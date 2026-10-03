@@ -16,6 +16,7 @@ import {
   saveProjectRoots,
   saveSelfImprovement,
 } from "../config/home-settings.ts";
+import { type ModelPreset, modelPresets } from "../config/model-presets.ts";
 import {
   type JevSetting,
   type ModelSettings,
@@ -65,6 +66,10 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
+import {
+  type ClaudeCodeAvailability,
+  probeClaudeCode,
+} from "../harness/claude-code/availability.ts";
 import type { HarnessName, ModelRecord } from "../harness/contract.ts";
 import { catalogueHarness, harnessFor, runnableModels } from "../harness/resolve.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
@@ -281,6 +286,9 @@ export type ModelOptionsResult = Readonly<{
   readonly discoveredProviders: readonly string[];
   /** The Balanced profile resolved from `modelSettings.enabledProviders` against this catalogue. */
   readonly balancedProfile: BalancedProfileProposal;
+  readonly claudeCode: ClaudeCodeAvailability;
+  /** One-click choices for all five roles; a disabled one says why in plain words. */
+  readonly presets: readonly ModelPreset[];
 }>;
 export type SourceRefreshResult = Readonly<{
   readonly head: string;
@@ -1108,10 +1116,14 @@ class TandemController {
       repoPath: source.repoPath,
       home: this.#deps.home,
     });
-    const availableModels = await catalogueHarness().listModels(
-      this.#deps.run,
-      source.checkoutPath,
-    );
+    const [availableModels, claudeCode] = await Promise.all([
+      catalogueHarness().listModels(this.#deps.run, source.checkoutPath),
+      probeClaudeCode({
+        run: this.#deps.run,
+        cwd: source.checkoutPath,
+        readText: (path) => readFile(path, "utf8").catch(() => undefined),
+      }),
+    ]);
     return {
       modelSettings,
       availableModels,
@@ -1120,6 +1132,8 @@ class TandemController {
         catalogue: availableModels,
         enabledProviders: new Set(modelSettings.enabledProviders),
       }),
+      claudeCode,
+      presets: modelPresets({ ompCatalogue: availableModels, claudeCode }),
     };
   }
 

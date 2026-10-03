@@ -4,6 +4,7 @@ import { endPresentation, listenPresentation, openPresentation } from "../adapte
 import type { HomeSettings, SelfImprovementMode } from "../config/home-settings.ts";
 import type { ModelSettings } from "../config/models.ts";
 import type { Clock, CommandResult, CommandRunner, IdFactory, RepoPolicy } from "../contracts.ts";
+import type { ClaudeCodeAvailability } from "../harness/claude-code/availability.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import { describeLavishFailure, type LavishOpenFailure } from "../report/publish.ts";
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
@@ -29,6 +30,7 @@ import {
   type SetupRepoDetails,
   type SetupRepoFacts,
   type SetupSearchStatus,
+  setupCatalogue,
 } from "./setup-view.ts";
 
 /**
@@ -44,9 +46,14 @@ export type SetupPageDependencies = Readonly<{
   run: CommandRunner;
   clock: Clock;
   idFactory: IdFactory;
-  models: (
-    repoPath: string,
-  ) => Promise<Readonly<{ availableModels: readonly ModelRecord[]; modelSettings: ModelSettings }>>;
+  models: (repoPath: string) => Promise<
+    Readonly<{
+      /** OMP's listing. */
+      availableModels: readonly ModelRecord[];
+      modelSettings: ModelSettings;
+      claudeCode: ClaudeCodeAvailability;
+    }>
+  >;
   roots: () => Promise<readonly string[]>;
   homeSettings: () => Promise<HomeSettings>;
   registeredProjects: () => Promise<readonly string[]>;
@@ -101,6 +108,9 @@ type StoredAnswer = Readonly<{
 
 /** Everything the page and the answer checks read, in one pass. */
 type SetupFacts = Readonly<{
+  ompCatalogue: readonly ModelRecord[];
+  claudeCode: ClaudeCodeAvailability;
+  /** Every model a role may be set to here, which the answer is checked against. */
   catalogue: readonly ModelRecord[];
   modelSettings: ModelSettings;
   settings: HomeSettings;
@@ -155,7 +165,9 @@ export class SetupPageWorkflow {
     ]);
     const searchedRoots = [...new Set([...roots, ...extraRoots])];
     return {
-      catalogue: models.availableModels,
+      ompCatalogue: models.availableModels,
+      claudeCode: models.claudeCode,
+      catalogue: setupCatalogue(models.availableModels, models.claudeCode),
       modelSettings: models.modelSettings,
       settings,
       roots: searchedRoots,
@@ -195,7 +207,8 @@ export class SetupPageWorkflow {
     const view = buildSetupView({
       generatedAt: this.#deps.clock(),
       homeFolder: this.#deps.homeFolder,
-      catalogue: data.catalogue,
+      ompCatalogue: data.ompCatalogue,
+      claudeCode: data.claudeCode,
       ...(saved.configured && saved.models !== undefined ? { savedModels: saved.models } : {}),
       searchedFolders: data.roots,
       pendingFolders: this.#explicitRoots,

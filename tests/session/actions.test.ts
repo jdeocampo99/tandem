@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderBoard } from "../../src/board/view.ts";
+import { modelPresets } from "../../src/config/model-presets.ts";
 import type { RepoPolicy } from "../../src/contracts.ts";
 import {
   type MemoryShowResult,
@@ -720,6 +721,36 @@ test("models summary discloses unresolved Balanced roles with actionable reasons
   expect(summary).toContain("No suitable model was found for these roles");
   expect(summary).toContain("Planning (coordinator)");
   expect(summary).toContain("no provider is explicitly enabled");
+});
+
+test("models summary offers each preset by name with every role's harness, or why it is off", () => {
+  const summary = summarizeTandemActionValue("models", {
+    modelSettings: { configPath: "/tandem-home/models.json", configured: false },
+    availableModels: [],
+    discoveredProviders: ["openai-codex"],
+    balancedProfile: { status: "unresolved", roles: {}, gaps: [] },
+    claudeCode: "ready",
+    presets: modelPresets({
+      ompCatalogue: [
+        {
+          selector: "openai-codex/gpt-6-astra",
+          id: "gpt-6-astra",
+          provider: "openai-codex",
+          reasoning: true,
+          thinking: ["low", "medium", "high", "max"],
+          cost: { input: 10, output: 50 },
+        },
+      ],
+      claudeCode: "not-installed",
+    }),
+  });
+
+  expect(summary).toContain(
+    "- Claude coordinates, Codex researches and reviews: unavailable. Claude Code isn't installed.",
+  );
+  expect(summary).toContain(
+    "- All OMP: Planning openai-codex/gpt-6-astra high (OMP); Research openai-codex/gpt-6-astra medium (OMP);",
+  );
 });
 
 test("onboard summaries render complete saved and pending role selections", () => {
