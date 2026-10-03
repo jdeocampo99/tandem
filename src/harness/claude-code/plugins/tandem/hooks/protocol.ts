@@ -3,8 +3,8 @@
  * object per `POST /event` over the sidecar's unix socket, and the HTTP response carries the
  * hook's answer. Effects go sidecar → mod as one JSON object per stdout line.
  *
- * This file imports nothing, so the mod, which can import only files inside its own plugin and
- * has no Node APIs, can bundle it as is.
+ * It lives inside the `tandem` plugin and imports nothing, because a mod can import only files
+ * inside its own plugin and has no Node APIs; the sidecar imports it from here.
  */
 
 export const SIDECAR_PROTOCOL_VERSION = 1;
@@ -42,7 +42,14 @@ export type SidecarEvent =
   | Readonly<{ type: "toolEnd"; call: WireToolCall }>
   /** `contextTokens` is the context size `$.session.usage()` reported after the turn. */
   | Readonly<{ type: "turnEnd"; usage?: WireUsage; contextTokens?: number }>
-  | Readonly<{ type: "agentEnd"; interrupted: boolean; failure?: string }>
+  /** `prompt` is the text the run began with (`turn.start`), `answer` its final text. */
+  | Readonly<{
+      type: "agentEnd";
+      interrupted: boolean;
+      failure?: string;
+      prompt?: string;
+      answer?: string;
+    }>
   | Readonly<{ type: "stopRequested"; aborted: boolean }>
   | Readonly<{ type: "compacting" }>
   | Readonly<{ type: "compacted" }>
@@ -72,7 +79,8 @@ export type HookReply =
   | Readonly<{ type: "refused"; reason: string }>;
 
 /** The events that start a hook; `askAnswer` continues one. */
-export type HookEventType = Exclude<SidecarEventType, "askAnswer">;
+export type HookEvent = Exclude<SidecarEvent, Readonly<{ type: "askAnswer" }>>;
+export type HookEventType = HookEvent["type"];
 
 /** The reply each hook event may get besides `ask` and `refused`. */
 const REPLIES: Readonly<Record<HookEventType, HookReply["type"]>> = {
@@ -230,11 +238,13 @@ function eventFrom(value: unknown): SidecarEvent {
         ...optional(record, "contextTokens", count, where),
       };
     case "agentEnd":
-      shape("interrupted", "failure");
+      shape("interrupted", "failure", "prompt", "answer");
       return {
         type,
         interrupted: flag(record, "interrupted", where),
         ...optional(record, "failure", text, where),
+        ...optional(record, "prompt", text, where),
+        ...optional(record, "answer", text, where),
       };
     case "stopRequested":
       shape("aborted");

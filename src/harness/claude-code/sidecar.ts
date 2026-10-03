@@ -11,7 +11,7 @@ import {
   parseSidecarEvent,
   SIDECAR_PROTOCOL_VERSION,
   type SidecarLine,
-} from "./protocol.ts";
+} from "./plugins/tandem/hooks/protocol.ts";
 import { sidecarSocketPath } from "./socket.ts";
 
 /** How long a new sidecar waits for the one it replaces (a mod reload) to let go of the socket. */

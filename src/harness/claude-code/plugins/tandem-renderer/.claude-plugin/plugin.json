@@ -1,0 +1,6 @@
+{
+  "name": "tandem-renderer",
+  "version": "0.1.0",
+  "description": "Hides the prompts Tandem submits to wake its coordinator, whose text Tandem already showed",
+  "author": { "name": "Tandem" }
+}

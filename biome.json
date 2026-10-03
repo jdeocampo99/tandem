@@ -7,7 +7,8 @@
       "!dist",
       "!evals/results",
       "!evals/results-research-continuation",
-      "!.claude"
+      "!.claude",
+      "!src/harness/claude-code/plugins/*/.claude-plugin/types"
     ]
   },
   "formatter": {

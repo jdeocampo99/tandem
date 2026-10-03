@@ -4,6 +4,7 @@ import { processEnvironmentSnapshot } from "../../config/environment.ts";
 import { appendDiagnosticEvent } from "../../runtime/diagnostics.ts";
 import { runTandemTool, type TandemCallDependencies } from "../../session/actions.ts";
 import type { SessionDeps } from "../../session/events.ts";
+import type { CoordinatorMessage } from "../../session/onboarding-guide.ts";
 import {
   type ChoiceConfirmation,
   promptRoutingConfig,
@@ -13,7 +14,7 @@ import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
 import { tandemRequestSchema } from "../../session/tools.ts";
 import { bindCoordinator, type CoordinatorOptions } from "../coordinator-session.ts";
 import { type ClaudeCodePane, claudeCodeToolCall, claudeCodeUsage } from "./host.ts";
-import type { HookEventType, HookReply, SidecarEvent } from "./protocol.ts";
+import type { HookEventType, HookReply, SidecarEvent } from "./plugins/tandem/hooks/protocol.ts";
 
 /** The events a session answers; the sidecar itself handles `shutdown` and `askAnswer`. */
 export type SessionHookEvent = Extract<SidecarEvent, { type: Exclude<HookEventType, "shutdown"> }>;
@@ -25,6 +26,21 @@ export type SessionBinding = Readonly<{
 }>;
 
 const DONE: HookReply = { type: "done" };
+
+/**
+ * The one exchange a finished Claude Code run is made of, as the messages the core reads at its
+ * end: Claude Code shows a mod no message list, only the prompt the run began with and its final
+ * answer. Without the prompt there is nothing for the setup page's wait to match.
+ */
+export function turnMessages(
+  end: Extract<SidecarEvent, { type: "agentEnd" }>,
+): readonly CoordinatorMessage[] {
+  if (end.prompt === undefined) return [];
+  return [
+    { role: "user", content: end.prompt },
+    ...(end.answer === undefined ? [] : [{ role: "assistant", content: end.answer }]),
+  ];
+}
 
 /**
  * The coordinator's `CoordinatorSession` driven by Claude Code events, mirroring the OMP
@@ -103,10 +119,8 @@ export function claudeCodeCoordinator(
       case "turnEnd":
         await session.turnEnd(event.usage === undefined ? undefined : claudeCodeUsage(event.usage));
         return DONE;
-      // Claude Code reports only a settled turn, and shows a mod no messages, so the setup page's
-      // wait for the coordinator's answer to a comment never matches; it ends when the page closes.
       case "agentEnd":
-        await session.agentEnd(false);
+        await session.agentEnd(false, () => turnMessages(event));
         return DONE;
       case "stopRequested":
         return { type: "stop" };

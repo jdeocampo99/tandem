@@ -15,7 +15,10 @@ import {
   routeUserPrompt,
 } from "../../session/prompt-routing.ts";
 import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
-import { tandemRequestSchema as tandemToolSchema } from "../../session/tools.ts";
+import {
+  TANDEM_TOOL_DESCRIPTION,
+  tandemRequestSchema as tandemToolSchema,
+} from "../../session/tools.ts";
 import {
   CARD_MESSAGE_TYPE,
   ompApprovalDialog,
@@ -124,8 +127,7 @@ function registerTandemTool(
   pi.registerTool({
     name: "tandem",
     label: "Tandem",
-    description:
-      "Start, inspect, steer, and control Tandem work with {request:{action:...}}. Actions that need approval ask the user to confirm. A delivered message does not mean the work is done.",
+    description: TANDEM_TOOL_DESCRIPTION,
     parameters: ompToolParameters(tandemToolSchema),
     strict: true,
     approval: "write",
