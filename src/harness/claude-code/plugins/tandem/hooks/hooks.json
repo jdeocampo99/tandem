@@ -1,0 +1,4 @@
+{
+  "description": "Tandem's Claude Code adapter",
+  "modules": ["./register.ts"]
+}

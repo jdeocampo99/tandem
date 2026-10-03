@@ -15,5 +15,13 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["bun"]
   },
-  "include": ["src", "tests", "evals"]
+  "include": ["src", "tests", "evals"],
+  // A Claude Code mod's hooks module and its `claude plugin test` files import the `claude-code`
+  // module, whose types Claude Code writes into the plugin only when it loads it. Each plugin's own
+  // tsconfig.json checks them against those types; protocol.ts and translate.ts stay checked here.
+  "exclude": [
+    "src/harness/claude-code/plugins/*/hooks/register.*",
+    "src/harness/claude-code/plugins/*/tests",
+    "src/harness/claude-code/plugins/*/.claude-plugin"
+  ]
 }

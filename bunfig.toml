@@ -1,0 +1,3 @@
+[test]
+# `claude plugin test` runs these: they import the claude-code/testing kit, which Bun has not.
+pathIgnorePatterns = ["src/harness/claude-code/plugins/*/tests/**"]

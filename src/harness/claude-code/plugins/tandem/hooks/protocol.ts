@@ -79,7 +79,8 @@ export type HookReply =
   | Readonly<{ type: "refused"; reason: string }>;
 
 /** The events that start a hook; `askAnswer` continues one. */
-export type HookEventType = Exclude<SidecarEventType, "askAnswer">;
+export type HookEvent = Exclude<SidecarEvent, Readonly<{ type: "askAnswer" }>>;
+export type HookEventType = HookEvent["type"];
 
 /** The reply each hook event may get besides `ask` and `refused`. */
 const REPLIES: Readonly<Record<HookEventType, HookReply["type"]>> = {

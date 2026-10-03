@@ -78,6 +78,9 @@ const briefContentSchema = z.strictObject({
   skipReview: z.boolean().optional(),
 });
 
+export const TANDEM_TOOL_DESCRIPTION =
+  "Start, inspect, steer, and control Tandem work with {request:{action:...}}. Actions that need approval ask the user to confirm. A delivered message does not mean the work is done.";
+
 /** The strict `{ request: { action, ... } }` parameters of the `tandem` tool; see `TandemAction`. */
 export const tandemRequestSchema = z.strictObject({
   request: z.union([

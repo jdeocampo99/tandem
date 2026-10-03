@@ -1,0 +1,8 @@
+{
+  "name": "tandem",
+  "version": "0.1.0",
+  "description": "Runs a Tandem coordinator in Claude Code by forwarding its hooks to Tandem's sidecar",
+  "author": {
+    "name": "Tandem"
+  }
+}
