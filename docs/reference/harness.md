@@ -5,8 +5,10 @@ port every harness implements.
 
 Code: src/harness/contract.ts (`HarnessName`, `harnessOf`, the `Harness` launch port), src/harness/resolve.ts
 (`harnessFor`, `harnessForRole`), src/harness/claude-code/models.ts (the Claude Code catalogue),
-src/harness/omp/launch.ts, src/coordinator/record.ts, src/workers/jobs.ts.
-Tests: tests/harness/, tests/evals/harness-scenarios.test.ts, tests/coordinator/coordinator-registry.test.ts, tests/workers/jobs.test.ts,
+src/harness/omp/launch.ts, src/coordinator/record.ts, src/workers/jobs.ts, src/harness/coordinator-session.ts
+(coordinator setup both adapters share), src/harness/claude-code/ (`protocol.ts`, `host.ts`,
+`coordinator.ts`, `sidecar.ts`: the Claude Code sidecar).
+Tests: tests/harness/, tests/harness/claude-code/, tests/evals/harness-scenarios.test.ts, tests/coordinator/coordinator-registry.test.ts, tests/workers/jobs.test.ts,
 tests/terminal/cli.test.ts.
 
 ## The two-harness rule
@@ -100,6 +102,111 @@ enforces it.
 executable, the coordinator's checked-in files, building a command from a `LaunchSpec`, matching
 live processes to a recorded command, the `ps` needle for a recorded session, and model and MCP
 listing. Only src/harness/omp/ and tests/harness/omp/ may import `@oh-my-pi/*`.
+
+## The Claude Code sidecar
+
+On Claude Code, the adapter is a mod: TypeScript inside a plugin, with no Node APIs and no imports
+outside the plugin, so it cannot open `state.sqlite`. It starts a Bun sidecar with
+`$.process.spawn` for the session's life. The sidecar holds the core session and the store; the
+mod forwards Claude Code's hooks and carries out the sidecar's effects. Steps 5 and 6 of issue #200
+add the mods; until then `harnessFor` still refuses `claude-code`.
+
+### Lifecycle
+
+- **Start.** The mod runs `bun src/harness/claude-code/sidecar.ts --role coordinator --session
+  <id>` in the session's working directory, with Claude Code's environment, which carries
+  `TANDEM_HOME` and the rest of the boundary environment. Only `coordinator` is accepted until the
+  worker binding exists; any other role fails closed.
+- **Socket.** `<home>/sidecars/<first 16 hex of sha256(session id)>.sock`, in a directory created
+  with mode 0700. A path over 103 bytes (macOS allows 104 with the NUL) is refused with a message
+  to use a shorter home.
+- **Idempotent start.** A socket file nobody answers on was left by a killed sidecar and is
+  removed. A socket that answers `GET /health` belongs to a live sidecar for the same session;
+  the new one waits up to 3 s for it to let go, then refuses to start rather than run two owners.
+- **Ready.** The first stdout line is `{"type":"ready","protocol":1,"socket":...,"pid":...}`, or
+  `{"type":"fatal","protocol":1,"reason":...}` and exit 1 when startup fails. The mod refuses a
+  ready line from another protocol version.
+- **Stop.** SIGTERM, SIGHUP, stdin closing, or a `shutdown` event: the sidecar refuses every
+  unanswered question, stops listening, removes the socket only if it is still its own (same
+  inode), shuts the session down, and exits 0. It takes SIGTERM and SIGHUP over from OMP's
+  postmortem module, which the service loads through the OMP launch harness and which would exit
+  with 143 before the socket is removed.
+- **Reload.** A mod hot-reload kills the sidecar, and the mod's `session.start` spawns a new one,
+  so the mod reads the socket path from each new ready line. State that lives only in memory
+  (notifications already sent this process, held next-turn context, an open thread) starts over,
+  as it does when OMP relaunches; durable state is in the store.
+- Stdout carries only protocol lines. The sidecar sends `console.log` to stderr.
+
+### Events in
+
+Each event is one JSON object in `POST /event`. The response body is the hook's reply. Unknown
+types, unknown fields, and wrong field types get HTTP 400 and `{"type":"refused","reason":...}`
+without reaching the session; a failure inside the session gets 500 and `refused`.
+
+| Event | Fields | Reply | Session call |
+| --- | --- | --- | --- |
+| `sessionStart` | `model` (the id Claude Code reports) | `done` | `sessionStart` |
+| `userPrompt` | `text`, `interactive`, `attachments` | `promptRoute {handled}` | prompt routing, then `userPrompt` |
+| `agentStart` | | `turnContext {system, context}` | `agentStart` |
+| `turnStart` | | `done` | `turnStart` |
+| `toolCall` | `call {id, name, input}` | `toolDecision {block, reason?}` | coordinator tool guard |
+| `tandemTool` | `id`, `input` | `toolResult {text, isError}` | the `tandem` tool |
+| `toolStart`, `toolEnd` | `call` | `done` | status line |
+| `turnEnd` | `usage?`, `contextTokens?` | `done` | usage ledger |
+| `agentEnd` | `interrupted`, `failure?` | `done` | `agentEnd`, final reconcile |
+| `stopRequested` | `aborted` | `stop {continueWith?}` | none for the coordinator |
+| `compacting` | | `compaction {instructions}` | `compacting` |
+| `compacted` | | `done` | `compacted` |
+| `shutdown` | | `done` | stops the sidecar |
+| `askAnswer` | `ask`, `allowed` | the asking hook's next reply | resumes `host.confirm` |
+
+- The sidecar classifies tool calls (`claudeCodeToolCall`): `Read`, `WebFetch` (its URL is the
+  path, so the coordinator's web-read guard applies), `Grep`/`Glob`, `Write`, `Edit`, `Bash`,
+  `Task`/`Agent`, `TodoWrite`, `mcp__*`, and everything else as `other`.
+- `turnContext.system` goes to `prompt.section`. `turnContext.context` holds deliveries that did
+  not wake the model and goes to `prompt.context`; each is handed over once.
+- `compaction.instructions` is what the mod passes to `$.session.compact({ instructions })`.
+
+**Approval.** `host.confirm` inside a hook ends that hook's HTTP response early with `{"type":"ask",
+"ask":"ask-<n>","title":...,"message":...}`. The mod calls `$.ui.ask` inside the same Claude Code
+hook (verified to wait past the 10 s hook limit) and posts `askAnswer`; that response is the hook's
+next reply, which may be another `ask`. A confirm outside any hook has nobody to ask and is
+refused. The mod parses every reply with `parseHookReply(event, body)` against the event that
+started the hook.
+
+**Fail closed.** When the sidecar refuses or cannot be reached, the mod denies a tool call, errors
+a `tandem` call, and otherwise lets Claude Code go on as if Tandem were absent.
+
+### Effects out
+
+| Core effect | Stdout line(s) | Mod call |
+| --- | --- | --- |
+| `deliver` with `triggerTurn` | `log {text}`, then `submit {hidden + text}` | `$.ui.log`, `$.prompt.submit({ text, asUser: true })` |
+| `deliver` without `triggerTurn` | `log {text}`; hidden + text held for `turnContext.context` | `$.ui.log` |
+| `promptAsUser` | `submit {text}` | `$.prompt.submit({ text, asUser: true })` |
+| `showCard`, `showStatus` | `log {text}` (and `submit` if `showStatus` wakes) | `$.ui.log` |
+| `notify` | `toast {text, level}` | `$.ui.toast` |
+| `compact` | `compact` | post `compacting`, then `$.session.compact` |
+| `abort` | `abort` | `$.turn.abort()` |
+| `recordEntry` | none | see below |
+| `shutdown` | refused (throws) | see below |
+
+The mod parses each line with `parseSidecarLine` and ignores, with a debug log, a line it cannot
+read.
+
+### What Claude Code cannot do
+
+| Limit | How the sidecar handles it |
+| --- | --- |
+| No mid-turn or mid-tool submit | Every `timing` lands the same way: a wake is submitted and Claude Code starts it once idle; any other delivery is shown now and given to the model with its next turn. |
+| No history rewriting (no `context` event) | There is no `contextBuild` event, and the protocol refuses one. Worker steering will arrive as new messages (step 6). |
+| No per-token progress | There is no `streaming` event; `streamingProgress` is false, so the stall watchdog is off. |
+| No session exit | The `shutdown` effect throws `UNSUPPORTED_EFFECTS.shutdown`; Herdr closes a Tandem pane. The core does not send it today. |
+| No raw keystrokes | Nothing maps OMP's `onTerminalInput` swallow while a worker pane closes; the worker binding (step 6) decides how a closing pane refuses input. |
+| No session entries | `recordEntry` writes nothing. OMP saves these in its session file and nothing in Tandem reads them back; the store stays the record. |
+| No editor text | `paneState().draft` is always false. Only the worker reads it, to hold a close back while the person types; step 6 revisits it. |
+| No message list at turn end | `agentEnd` passes no messages, so the setup page's wait for the coordinator's answer to a comment never matches and ends when the page closes. |
+| Model id, not selector | `assertSelectedModel("claude-code/<alias>")` passes when the reported id is the alias or contains it as a word (`claude-opus-5-5` for `opus`), and fails closed when no model was reported. |
 
 ## Later
 
