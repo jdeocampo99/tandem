@@ -273,6 +273,32 @@ test("a candidate from a discovered but unenabled provider never authorizes a mo
   expect(routing.selector).toBe(PINNED.model);
 });
 
+test("a reassignment never moves a role into another harness", () => {
+  const routing = authorizedRouting(
+    resolveExecutionRouting(
+      routingRequest({
+        boundary: replacementBoundary(),
+        catalogue: snapshot(
+          [
+            catalogueEntry(PINNED.model, {
+              cost: { input: 2, output: 2 },
+              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 2 },
+            }),
+            catalogueEntry("claude-code/included", {
+              cost: { input: 1, output: 1 },
+              includedAllowance: { plan: "pro", unit: "request", unitsPerRequest: 1 },
+            }),
+          ],
+          ["alpha", "claude-code"],
+        ),
+      }),
+    ),
+  );
+
+  expect(routing.basis).toBe("pinned-policy");
+  expect(routing.selector).toBe(PINNED.model);
+});
+
 test("a replacement that can't be justified keeps the pinned model instead of asking", () => {
   const pinnedEntry = catalogueEntry(PINNED.model, {
     cost: { input: 2, output: 2 },

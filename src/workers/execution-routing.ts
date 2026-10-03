@@ -32,7 +32,7 @@ import {
   modelTierEvidence,
 } from "../config/model-tier.ts";
 import type { IsoTimestamp, ModelSpec } from "../contracts.ts";
-import type { ModelRecord } from "../harness/contract.ts";
+import { harnessOf, type ModelRecord } from "../harness/contract.ts";
 import {
   type DurableExecutionRouting,
   type DurableExecutionRoutingPause,
@@ -433,8 +433,8 @@ function readEvidence(
 
 /**
  * The candidates a reassignment may even consider: models from a provider the pinned profile
- * explicitly enabled, supporting the thinking level this role is pinned to, and neither the model
- * that just failed nor the pinned model itself.
+ * explicitly enabled, running in the pinned model's harness, supporting the thinking level this
+ * role is pinned to, and neither the model that just failed nor the pinned model itself.
  */
 function eligibleCandidates(
   catalogue: Extract<ModelCatalogueSnapshot, { readonly status: "read" }>,
@@ -442,10 +442,12 @@ function eligibleCandidates(
   failedSelector: string,
 ): readonly ModelTierEvidence[] {
   const enabled = new Set(catalogue.enabledProviders);
+  const pinnedHarness = harnessOf(pinned);
   return catalogue.models
     .filter(
       (entry) =>
         enabled.has(entry.provider) &&
+        harnessOf({ model: entry.selector, thinking: pinned.thinking }) === pinnedHarness &&
         entry.thinking.includes(pinned.thinking) &&
         entry.selector !== failedSelector &&
         entry.selector !== pinned.model,
