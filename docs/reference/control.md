@@ -90,6 +90,9 @@ src/terminal/cli-arguments.ts, src/cli.ts
 
 - A running primary worker receives directions at the next provider-context boundary without
   interrupting an active tool. A terminal response continues only if an unapplied direction remains.
+  On Claude Code, which cannot rewrite context, directions arrive as new text after the next tool
+  result, as the text a stopping turn continues with, or as a prompt while the worker is idle
+  ([harness.md](harness.md#steering-a-claude-code-worker)).
 - A task in validation, review, or `ready` instead stops through the ownership checks and
   invalidates old evidence in a new generation, without charging a repair round. When the task's
   PR is open, Tandem adds a line telling the agent to commit and push (see
