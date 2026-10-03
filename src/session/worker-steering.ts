@@ -1,5 +1,9 @@
 import type { TaskInbox, WorkerReceipt } from "../contracts.ts";
-import { formatTaskMessages, type TaskMessageBatch } from "../tasks/communication-protocol.ts";
+import {
+  formatTaskMessages,
+  markersFromText,
+  type TaskMessageBatch,
+} from "../tasks/communication-protocol.ts";
 import {
   atLeastAsNewBatch,
   inboxMessageBatch,
@@ -9,9 +13,18 @@ import {
 } from "../workers/control-protocol.ts";
 import type { ReplyFor, SessionDeps, SessionEvent, SessionHost } from "./events.ts";
 
+/**
+ * How steering reaches the model. `context`: the harness rebuilds each request's context, so the
+ * newest batch replaces every earlier copy (OMP). `messages`: the harness cannot rewrite history,
+ * so each newer batch is handed over once as new text, after a tool result, as the text a stopping
+ * turn continues with, or as a new prompt while the pane is idle (Claude Code).
+ */
+export type SteeringDelivery = "context" | "messages";
+
 export type WorkerSteeringDeps = Pick<SessionDeps, "clock" | "timers"> &
   Readonly<{
-    host: Pick<SessionHost, "perform">;
+    host: Pick<SessionHost, "perform" | "paneState">;
+    delivery: SteeringDelivery;
     config: WorkerControlConfig;
     /** The task inbox at `config.inboxPath`, or undefined when there is none. */
     readInbox(): Promise<TaskInbox | undefined>;
@@ -174,6 +187,8 @@ export class WorkerSteering {
         {
           ...this.receipt,
           receivedRevision: Math.max(this.receipt.receivedRevision, pendingBatch.revision),
+          // The continuation text goes straight to the model; no later context build shows it.
+          ...(this.deps.delivery === "messages" ? { appliedRevision: pendingBatch.revision } : {}),
           heartbeatAt: isoNow(this.deps.clock),
           phase: "model",
         },
@@ -189,6 +204,45 @@ export class WorkerSteering {
     } catch (error) {
       this.fail(error);
       return {};
+    }
+  }
+
+  /**
+   * Hands over the batch newer than the one applied, once, as text the model reads next (after a
+   * tool result, under `messages` delivery). Undefined when nothing new is waiting.
+   */
+  async takePending(): Promise<string | undefined> {
+    if (this.stopped) return undefined;
+    try {
+      this.retainInbox(await checkedInbox(this.deps), this.retainedBatch?.revision);
+      const batch = this.pendingBatch();
+      if (batch === undefined) return undefined;
+      await this.markApplied(batch.revision);
+      this.deps.trace("steering_handed_over", { revision: batch.revision });
+      return formatTaskMessages(this.deps.config.taskId, batch.revision, batch.messages);
+    } catch (error) {
+      this.fail(error);
+      return undefined;
+    }
+  }
+
+  /**
+   * The model received `text` as a new message, under `messages` delivery: the prompt a run began
+   * with. The newest batch for this task in it is applied.
+   */
+  async onPromptSeen(text: string): Promise<void> {
+    const newest = markersFromText(text)
+      .map((marker) => marker.batch)
+      .filter((batch) => batch.taskId === this.deps.config.taskId)
+      .reduce<TaskMessageBatch | undefined>(
+        (best, batch) => (best === undefined || batch.revision > best.revision ? batch : best),
+        undefined,
+      );
+    if (newest === undefined || newest.revision <= this.receipt.appliedRevision) return;
+    try {
+      await this.markApplied(newest.revision);
+    } catch (error) {
+      this.fail(error);
     }
   }
 
@@ -244,11 +298,47 @@ export class WorkerSteering {
     this.pollInFlight = true;
     try {
       await this.observeInbox();
+      await this.deliverWhileIdle();
     } catch (error) {
       this.fail(error);
     } finally {
       this.pollInFlight = false;
     }
+  }
+
+  private pendingBatch(): TaskMessageBatch | undefined {
+    const batch = this.retainedBatch;
+    return batch !== undefined && batch.revision > this.receipt.appliedRevision ? batch : undefined;
+  }
+
+  private async markApplied(revision: number): Promise<void> {
+    const now = isoNow(this.deps.clock);
+    await this.persist(
+      {
+        ...this.receipt,
+        receivedRevision: Math.max(this.receipt.receivedRevision, revision),
+        appliedRevision: revision,
+        heartbeatAt: now,
+        progressAt: now,
+      },
+      true,
+    );
+  }
+
+  /** Under `messages` delivery, an idle pane gets a newer batch as a prompt of its own. */
+  private async deliverWhileIdle(): Promise<void> {
+    if (this.deps.delivery !== "messages" || this.stopped) return;
+    const pane = this.deps.host.paneState();
+    if (this.pendingBatch() === undefined || !pane.idle || pane.pendingMessages) return;
+    const text = await this.takePending();
+    if (text === undefined) return;
+    await this.deps.host.perform({
+      type: "deliver",
+      source: "steering",
+      text,
+      timing: "nextTurn",
+      triggerTurn: true,
+    });
   }
 
   private async heartbeat(): Promise<void> {

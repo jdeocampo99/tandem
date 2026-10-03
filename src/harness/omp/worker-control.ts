@@ -36,6 +36,7 @@ async function registerWorkerSteering(pi: ExtensionAPI): Promise<void> {
     host: pane.host,
     timers: pane.timers,
     trace,
+    delivery: "context",
   });
   if (steering === undefined) return;
   const record = (ctx: ExtensionContext, phase: WorkerReceipt["phase"], tool?: string) => {

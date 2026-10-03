@@ -56,10 +56,11 @@ function steeringDeps(overrides: Partial<WorkerSteeringDeps> = {}) {
       writes.push(receipt);
     },
     trace: () => {},
+    delivery: "context",
     ...overrides,
   };
   const aborts = () => recording.effects.filter((effect) => effect.type === "abort").length;
-  return { deps, state, writes, time, aborts };
+  return { deps, state, writes, time, aborts, recording };
 }
 
 async function settle(): Promise<void> {
@@ -190,4 +191,75 @@ test("receipt writes run one at a time, in order, and heartbeats write at most o
   fixture.time.advance(10_000);
   await settle();
   expect(order.slice(afterStart)).toEqual(["start model", "end model"]);
+});
+
+test("without history rewriting, each newer batch is handed over once after a tool result", async () => {
+  const fixture = steeringDeps({ delivery: "messages" });
+  fixture.recording.answers.paneState = { idle: false, pendingMessages: false, draft: false };
+  const steering = await WorkerSteering.open(fixture.deps);
+  expect(await steering.takePending()).toBeUndefined();
+
+  fixture.state.inbox = inboxWith(1);
+  expect(await steering.takePending()).toBe(formatTaskMessages(TASK, 1, inboxWith(1).messages));
+  expect(fixture.writes.at(-1)).toMatchObject({ receivedRevision: 1, appliedRevision: 1 });
+  expect(await steering.takePending()).toBeUndefined();
+
+  fixture.state.inbox = inboxWith(2);
+  const late = await steering.onStopRequested(false);
+  expect(late).toEqual({ continueWith: formatTaskMessages(TASK, 2, inboxWith(2).messages) });
+  expect(fixture.writes.at(-1)).toMatchObject({ receivedRevision: 2, appliedRevision: 2 });
+  expect(await steering.takePending()).toBeUndefined();
+  expect(fixture.recording.effects).toEqual([]);
+});
+
+test("without history rewriting, an idle pane gets a newer batch as its own prompt, once", async () => {
+  const fixture = steeringDeps({ delivery: "messages" });
+  fixture.recording.answers.paneState = { idle: true, pendingMessages: true, draft: false };
+  const steering = await WorkerSteering.open(fixture.deps);
+  await steering.onSessionStart();
+  fixture.state.inbox = inboxWith(1);
+  fixture.time.advance(250);
+  await settle();
+  // A queued prompt (the brief, not yet started) holds delivery back.
+  expect(fixture.recording.effects).toEqual([]);
+
+  fixture.recording.answers.paneState = { idle: true, pendingMessages: false, draft: false };
+  fixture.time.advance(250);
+  await settle();
+  fixture.time.advance(250);
+  await settle();
+  expect(fixture.recording.effects).toEqual([
+    {
+      type: "deliver",
+      source: "steering",
+      text: formatTaskMessages(TASK, 1, inboxWith(1).messages),
+      timing: "nextTurn",
+      triggerTurn: true,
+    },
+  ]);
+  expect(fixture.writes.at(-1)).toMatchObject({ appliedRevision: 1 });
+});
+
+test("with history rewriting, an idle pane is never prompted with steering", async () => {
+  const fixture = steeringDeps();
+  const steering = await WorkerSteering.open(fixture.deps);
+  await steering.onSessionStart();
+  fixture.state.inbox = inboxWith(1);
+  fixture.time.advance(1_000);
+  await settle();
+  expect(fixture.recording.effects).toEqual([]);
+});
+
+test("the prompt a run begins with applies the newest batch for this task in it", async () => {
+  const fixture = steeringDeps({ delivery: "messages" });
+  fixture.state.inbox = inboxWith(2);
+  const steering = await WorkerSteering.open(fixture.deps);
+  const other = formatTaskMessages("task-2", 3, inboxWith(3, "task-2").messages);
+  await steering.onPromptSeen(`Implement it.\n\n${other}`);
+  expect(fixture.writes.at(-1)).toMatchObject({ appliedRevision: 0 });
+  await steering.onPromptSeen(
+    `Implement it.\n\n${formatTaskMessages(TASK, 1, inboxWith(1).messages)}\n${formatTaskMessages(TASK, 2, inboxWith(2).messages)}`,
+  );
+  expect(fixture.writes.at(-1)).toMatchObject({ receivedRevision: 2, appliedRevision: 2 });
+  expect(await steering.takePending()).toBeUndefined();
 });

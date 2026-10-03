@@ -437,3 +437,29 @@ export function formatTaskMessages(
   const parsed = parseTaskMessageBatch({ taskId, revision, messages });
   return `${TASK_COMMUNICATION_MARKER} ${JSON.stringify(parsed)}`;
 }
+
+/** A task-communication marker line found in a message, with the text before it on its line. */
+export type Marker = Readonly<{
+  readonly raw: string;
+  readonly prefix: string;
+  readonly batch: TaskMessageBatch;
+}>;
+
+export function markersFromText(text: string): readonly Marker[] {
+  const markers: Marker[] = [];
+  for (const line of text.split(/\r?\n/u)) {
+    const markerStart = line.indexOf(`${TASK_COMMUNICATION_MARKER} `);
+    if (markerStart < 0) continue;
+    const prefix = line.slice(0, markerStart);
+    if (prefix.trim().length !== 0 && prefix.trim() !== "-") continue;
+    const payload = line.slice(markerStart + TASK_COMMUNICATION_MARKER.length + 1);
+    try {
+      const parsed = JSON.parse(payload) as unknown;
+      const batch = parseTaskMessageBatch(parsed);
+      markers.push({ raw: line, prefix, batch });
+    } catch {
+      // An unrecognized marker is not proof of a provider-bound message.
+    }
+  }
+  return markers;
+}

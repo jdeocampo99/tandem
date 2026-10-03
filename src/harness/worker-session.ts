@@ -4,7 +4,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { createHerdrStatusReporter } from "../adapters/herdr-status.ts";
 import type { SessionDeps } from "../session/events.ts";
 import { type WorkerHost, WorkerSession } from "../session/worker.ts";
-import { WorkerSteering } from "../session/worker-steering.ts";
+import { type SteeringDelivery, WorkerSteering } from "../session/worker-steering.ts";
 import {
   readTaskInbox,
   readWorkerReceipt,
@@ -151,7 +151,8 @@ export function workerSession(
  */
 export async function openWorkerSteering(
   environment: Readonly<Record<string, string | undefined>>,
-  harness: Pick<WorkerHarness, "host" | "timers"> & Readonly<{ trace: WorkerTrace }>,
+  harness: Pick<WorkerHarness, "host" | "timers"> &
+    Readonly<{ trace: WorkerTrace; delivery: SteeringDelivery }>,
 ): Promise<WorkerSteering | undefined> {
   const config = parseWorkerControlConfig(environment[WORKER_CONTROL_ENV]);
   if (config === undefined) return undefined;
@@ -163,5 +164,6 @@ export async function openWorkerSteering(
     readInbox: () => readTaskInbox(config.inboxPath),
     writeReceipt: (receipt) => writeWorkerReceipt(config.receiptPath, receipt),
     trace: harness.trace,
+    delivery: harness.delivery,
   });
 }
