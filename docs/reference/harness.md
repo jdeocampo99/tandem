@@ -50,13 +50,23 @@ A model reassignment after a failure stays within the pinned model's harness.
 
 ## The Claude Code catalogue
 
-Claude Code models are not in `omp models --json`, so Tandem keeps a fixed catalogue:
+Claude Code models are not in `omp models --json`, so Tandem keeps a fixed catalogue of the
+aliases `claude --model` accepts:
 
 | Selector | Thinking levels |
 | --- | --- |
+| `claude-code/fable` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `claude-code/opus` | `low`, `medium`, `high`, `xhigh`, `max` |
-| `claude-code/sonnet` | `low`, `medium`, `high`, `max` |
+| `claude-code/sonnet` | `low`, `medium`, `high`, `xhigh`, `max` |
 | `claude-code/haiku` | `off` |
+
+Sources, checked against Claude Code 2.1.288: `claude --help` lists `--effort` values `low`,
+`medium`, `high`, `xhigh`, `max`, and the [model configuration
+page](https://code.claude.com/docs/en/model-config.md) lists the aliases and each model's levels.
+On the Anthropic API, which a Claude login uses, `fable`, `opus`, and `sonnet` resolve to Fable
+5.1, Opus 5.5, and Sonnet 5.5, which take all five levels. Haiku is not in the docs' effort table,
+so it takes none. Where an alias resolves to an older model (Sonnet 4.6 on some cloud providers),
+Claude Code runs an unsupported level at the highest level it supports below it.
 
 - `configure-models` and models.json validation accept these selectors alongside the OMP listing,
   and reject any other `claude-code/*` selector or an unsupported thinking level.

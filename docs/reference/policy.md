@@ -109,7 +109,7 @@ The coordinator delegates research and does judgement itself.
 - Absent reads create nothing. Malformed or symlinked `models.json`, or a home inside the target,
   fails closed. Writes replace the file atomically.
 - The catalogue comes from `omp models --json`, one lookup per operation, plus a fixed Claude Code
-  catalogue (`claude-code/opus`, `claude-code/sonnet`, `claude-code/haiku`) that only explicit
+  catalogue (`claude-code/fable`, `claude-code/opus`, `claude-code/sonnet`, `claude-code/haiku`) that only explicit
   choices such as `configure-models` accept; Tandem never offers or picks those on its own. Never parse private
   model configuration or invent names. Catalogue cost is descriptive, not a price guarantee.
 - `configure-models` takes a file mapping all five roles directly to `{ model, thinking }` (not

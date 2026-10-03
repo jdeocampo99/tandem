@@ -1585,6 +1585,23 @@ test("configureModels accepts a Claude Code model only by its exact selector and
         models: withCoordinator({ model: "claude-code/opus", thinking: "minimal" }),
       }),
     ).rejects.toThrow('"claude-code/opus" does not support thinking "minimal"');
+    await expect(
+      service.configureModels({
+        repoPath: task.repoPath,
+        models: withCoordinator({ model: "claude-code/haiku", thinking: "high" }),
+      }),
+    ).rejects.toThrow('"claude-code/haiku" does not support thinking "high"');
+    for (const accepted of [
+      { model: "claude-code/sonnet", thinking: "xhigh" },
+      { model: "claude-code/fable", thinking: "max" },
+      { model: "claude-code/haiku", thinking: "off" },
+    ] as const) {
+      const configured = await service.configureModels({
+        repoPath: task.repoPath,
+        models: withCoordinator(accepted),
+      });
+      expect(configured.models?.coordinator).toEqual(accepted);
+    }
 
     const opus: ModelSpec = { model: "claude-code/opus", thinking: "high" };
     const saved = await service.configureModels({
