@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { policyHarness } from "../../src/config/policy.ts";
 import {
   blockCause,
   type InstructionChannels,
@@ -12,7 +11,6 @@ import {
   type ResolvedPolicy,
   type WorktreeLease,
 } from "../../src/contracts.ts";
-import { DEFAULT_HARNESS, parseHarnessName } from "../../src/harness/contract.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
 import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
@@ -941,6 +939,30 @@ test("a record written before setup commands existed loads with none", async () 
   });
 });
 
+test("a reloaded task keeps the policy digest Tandem pinned before harnesses came from models", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "digest-pinned" });
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the record did not reload");
+    expect(policyIdentity(reloaded.policy)).toBe(
+      "a4465e91847c68d4bae71a5d7e048581ff89991ca64f3c1945233e30a8139a81",
+    );
+  });
+});
+
+test("a stored policy naming a harness is refused like any unknown key", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const created = await store.create({ ...input, id: "harness-key" });
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      policyValue.config = { ...policyValue.config, harness: "omp" };
+    });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("a record pinned with standards none keeps it and its digest across reloads", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
@@ -956,50 +978,6 @@ test("a record pinned with standards none keeps it and its digest across reloads
     if (reloaded === undefined) throw new Error("the record did not reload");
     expect(reloaded.policy.config.standards).toBe("none");
     expect(policyIdentity(reloaded.policy)).toBe(pinnedDigest);
-  });
-});
-
-test("a task pinned before harness choice reloads as OMP with its digest unchanged", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    const store = makeStore(directory);
-    const created = await store.create({ ...input, id: "harness-legacy" });
-    let pinnedDigest = "";
-    rewritePayload(directory, created.id, (payload) => {
-      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
-      expect("harness" in (policyValue.config ?? {})).toBe(false);
-      pinnedDigest = createHash("sha256").update(JSON.stringify(policyValue)).digest("hex");
-    });
-
-    const reloaded = await store.read(created.id);
-    if (reloaded === undefined) throw new Error("the record did not reload");
-    expect(policyHarness(reloaded.policy.config)).toBe(DEFAULT_HARNESS);
-    expect(policyIdentity(reloaded.policy)).toBe(pinnedDigest);
-  });
-});
-
-test("a task keeps the harness its policy pinned", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    const store = makeStore(directory);
-    const claudeCode = parseHarnessName("claude-code", "harness");
-    const created = await store.create({
-      ...input,
-      id: "harness-pinned",
-      policy: { ...policy, config: { ...policy.config, harness: claudeCode } },
-    });
-    const reloaded = await store.read(created.id);
-    expect(reloaded?.policy.config.harness).toBe(claudeCode);
-  });
-});
-
-test("a task pinned with an unknown harness fails closed", async () => {
-  await withTemporaryDirectory(async (directory) => {
-    const store = makeStore(directory);
-    const created = await store.create({ ...input, id: "harness-unknown" });
-    rewritePayload(directory, created.id, (payload) => {
-      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
-      policyValue.config = { ...policyValue.config, harness: "codex" };
-    });
-    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
 

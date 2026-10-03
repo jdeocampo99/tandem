@@ -55,7 +55,6 @@ import {
   WORKSTREAM_NAME_PATTERN,
   type WorktreeLease,
 } from "../contracts.ts";
-import { type HarnessName, parseHarnessName } from "../harness/contract.ts";
 import { PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import { type PrReviewState, parsePrReviewState } from "../pr-review/state.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
@@ -363,7 +362,6 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       "maxFixRounds",
       "reviewLevels",
       "standards",
-      "harness",
       "requestBudget",
     ],
     source,
@@ -430,7 +428,6 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       ? { reviewLevels: parseReviewLevelPolicy(value, `${source}.reviewLevels`) }
       : {}),
     ...(Object.hasOwn(value, "standards") ? { standards: parseStandards(value, source) } : {}),
-    ...(Object.hasOwn(value, "harness") ? { harness: parsePinnedHarness(value, source) } : {}),
   };
 }
 
@@ -455,14 +452,6 @@ function parseSetupCommands(record: UnknownRecord, source: string): readonly Set
       timeoutMs: requiredInteger(entry, "timeoutMs", entrySource, 1),
     };
   });
-}
-
-function parsePinnedHarness(record: UnknownRecord, source: string): HarnessName {
-  try {
-    return parseHarnessName(requiredValue(record, "harness", source), "harness");
-  } catch (error) {
-    return failState(`${source}.harness`, "harness is not a known harness", error);
-  }
 }
 
 function parseStandards(record: UnknownRecord, source: string): "none" {

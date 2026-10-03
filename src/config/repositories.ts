@@ -694,10 +694,6 @@ ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"
 # leave them out and let this repository's AGENTS.md, CLAUDE.md, and instructions govern.
 # standards = "tandem"
 
-# The agent program this project's coordinator and agents run on: "omp" (the default) or
-# "claude-code". Claude Code support is not ready yet, so a project set to it will not start.
-# harness = "omp"
-
 # Extra instructions for agents at each stage. Keep this section below the settings above.
 # [instructions]
 # implementation = ["Keep changes small and match the surrounding code."]
