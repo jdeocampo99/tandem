@@ -2,23 +2,21 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
-import type { WorkerReceipt } from "./contracts.ts";
-import { WorkerSteering } from "./session/worker-steering.ts";
-import { readTaskInbox, writeWorkerReceipt } from "./tasks/communication-persistence.ts";
+import type { WorkerReceipt } from "../../contracts.ts";
+import { WorkerSteering } from "../../session/worker-steering.ts";
+import { readTaskInbox, writeWorkerReceipt } from "../../tasks/communication-persistence.ts";
 import {
-  contextWithTaskMessages,
-  newestTaskMarker,
   parseWorkerControlConfig,
   toolName,
-} from "./workers/control-protocol.ts";
-import { traceWorkerTurn, WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
+  WORKER_CONTROL_ENV,
+} from "../../workers/control-protocol.ts";
+import { traceWorkerTurn, WORKER_JOB_PATH_ENV } from "../../workers/terminal.ts";
+import { contextWithTaskMessages, newestTaskMarker } from "./task-messages.ts";
 import {
   OmpWorkerPane,
   registerWorkerTerminalExtension,
   SYSTEM_CLOCK,
-} from "./workers/terminal-extension.ts";
-
-export const WORKER_CONTROL_ENV = "TANDEM_WORKER_CONTROL";
+} from "./terminal-extension.ts";
 
 export default async function workerControlExtension(pi: ExtensionAPI): Promise<void> {
   try {

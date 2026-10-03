@@ -11,6 +11,7 @@ import type {
   Endpoint,
   TaskRecord,
 } from "../contracts.ts";
+import { ompHarness } from "../harness/omp/launch.ts";
 import { withPresentationLock } from "../presentations/lock.ts";
 import { readPresentationRecord } from "../presentations/records.ts";
 import { activeRuntimeJob, unreleasedReservation } from "../runtime/activity.ts";
@@ -41,7 +42,6 @@ import {
   findResetCoordinator,
   parseJson,
   readSessionSnapshot,
-  sameCommand,
   snapshotPaneForEndpoint,
 } from "./ownership.ts";
 import type { CoordinatorRecord } from "./record.ts";
@@ -147,7 +147,7 @@ function sameCoordinatorIdentity(left: CoordinatorRecord, right: CoordinatorReco
     left.worktree.leaseId === right.worktree.leaseId &&
     left.worktree.leaseHolder === right.worktree.leaseHolder &&
     left.worktree.leasedAt === right.worktree.leasedAt &&
-    sameCommand(left.command, right.command)
+    ompHarness.sameCommand(left.command, right.command)
   );
 }
 
@@ -174,7 +174,7 @@ async function assertIdleResetCoordinator(
   if (inspection.activeWorker) {
     if (
       inspection.processInfo.foregroundProcesses.filter((process) =>
-        sameCommand(process.argv, record.command),
+        ompHarness.sameCommand(process.argv, record.command),
       ).length !== 1
     ) {
       throw ownershipFailure("coordinator foreground process changed before reset");

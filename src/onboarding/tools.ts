@@ -1,5 +1,6 @@
 import { TANDEM_HERDR_PLUGIN } from "../adapters/herdr.ts";
 import type { CommandResult, CommandRunner } from "../contracts.ts";
+import { OMP_INSTALL_COMMAND } from "../harness/omp/adapter.ts";
 import { MIN_HERDR_VERSION, parseHerdrVersion, versionAtLeast } from "../terminal/herdr-setup.ts";
 
 /** One thing Tandem needs on this machine: whether it is there, and the command that fixes it. */
@@ -68,7 +69,7 @@ export async function checkTools(
     name: "OMP",
     ok: omp?.code === 0,
     detail: omp?.code === 0 ? firstLine(omp) : "not found",
-    ...(omp?.code === 0 ? {} : { fix: "bun install -g @oh-my-pi/pi-coding-agent" }),
+    ...(omp?.code === 0 ? {} : { fix: OMP_INSTALL_COMMAND }),
   });
 
   const git = await tryRun(run, ["git", "--version"], cwd);

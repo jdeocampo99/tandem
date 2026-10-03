@@ -1,19 +1,19 @@
 import { expect, test } from "bun:test";
-import type { OmpIncludedAllowance, OmpModelRecord } from "../../src/adapters/omp.ts";
 import {
   compareModelTier,
   lookupModelTierEvidence,
   type ModelTierEvidence,
 } from "../../src/config/model-tier.ts";
 import type { ThinkingLevel } from "../../src/contracts.ts";
+import type { IncludedAllowance, ModelRecord } from "../../src/harness/contract.ts";
 
 type CatalogueOverrides = Readonly<{
   readonly thinking?: readonly ThinkingLevel[];
   readonly cost?: Readonly<{ readonly input: number; readonly output: number }>;
-  readonly includedAllowance?: OmpIncludedAllowance;
+  readonly includedAllowance?: IncludedAllowance;
 }>;
 
-function catalogueEntry(selector: string, overrides: CatalogueOverrides = {}): OmpModelRecord {
+function catalogueEntry(selector: string, overrides: CatalogueOverrides = {}): ModelRecord {
   return {
     selector,
     id: selector,
@@ -26,7 +26,7 @@ function catalogueEntry(selector: string, overrides: CatalogueOverrides = {}): O
   };
 }
 
-function evidenceFor(entry: OmpModelRecord): ModelTierEvidence {
+function evidenceFor(entry: ModelRecord): ModelTierEvidence {
   const lookup = lookupModelTierEvidence([entry], { model: entry.selector, thinking: "high" });
   if (lookup.status !== "known") throw new Error(`expected known evidence, got ${lookup.gap}`);
   return lookup.evidence;

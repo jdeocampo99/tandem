@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import type { RepoPolicy } from "../../src/contracts.ts";
+import type { ModelRecord } from "../../src/harness/contract.ts";
 import { renderSetupHtml } from "../../src/onboarding/setup-render.ts";
 import { buildSetupView, type SetupViewInput } from "../../src/onboarding/setup-view.ts";
 
-const catalogue: readonly OmpModelRecord[] = [
+const catalogue: readonly ModelRecord[] = [
   {
     selector: "anthropic/claude-opus",
     id: "claude-opus",

@@ -597,39 +597,48 @@ test("keeps different canonical repositories independent and rejects corrupt rec
     await cleanup(values.root);
   }
 });
-test("rejects a live pre-registry Tandem coordinator instead of adopting or duplicating it", async () => {
+const SOURCE = join(dirname(fileURLToPath(import.meta.url)), "../../src");
+const EXTENSION_PATHS = {
+  current: join(SOURCE, "harness/omp/extension.ts"),
+  "pre-harness": join(SOURCE, "extension.ts"),
+} as const;
+
+test("still owns a coordinator recorded and launched from the pre-harness extension path", async () => {
   const values = await fixture();
   try {
-    const extensionPath = join(dirname(fileURLToPath(import.meta.url)), "../../src/extension.ts");
-    const legacyCommand = [
-      "bun",
+    const recorded: CoordinatorRecord = {
+      ...values.recordA,
+      command: [
+        "omp",
+        "--config",
+        join(SOURCE, "worker-config.yml"),
+        "--no-extensions",
+        "--extension",
+        EXTENSION_PATHS["pre-harness"],
+        "--tools",
+        "read,ask,tandem",
+        "--cwd",
+        values.worktreeA,
+        "--session-dir",
+        join(values.home, "coordinator-sessions", "abc"),
+      ],
+    };
+    await saveCoordinatorRecord(values.home, recorded);
+    const nativeCommand = [
       "bun",
       join(values.root, ".bun", "bin", "omp"),
-      "--extension",
-      extensionPath,
-      "--cwd",
-      values.repoA,
-      "--no-title",
+      ...recorded.command.slice(1),
     ];
     const runner = scriptedRunner([
+      result(panePayload(recorded)),
       result(
-        snapshotPayload([
+        processPayload(recorded, [
           {
-            workspaceId: values.recordA.endpoint.workspaceId,
-            tabId: values.recordA.endpoint.tabId,
-            paneId: values.recordA.endpoint.paneId,
-          },
-        ]),
-      ),
-      result(panePayload(values.recordA, values.repoA)),
-      result(
-        processPayload(values.recordA, [
-          {
-            pid: 7777,
-            name: "omp",
-            argv: legacyCommand,
-            argv0: "omp",
-            cmdline: legacyCommand.join(" "),
+            pid: 1234,
+            name: "bun",
+            argv: [...nativeCommand, "--continue"],
+            argv0: "bun",
+            cmdline: nativeCommand.join(" "),
           },
         ]),
       ),
@@ -641,12 +650,63 @@ test("rejects a live pre-registry Tandem coordinator instead of adopting or dupl
         sessionId: "tandem",
         repoPath: values.repoA,
       }),
-    ).rejects.toThrow(/Stop that coordinator manually/u);
-    await expect(listCoordinatorRecords(values.home, "tandem")).resolves.toEqual([]);
+    ).resolves.toEqual(recorded);
   } finally {
     await cleanup(values.root);
   }
 });
+
+for (const [location, extensionPath] of Object.entries(EXTENSION_PATHS)) {
+  test(`rejects a live pre-registry Tandem coordinator from the ${location} extension path instead of adopting or duplicating it`, async () => {
+    const values = await fixture();
+    try {
+      const legacyCommand = [
+        "bun",
+        "bun",
+        join(values.root, ".bun", "bin", "omp"),
+        "--extension",
+        extensionPath,
+        "--cwd",
+        values.repoA,
+        "--no-title",
+      ];
+      const runner = scriptedRunner([
+        result(
+          snapshotPayload([
+            {
+              workspaceId: values.recordA.endpoint.workspaceId,
+              tabId: values.recordA.endpoint.tabId,
+              paneId: values.recordA.endpoint.paneId,
+            },
+          ]),
+        ),
+        result(panePayload(values.recordA, values.repoA)),
+        result(
+          processPayload(values.recordA, [
+            {
+              pid: 7777,
+              name: "omp",
+              argv: legacyCommand,
+              argv0: "omp",
+              cmdline: legacyCommand.join(" "),
+            },
+          ]),
+        ),
+      ]);
+
+      await expect(
+        findRunningCoordinator(runner.run, {
+          home: values.home,
+          sessionId: "tandem",
+          repoPath: values.repoA,
+        }),
+      ).rejects.toThrow(/Stop that coordinator manually/u);
+      await expect(listCoordinatorRecords(values.home, "tandem")).resolves.toEqual([]);
+    } finally {
+      await cleanup(values.root);
+    }
+  });
+}
 
 test("fails closed on a live foreign process and leaves the record untouched", async () => {
   const values = await fixture();

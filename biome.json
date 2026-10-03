@@ -17,7 +17,22 @@
     "lineWidth": 100
   },
   "linter": {
-    "enabled": true
+    "enabled": true,
+    "rules": {
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "patterns": [
+              {
+                "group": ["@oh-my-pi/**"],
+                "message": "Only src/harness/omp/ and its tests may import OMP. Go through the launch port in src/harness/contract.ts."
+              }
+            ]
+          }
+        }
+      }
+    }
   },
   "assist": {
     "enabled": true,
@@ -26,5 +41,17 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/harness/omp/**", "tests/harness/omp/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    }
+  ]
 }

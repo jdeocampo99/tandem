@@ -1,4 +1,3 @@
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import { jevGateway } from "../adapters/typesafe.ts";
 import { type JevSetting, parseModelAssignments } from "../config/models.ts";
 import {
@@ -15,6 +14,7 @@ import {
   type ModelSpec,
   type RepoPolicy,
 } from "../contracts.ts";
+import type { ModelRecord } from "../harness/contract.ts";
 
 export type TerminalSelection = Readonly<{
   readonly choices: readonly Readonly<{
@@ -37,7 +37,7 @@ export type ModelOnboardingMode = "first" | "saved";
 
 export type ModelOnboardingInput = Readonly<{
   readonly mode: ModelOnboardingMode;
-  readonly availableModels: readonly OmpModelRecord[];
+  readonly availableModels: readonly ModelRecord[];
   readonly currentModels?: RepoPolicy["models"];
   /** Currently saved provider enablement, shown read-only on repeat onboarding. */
   readonly enabledProviders?: readonly string[];
@@ -119,20 +119,18 @@ function currentForRole(
 }
 
 function uniqueModel(
-  availableModels: readonly OmpModelRecord[],
+  availableModels: readonly ModelRecord[],
   selector: string,
-): OmpModelRecord | undefined {
+): ModelRecord | undefined {
   const matches = availableModels.filter((model) => model.selector === selector);
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-function usableModels(availableModels: readonly OmpModelRecord[]): readonly OmpModelRecord[] {
+function usableModels(availableModels: readonly ModelRecord[]): readonly ModelRecord[] {
   return availableModels.filter((model) => model.thinking.length > 0);
 }
 
-function ensureUsableCatalogue(
-  availableModels: readonly OmpModelRecord[],
-): readonly OmpModelRecord[] {
+function ensureUsableCatalogue(availableModels: readonly ModelRecord[]): readonly ModelRecord[] {
   if (availableModels.length === 0) {
     throw new Error(
       "OMP returned no available models; install or authenticate OMP, then retry. Tandem will not guess a model.",
@@ -148,7 +146,7 @@ function ensureUsableCatalogue(
 }
 
 function modelSelection(
-  models: readonly OmpModelRecord[],
+  models: readonly ModelRecord[],
   role: AgentRole,
   currentModels: RepoPolicy["models"] | undefined,
 ): TerminalSelection {
@@ -168,7 +166,7 @@ function modelSelection(
 }
 
 function thinkingSelection(
-  model: OmpModelRecord,
+  model: ModelRecord,
   role: AgentRole,
   currentModels: RepoPolicy["models"] | undefined,
 ): TerminalSelection {
@@ -191,7 +189,7 @@ function thinkingSelection(
 
 function validateAgainstCatalogue(
   assignments: RepoPolicy["models"],
-  availableModels: readonly OmpModelRecord[],
+  availableModels: readonly ModelRecord[],
 ): RepoPolicy["models"] {
   const parsed = parseModelAssignments(assignments);
   for (const role of MODEL_ROLE_ORDER) {
@@ -213,7 +211,7 @@ function validateAgainstCatalogue(
 
 async function readModelAndThinking(
   prompter: TerminalPrompter,
-  models: readonly OmpModelRecord[],
+  models: readonly ModelRecord[],
   role: AgentRole,
   currentModels: RepoPolicy["models"] | undefined,
 ): Promise<ModelSpec | undefined> {
@@ -253,7 +251,7 @@ async function readModelAndThinking(
 
 async function collectAssignments(
   prompter: TerminalPrompter,
-  availableModels: readonly OmpModelRecord[],
+  availableModels: readonly ModelRecord[],
   currentModels: RepoPolicy["models"] | undefined,
 ): Promise<RepoPolicy["models"] | undefined> {
   const models = ensureUsableCatalogue(availableModels);

@@ -1,6 +1,6 @@
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
+import type { ModelRecord } from "../harness/contract.ts";
 import { SETUP_ROLE_COPY } from "./setup-view.ts";
 
 /**
@@ -52,7 +52,7 @@ export type SetupRepoCheck =
   | Readonly<{ kind: "not-a-repo" }>;
 
 export type SetupAnswerFacts = Readonly<{
-  catalogue: readonly OmpModelRecord[];
+  catalogue: readonly ModelRecord[];
   /** Keyed by the answer's own path spelling. */
   repositories: ReadonlyMap<string, SetupRepoCheck>;
 }>;
@@ -494,7 +494,7 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
 /** Returns the unique providers selected by the answer's model choices. */
 export function setupProviders(
   answer: SetupAnswer,
-  catalogue: readonly OmpModelRecord[],
+  catalogue: readonly ModelRecord[],
 ): readonly string[] {
   const providers = new Set<string>();
   for (const role of MODEL_ROLE_ORDER) {

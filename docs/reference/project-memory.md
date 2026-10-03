@@ -5,7 +5,7 @@ when it writes, how stale notes are kept from misleading it, and what a catch-up
 
 Code: src/memory/ (`workstream.ts` pure sections, cap, follow-ups, recent work, and the catch-up
 view; `view.ts` the card and list; `store.ts` files, handoff archive, and archiving; `service.ts`
-the actions), src/main.ts (`tandem memory`), src/extension/omp-host.ts (the `tandem-card` message and its
+the actions), src/main.ts (`tandem memory`), src/harness/omp/host.ts (the `tandem-card` message and its
 renderer), src/session/actions.ts
 (`memory-list`, `memory-show`, `memory-write`, `memory-done`), src/session/coordinator.ts (the
 standing `Workstreams:` line), src/instructions.ts (the coordinator's memory guidance).

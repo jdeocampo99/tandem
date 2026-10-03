@@ -8,8 +8,8 @@
  * explicitly instead of filling the gap with zero.
  */
 
-import type { OmpIncludedAllowance, OmpModelRecord } from "../adapters/omp.ts";
 import type { ModelSpec, ThinkingLevel } from "../contracts.ts";
+import type { IncludedAllowance, ModelRecord } from "../harness/contract.ts";
 
 /** Why one model's catalogue entry cannot supply tier evidence at all. */
 export type ModelCatalogueGap =
@@ -47,7 +47,7 @@ export type ModelTierEvidence = Readonly<{
   readonly provider: string;
   readonly thinking: ThinkingLevel;
   readonly catalogueCost?: Readonly<{ readonly input: number; readonly output: number }>;
-  readonly includedAllowance?: OmpIncludedAllowance;
+  readonly includedAllowance?: IncludedAllowance;
 }>;
 
 export type ModelTierEvidenceLookup =
@@ -77,7 +77,7 @@ export type ModelTierComparison =
 
 /** Reads one catalogue entry's tier evidence, or names why the catalogue cannot supply it. */
 export function lookupModelTierEvidence(
-  catalogue: readonly OmpModelRecord[],
+  catalogue: readonly ModelRecord[],
   model: ModelSpec,
 ): ModelTierEvidenceLookup {
   const matches = catalogue.filter((entry) => entry.selector === model.model);
@@ -92,10 +92,7 @@ export function lookupModelTierEvidence(
 }
 
 /** Builds tier evidence from a catalogue entry already known to support `thinking`. */
-export function modelTierEvidence(
-  entry: OmpModelRecord,
-  thinking: ThinkingLevel,
-): ModelTierEvidence {
+export function modelTierEvidence(entry: ModelRecord, thinking: ThinkingLevel): ModelTierEvidence {
   return {
     selector: entry.selector,
     provider: entry.provider,

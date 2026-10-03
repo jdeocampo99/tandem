@@ -3,7 +3,7 @@
 What the coordinator's OMP extension, its scheduler and notifications, and worktree maintenance and
 scout release must guarantee.
 
-Code: src/extension.ts (OMP adapter), src/extension/registration.ts, src/extension/omp-host.ts,
+Code: src/harness/omp/extension.ts (OMP adapter), src/harness/omp/registration.ts, src/harness/omp/host.ts,
 src/session/coordinator.ts (scheduler, status, compaction), src/session/actions.ts,
 src/session/tools.ts, src/session/tool-guard.ts, src/session/prompt-routing.ts,
 src/session/notifications.ts, src/pool/maintenance.ts, src/pool/policy.ts,
@@ -39,7 +39,7 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
 - `configure-models` does not change existing task snapshots.
 - User prompts route through `routeUserPrompt` (src/session/prompt-routing.ts) before the model
   sees them, for confirmations and other harness-neutral prompt handling; OMP's `input` event
-  forwards there via `registerPromptRouting` in src/extension/registration.ts.
+  forwards there via `registerPromptRouting` in src/harness/omp/registration.ts.
 - The coordinator's own tool calls, not the `tandem` tool's, are guarded by `coordinatorToolRefusal`
   (src/session/tool-guard.ts), keyed on the call's harness-neutral `ToolCall.kind` (`"mcp"`,
   `"read"`, ...) rather than an OMP tool name. OMP-loaded MCP servers are not filtered by a Tandem
@@ -50,12 +50,12 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   user configuration. Tandem does not grant every skill or server found on disk; sources OMP
   intentionally disables remain unavailable. Explicit per-task skills are still resolved and
   pinned into worker briefs.
-- `registerCoordinatorToolGuard` in `src/extension/registration.ts` converts OMP's native
-  `tool_call` event to the harness-neutral shape with `ompToolCall` (src/extension/omp-host.ts) and
+- `registerCoordinatorToolGuard` in `src/harness/omp/registration.ts` converts OMP's native
+  `tool_call` event to the harness-neutral shape with `ompToolCall` (src/harness/omp/host.ts) and
   blocks the call when a reason comes back.
-- src/extension/omp-host.ts is the shared OMP coordinator host: `ompSessionHost` (the `SessionHost`
+- src/harness/omp/host.ts is the shared OMP coordinator host: `ompSessionHost` (the `SessionHost`
   the harness-neutral core calls into), `ompToolCall`, `ompMcpToolPrefix`, and `ompApprovalDialog`.
-  src/extension.ts and src/extension/registration.ts build the coordinator extension on it.
+  src/harness/omp/extension.ts and src/harness/omp/registration.ts build the coordinator extension on it.
 
 ## Scheduler and notifications
 

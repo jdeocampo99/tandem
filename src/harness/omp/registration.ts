@@ -1,22 +1,21 @@
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { ompToolParameters } from "../adapters/omp-tool-schema.ts";
-import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
-import type { TandemService } from "../service/controller.ts";
+import { appendDiagnosticEvent } from "../../runtime/diagnostics.ts";
+import type { TandemService } from "../../service/controller.ts";
 import {
   runTandemCommand,
   runTandemTool,
   type TandemCallDependencies,
-} from "../session/actions.ts";
-import type { CoordinatorTurnAction } from "../session/events.ts";
+} from "../../session/actions.ts";
+import type { CoordinatorTurnAction } from "../../session/events.ts";
 import {
   type ChoiceConfirmation,
   type PromptRoutingConfig,
   routeUserPrompt,
-} from "../session/prompt-routing.ts";
-import { coordinatorToolRefusal } from "../session/tool-guard.ts";
-import { tandemRequestSchema as tandemToolSchema } from "../session/tools.ts";
+} from "../../session/prompt-routing.ts";
+import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
+import { tandemRequestSchema as tandemToolSchema } from "../../session/tools.ts";
 import {
   CARD_MESSAGE_TYPE,
   ompApprovalDialog,
@@ -25,7 +24,8 @@ import {
   renderCardMessage,
   renderStatusMessage,
   STATUS_MESSAGE_TYPE,
-} from "./omp-host.ts";
+} from "./host.ts";
+import { ompToolParameters } from "./tool-schema.ts";
 
 export type TandemOmpRegistrationDependencies = Readonly<{
   readonly getService: (ctx: ExtensionContext) => TandemService;

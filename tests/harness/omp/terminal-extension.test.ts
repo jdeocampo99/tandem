@@ -8,7 +8,7 @@ import {
   isBackgroundResultWake,
   OmpWorkerPane,
   ompWorkerToolCall,
-} from "../../src/workers/terminal-extension.ts";
+} from "../../../src/harness/omp/terminal-extension.ts";
 
 test("only a finished background command's wake-up counts as a background wake", () => {
   const assistant = { role: "assistant", content: [], timestamp: 1 } as unknown as AgentMessage;

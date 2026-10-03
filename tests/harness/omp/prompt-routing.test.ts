@@ -11,13 +11,13 @@ import {
   type JevEvaluationInput,
   type JevEvaluationResponse,
   type JevFetch,
-} from "../../src/adapters/typesafe.ts";
-import { renderBoard } from "../../src/board/view.ts";
-import { registerTandemOmp } from "../../src/extension/registration.ts";
-import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
-import { appendDiagnosticEvent, readPromptRoutingLog } from "../../src/runtime/diagnostics.ts";
-import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION } from "../../src/runtime/usage.ts";
-import type { TandemService } from "../../src/service/controller.ts";
+} from "../../../src/adapters/typesafe.ts";
+import { renderBoard } from "../../../src/board/view.ts";
+import { registerTandemOmp } from "../../../src/harness/omp/registration.ts";
+import { RESTART_QUESTION_ID_PREFIX } from "../../../src/recovery/central.ts";
+import { appendDiagnosticEvent, readPromptRoutingLog } from "../../../src/runtime/diagnostics.ts";
+import { JEV_PRICING_SNAPSHOT, USAGE_RECORD_SCHEMA_VERSION } from "../../../src/runtime/usage.ts";
+import type { TandemService } from "../../../src/service/controller.ts";
 import {
   actionForPromptDecision,
   type ChoiceConfirmation,
@@ -27,8 +27,8 @@ import {
   promptRoutingConfig,
   routeUserPrompt,
   type UserPrompt,
-} from "../../src/session/prompt-routing.ts";
-import { type RecordingSessionHost, recordingSessionHost } from "../evals/scenario.ts";
+} from "../../../src/session/prompt-routing.ts";
+import { type RecordingSessionHost, recordingSessionHost } from "../../evals/scenario.ts";
 
 type Choice = Readonly<{ choice: string; confidence?: number }>;
 

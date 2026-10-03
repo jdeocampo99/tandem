@@ -1,11 +1,9 @@
 import { expect, test } from "bun:test";
-import type { OmpModelRecord } from "../../src/adapters/omp.ts";
 import { discoveredProviders, resolveBalancedProfile } from "../../src/config/operating-profile.ts";
 import { MODEL_ROLE_ORDER } from "../../src/contracts.ts";
+import type { ModelRecord } from "../../src/harness/contract.ts";
 
-function model(
-  overrides: Partial<OmpModelRecord> & Pick<OmpModelRecord, "selector">,
-): OmpModelRecord {
+function model(overrides: Partial<ModelRecord> & Pick<ModelRecord, "selector">): ModelRecord {
   return {
     id: overrides.selector,
     provider: overrides.selector.split("/")[0] ?? "unknown",
@@ -15,7 +13,7 @@ function model(
   };
 }
 
-const RICH_CATALOGUE: readonly OmpModelRecord[] = [
+const RICH_CATALOGUE: readonly ModelRecord[] = [
   model({
     selector: "acme/frontier",
     provider: "acme",
@@ -89,7 +87,7 @@ test("resolveBalancedProfile picks the highest-context, lowest-cost eligible can
 });
 
 test("roles that do not require reasoning may still select a non-reasoning candidate", () => {
-  const catalogue: readonly OmpModelRecord[] = [
+  const catalogue: readonly ModelRecord[] = [
     model({
       selector: "acme/scout-model",
       provider: "acme",
@@ -108,7 +106,7 @@ test("roles that do not require reasoning may still select a non-reasoning candi
 });
 
 test("a candidate with undefined reasoning is excluded as ambiguous capability evidence", () => {
-  const catalogue: readonly OmpModelRecord[] = [
+  const catalogue: readonly ModelRecord[] = [
     { id: "m", selector: "acme/no-evidence", provider: "acme", thinking: ["medium"] },
   ];
   const proposal = resolveBalancedProfile({ catalogue, enabledProviders: new Set(["acme"]) });
@@ -119,7 +117,7 @@ test("a candidate with undefined reasoning is excluded as ambiguous capability e
 });
 
 test("an unsupported thinking level for a role fails closed with an actionable reason", () => {
-  const catalogue: readonly OmpModelRecord[] = [
+  const catalogue: readonly ModelRecord[] = [
     model({ selector: "acme/only-low", provider: "acme", thinking: ["low"] }),
   ];
   const proposal = resolveBalancedProfile({ catalogue, enabledProviders: new Set(["acme"]) });

@@ -51,8 +51,6 @@ async function fixture(): Promise<Fixture> {
   await mkdir(taskWorktree, { recursive: true });
   await mkdir(decoy, { recursive: true });
   const model = defaultPolicy().models.coordinator;
-  const configPath = "/tandem/src/worker-config.yml";
-  const extensionPath = "/tandem/src/extension.ts";
   const pool = fakePool({ repo, poolRoot, taskWorktreePath: taskWorktree });
   let quarantineIds = 0;
   return {
@@ -70,8 +68,6 @@ async function fixture(): Promise<Fixture> {
       poolRoot,
       sessionId: SESSION_ID,
       model,
-      configPath,
-      extensionPath,
       continueSession: false,
       headless: true,
       noAttach: true,

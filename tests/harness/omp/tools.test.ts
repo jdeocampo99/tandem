@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { validateToolArguments } from "@oh-my-pi/pi-ai";
 import type { z } from "zod/v4";
-import { ompToolParameters } from "../../src/adapters/omp-tool-schema.ts";
-import type { TandemAction } from "../../src/session/actions.ts";
+import { ompToolParameters } from "../../../src/harness/omp/tool-schema.ts";
+import type { TandemAction } from "../../../src/session/actions.ts";
 import {
   copyAssetSchema,
   submitReportSchema,
   tandemRequestSchema,
-} from "../../src/session/tools.ts";
-import type { WorkerRole } from "../../src/workers/jobs.ts";
+} from "../../../src/session/tools.ts";
+import type { WorkerRole } from "../../../src/workers/jobs.ts";
 
 type Case = Readonly<{ name: string; input: unknown; valid: boolean }>;
 

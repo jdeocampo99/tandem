@@ -72,8 +72,6 @@ async function fixture(): Promise<Fixture> {
     poolRoot,
     sessionId,
     model,
-    configPath: "/tandem/src/worker-config.yml",
-    extensionPath: "/tandem/src/extension.ts",
     continueSession: false,
     headless: true,
     noAttach: true,
@@ -248,6 +246,7 @@ async function seedPendingScout(
     unmerged: false,
   });
   test.pool.panes.set(endpoint.paneId, {
+    sessionId: endpoint.sessionId,
     paneId: endpoint.paneId,
     tabId: endpoint.tabId,
     workspaceId: endpoint.workspaceId,
@@ -345,6 +344,7 @@ async function seedPendingImplementation(
     generation: 0,
   };
   test.pool.panes.set(endpoint.paneId, {
+    sessionId: endpoint.sessionId,
     paneId: endpoint.paneId,
     tabId: endpoint.tabId,
     workspaceId: endpoint.workspaceId,

@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { CommandRequest } from "./contracts.ts";
+import type { AgentKind } from "./harness/contract.ts";
+import { ompHarness } from "./harness/omp/launch.ts";
 import { readTaskInbox } from "./tasks/communication-persistence.ts";
 import { formatTaskMessages } from "./tasks/communication-protocol.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
-import { WORKER_CONTROL_ENV } from "./worker-control.ts";
+import { WORKER_CONTROL_ENV } from "./workers/control-protocol.ts";
 import {
   claimExecutionStart,
   type ExecutionAdmission,
@@ -19,7 +20,7 @@ import {
   type WorkerJob,
   type WorkerResult,
 } from "./workers/jobs.ts";
-import { COPY_ASSET_TOOL, SUBMIT_REPORT_TOOL, WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
+import { WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
 
 export type WorkerClock = () => string;
 export type WorkerResultWriter = (resultPath: string, result: WorkerResult) => void | Promise<void>;
@@ -31,33 +32,6 @@ export type WorkerRunOptions = Readonly<{
     input: ExecutionGateInput,
   ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
-
-// write, edit, and copy_asset reach only the mockup folder Tandem names (see mockupWriteDecision).
-const SCOUT_TOOLS = [
-  "read",
-  "grep",
-  "glob",
-  "web_search",
-  "task",
-  "write",
-  "edit",
-  COPY_ASSET_TOOL,
-  SUBMIT_REPORT_TOOL,
-] as const;
-const READ_ONLY_TOOLS = ["read", "grep", "glob", SUBMIT_REPORT_TOOL] as const;
-const IMPLEMENTER_TOOLS = [
-  "read",
-  "grep",
-  "glob",
-  "edit",
-  "write",
-  "bash",
-  "todo",
-  SUBMIT_REPORT_TOOL,
-] as const;
-const PRESENTATION_TOOLS = ["read", "grep", "glob", "write", "edit", SUBMIT_REPORT_TOOL] as const;
-const WORKER_CONFIG_PATH = fileURLToPath(new URL("./worker-config.yml", import.meta.url));
-const WORKER_CONTROL_PATH = fileURLToPath(new URL("./worker-control.ts", import.meta.url));
 
 async function promptWithInitialCommunication(job: WorkerJob): Promise<string> {
   if (job.communication === undefined) return job.prompt;
@@ -79,14 +53,8 @@ async function promptWithInitialCommunication(job: WorkerJob): Promise<string> {
   return job.prompt.includes(marker) ? job.prompt : `${job.prompt}\n\n${marker}`;
 }
 
-function toolsForJob(job: WorkerJob): string {
-  const role = job.role;
-  // The bash tool is limited to read-only git and gh commands by the worker terminal extension.
-  if (job.prReview !== undefined) return [...READ_ONLY_TOOLS, "bash"].join(",");
-  if (role === "scout") return SCOUT_TOOLS.join(",");
-  if (role === "implementer") return IMPLEMENTER_TOOLS.join(",");
-  if (role === "presentation") return PRESENTATION_TOOLS.join(",");
-  return READ_ONLY_TOOLS.join(",");
+function agentForJob(job: WorkerJob): AgentKind {
+  return job.prReview === undefined ? job.role : "pr-reviewer";
 }
 
 function workerEnvironment(job: WorkerJob, jobPath: string): Readonly<Record<string, string>> {
@@ -108,29 +76,16 @@ function workerEnvironment(job: WorkerJob, jobPath: string): Readonly<Record<str
 function buildWorkerCommand(job: WorkerJob, prompt: string, jobPath: string): CommandRequest {
   const environment = workerEnvironment(job, jobPath);
   return {
-    argv: [
-      "omp",
-      "--model",
-      job.model.model,
-      "--thinking",
-      job.model.thinking,
-      "--no-prewalk",
-      "--no-rules",
-      "--no-title",
-      "--no-extensions",
-      "--extension",
-      WORKER_CONTROL_PATH,
-      ...(job.sessionDirectory === undefined
-        ? ["--no-session"]
-        : ["--session-dir", job.sessionDirectory, "--continue"]),
-      "--config",
-      WORKER_CONFIG_PATH,
-      "--cwd",
-      job.cwd,
-      "--tools",
-      toolsForJob(job),
+    argv: ompHarness.command({
+      agent: agentForJob(job),
+      cwd: job.cwd,
+      model: job.model,
+      conversation:
+        job.sessionDirectory === undefined
+          ? { kind: "none" }
+          : { kind: "saved", directory: job.sessionDirectory, resume: true },
       prompt,
-    ],
+    }),
     cwd: job.cwd,
     env: environment,
   };

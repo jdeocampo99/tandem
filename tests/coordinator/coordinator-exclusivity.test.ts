@@ -74,8 +74,6 @@ async function fixture(): Promise<Fixture> {
       poolRoot,
       sessionId,
       model,
-      configPath: "/tandem/src/worker-config.yml",
-      extensionPath: "/tandem/src/extension.ts",
       continueSession: false,
       headless: true,
       noAttach: true,

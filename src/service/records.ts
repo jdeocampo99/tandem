@@ -1,5 +1,4 @@
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { OmpModelRecord } from "../adapters/omp.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
   Clock,
@@ -13,6 +12,7 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import { MODEL_ROLE_ORDER } from "../contracts.ts";
+import type { ModelRecord } from "../harness/contract.ts";
 import { type AgentBriefReview, buildAgentBrief } from "../instructions.ts";
 import { workstreamName } from "../memory/workstream.ts";
 import type { PlaybookId } from "../playbooks/catalog.ts";
@@ -125,7 +125,7 @@ export function readTextList(value: unknown, field: string): readonly string[] {
 
 export function validateModelAssignments(
   assignments: RepoPolicy["models"],
-  availableModels: readonly OmpModelRecord[],
+  availableModels: readonly ModelRecord[],
 ): void {
   for (const role of MODEL_ROLE_ORDER) {
     const assignment = assignments[role];

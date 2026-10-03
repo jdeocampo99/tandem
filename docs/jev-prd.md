@@ -91,5 +91,5 @@ Current implementation areas:
 
 - [TypeSafe transport](../src/adapters/typesafe.ts)
 - [Prompt routing](../src/session/prompt-routing.ts)
-- [Extension registration](../src/extension/registration.ts)
+- [Extension registration](../src/harness/omp/registration.ts)
 - [Diagnostic persistence](../src/runtime/diagnostics.ts)

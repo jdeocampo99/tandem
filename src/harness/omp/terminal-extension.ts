@@ -6,10 +6,9 @@ import type {
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { matchesKey } from "@oh-my-pi/pi-tui";
-import { runCommand } from "../adapters/commands.ts";
-import { createHerdrStatusReporter } from "../adapters/herdr-status.ts";
-import { ompToolParameters } from "../adapters/omp-tool-schema.ts";
-import { todoItems } from "../playbooks/progress.ts";
+import { runCommand } from "../../adapters/commands.ts";
+import { createHerdrStatusReporter } from "../../adapters/herdr-status.ts";
+import { todoItems } from "../../playbooks/progress.ts";
 import type {
   SessionDeps,
   SessionEffect,
@@ -17,18 +16,18 @@ import type {
   ToolKind,
   ToolOutcome,
   UsageCounts,
-} from "../session/events.ts";
-import { copyAssetSchema, submitReportSchema } from "../session/tools.ts";
-import { type WorkerHost, WorkerSession } from "../session/worker.ts";
-import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
-import type { TranscriptRef } from "../tasks/timeline.ts";
-import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "./jobs.ts";
+} from "../../session/events.ts";
+import { copyAssetSchema, submitReportSchema } from "../../session/tools.ts";
+import { type WorkerHost, WorkerSession } from "../../session/worker.ts";
+import { readWorkerReceipt } from "../../tasks/communication-persistence.ts";
+import type { TranscriptRef } from "../../tasks/timeline.ts";
+import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "../../workers/jobs.ts";
 import {
   assertSelectedModel,
   expectedModelParts,
   nativeAgentEndAborted,
   nativeAgentEndFailure,
-} from "./protocol.ts";
+} from "../../workers/protocol.ts";
 import {
   COPY_ASSET_TOOL,
   readWorkerTerminalCommand,
@@ -39,7 +38,8 @@ import {
   WORKER_JOB_PATH_ENV,
   writeWorkerTerminal,
   writeWorkerTokenTally,
-} from "./terminal.ts";
+} from "../../workers/terminal.ts";
+import { ompToolParameters } from "./tool-schema.ts";
 
 /** The wall and monotonic clocks a worker session runs on. */
 export const SYSTEM_CLOCK: SessionDeps["clock"] = {

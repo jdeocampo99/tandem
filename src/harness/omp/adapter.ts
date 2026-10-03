@@ -1,5 +1,4 @@
 import { loadAllMCPConfigs } from "@oh-my-pi/pi-coding-agent/mcp/config";
-import type { CommandRequest, CommandRunner, ModelSpec, ThinkingLevel } from "../contracts.ts";
 import {
   AdapterProtocolError,
   checkedPath,
@@ -10,7 +9,9 @@ import {
   requiredRecord,
   requiredString,
   runChecked,
-} from "./primitives.ts";
+} from "../../adapters/primitives.ts";
+import type { CommandRequest, CommandRunner, ModelSpec, ThinkingLevel } from "../../contracts.ts";
+import type { IncludedAllowance, ModelRecord } from "../contract.ts";
 
 const THINKING_LEVELS: Readonly<Record<string, true>> = {
   off: true,
@@ -27,33 +28,6 @@ function isThinkingLevel(value: string): value is ThinkingLevel {
   return THINKING_LEVELS[value] === true;
 }
 
-/**
- * What one request on this model draws from a subscription's included allowance, in the
- * provider's own units. It carries no currency: an included draw is quota consumption, and
- * pricing it would invent a charge the provider never billed.
- */
-export type OmpIncludedAllowance = Readonly<{
-  plan: string;
-  unit: string;
-  unitsPerRequest: number;
-}>;
-
-export type OmpModelRecord = Readonly<{
-  selector: string;
-  id: string;
-  provider: string;
-  thinking: readonly ThinkingLevel[];
-  name?: string;
-  reasoning?: boolean;
-  contextWindow?: number;
-  /** Descriptive catalogue pricing; it is evidence about the model, not this account's rate. */
-  cost?: Readonly<{
-    input: number;
-    output: number;
-  }>;
-  includedAllowance?: OmpIncludedAllowance;
-}>;
-
 export type OmpModelListInput = Readonly<{
   cwd: string;
 }>;
@@ -61,11 +35,6 @@ export type OmpModelListInput = Readonly<{
 export type ValidateModelInput = Readonly<{
   cwd: string;
   model: ModelSpec;
-}>;
-
-export type OmpArgvInput = Readonly<{
-  model: ModelSpec;
-  prompt?: string;
 }>;
 
 function optionalBoolean(
@@ -123,7 +92,7 @@ function optionalIncludedAllowance(
   field: string,
   operation: string,
   response: string,
-): OmpIncludedAllowance | undefined {
+): IncludedAllowance | undefined {
   if (value === undefined || value === null) return undefined;
   const allowance = requiredRecord(value, field, operation, response);
   const unitsPerRequest = optionalNumber(
@@ -180,7 +149,7 @@ function parseModelRecord(
   index: number,
   operation: string,
   response: string,
-): OmpModelRecord {
+): ModelRecord {
   const record = requiredRecord(value, `models[${index}]`, operation, response);
   const selector = requiredString(
     record.selector,
@@ -234,7 +203,7 @@ function parseModelRecord(
   };
 }
 
-function parseModelListing(response: string): readonly OmpModelRecord[] {
+function parseModelListing(response: string): readonly ModelRecord[] {
   const operation = "omp model listing";
   const parsed = parseJson(response, operation);
   const root = requiredRecord(parsed, "response", operation, response);
@@ -245,7 +214,7 @@ function parseModelListing(response: string): readonly OmpModelRecord[] {
 }
 
 type OmpModelListingResult = Readonly<{
-  readonly models: readonly OmpModelRecord[];
+  readonly models: readonly ModelRecord[];
   readonly response: string;
 }>;
 
@@ -267,14 +236,14 @@ async function readOmpModelListing(
 export async function listOmpModels(
   run: CommandRunner,
   input: OmpModelListInput,
-): Promise<readonly OmpModelRecord[]> {
+): Promise<readonly ModelRecord[]> {
   return (await readOmpModelListing(run, input)).models;
 }
 
 export async function validateModel(
   run: CommandRunner,
   input: ValidateModelInput,
-): Promise<OmpModelRecord> {
+): Promise<ModelRecord> {
   const model = input.model;
   checkedText(model.model, "model.model");
   if (!isThinkingLevel(model.thinking)) {
@@ -307,24 +276,7 @@ export async function validateModel(
   return observed;
 }
 
-export function buildOmpArgv(input: OmpArgvInput): readonly string[] {
-  checkedText(input.model.model, "model.model");
-  if (!isThinkingLevel(input.model.thinking)) {
-    throw new TypeError(`unsupported model thinking level ${input.model.thinking}`);
-  }
-  const argv = [
-    "omp",
-    "--model",
-    input.model.model,
-    "--thinking",
-    input.model.thinking,
-    "--no-prewalk",
-    "--no-extensions",
-    "--no-title",
-  ];
-  if (input.prompt !== undefined) argv.push(input.prompt);
-  return argv;
-}
+export const OMP_INSTALL_COMMAND = "bun install -g @oh-my-pi/pi-coding-agent";
 
 /** Names of the MCP servers OMP would load in this checkout, from project and user config. */
 export async function listOmpMcpServers(cwd: string): Promise<readonly string[]> {

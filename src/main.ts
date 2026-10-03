@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { basename } from "node:path";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
@@ -12,6 +11,7 @@ import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { isTandemCheckout, TANDEM_CHECKOUT } from "./coordinator/tandem-checkout.ts";
+import { terminalOpensLinks } from "./harness/omp/terminal.ts";
 import { renderCatchUpCard, renderWorkstreamList } from "./memory/view.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
 import { type PublishedReport, publishReport } from "./report/publish.ts";
@@ -431,7 +431,7 @@ async function handleMemory({
     const [workstream] = invocation.paths;
     const colors = statusStyle(environment, dependencies);
     // Links only where colors are on (a terminal, no NO_COLOR), and only if it opens OSC 8 links.
-    const style = { ...colors, links: colors.color && TERMINAL.hyperlinks };
+    const style = { ...colors, links: colors.color && terminalOpensLinks() };
     if (workstream === undefined) {
       const lines = await service.memoryList(project);
       stdout(

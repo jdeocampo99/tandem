@@ -2,6 +2,7 @@ import { expect, setSystemTime, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { registerWorkerTerminalExtension } from "../../src/harness/omp/terminal-extension.ts";
 import { runWorkerJob } from "../../src/worker.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import {
@@ -16,7 +17,6 @@ import {
   requestWorkerTerminalCommand,
   type WorkerTerminalJob,
 } from "../../src/workers/terminal.ts";
-import { registerWorkerTerminalExtension } from "../../src/workers/terminal-extension.ts";
 import { validationCommandLine } from "../../src/workers/validation-commands.ts";
 
 const MODEL = { provider: "openai-codex", id: "gpt-5.6-luna" };

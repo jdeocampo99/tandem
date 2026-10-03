@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { OmpIncludedAllowance, OmpModelRecord } from "../../src/adapters/omp.ts";
 import type { ModelSpec, ThinkingLevel } from "../../src/contracts.ts";
+import type { IncludedAllowance, ModelRecord } from "../../src/harness/contract.ts";
 import type { DurableExecutionRouting } from "../../src/runtime/schema.ts";
 import {
   authorizeExecutionModel,
@@ -29,10 +29,10 @@ const OBSERVED: ExecutionUsageObservation = { status: "observed", exposure: MEAS
 type CatalogueOverrides = Readonly<{
   readonly thinking?: readonly ThinkingLevel[];
   readonly cost?: Readonly<{ readonly input: number; readonly output: number }>;
-  readonly includedAllowance?: OmpIncludedAllowance;
+  readonly includedAllowance?: IncludedAllowance;
 }>;
 
-function catalogueEntry(selector: string, overrides: CatalogueOverrides = {}): OmpModelRecord {
+function catalogueEntry(selector: string, overrides: CatalogueOverrides = {}): ModelRecord {
   return {
     selector,
     id: selector,
@@ -46,7 +46,7 @@ function catalogueEntry(selector: string, overrides: CatalogueOverrides = {}): O
 }
 
 function snapshot(
-  models: readonly OmpModelRecord[],
+  models: readonly ModelRecord[],
   enabledProviders: readonly string[],
 ): ModelCatalogueSnapshot {
   return { status: "read", models, enabledProviders, readAt: "2030-01-01T00:00:00.000Z" };
