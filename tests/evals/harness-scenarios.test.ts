@@ -66,6 +66,21 @@ test("a scout on a Claude Code model gets a Claude Code job while the coordinato
   });
 });
 
+test("a scout pinned to a Claude Code model launches although OMP's listing lacks it", async () => {
+  const ompModels = [
+    {
+      provider: "openai-codex",
+      id: "gpt-5.6",
+      selector: "openai-codex/gpt-5.6",
+      thinking: ["high"],
+    },
+  ];
+  await withScenario({ ompModels }, async (world) => {
+    const spec = await launchedScoutSpec(world, policyWith({ scout: CLAUDE_CODE_SONNET }));
+    expect(spec.harness).toBe(parseHarnessName("claude-code", "harness"));
+  });
+});
+
 test("a Claude Code coordinator leaves an OMP scout's job on OMP", async () => {
   await withScenario({}, async (world) => {
     const spec = await launchedScoutSpec(world, policyWith({ coordinator: CLAUDE_CODE_OPUS }));

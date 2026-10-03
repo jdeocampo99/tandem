@@ -65,8 +65,8 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
-import type { ModelRecord } from "../harness/contract.ts";
-import { catalogueHarness, runnableModels } from "../harness/resolve.ts";
+import type { HarnessName, ModelRecord } from "../harness/contract.ts";
+import { catalogueHarness, harnessFor, runnableModels } from "../harness/resolve.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
@@ -801,7 +801,7 @@ class TandemController {
       maintainPoolForAllocation: (task) => this.maintainPoolForAllocation(task),
       recordRequestUsage: (events) => this.#accounting.record(events),
       readRequestUsage: (requestId) => deps.usageLedger.read(requestId),
-      readModelCatalogue: (cwd) => this.readModelCatalogue(cwd),
+      readModelCatalogue: (cwd, harness) => this.readModelCatalogue(cwd, harness),
     });
     this.#control = new TaskControlWorkflow({
       home: deps.home,
@@ -1085,12 +1085,15 @@ class TandemController {
    * cannot read is reported as unavailable rather than as an empty catalogue, because an empty one
    * would read as "nothing is enabled and nothing is included".
    */
-  private async readModelCatalogue(cwd: string): Promise<ModelCatalogueSnapshot> {
+  private async readModelCatalogue(
+    cwd: string,
+    harness: HarnessName,
+  ): Promise<ModelCatalogueSnapshot> {
     try {
       const settings = await readModelSettings({ repoPath: cwd, home: this.#deps.home });
       return {
         status: "read",
-        models: await runnableModels(this.#deps.run, cwd),
+        models: await harnessFor(harness).listModels(this.#deps.run, cwd),
         enabledProviders: settings.enabledProviders,
         readAt: this.#deps.clock(),
       };

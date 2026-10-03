@@ -103,10 +103,13 @@ never import either harness's `launch.ts`; Biome enforces it.
   extension is.
 - The OMP model listing and MCP listing are home-wide, so they always come from OMP
   (`catalogueHarness`).
-- A job's launch checks its pinned model against `runnableModels`: OMP's listing plus the Claude
-  Code catalogue. Without the catalogue, a task pinned to `claude-code/sonnet` stopped with "That
-  model isn't listed right now." Reassignment still never moves a role into Claude Code: it keeps
-  the pinned model's harness and picks only from enabled providers.
+- A job's launch checks its pinned model against its own harness's listing (the
+  `ModelCatalogueReader` takes the harness): OMP's listing for an OMP model, the fixed catalogue
+  for a Claude Code one. Checked against OMP's listing alone, a task pinned to `claude-code/sonnet`
+  stopped with "That model isn't listed right now" (seen live). A reassignment stays in the pinned
+  model's harness and picks only from enabled providers, so it never needs another listing.
+- `configure-models` accepts any selector in `runnableModels`: OMP's listing plus the Claude Code
+  catalogue.
 
 ## The launch port
 

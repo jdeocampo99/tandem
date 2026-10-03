@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { Clock, IdFactory, TaskRecord } from "../contracts.ts";
+import { type HarnessName, harnessOf } from "../harness/contract.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import { readRuntimeState, taskJobsDirectory, writeRuntimeState } from "../runtime/persistence.ts";
 import type { DurableExecutionRouting, RuntimeTaskState } from "../runtime/schema.ts";
@@ -241,7 +242,8 @@ export class TaskReservations {
     // An uncertain-outcome question stops speaking once that attempt settles as a known failure.
     const settledUncertainty =
       runtime.routingPause?.reason === "prior-outcome-uncertain" && prior?.outcome !== "uncertain";
-    const catalogue = await this.readCatalogue(attempt.cwd);
+    const pinned = task.policy.config.models[modelRole];
+    const catalogue = await this.readCatalogue(attempt.cwd, harnessOf(pinned));
     // A catalogue gap stops speaking once the catalogue lists the pinned model cleanly again.
     if (
       !settledUncertainty &&
@@ -263,7 +265,7 @@ export class TaskReservations {
         policyDigest: attempt.policyDigest,
         inputHead: attempt.inputHead,
       },
-      pinned: task.policy.config.models[modelRole],
+      pinned,
       catalogue,
       usage: await this.observeRequestUsage(task),
       now: this.#deps.clock(),
@@ -285,9 +287,9 @@ export class TaskReservations {
   }
 
   /** Reads catalogue evidence without letting a boundary failure decide anything by itself. */
-  private async readCatalogue(cwd: string): Promise<ModelCatalogueSnapshot> {
+  private async readCatalogue(cwd: string, harness: HarnessName): Promise<ModelCatalogueSnapshot> {
     try {
-      return await this.#deps.readModelCatalogue(cwd);
+      return await this.#deps.readModelCatalogue(cwd, harness);
     } catch {
       return { status: "unavailable", reason: "catalogue-unreadable" };
     }

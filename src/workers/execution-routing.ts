@@ -32,7 +32,7 @@ import {
   modelTierEvidence,
 } from "../config/model-tier.ts";
 import type { IsoTimestamp, ModelSpec } from "../contracts.ts";
-import { harnessOf, type ModelRecord } from "../harness/contract.ts";
+import { type HarnessName, harnessOf, type ModelRecord } from "../harness/contract.ts";
 import {
   type DurableExecutionRouting,
   type DurableExecutionRoutingPause,
@@ -68,7 +68,14 @@ export type ModelCatalogueSnapshot =
     }>;
 
 /** Reads the catalogue for one repository checkout at an execution boundary. */
-export type ModelCatalogueReader = (cwd: string) => Promise<ModelCatalogueSnapshot>;
+/**
+ * The listing of one harness for one checkout. A pinned model is checked against its own harness's
+ * listing, and a reassignment never leaves that harness, so no other listing is ever needed.
+ */
+export type ModelCatalogueReader = (
+  cwd: string,
+  harness: HarnessName,
+) => Promise<ModelCatalogueSnapshot>;
 
 /** The identities one routing choice is resolved under and recorded against. */
 export type ExecutionAttemptIdentity = Readonly<{
