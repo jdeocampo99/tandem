@@ -22,6 +22,7 @@ import {
   resolveCoordinatorSourceHead,
 } from "../../src/coordinator/source.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { HarnessUnavailableError } from "../../src/harness/resolve.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { RuntimeTaskState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -566,7 +567,7 @@ test("refuses a coordinator record naming an unknown or unavailable harness", as
     );
     await rewriteRecordHarness(values.home, values.recordA, "claude-code");
     await expect(findRunningCoordinator(scriptedRunner([]).run, lookup)).rejects.toThrow(
-      /Tandem cannot run yet/u,
+      HarnessUnavailableError,
     );
   } finally {
     await cleanup(values.root);

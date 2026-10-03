@@ -1,20 +1,56 @@
-import type { Harness, HarnessName, KnownHarness } from "./contract.ts";
+import type { AgentRole, ModelSpec } from "../contracts.ts";
+import { CLAUDE_CODE_PROVIDER } from "./claude-code/models.ts";
+import {
+  DEFAULT_HARNESS,
+  type Harness,
+  type HarnessName,
+  type KnownHarness,
+  parseHarnessName,
+} from "./contract.ts";
 import { ompHarness } from "./omp/launch.ts";
 
-/** Thrown when a project names a harness Tandem knows but cannot run yet. */
+/** Thrown when a role's model runs in a harness Tandem knows but cannot run yet. */
 export class HarnessUnavailableError extends Error {}
 
-const HARNESSES: Readonly<Record<KnownHarness, () => Harness>> = {
-  omp: () => ompHarness,
-  "claude-code": () => {
-    throw new HarnessUnavailableError(
-      'This project is set to run on Claude Code, which Tandem cannot run yet. Set harness = "omp" in the project\'s settings.toml, or delete the harness line, to use OMP.',
-    );
-  },
+const CLAUDE_CODE = parseHarnessName("claude-code", "harness");
+
+/** Each known harness, or undefined while Tandem can't run it yet. */
+const RUNNABLE: Readonly<Record<KnownHarness, Harness | undefined>> = {
+  omp: ompHarness,
+  "claude-code": undefined,
 };
+
+function runnable(name: HarnessName): Harness | undefined {
+  const known: KnownHarness = name;
+  return RUNNABLE[known];
+}
+
+/**
+ * The one place a model becomes a harness: a `claude-code/<model>` selector runs in Claude Code,
+ * and every other selector, or no model at all (the harness's own default), runs in OMP.
+ */
+export function harnessOf(model: ModelSpec | undefined): HarnessName {
+  return model?.model.startsWith(`${CLAUDE_CODE_PROVIDER}/`) ? CLAUDE_CODE : DEFAULT_HARNESS;
+}
 
 /** The one place a harness name becomes the harness that launches and recognizes its agents. */
 export function harnessFor(name: HarnessName): Harness {
-  const known: KnownHarness = name;
-  return HARNESSES[known]();
+  const harness = runnable(name);
+  if (harness === undefined) {
+    throw new HarnessUnavailableError(
+      "This agent's model runs in Claude Code, and Tandem can't run Claude Code yet. Pick a model from another provider for its role with `tandem configure`.",
+    );
+  }
+  return harness;
+}
+
+/** The harness that runs `role` on `model`, refusing in plain English when Tandem can't run it. */
+export function harnessForRole(role: AgentRole, model: ModelSpec | undefined): Harness {
+  const harness = runnable(harnessOf(model));
+  if (harness === undefined) {
+    throw new HarnessUnavailableError(
+      `The ${role}'s model is ${model?.model}, which runs in Claude Code. Tandem can't run Claude Code yet. Pick a model from another provider for this role with \`tandem configure\`.`,
+    );
+  }
+  return harness;
 }

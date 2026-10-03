@@ -1,7 +1,6 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { inspectEndpoint, sendCommand } from "../adapters/herdr.ts";
 import { EndpointBusyError } from "../adapters/primitives.ts";
-import { policyHarness } from "../config/policy.ts";
 import type {
   BlockCause,
   Clock,
@@ -10,6 +9,7 @@ import type {
   IdFactory,
   TaskRecord,
 } from "../contracts.ts";
+import { harnessOf } from "../harness/resolve.ts";
 import { PLAYBOOKS, type PlaybookId } from "../playbooks/catalog.ts";
 import { playbookForRun } from "../playbooks/selection.ts";
 import { buildPrReviewBrief } from "../pr-review/brief.ts";
@@ -95,6 +95,10 @@ function workerJobSpec(
 ): WorkerJob {
   const { home, task, runtime, role, sessionDirectory, timeoutMs } = input;
   const prReview = task.prReview;
+  const model = resolvedExecutionModel(
+    runtime.operation?.routing,
+    task.policy.config.models[modelRoleForTask(task, role)],
+  );
   return {
     schemaVersion: 1,
     id: input.jobId,
@@ -102,11 +106,8 @@ function workerJobSpec(
     generation: task.generation,
     role,
     cwd: runtime.worktree?.path ?? taskSourcePath(task, runtime),
-    harness: policyHarness(task.policy.config),
-    model: resolvedExecutionModel(
-      runtime.operation?.routing,
-      task.policy.config.models[modelRoleForTask(task, role)],
-    ),
+    harness: harnessOf(model),
+    model,
     prompt: input.prompt,
     resultPath: input.resultPath,
     ...(runtime.operation === undefined

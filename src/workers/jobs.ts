@@ -48,7 +48,7 @@ export type WorkerJob = Readonly<{
   readonly generation: number;
   readonly role: WorkerRole;
   readonly cwd: string;
-  /** The task's pinned harness; jobs written before it existed ran on OMP. */
+  /** The harness `model` runs in; jobs written before it existed ran on OMP. */
   readonly harness: HarnessName;
   readonly model: ModelSpec;
   readonly prompt: string;

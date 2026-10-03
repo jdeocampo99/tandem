@@ -5,7 +5,6 @@ import {
   inspectEndpoint,
   taskWorkspaceLabel,
 } from "../adapters/herdr.ts";
-import { policyHarness } from "../config/policy.ts";
 import type {
   BlockCause,
   Clock,
@@ -17,6 +16,7 @@ import type {
   ReviewMode,
   TaskRecord,
 } from "../contracts.ts";
+import { harnessOf } from "../harness/resolve.ts";
 import { isDeadReviewFailure, unresolvedReviewFailure } from "../recovery/central-review.ts";
 import { writeJsonAtomically, writeTextAtomically } from "../runtime/persistence.ts";
 import type { DurableJob, RuntimeTaskState } from "../runtime/schema.ts";
@@ -483,6 +483,7 @@ export class ReviewStage {
       paths,
       hasIncrementalPatch: round.facts.sinceLastReview !== undefined,
     });
+    const model = resolvedExecutionModel(operation?.routing, task.policy.config.models[role]);
     const spec: WorkerJob = {
       schemaVersion: 1,
       id: jobId,
@@ -490,8 +491,8 @@ export class ReviewStage {
       generation: task.generation,
       role,
       cwd: round.cwd,
-      harness: policyHarness(task.policy.config),
-      model: resolvedExecutionModel(operation?.routing, task.policy.config.models[role]),
+      harness: harnessOf(model),
+      model,
       prompt: buildPrompt(
         task,
         role,

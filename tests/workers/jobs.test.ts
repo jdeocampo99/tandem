@@ -717,6 +717,7 @@ test("a Claude Code job fails closed before running setup or any agent", async (
     const job = {
       ...makeJob(root),
       harness: "claude-code",
+      model: { model: "claude-code/sonnet", thinking: "high" },
       setup: [{ name: "install", argv: ["bun", "install"], timeoutMs: 5_000 }],
       execution: {
         schemaVersion: 1 as const,
@@ -739,7 +740,7 @@ test("a Claude Code job fails closed before running setup or any agent", async (
     });
     expect(calls).toEqual([]);
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("Claude Code, which Tandem cannot run yet");
+    expect(result.error).toContain("Tandem can't run Claude Code yet");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

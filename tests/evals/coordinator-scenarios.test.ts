@@ -9,7 +9,6 @@ import type {
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
-import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import {
   SCENARIO_POLICY,
@@ -29,7 +28,6 @@ function launchRequest(world: ScenarioWorld): CoordinatorLaunchRequest {
     home: world.home,
     poolRoot: world.poolRoot,
     sessionId: world.sessionId,
-    harness: DEFAULT_HARNESS,
     model: { model: "scenario/coordinator", thinking: "low" },
     continueSession: true,
     headless: true,

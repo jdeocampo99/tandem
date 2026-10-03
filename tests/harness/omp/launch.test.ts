@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCoordinatorArgv } from "../../../src/coordinator/launch.ts";
-import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ompHarness } from "../../../src/harness/omp/launch.ts";
 
 const SOURCE = fileURLToPath(new URL("../../../src/", import.meta.url));
@@ -14,7 +13,6 @@ test("the coordinator runs only read, ask and tandem with Tandem's extension and
   expect(
     buildCoordinatorArgv({
       cwd: "/repo",
-      harness: DEFAULT_HARNESS,
       model: { model: "openai-codex/gpt-6-astra", thinking: "high" },
       continueSession: true,
       sessionDirectory: "/home/coordinator-sessions/abc",
@@ -47,7 +45,6 @@ test("the coordinator runs only read, ask and tandem with Tandem's extension and
 test("the coordinator leaves the model to OMP when none is given", () => {
   const argv = buildCoordinatorArgv({
     cwd: "/tandem",
-    harness: DEFAULT_HARNESS,
     model: undefined,
     sessionDirectory: "/home/coordinator-sessions/abc",
   });
@@ -60,7 +57,6 @@ test("coordinator launch values that look like flags are refused", () => {
   expect(() =>
     buildCoordinatorArgv({
       cwd: "/repo",
-      harness: DEFAULT_HARNESS,
       model: undefined,
       sessionDirectory: "/home/s",
       prompt: "--yolo",

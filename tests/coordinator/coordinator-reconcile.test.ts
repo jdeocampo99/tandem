@@ -27,7 +27,6 @@ import {
   listCoordinatorQuarantineRecords,
   quarantineCoordinatorLease,
 } from "../../src/coordinator/resources.ts";
-import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
@@ -72,7 +71,6 @@ async function fixture(): Promise<Fixture> {
     home,
     poolRoot,
     sessionId,
-    harness: DEFAULT_HARNESS,
     model,
     continueSession: false,
     headless: true,

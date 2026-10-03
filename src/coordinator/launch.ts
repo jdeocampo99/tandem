@@ -15,8 +15,8 @@ import type {
   ModelSpec,
   WorktreeLease,
 } from "../contracts.ts";
-import type { HarnessName } from "../harness/contract.ts";
-import { harnessFor } from "../harness/resolve.ts";
+import type { Harness } from "../harness/contract.ts";
+import { harnessFor, harnessOf } from "../harness/resolve.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
@@ -54,9 +54,11 @@ function defaultClock(): string {
 }
 
 export type CoordinatorLaunchInput = Readonly<{
-  readonly harness: HarnessName;
   readonly cwd: string;
-  /** Unset runs OMP's own default model: the Tandem coordinator before any model is chosen. */
+  /**
+   * Picks the harness too. Unset runs OMP's own default model: the Tandem coordinator before any
+   * model is chosen.
+   */
   readonly model: ModelSpec | undefined;
   readonly continueSession?: boolean;
   readonly sessionDirectory: string;
@@ -71,9 +73,10 @@ export type CoordinatorLaunchRequest = Readonly<{
   readonly home: string;
   readonly poolRoot: string;
   readonly sessionId: string;
-  /** The harness a new coordinator runs on; a running one keeps the harness its record names. */
-  readonly harness: HarnessName;
-  /** Unset runs the harness's own default model: the Tandem coordinator before any model is chosen. */
+  /**
+   * Picks the harness a new coordinator runs on; a running one keeps the harness its record names.
+   * Unset runs OMP's own default model: the Tandem coordinator before any model is chosen.
+   */
   readonly model: ModelSpec | undefined;
   readonly continueSession: boolean;
   readonly headless: boolean;
@@ -128,7 +131,7 @@ export type CoordinatorLaunchDependencies = Readonly<{
 }>;
 /** Checks caller-supplied launch values, then builds the coordinator command. */
 export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
-  return harnessFor(input.harness).command({
+  return harnessFor(harnessOf(input.model)).command({
     agent: "coordinator",
     cwd: checkLaunchPath(input.cwd, "cwd"),
     model:
@@ -149,10 +152,10 @@ export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly st
 
 /** The coordinator's checked-in files; the CLI may name them only to confirm them. */
 export function coordinatorFiles(
-  harness: HarnessName,
+  harness: Harness,
   options: CliOptions,
 ): Readonly<{ extensionPath: string; configPath: string }> {
-  const defaults = harnessFor(harness).coordinatorFiles;
+  const defaults = harness.coordinatorFiles;
   const extensionPath = options.extensionPath ?? defaults.extensionPath;
   const configPath = options.configPath ?? defaults.configPath;
   if (resolve(extensionPath) !== resolve(defaults.extensionPath)) {
@@ -637,7 +640,6 @@ export async function launchCoordinatorUnlocked(
   }
   const headless = request.headless || request.noAttach;
   buildCoordinatorArgv({
-    harness: request.harness,
     cwd: request.cwd,
     model: request.model,
     continueSession: request.continueSession,
@@ -787,7 +789,6 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   let workspaceRetirement = startup.workspaceRetirement;
   const coordinatorCwd = worktree.path;
   const argv = buildCoordinatorArgv({
-    harness: request.harness,
     cwd: coordinatorCwd,
     model: request.model,
     continueSession: request.continueSession,
@@ -884,7 +885,6 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     ...jevOverride,
   };
   const resumeArgv = buildCoordinatorArgv({
-    harness: request.harness,
     cwd: coordinatorCwd,
     model: request.model,
     continueSession: true,
@@ -915,7 +915,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     repoPath: paths.repo,
     endpoint,
     worktree,
-    harness: request.harness,
+    harness: harnessOf(request.model),
     command: argv,
   });
   await waitForCoordinatorOwnership(

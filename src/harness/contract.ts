@@ -4,10 +4,10 @@ const HARNESS_NAMES = ["omp", "claude-code"] as const;
 declare const harnessNameBrand: unique symbol;
 
 export type KnownHarness = (typeof HARNESS_NAMES)[number];
-/** The agent program a project's coordinator and child agents run on. Parse it with `parseHarnessName`. */
+/** The agent program one agent runs in, decided by its model. Parse it with `parseHarnessName`. */
 export type HarnessName = KnownHarness & { readonly [harnessNameBrand]: true };
 
-/** Reads a harness name from settings or a saved record; anything else is refused. */
+/** Reads a harness name from a saved record or job; anything else is refused. */
 export function parseHarnessName(value: unknown, field: string): HarnessName {
   if (typeof value === "string" && (HARNESS_NAMES as readonly string[]).includes(value)) {
     return value as HarnessName;
@@ -17,7 +17,7 @@ export function parseHarnessName(value: unknown, field: string): HarnessName {
   );
 }
 
-/** What a project runs on when its settings name no harness, and what anything saved without one ran on. */
+/** What every model outside Claude Code runs in, and what anything saved without a harness ran in. */
 export const DEFAULT_HARNESS: HarnessName = parseHarnessName("omp", "harness");
 
 /**

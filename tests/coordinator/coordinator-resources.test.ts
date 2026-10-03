@@ -68,7 +68,6 @@ async function fixture(): Promise<Fixture> {
       home,
       poolRoot,
       sessionId: SESSION_ID,
-      harness: DEFAULT_HARNESS,
       model,
       continueSession: false,
       headless: true,
