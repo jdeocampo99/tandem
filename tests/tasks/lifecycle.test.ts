@@ -261,6 +261,28 @@ test("pins a complete resolved policy snapshot when creating a task", () => {
   expect(task.policy.guidance.validation[0]?.text).toBe("validation guidance");
 });
 
+test("pins standards none when a task is created from a policy that sets it", () => {
+  const task = createTask(
+    {
+      ...implementationInput,
+      id: "standards-none",
+      policy: { ...policy, config: { ...policy.config, standards: "none" } },
+    },
+    "2026-09-15T00:00:00.000Z",
+  );
+
+  expect(task.policy.config.standards).toBe("none");
+});
+
+test("a task created from a policy without standards keeps the digest pinned before the setting", () => {
+  const task = createTask(implementationInput, "2026-09-15T00:00:00.000Z");
+
+  expect("standards" in task.policy.config).toBe(false);
+  expect(policyIdentity(task.policy)).toBe(
+    "790ab55c52c916ea1e2511e588329349c1ad952ae0130c9c3feb1ed3bb1df6ef",
+  );
+});
+
 const pinnedSkill = {
   name: "refactor-functions",
   origin: "repository",
