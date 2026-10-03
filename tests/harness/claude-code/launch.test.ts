@@ -156,6 +156,8 @@ test("a worker runs unattended with its role's tools, its model, and its brief",
     ...FLAGS.slice(0, -2),
     "--permission-mode",
     "bypassPermissions",
+    "--name",
+    "tandem-scout",
     "--tools",
     "Read,Grep,Glob,WebSearch,WebFetch,Agent,Write,Edit",
     "--",
@@ -348,6 +350,31 @@ test("an unrecorded claude process loading Tandem's plugin can't be proven eithe
   expect(await match(["claude"])).toBe("no-match");
   expect(await match(["claude", "--plugin-dir"])).toBe("unknown");
   expect(await match(["node", "cli.js"])).toBe("unknown");
+});
+
+test("a Tandem worker in Claude Code is never taken for an unrecorded coordinator", async () => {
+  const expected = { repoPath: "/repo", sessionDirectory: DIRECTORY };
+  for (const agent of [
+    "scout",
+    "reviewer",
+    "pr-reviewer",
+    "implementer",
+    "presentation",
+  ] as const) {
+    const argv = claudeCodeHarness.command(
+      coordinatorSpec({
+        agent,
+        conversation: { kind: "saved", directory: undefined, resume: false, id: ID },
+      }),
+    );
+    expect(argv.slice(argv.indexOf("--name"), argv.indexOf("--name") + 2)).toEqual([
+      "--name",
+      `tandem-${agent}`,
+    ]);
+    expect(await claudeCodeHarness.matchUnrecordedCoordinator(argv, expected)).toBe("no-match");
+  }
+  const named = [...claudeCodeHarness.command(coordinatorSpec()), "--name", "tandem-coordinator"];
+  expect(await claudeCodeHarness.matchUnrecordedCoordinator(named, expected)).toBe("unknown");
 });
 
 test("models come from the fixed catalogue and there are no MCP servers", async () => {

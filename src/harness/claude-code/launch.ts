@@ -121,6 +121,17 @@ const TOOLS: Readonly<Record<AgentKind, readonly string[]>> = {
   presentation: ["Read", "Grep", "Glob", "Write", "Edit"],
 };
 
+/** The session name a worker runs under, which tells it apart from a coordinator in `ps`. */
+function workerName(agent: Exclude<AgentKind, "coordinator">): string {
+  return `tandem-${agent}`;
+}
+
+const WORKER_NAMES: ReadonlySet<string> = new Set(
+  (Object.keys(TOOLS) as AgentKind[])
+    .filter((agent): agent is Exclude<AgentKind, "coordinator"> => agent !== "coordinator")
+    .map(workerName),
+);
+
 /**
  * Only the Tandem plugins load: `--setting-sources project,local` keeps the Claude login but drops
  * user settings, plugins, and hooks; `--strict-mcp-config` and `--no-chrome` drop every MCP tool.
@@ -149,7 +160,9 @@ function agentCommand(spec: LaunchSpec): readonly string[] {
     "--disable-slash-commands",
     "--system-prompt-snapshot",
     "off",
-    ...(spec.agent === "coordinator" ? [] : ["--permission-mode", "bypassPermissions"]),
+    ...(spec.agent === "coordinator"
+      ? []
+      : ["--permission-mode", "bypassPermissions", "--name", workerName(spec.agent)]),
     "--tools",
     TOOLS[spec.agent].join(","),
     // `--tools` takes every argument up to the next option, so `--` ends it before the prompt.
@@ -237,12 +250,15 @@ function looksLikeAgent(process: AgentProcess): boolean {
 
 /**
  * A Claude Code coordinator names no repository on its command line, so one loading Tandem's
- * adapter plugin can never be proven to belong to this repository or to another.
+ * adapter plugin can never be proven to belong to this repository or to another. A Tandem worker
+ * names itself with `--name`, so it is never taken for a coordinator.
  */
 async function matchUnrecordedCoordinator(
   argv: readonly string[],
 ): Promise<UnrecordedCoordinatorMatch> {
   if (!isClaude(argv[0])) return "unknown";
+  const name = argv.indexOf("--name");
+  if (name !== -1 && WORKER_NAMES.has(argv[name + 1] ?? "")) return "no-match";
   const adapter = await canonicalPath(ADAPTER_PLUGIN_PATH);
   for (let index = 1; index < argv.length; index += 1) {
     if (argv[index] !== "--plugin-dir") continue;
