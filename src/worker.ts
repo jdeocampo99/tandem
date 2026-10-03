@@ -192,7 +192,7 @@ export async function runWorkerJob(
   const run = options.run ?? defaultRunInteractive;
   let childExit: number;
   try {
-    const harness = harnessFor(job.harness);
+    const harness = harnessFor(job.harness, job.role);
     await runSetup(job, run);
     const prompt = await promptWithInitialCommunication(job);
     childExit = await run(buildWorkerCommand(harness, job, prompt, absoluteJobPath));

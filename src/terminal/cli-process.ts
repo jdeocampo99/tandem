@@ -3,6 +3,7 @@ import type { TandemEnvironmentSource } from "../config/environment.ts";
 
 export type PathStat = Readonly<{
   isFile: () => boolean;
+  isDirectory: () => boolean;
   isSymbolicLink: () => boolean;
 }>;
 

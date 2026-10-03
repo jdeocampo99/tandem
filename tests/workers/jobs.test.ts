@@ -740,7 +740,7 @@ test("a Claude Code job fails closed before running setup or any agent", async (
     });
     expect(calls).toEqual([]);
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("Tandem can't run Claude Code yet");
+    expect(result.error).toContain("Tandem can run only the coordinator so far");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

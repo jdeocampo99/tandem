@@ -65,9 +65,15 @@ export type ModelRecord = Readonly<{
 export type AgentKind = AgentRole | "pr-reviewer";
 
 /** Where the agent keeps its conversation. */
-export type Conversation =
-  | Readonly<{ kind: "none" }>
-  | Readonly<{ kind: "saved"; directory: string | undefined; resume: boolean }>;
+export type Conversation = Readonly<{ kind: "none" }> | SavedConversation;
+
+export type SavedConversation = Readonly<{
+  kind: "saved";
+  directory: string | undefined;
+  resume: boolean;
+  /** Claude Code names a conversation by this id; OMP finds it by `directory` and ignores it. */
+  id?: string;
+}>;
 
 export type LaunchSpec = Readonly<{
   agent: AgentKind;
@@ -84,6 +90,34 @@ export type AgentProcess = Readonly<{
   argv0: string | undefined;
 }>;
 
+/** A file or directory the coordinator command loads, checked before launch. */
+export type CoordinatorFile = Readonly<{
+  /** How checks name it; the CLI's `--extension` and `--config` confirm the files so named. */
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+}>;
+
+/** The effects a coordinator launch lends its harness, injected so the harness's decisions stay testable. */
+export type CoordinatorLaunchIo = Readonly<{
+  /** The file's text, or undefined when it does not exist. */
+  readText(path: string): Promise<string | undefined>;
+  writeText(path: string, text: string): Promise<void>;
+  newId(): string;
+  /** Whether something answers `GET /health` on this unix socket. */
+  answersHealth(socket: string): Promise<boolean>;
+  sleep(milliseconds: number, signal?: AbortSignal): Promise<void>;
+  /** Milliseconds on a monotonic clock. */
+  now(): number;
+}>;
+
+/** A coordinator whose command has just started, as its ready handshake needs it. */
+export type StartedCoordinator = Readonly<{
+  home: string;
+  poolRoot: string;
+  conversation: SavedConversation;
+}>;
+
 /** Whether a live process is a coordinator Tandem launched for this repository without a record. */
 export type UnrecordedCoordinatorMatch = "match" | "no-match" | "unknown";
 
@@ -91,8 +125,24 @@ export type UnrecordedCoordinatorMatch = "match" | "no-match" | "unknown";
 export type Harness = Readonly<{
   /** The program every command this harness builds starts with. */
   executable: string;
-  /** Files the coordinator command loads, checked before launch. */
-  coordinatorFiles: Readonly<{ extensionPath: string; configPath: string }>;
+  coordinatorFiles: readonly CoordinatorFile[];
+  /** Environment the coordinator needs beyond Tandem's own, in its pane and in a direct run. */
+  launchEnvironment: Readonly<Record<string, string>>;
+  /** The conversation a coordinator launch names, from what an earlier launch kept in `directory`. */
+  coordinatorConversation(
+    directory: string,
+    resume: boolean,
+    io: CoordinatorLaunchIo,
+  ): Promise<SavedConversation>;
+  /**
+   * Resolves once the started coordinator has loaded Tandem, and keeps its conversation for the
+   * next launch to resume; rejects in plain English when it does not. An aborted wait resolves.
+   */
+  awaitCoordinatorReady(
+    started: StartedCoordinator,
+    io: CoordinatorLaunchIo,
+    signal?: AbortSignal,
+  ): Promise<void>;
   command(spec: LaunchSpec): readonly string[];
   /** False unless both commands provably launch the same agent; resuming does not distinguish. */
   sameCommand(live: readonly string[], recorded: readonly string[]): boolean;

@@ -29,8 +29,8 @@
                 "message": "Only src/harness/omp/ and its tests may import OMP. Go through the launch port in src/harness/contract.ts."
               },
               {
-                "group": ["**/harness/omp/launch.ts"],
-                "message": "Resolve a harness with harnessFor in src/harness/resolve.ts instead of importing the OMP harness."
+                "group": ["**/harness/omp/launch.ts", "**/harness/claude-code/launch.ts"],
+                "message": "Resolve a harness with harnessFor in src/harness/resolve.ts instead of importing it."
               }
             ]
           }
@@ -58,7 +58,11 @@
       }
     },
     {
-      "includes": ["src/harness/resolve.ts", "tests/harness/resolve.test.ts"],
+      "includes": [
+        "src/harness/resolve.ts",
+        "tests/harness/resolve.test.ts",
+        "tests/harness/claude-code/**"
+      ],
       "linter": {
         "rules": {
           "style": {

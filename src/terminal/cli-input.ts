@@ -5,6 +5,7 @@ import { parseModelAssignments } from "../config/models.ts";
 import type { MergingChoice } from "../config/repositories.ts";
 import type { ModelSpec, RepoPolicy } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
+import type { CoordinatorFile } from "../harness/contract.ts";
 import type { CreateTaskRequest } from "../service/controller.ts";
 import {
   type CliInvocation,
@@ -184,21 +185,38 @@ export function modelForPolicy(policyModel: ModelSpec, options: CliOptions): Mod
   return policyModel;
 }
 
-export async function verifyRegularPath(
+async function statField(
   statPath: (path: string) => Promise<PathStat>,
   path: string,
   field: string,
-): Promise<void> {
-  let stat: PathStat;
+): Promise<PathStat> {
   try {
-    stat = await statPath(path);
+    return await statPath(path);
   } catch (error) {
     throw new Error(
       `${field} is unavailable at ${path}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+export async function verifyRegularPath(
+  statPath: (path: string) => Promise<PathStat>,
+  path: string,
+  field: string,
+): Promise<void> {
+  const stat = await statField(statPath, path, field);
   if (stat.isSymbolicLink() || !stat.isFile())
     throw new Error(`${field} must be a regular non-symlink file: ${path}`);
+}
+
+export async function verifyCoordinatorFile(
+  statPath: (path: string) => Promise<PathStat>,
+  file: CoordinatorFile,
+): Promise<void> {
+  if (file.kind === "file") return verifyRegularPath(statPath, file.path, file.name);
+  const stat = await statField(statPath, file.path, file.name);
+  if (stat.isSymbolicLink() || !stat.isDirectory())
+    throw new Error(`${file.name} must be a non-symlink directory: ${file.path}`);
 }
 
 export function checkLaunchText(value: string, field: string): string {

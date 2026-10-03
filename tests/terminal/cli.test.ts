@@ -15,6 +15,7 @@ import {
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
+import { harnessForRole } from "../../src/harness/resolve.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   type CliApplication,
@@ -600,6 +601,7 @@ test("CLI launches a clean coordinator while preserving dirty original source id
       },
       statPath: async () => ({
         isFile: () => true,
+        isDirectory: () => false,
         isSymbolicLink: () => false,
       }),
       run: runner.run,
@@ -669,7 +671,7 @@ test("CLI launches a clean coordinator while preserving dirty original source id
   }
 });
 
-test("CLI refuses a new Claude Code coordinator before checking files or starting anything", async () => {
+test("CLI checks a new Claude Code coordinator's plugins before starting anything", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-cli-claude-code-")));
   try {
     const repo = join(root, "repo");
@@ -720,10 +722,10 @@ test("CLI refuses a new Claude Code coordinator before checking files or startin
       ]),
     );
 
-    await expect(launch).rejects.toThrow(
-      "The coordinator's model is claude-code/opus, which runs in Claude Code. Tandem can't run Claude Code yet. Pick a model from another provider for this role with `tandem configure`.",
-    );
-    expect(effects).toEqual([]);
+    const adapter = harnessForRole("coordinator", CLAUDE_CODE_COORDINATOR).coordinatorFiles[0]
+      ?.path;
+    await expect(launch).rejects.toThrow(`adapter plugin is unavailable at ${adapter}`);
+    expect(effects).toEqual([adapter]);
     expect(runner.calls.map((call) => call.argv[0])).not.toContain("omp");
     expect(runner.calls.map((call) => call.argv[0])).not.toContain("treehouse");
   } finally {
@@ -789,6 +791,7 @@ test("CLI reports a failed direct coordinator child as a nonzero outcome", async
             },
             statPath: async () => ({
               isFile: () => true,
+              isDirectory: () => false,
               isSymbolicLink: () => false,
             }),
             run: runner.run,
@@ -1237,7 +1240,7 @@ test("CLI reconnects to a running OMP coordinator after models.json moves the co
   );
 });
 
-test("restartCoordinator refuses a Claude Code replacement before closing the running OMP coordinator", async () => {
+test("restartCoordinator checks a Claude Code replacement before closing the running OMP coordinator", async () => {
   await withRunningOmpCoordinator(
     "tandem-cli-restart-harness-",
     async ({ request, fixturePath, runner }) => {
@@ -1255,11 +1258,14 @@ test("restartCoordinator refuses a Claude Code replacement before closing the ru
             },
             sleep: async () => undefined,
             processEnvironment: {},
+            checkNewCoordinator: async (harness) => {
+              throw new Error(`${harness.executable} is missing Tandem's plugins`);
+            },
           },
         ),
       );
 
-      await expect(restart).rejects.toThrow("runs in Claude Code");
+      await expect(restart).rejects.toThrow("claude is missing Tandem's plugins");
       expect(observed.calls.some((call) => call.argv.includes("close"))).toBe(false);
     },
   );

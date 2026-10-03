@@ -66,8 +66,8 @@ import {
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
 import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
-import { DEFAULT_HARNESS, type Harness, type ModelRecord } from "../harness/contract.ts";
-import { harnessFor } from "../harness/resolve.ts";
+import type { ModelRecord } from "../harness/contract.ts";
+import { catalogueHarness } from "../harness/resolve.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
@@ -560,14 +560,6 @@ type ServiceDependencies = Readonly<{
 
 /** Why a task resumed after its question was answered, as its timeline records it. */
 const QUESTION_ANSWERED = "Its question was answered.";
-
-/**
- * OMP lists the models Tandem offers and picks on its own, and the MCP servers. Claude Code models
- * are never offered or picked automatically; a role gets one only when the user names it.
- */
-function catalogueHarness(): Harness {
-  return harnessFor(DEFAULT_HARNESS);
-}
 
 function assertTaskId(id: unknown): string {
   return singleLine(id, "task id");

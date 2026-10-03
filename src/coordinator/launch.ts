@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { quoteShellCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
 import { readHerdrStatus } from "../adapters/herdr.ts";
@@ -15,7 +15,14 @@ import type {
   ModelSpec,
   WorktreeLease,
 } from "../contracts.ts";
-import { type Harness, harnessOf } from "../harness/contract.ts";
+import {
+  type CoordinatorFile,
+  type CoordinatorLaunchIo,
+  type Harness,
+  harnessOf,
+  type LaunchSpec,
+  type StartedCoordinator,
+} from "../harness/contract.ts";
 import { harnessFor, harnessForRole } from "../harness/resolve.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
@@ -28,7 +35,12 @@ import {
 } from "./exclusivity.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { COORDINATOR_SCRIPT_DIRECTORY, findRunningCoordinator } from "./ownership.ts";
-import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } from "./record.ts";
+import {
+  COORDINATOR_LEASE_HOLDER_PREFIX,
+  type CoordinatorRecord,
+  isMissing,
+  recordPath,
+} from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
   applyCoordinatorReplacement,
@@ -62,6 +74,8 @@ export type CoordinatorLaunchInput = Readonly<{
   readonly model: ModelSpec | undefined;
   readonly continueSession?: boolean;
   readonly sessionDirectory: string;
+  /** The conversation's id, for a harness that names conversations by id (Claude Code). */
+  readonly conversationId?: string;
   readonly prompt?: string;
 }>;
 
@@ -118,8 +132,12 @@ export type CoordinatorLaunchDependencies = Readonly<{
   readonly processEnvironment: TandemEnvironmentSource;
   /** Timestamps quarantine notes; defaults to the wall clock. */
   readonly clock?: () => string;
-  /** Names quarantine notes; defaults to a random UUID. */
+  /** Names quarantine notes and new Claude Code conversations; defaults to a random UUID. */
   readonly newId?: () => string;
+  /** Whether a unix socket answers `GET /health`; defaults to asking it. */
+  readonly answersHealth?: (socket: string) => Promise<boolean>;
+  /** Milliseconds on a monotonic clock, for the ready wait; defaults to `performance.now`. */
+  readonly now?: () => number;
   /** Checks the files and model a new coordinator needs on the harness it would launch on. */
   readonly checkNewCoordinator?: (harness: Harness, model: ModelSpec | undefined) => Promise<void>;
   readonly rehomeTaskWorkspaces?: (
@@ -131,9 +149,9 @@ export type CoordinatorLaunchDependencies = Readonly<{
     }>,
   ) => Promise<readonly string[]>;
 }>;
-/** Checks caller-supplied launch values, then builds the coordinator command. */
-export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
-  return harnessFor(harnessOf(input.model)).command({
+/** Checks caller-supplied launch values. */
+function coordinatorLaunchSpec(input: CoordinatorLaunchInput): LaunchSpec {
+  return {
     agent: "coordinator",
     cwd: checkLaunchPath(input.cwd, "cwd"),
     model:
@@ -147,30 +165,56 @@ export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly st
       kind: "saved",
       directory: checkLaunchPath(input.sessionDirectory, "sessionDirectory"),
       resume: input.continueSession === true,
+      ...(input.conversationId === undefined
+        ? {}
+        : { id: checkLaunchText(input.conversationId, "conversationId") }),
     },
     ...(input.prompt === undefined ? {} : { prompt: checkLaunchText(input.prompt, "prompt") }),
-  });
+  };
 }
 
-/** The coordinator's checked-in files; the CLI may name them only to confirm them. */
+/** Checks caller-supplied launch values, then builds the coordinator command. */
+export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
+  return harnessFor(harnessOf(input.model), "coordinator").command(coordinatorLaunchSpec(input));
+}
+
+/** The CLI's options that may name a coordinator file, only to confirm it. */
+const FILE_CONFIRMATIONS = [
+  {
+    name: "extension",
+    flag: "--extension",
+    option: "extensionPath",
+    mismatch: (path: string) =>
+      `coordinator extension must be Tandem's checked-in extension at ${path}`,
+  },
+  {
+    name: "config",
+    flag: "--config",
+    option: "configPath",
+    mismatch: (path: string) =>
+      `coordinator config must be the checked-in fallback-disabled config at ${path}`,
+  },
+] as const;
+
+/** The coordinator's checked-in files; the CLI may name the extension and config only to confirm them. */
 export function coordinatorFiles(
   harness: Harness,
   options: CliOptions,
-): Readonly<{ extensionPath: string; configPath: string }> {
-  const defaults = harness.coordinatorFiles;
-  const extensionPath = options.extensionPath ?? defaults.extensionPath;
-  const configPath = options.configPath ?? defaults.configPath;
-  if (resolve(extensionPath) !== resolve(defaults.extensionPath)) {
-    throw new CliUsageError(
-      `coordinator extension must be Tandem's checked-in extension at ${defaults.extensionPath}`,
-    );
+): readonly CoordinatorFile[] {
+  for (const confirmation of FILE_CONFIRMATIONS) {
+    const named = options[confirmation.option];
+    if (named === undefined) continue;
+    const file = harness.coordinatorFiles.find((entry) => entry.name === confirmation.name);
+    if (file === undefined) {
+      throw new CliUsageError(
+        `this coordinator runs in ${harness.executable}, which loads no ${confirmation.name} file; leave out ${confirmation.flag}`,
+      );
+    }
+    if (resolve(named) !== resolve(file.path)) {
+      throw new CliUsageError(confirmation.mismatch(file.path));
+    }
   }
-  if (resolve(configPath) !== resolve(defaults.configPath)) {
-    throw new CliUsageError(
-      `coordinator config must be the checked-in fallback-disabled config at ${defaults.configPath}`,
-    );
-  }
-  return { extensionPath, configPath };
+  return harness.coordinatorFiles;
 }
 
 type CoordinatorPaths = Readonly<{
@@ -203,7 +247,7 @@ export async function checkNewCoordinator(
 ): Promise<void> {
   const harness = harnessForRole("coordinator", request.model);
   await dependencies.checkNewCoordinator?.(harness, request.model);
-  buildCoordinatorArgv({
+  coordinatorLaunchSpec({
     cwd: request.cwd,
     model: request.model,
     continueSession: request.continueSession,
@@ -799,18 +843,142 @@ type CoordinatorStartupResult = Readonly<{
   readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
 }>;
 
+async function answersHealth(socket: string): Promise<boolean> {
+  try {
+    return (await fetch("http://sidecar/health", { unix: socket })).ok;
+  } catch {
+    return false;
+  }
+}
+
+function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): CoordinatorLaunchIo {
+  return {
+    readText: async (path) => {
+      try {
+        return await readFile(path, "utf8");
+      } catch (error) {
+        if (isMissing(error)) return undefined;
+        throw error;
+      }
+    },
+    writeText: async (path, text) => {
+      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+      await writeFile(path, text, { encoding: "utf8", mode: 0o600 });
+    },
+    newId: dependencies.newId ?? randomUUID,
+    answersHealth: dependencies.answersHealth ?? answersHealth,
+    sleep: dependencies.sleep,
+    now: dependencies.now ?? (() => performance.now()),
+  };
+}
+
+async function processIdsNaming(
+  run: CommandRunner,
+  needle: string,
+  cwd: string,
+): Promise<readonly string[]> {
+  const listing = await runExternal(run, { argv: ["ps", "-axww", "-o", "pid=,command="], cwd });
+  return listing.stdout
+    .split("\n")
+    .filter((line) => line.includes(needle))
+    .map((line) => line.trim().split(/\s+/u)[0] ?? "")
+    .filter((pid) => pid.length > 0 && pid !== String(process.pid));
+}
+
+/**
+ * Stops the coordinator a failed ready wait leaves behind, found by the conversation its command
+ * names, and waits until it has exited so its pane is a stopped shell again.
+ */
+async function stopUnreadyCoordinator(
+  dependencies: CoordinatorLaunchDependencies,
+  harness: Harness,
+  argv: readonly string[],
+  cwd: string,
+): Promise<void> {
+  const needle = harness.processNeedle(argv);
+  if (needle === undefined) throw new Error("the coordinator command names no conversation");
+  const pids = await processIdsNaming(dependencies.run, needle, cwd);
+  if (pids.length === 0) return;
+  await runExternal(dependencies.run, { argv: ["kill", "-TERM", ...pids], cwd });
+  for (let attempt = 0; attempt < HERDR_READY_ATTEMPTS; attempt += 1) {
+    if ((await processIdsNaming(dependencies.run, needle, cwd)).length === 0) return;
+    await dependencies.sleep(HERDR_READY_DELAY_MS);
+  }
+  throw new Error(`the coordinator naming ${needle} did not exit after SIGTERM`);
+}
+
+/** Waits for the coordinator to load Tandem; one that does not is stopped and the launch fails. */
+async function awaitReadyOrStop(
+  dependencies: CoordinatorLaunchDependencies,
+  harness: Harness,
+  started: StartedCoordinator,
+  argv: readonly string[],
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  try {
+    await harness.awaitCoordinatorReady(started, coordinatorLaunchIo(dependencies), signal);
+  } catch (error) {
+    try {
+      await stopUnreadyCoordinator(dependencies, harness, argv, cwd);
+    } catch (stopError) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)} Stopping it also failed: ${stopError instanceof Error ? stopError.message : String(stopError)}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+/**
+ * Runs the coordinator in the caller's pane with its ready wait beside it. The wait ends when the
+ * coordinator exits; a coordinator that never gets ready is stopped and the launch fails.
+ */
+async function runDirectCoordinator(
+  dependencies: CoordinatorLaunchDependencies,
+  harness: Harness,
+  started: StartedCoordinator,
+  request: Parameters<RunInteractive>[0],
+): Promise<number> {
+  const exited = new AbortController();
+  const outcome = dependencies.runInteractive(request).then(
+    (code) => ({ ok: true as const, code }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  void outcome.then(() => exited.abort());
+  await awaitReadyOrStop(dependencies, harness, started, request.argv, request.cwd, exited.signal);
+  const result = await outcome;
+  if (!result.ok) throw result.error;
+  return result.code;
+}
+
 /** Runs the coordinator in the caller's pane or in a freshly created owned workspace. */
 async function startCoordinator(startup: CoordinatorStartup): Promise<CoordinatorStartupResult> {
   const { request, dependencies, paths, context, headless, worktree, previous } = startup;
   let workspaceRetirement = startup.workspaceRetirement;
   const coordinatorCwd = worktree.path;
-  const argv = buildCoordinatorArgv({
-    cwd: coordinatorCwd,
-    model: request.model,
-    continueSession: request.continueSession,
-    sessionDirectory: paths.sessionDirectory,
-    ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
-  });
+  const harness = harnessFor(harnessOf(request.model), "coordinator");
+  const conversation = await harness.coordinatorConversation(
+    paths.sessionDirectory,
+    request.continueSession,
+    coordinatorLaunchIo(dependencies),
+  );
+  const started: StartedCoordinator = {
+    home: paths.home,
+    poolRoot: paths.poolRoot,
+    conversation,
+  };
+  const argvFor = (resume: boolean, prompt: string | undefined): readonly string[] =>
+    buildCoordinatorArgv({
+      cwd: coordinatorCwd,
+      model: request.model,
+      continueSession: resume,
+      sessionDirectory: paths.sessionDirectory,
+      ...(conversation.id === undefined ? {} : { conversationId: conversation.id }),
+      ...(prompt === undefined ? {} : { prompt }),
+    });
+  const argv = argvFor(conversation.resume, request.prompt);
   const sourceEnvironment = coordinatorEnvironmentOverrides(
     paths,
     request,
@@ -825,9 +993,10 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   if (context !== undefined && !headless) {
     const environment = mergeInheritedEnvironment(dependencies.processEnvironment, {
       ...sourceEnvironment,
+      ...harness.launchEnvironment,
       ...jevOverride,
     });
-    const processExitCode = await dependencies.runInteractive({
+    const processExitCode = await runDirectCoordinator(dependencies, harness, started, {
       argv,
       cwd: coordinatorCwd,
       env: environment,
@@ -898,14 +1067,10 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       request.parentWorkspaceId ?? workspace.workspaceId,
       coordinatorCwd,
     ),
+    ...harness.launchEnvironment,
     ...jevOverride,
   };
-  const resumeArgv = buildCoordinatorArgv({
-    cwd: coordinatorCwd,
-    model: request.model,
-    continueSession: true,
-    sessionDirectory: paths.sessionDirectory,
-  });
+  const resumeArgv = argvFor(true, undefined);
   const bootstrapPath = await writeCoordinatorBootstrap(
     paths,
     request,
@@ -934,6 +1099,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     harness: harnessOf(request.model),
     command: argv,
   });
+  await awaitReadyOrStop(dependencies, harness, started, argv, coordinatorCwd);
   await waitForCoordinatorOwnership(
     dependencies.run,
     dependencies.sleep,

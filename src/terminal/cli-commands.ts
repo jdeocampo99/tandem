@@ -9,6 +9,7 @@ import {
 import { renestWorkspaces } from "../coordinator/renest.ts";
 import { restartCoordinator } from "../coordinator/restart.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
+import type { CoordinatorFile } from "../harness/contract.ts";
 import { harnessForRole } from "../harness/resolve.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
@@ -30,7 +31,7 @@ import {
   repoFor,
   summaryForInvocation,
   taskIdFor,
-  verifyRegularPath,
+  verifyCoordinatorFile,
 } from "./cli-input.ts";
 import {
   type PathStat,
@@ -121,9 +122,9 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
   const launchDependencies: CoordinatorLaunchDependencies = {
     run,
     checkNewCoordinator: async (harness, newModel) => {
-      const files = coordinatorFiles(harness, invocation.options);
-      await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
-      await verifyRegularPath(statPath, files.configPath, "configPath");
+      for (const file of coordinatorFiles(harness, invocation.options)) {
+        await verifyCoordinatorFile(statPath, file);
+      }
       if (newModel !== undefined) await harness.validateModel(run, environment.repo, newModel);
     },
     startPersistent: capabilities.startPersistent,
@@ -186,20 +187,20 @@ async function doctor(context: CliCommandContext): Promise<CliCommandOutcome> {
   };
   const coordinatorHarness = () => harnessForRole("coordinator", coordinatorModel());
   const checks: DoctorCheck[] = [];
-  checks.push(
-    await runDoctorCheck("extension", async () => {
-      const files = coordinatorFiles(coordinatorHarness(), invocation.options);
-      await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
-      return files.extensionPath;
-    }),
-  );
-  checks.push(
-    await runDoctorCheck("config", async () => {
-      const files = coordinatorFiles(coordinatorHarness(), invocation.options);
-      await verifyRegularPath(statPath, files.configPath, "configPath");
-      return files.configPath;
-    }),
-  );
+  let files: readonly CoordinatorFile[] = [];
+  const filesCheck = await runDoctorCheck("coordinator files", async () => {
+    files = coordinatorFiles(coordinatorHarness(), invocation.options);
+    return undefined;
+  });
+  if (!filesCheck.ok) checks.push(filesCheck);
+  for (const file of files) {
+    checks.push(
+      await runDoctorCheck(file.name, async () => {
+        await verifyCoordinatorFile(statPath, file);
+        return file.path;
+      }),
+    );
+  }
   checks.push(policyCheck);
   checks.push(
     await runDoctorCheck("omp-model", async () => {
