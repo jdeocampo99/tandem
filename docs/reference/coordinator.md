@@ -192,8 +192,8 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
 - A pre-registry coordinator without a clean lease record is never adopted or duplicated; launch
   refuses and tells the user to stop it and relaunch (`legacyCoordinatorGuidance` in ownership.ts).
 - Each record names the coordinator's `harness` (see [harness.md](harness.md)); a record saved
-  before that field is OMP. Launch takes the harness from the project's policy and refuses before
-  starting anything when it cannot run it. Reconnect, restart, reset, and `tandem fix` match
+  before that field is OMP. Launch derives the harness from the coordinator's model
+  (`harnessOf`) and refuses before starting anything when it cannot run it. Reconnect, restart, reset, and `tandem fix` match
   processes with the recorded harness, and a record whose `command[0]` is not that harness's
   executable, or whose harness is unknown, is unreadable.
 - Commands and processes are matched through the launch port (`Harness` in

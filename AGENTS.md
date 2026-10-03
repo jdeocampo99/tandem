@@ -32,7 +32,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Model tier evidence and economical routing | [config/model-tier.ts](src/config/model-tier.ts), [workers/execution-routing.ts](src/workers/execution-routing.ts) |
 | Implementer playbooks (per-job-type to-do steps, submit gate) | [playbooks/](src/playbooks/) |
 | Worker execution, results, control, validation | Harness-neutral session logic: [session/worker.ts](src/session/worker.ts) (`WorkerSession`), [session/worker-steering.ts](src/session/worker-steering.ts) (`WorkerSteering`). [workers/](src/workers/) is the domain layer (jobs, protocol, terminal I/O); entry points: [worker.ts](src/worker.ts), [validation-worker.ts](src/validation-worker.ts); OMP adapters: [harness/omp/worker-control.ts](src/harness/omp/worker-control.ts), [harness/omp/terminal-extension.ts](src/harness/omp/terminal-extension.ts) |
-| Harness choice and launch port: `HarnessName`, one `LaunchSpec`, coordinator and worker commands, process matching, model listing | [harness/contract.ts](src/harness/contract.ts) → [harness/resolve.ts](src/harness/resolve.ts) (`harnessFor`, the only way to get a harness) → [harness/omp/launch.ts](src/harness/omp/launch.ts). Only [harness/omp/](src/harness/omp/) and `tests/harness/omp/` may import `@oh-my-pi/*` (Biome enforces it) |
+| Harness choice and launch port: `HarnessName`, `harnessOf` (a role's model picks its harness), one `LaunchSpec`, coordinator and worker commands, process matching, model listing | [harness/contract.ts](src/harness/contract.ts) → [harness/resolve.ts](src/harness/resolve.ts) (`harnessFor`/`harnessForRole`, the only way to get a harness), [harness/claude-code/models.ts](src/harness/claude-code/models.ts) (fixed Claude Code catalogue) → [harness/omp/launch.ts](src/harness/omp/launch.ts). Only [harness/omp/](src/harness/omp/) and `tests/harness/omp/` may import `@oh-my-pi/*` (Biome enforces it) |
 | OMP tools, notifications, compaction, prompts | [harness/omp/extension.ts](src/harness/omp/extension.ts) (OMP adapter) → [harness/omp/registration.ts](src/harness/omp/registration.ts) (OMP wiring), [harness/omp/host.ts](src/harness/omp/host.ts) (shared OMP coordinator host) and [session/](src/session/) (harness-neutral logic; `tools.ts` has the tool schemas; `coordinator.ts` runs the coordinator's scheduler, status, and compaction; `tool-guard.ts` limits coordinator tools; `prompt-routing.ts` routes user input); [instructions.ts](src/instructions.ts), [harness/omp/worker-config.yml](src/harness/omp/worker-config.yml) |
 | Worktree capacity and maintenance | [pool/](src/pool/) |
 | Evidence, PR publication, merge | [delivery/](src/delivery/): `preflight.ts` checks a ready task before publishing |
@@ -66,7 +66,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   not recovery; `tandem reset` cancels all in-progress tasks across saved projects, and
   `tandem reset --hard` deletes the whole Tandem home.
 - Child agents run interactive OMP. Fresh reviewers are read-only; stop implementer mutation during
-  validation/review. Validation runs separately without a model. No remote fleets. Exactly two harnesses, OMP and Claude Code, one per project.
+  validation/review. Validation runs separately without a model. No remote fleets. Exactly two harnesses, OMP and Claude Code; each role's model picks its harness.
 - When a session is bad or blocked, inspect durable state first with `tandem status TASK_ID --json`, then `restart` the task, which goes through central recovery; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
 
 ## Change and verify
@@ -106,7 +106,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 
 - Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
 - Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
-- Harnesses (OMP, Claude Code), where the choice is recorded, the launch port: [harness.md](docs/reference/harness.md).
+- Harnesses (OMP, Claude Code), how a role's model picks one, where it is recorded, the launch port: [harness.md](docs/reference/harness.md).
 - Onboarding, settings file, model choices, Jev routing, instruction provenance, skills: [policy.md](docs/reference/policy.md).
 - Task stages, fix rounds, research continuation, playbooks, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).
 - Request briefs, approval revisions, review pane: [request-briefs.md](docs/reference/request-briefs.md).

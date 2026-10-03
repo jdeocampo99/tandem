@@ -102,11 +102,15 @@ The coordinator delegates research and does judgement itself.
   roles (`coordinator`, `scout`, `implementer`, `reviewer`, `presentation`), each with exactly
   `model` (exact `provider/model`) and `thinking` (a supported level). A partial or hand-edited
   file never becomes implicit defaults. A legacy `verifier` entry is accepted and ignored.
+- A role's model also picks where it runs: a `claude-code/<model>` selector runs that role in
+  Claude Code and anything else runs it in OMP. Roles may differ. See [harness.md](harness.md).
 - `enabledProviders` lists providers approved for spending; absent means none, never "all
   discovered". A write that omits it preserves the saved value.
 - Absent reads create nothing. Malformed or symlinked `models.json`, or a home inside the target,
   fails closed. Writes replace the file atomically.
-- The catalogue comes from `omp models --json`, one lookup per operation. Never parse private
+- The catalogue comes from `omp models --json`, one lookup per operation, plus a fixed Claude Code
+  catalogue (`claude-code/opus`, `claude-code/sonnet`, `claude-code/haiku`) that only explicit
+  choices such as `configure-models` accept; Tandem never offers or picks those on its own. Never parse private
   model configuration or invent names. Catalogue cost is descriptive, not a price guarantee.
 - `configure-models` takes a file mapping all five roles directly to `{ model, thinking }` (not
   the storage envelope), with no model-controlled approval field. It refuses without `--yes`, and
@@ -164,11 +168,6 @@ Contracts the parser does not make obvious:
   principles (`src/instructions.ts`) out of implementer and reviewer briefs and the review brief's
   mandatory principles, so the repository's own guidance governs. It is pinned only when `"none"`,
   so policies pinned before the setting keep their digest.
-- `harness` is `"omp"` (default) or `"claude-code"`, the agent program the project's coordinator
-  and agents run on; any other value refuses the file. Like `standards`, it is pinned only when not
-  `"omp"`, so policies pinned before the setting keep their digest and load as OMP. Claude Code
-  cannot run yet: launch and workers refuse it with a plain-English message. See
-  [harness.md](harness.md).
 - Legacy keys `requestBudget`, `maxWorkers`, and `reviewLevels` decode but are ignored. A task
   pinned with `reviewLevels` carries it unread so its policy digest still matches.
 - Existing valid settings are preserved; an invalid file (bad TOML or JSON, unknown fields, wrong
