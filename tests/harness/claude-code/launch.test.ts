@@ -96,6 +96,7 @@ test("a fresh coordinator names its new conversation and runs only Tandem's plug
     "--effort",
     "high",
     ...FLAGS,
+    "--",
     "hello",
   ]);
 });
@@ -157,6 +158,7 @@ test("a worker runs unattended with its role's tools, its model, and its brief",
     "bypassPermissions",
     "--tools",
     "Read,Grep,Glob,WebSearch,WebFetch,Agent,Write,Edit",
+    "--",
     "Look at the cache.",
   ]);
   const tools = (agent: LaunchSpec["agent"]) => {

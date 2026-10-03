@@ -152,7 +152,8 @@ function agentCommand(spec: LaunchSpec): readonly string[] {
     ...(spec.agent === "coordinator" ? [] : ["--permission-mode", "bypassPermissions"]),
     "--tools",
     TOOLS[spec.agent].join(","),
-    ...(spec.prompt === undefined ? [] : [spec.prompt]),
+    // `--tools` takes every argument up to the next option, so `--` ends it before the prompt.
+    ...(spec.prompt === undefined ? [] : ["--", spec.prompt]),
   ];
 }
 
