@@ -79,6 +79,7 @@ test("a pr-reviewer gets read-only tools plus bash and no saved conversation", (
     "openai-codex/gpt-5.6-luna",
     "--thinking",
     "max",
+    "--approval-mode=yolo",
     "--no-prewalk",
     "--no-rules",
     "--no-title",
@@ -103,8 +104,50 @@ test("a worker with a saved conversation resumes it", () => {
     model: { model: "m", thinking: "high" },
     conversation: { kind: "saved", directory: "/sessions/task-1", resume: true },
   });
-  expect(argv.slice(11, 14)).toEqual(["--session-dir", "/sessions/task-1", "--continue"]);
+  expect(argv.slice(12, 15)).toEqual(["--session-dir", "/sessions/task-1", "--continue"]);
   expect(argv).toContain("read,grep,glob,edit,write,bash,todo,submit_report");
+});
+
+test("every worker overrides the user's approval mode; the coordinator keeps it", () => {
+  for (const agent of [
+    "scout",
+    "reviewer",
+    "pr-reviewer",
+    "implementer",
+    "presentation",
+  ] as const) {
+    expect(
+      ompHarness.command({
+        agent,
+        cwd: "/worktree",
+        model: undefined,
+        conversation: { kind: "none" },
+      }),
+    ).toContain("--approval-mode=yolo");
+  }
+  const coordinator = buildCoordinatorArgv({
+    cwd: "/repo",
+    model: undefined,
+    sessionDirectory: "/home/s",
+  });
+  expect(coordinator.some((value) => value.startsWith("--approval-mode"))).toBe(false);
+});
+
+test("a worker launched before the approval flag is still an OMP agent and never a coordinator", async () => {
+  const expected = { repoPath: "/repo", sessionDirectory: "/home/s" };
+  const current = ompHarness.command({
+    agent: "implementer",
+    cwd: "/repo",
+    model: undefined,
+    conversation: { kind: "saved", directory: "/home/s", resume: true },
+  });
+  const older = current.filter((value) => value !== "--approval-mode=yolo");
+  expect(older).toHaveLength(current.length - 1);
+  for (const argv of [older, current]) {
+    expect(ompHarness.looksLikeAgent({ argv, name: "bun", argv0: undefined })).toBe(true);
+    await expect(ompHarness.matchUnrecordedCoordinator(argv, expected)).resolves.toBe("no-match");
+  }
+  expect(ompHarness.sameCommand(["bun", "/x/omp", ...older.slice(1)], older)).toBe(true);
 });
 
 test("a live command matches its record through bun launchers and --continue only", () => {

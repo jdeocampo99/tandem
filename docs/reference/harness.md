@@ -137,6 +137,20 @@ The CLI's `--extension` and `--config` confirm the coordinator files with those 
 for a Claude Code coordinator, which loads neither, is refused. `doctor` checks each file by its
 name. Only src/harness/omp/ and tests/harness/omp/ may import `@oh-my-pi/*`.
 
+### OMP approval mode
+
+An OMP worker launches with `--approval-mode=yolo`, which overrides the user's
+`tools.approvalMode` for that session. A worker runs unattended in its pane, so under `always-ask`
+or `write` it would wait for a confirmation nobody answers. Tandem's worker extension decides what
+a worker may do instead, as `bypassPermissions` does for a Claude Code worker. A reviewer still
+gets only read-only tools, and a PR review's bash still runs only read-only commands.
+
+The coordinator keeps the user's approval mode. The user sits at its pane and can answer OMP's
+prompts, and `approval: "write"` on the `tandem` tool is meant to reach them. Pinning it would
+also change the recorded command, so `sameCommand` would stop recognizing a coordinator launched
+before the change. Worker commands are never recorded or compared, so a worker launched without
+the flag stays an OMP process that no coordinator check claims.
+
 ## The Claude Code coordinator
 
 A coordinator on a `claude-code/<model>` selector runs:
