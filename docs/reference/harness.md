@@ -302,7 +302,7 @@ without reaching the session; a failure inside the session gets 500 and `refused
 | Event | Fields | Reply | Coordinator | Worker |
 | --- | --- | --- | --- | --- |
 | `sessionStart` | `model` (the id Claude Code reports) | `done` | `sessionStart` | steering's and the session's `onSessionStart` |
-| `userPrompt` | `text`, `interactive`, `attachments` | `promptRoute {handled}` | prompt routing, then `userPrompt` | `onHumanInput` for a typed prompt that is not the brief; never handled |
+| `userPrompt` | `text`, `origin` (`composer`, `task-notification`, or `other`), `attachments` | `promptRoute {handled}` | prompt routing, then `userPrompt` for a composer prompt | `onHumanInput` for a composer prompt that is not the brief; a background task's notification after the report is handled, so the mod drops it |
 | `agentStart` | `prompt?` (the text the run begins with) | `turnContext {system, context}` | `agentStart` | `onAgentStart`; the prompt's newest steering batch is applied |
 | `turnStart` | | `done` | `turnStart` | `onTurnStart` |
 | `streaming` | | `done` | nothing | `onStreaming` |
@@ -384,7 +384,7 @@ Two plugins under src/harness/claude-code/plugins/, loaded with `--plugin-dir`:
 | Claude Code event | What the adapter does |
 | --- | --- |
 | `session.start` | Spawns the sidecar beside the plugin with `--session` `$.session.id()`, waits up to 8 s for its ready line, registers the tools it lists (as `mcp__tandem__<name>`, before the first prompt, since the first `session.start` is awaited), posts `sessionStart` with `$.session.model()`, and only then follows its later lines. A fatal line, an unreadable one, or no line stops it and shows a toast; the mod then has no tools and no socket and fails closed. A reload runs this again with a new sidecar. |
-| `prompt.submit` | Skips Tandem's own submits. Posts `userPrompt` (`interactive` when the origin is the composer); `handled` drops the prompt. A prompt typed while idle then posts `agentStart` and carries `turnContext.context` as its `context`. |
+| `prompt.submit` | Skips Tandem's own submits. Posts `userPrompt` with `origin` from `e.origin.kind` (`composer` and `task-notification` as named, anything else `other`); `handled` drops the prompt. A prompt typed while idle then posts `agentStart` and carries `turnContext.context` as its `context`. |
 | `turn.start` | Posts `agentStart` when the prompt did not (a wake, or a prompt typed over a running turn), then `turnStart`. Remembers the text and turn id. Both `agentStart`s carry the run's text as `prompt`. |
 | `turn.step` (main loop) | Passes the response through chunk by chunk, posting `streaming` (not awaited) at most every 5 s. |
 | `prompt.edit` | Posts `promptEdit` with whether text is left after the edit; a refusal returns the box unchanged, which consumes the edit. |
@@ -421,7 +421,7 @@ repository's tsc and bun tests.
 | No transcript reference | A Claude Code worker's result carries no `transcript` (OMP's session file and entry id); `tandem trace` has none to link. |
 | No `TodoWrite` | The to-do list is built from `TaskCreate` and `TaskUpdate` (above). There are no phases, so a playbook step matches an item's subject. |
 | No message list at turn end | `agentEnd` carries the run's prompt (`turn.start`'s text) and final answer (`turn.complete`'s `answer`), which the core reads as one user message and one assistant message, so the setup page's wait for the coordinator's answer to a comment matches. Without a prompt there are no messages and nothing matches. |
-| No background-result wake | OMP marks a finished background command's wake, and a submitted worker stops it at once. Claude Code's task notification is an ordinary prompt to the adapter, so the turn runs; a submitted worker idle for 30 s still settles. |
+| No background-result wake | OMP marks a finished background command's wake, and a submitted worker aborts it. Claude Code sends a finished background task as a prompt whose origin is `task-notification`; a submitted worker answers it `handled`, the mod drops it, and no turn runs. |
 | Model id, not selector | `assertSelectedModel("claude-code/<alias>")` passes when the reported id is the alias or contains it as a word (`claude-opus-5-5` for `opus`), and fails closed when no model was reported. |
 
 ### Steering a Claude Code worker

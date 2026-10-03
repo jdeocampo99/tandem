@@ -277,6 +277,28 @@ test("a typed prompt Tandem handles never reaches the model", async ($, on) => {
   expect(submitted).toEqual([]);
 });
 
+test("a background task's notification the sidecar handles is dropped", async ($, on) => {
+  const { posted, submitted } = sidecar(on, (event) =>
+    event.type === "userPrompt" && event.origin === "task-notification"
+      ? { type: "promptRoute", handled: true }
+      : DONE,
+  );
+  await $.session.start(start);
+  const result = await $.prompt.submit({
+    text: "Background task finished.",
+    origin: { kind: "task-notification" },
+    wait: false,
+  });
+  expect(result).toMatchObject({ drop: "Handled by Tandem." });
+  expect(posted.at(-1)).toEqual({
+    type: "userPrompt",
+    text: "Background task finished.",
+    origin: "task-notification",
+    attachments: 0,
+  });
+  expect(submitted).toEqual([]);
+});
+
 test("a typed turn carries held deliveries, the coordinator section, and its answer back", async ($, on) => {
   const { posted } = sidecar(on, (event) => {
     if (event.type === "userPrompt") return { type: "promptRoute", handled: false };

@@ -23,6 +23,13 @@ export type WireToolSpec = Readonly<{
   inputSchema: Readonly<Record<string, unknown>>;
 }>;
 
+/**
+ * Where a prompt came from, as Claude Code's `PromptOrigin.kind` names it: the person's Enter, a
+ * finished background task's notification, or anything else (the bridge, the SDK, a peer).
+ */
+export const PROMPT_ORIGINS = ["composer", "task-notification", "other"] as const;
+export type PromptOrigin = (typeof PROMPT_ORIGINS)[number];
+
 /** One finished model turn's tokens, from Claude Code's `turn.complete`. */
 export type WireUsage = Readonly<{
   model: string;
@@ -39,7 +46,7 @@ export type WireUsage = Readonly<{
  */
 export type SidecarEvent =
   | Readonly<{ type: "sessionStart"; model: string }>
-  | Readonly<{ type: "userPrompt"; text: string; interactive: boolean; attachments: number }>
+  | Readonly<{ type: "userPrompt"; text: string; origin: PromptOrigin; attachments: number }>
   /** `prompt` is the text the run begins with, when it begins with one. */
   | Readonly<{ type: "agentStart"; prompt?: string }>
   | Readonly<{ type: "turnStart" }>
@@ -178,6 +185,15 @@ function flag(record: Fields, key: string, where: string): boolean {
   return value;
 }
 
+function promptOrigin(record: Fields, key: string, where: string): PromptOrigin {
+  const value = record[key];
+  const origin = PROMPT_ORIGINS.find((known) => known === value);
+  if (origin === undefined) {
+    throw new WireError(`${where}.${key} must be one of ${PROMPT_ORIGINS.join(", ")}`);
+  }
+  return origin;
+}
+
 function count(record: Fields, key: string, where: string): number {
   const value = record[key];
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
@@ -234,11 +250,11 @@ function eventFrom(value: unknown): SidecarEvent {
       shape("model");
       return { type, model: name(record, "model", where) };
     case "userPrompt":
-      shape("text", "interactive", "attachments");
+      shape("text", "origin", "attachments");
       return {
         type,
         text: text(record, "text", where),
-        interactive: flag(record, "interactive", where),
+        origin: promptOrigin(record, "origin", where),
         attachments: count(record, "attachments", where),
       };
     case "agentStart":

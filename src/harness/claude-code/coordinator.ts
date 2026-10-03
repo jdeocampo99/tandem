@@ -9,6 +9,7 @@ import {
   type ChoiceConfirmation,
   promptRoutingConfig,
   routeUserPrompt,
+  type UserPrompt,
 } from "../../session/prompt-routing.ts";
 import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
 import { tandemRequestSchema } from "../../session/tools.ts";
@@ -79,7 +80,14 @@ export function claudeCodeCoordinator(
         await session.sessionStart();
         return DONE;
       case "userPrompt": {
-        const { handled } = await routeUserPrompt(event, {
+        const interactive = event.origin === "composer";
+        const prompt: UserPrompt = {
+          type: "userPrompt",
+          text: event.text,
+          interactive,
+          attachments: event.attachments,
+        };
+        const { handled } = await routeUserPrompt(prompt, {
           confirmation,
           config: routing,
           service: () => session.service(),
@@ -88,7 +96,7 @@ export function claudeCodeCoordinator(
           confirm: pane.host.confirm,
           diagnostics: (entry) => appendDiagnosticEvent(environment.home, entry),
         });
-        if (!handled && event.interactive) session.userPrompt();
+        if (!handled && interactive) session.userPrompt();
         return { type: "promptRoute", handled };
       }
       case "agentStart": {

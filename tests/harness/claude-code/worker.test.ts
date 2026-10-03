@@ -174,7 +174,7 @@ test("an idle worker gets steering as a submitted prompt, after its brief has ru
 
 test("the brief is Tandem's; a prompt the person types is theirs", async () => {
   const { binding, files } = await worker();
-  await binding.handle({ type: "userPrompt", text: BRIEF, interactive: true, attachments: 0 });
+  await binding.handle({ type: "userPrompt", text: BRIEF, origin: "composer", attachments: 0 });
   await binding.handle({ type: "agentStart", prompt: BRIEF });
   await binding.handle({ type: "agentEnd", interrupted: false });
   // A turn Tandem started that ended without a report is reminded, not conversation.
@@ -185,12 +185,40 @@ test("the brief is Tandem's; a prompt the person types is theirs", async () => {
   await typed.binding.handle({
     type: "userPrompt",
     text: "What did you find?",
-    interactive: true,
+    origin: "composer",
     attachments: 0,
   });
   await typed.binding.handle({ type: "agentStart", prompt: "What did you find?" });
   await typed.binding.handle({ type: "agentEnd", interrupted: false });
   expect(typed.lines.filter((line) => line.type === "submit")).toEqual([]);
+});
+
+test("a background task's notification after the report is dropped; before it, and a typed prompt after it, still run", async () => {
+  const { binding } = await worker();
+  const notice = {
+    type: "userPrompt",
+    text: "Background task finished.",
+    origin: "task-notification",
+    attachments: 0,
+  } as const;
+  await binding.handle({ type: "agentStart", prompt: BRIEF });
+  expect(await binding.handle(notice)).toEqual({ type: "promptRoute", handled: false });
+  await binding.handle({
+    type: "pluginTool",
+    id: "t2",
+    name: "submit_report",
+    input: { outcome: "completed", report: "Keyed by path." },
+  });
+  await binding.handle({ type: "agentEnd", interrupted: false });
+  expect(await binding.handle(notice)).toEqual({ type: "promptRoute", handled: true });
+  expect(
+    await binding.handle({
+      type: "userPrompt",
+      text: "What did you find?",
+      origin: "composer",
+      attachments: 0,
+    }),
+  ).toEqual({ type: "promptRoute", handled: false });
 });
 
 test("submit_report runs through the guard, and a TodoWrite list reaches the playbook gate", async () => {

@@ -14,7 +14,7 @@ const call = { id: "toolu_1", name: "Read", input: { file_path: "src/a.ts" } };
 
 const EVENTS: readonly SidecarEvent[] = [
   { type: "sessionStart", model: "claude-opus-5-5" },
-  { type: "userPrompt", text: "status?", interactive: true, attachments: 0 },
+  { type: "userPrompt", text: "status?", origin: "composer", attachments: 0 },
   { type: "agentStart" },
   { type: "agentStart", prompt: "Research the cache." },
   { type: "turnStart" },
@@ -67,11 +67,11 @@ test("malformed or unknown events are refused with the reason", () => {
     ['{"type":"agentStart","extra":1}', "agentStart event has unknown fields: extra"],
     ['{"type":"sessionStart","model":" "}', "sessionStart event.model must not be empty"],
     [
-      '{"type":"userPrompt","text":"hi","interactive":"yes","attachments":0}',
-      "userPrompt event.interactive must be true or false",
+      '{"type":"userPrompt","text":"hi","origin":"bridge","attachments":0}',
+      "userPrompt event.origin must be one of composer, task-notification, other",
     ],
     [
-      '{"type":"userPrompt","text":"hi","interactive":true,"attachments":-1}',
+      '{"type":"userPrompt","text":"hi","origin":"composer","attachments":-1}',
       "userPrompt event.attachments must be a whole number of zero or more",
     ],
     [

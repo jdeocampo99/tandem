@@ -94,7 +94,14 @@ export function claudeCodeWorker(pane: ClaudeCodePane, parts: WorkerParts): Sess
         return DONE;
       case "userPrompt":
         // Tandem's brief, given as Claude Code's first prompt, is not the person at the pane.
-        if (event.interactive && !event.text.startsWith(job.prompt)) session.onHumanInput();
+        if (event.origin === "composer" && !event.text.startsWith(job.prompt)) {
+          session.onHumanInput();
+        }
+        // A background task finishing after the report would run a turn for nothing; handled
+        // makes the mod drop it, as OMP aborts that wake.
+        if (event.origin === "task-notification" && session.reportSubmitted) {
+          return { type: "promptRoute", handled: true };
+        }
         return { type: "promptRoute", handled: false };
       case "agentStart":
         session.onAgentStart();
