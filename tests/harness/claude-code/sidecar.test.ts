@@ -10,8 +10,9 @@ import {
   parseSidecarLine,
   type SidecarEvent,
   type SidecarLine,
-} from "../../../src/harness/claude-code/protocol.ts";
-import { claimSocket, sidecarSocketPath } from "../../../src/harness/claude-code/sidecar.ts";
+} from "../../../src/harness/claude-code/plugins/tandem/hooks/protocol.ts";
+import { claimSocket } from "../../../src/harness/claude-code/sidecar.ts";
+import { sidecarSocketPath } from "../../../src/harness/claude-code/socket.ts";
 
 const SIDECAR = join(TANDEM_CHECKOUT, "src", "harness", "claude-code", "sidecar.ts");
 
@@ -177,12 +178,40 @@ test("SIGTERM stops the sidecar and removes its socket", async () => {
   expect(existsSync(sidecar.socket)).toBe(false);
 });
 
-test("closing stdin stops the sidecar, as when the mod that spawned it goes away", async () => {
+test("closed stdin does not stop the sidecar, since the mod spawns it with stdin closed", async () => {
   const sidecar = await startSidecar(await gitRepo());
   await sidecar.process.stdin.end();
+  await Bun.sleep(500);
+  expect(await (await fetch("http://sidecar/health", { unix: sidecar.socket })).text()).toBe("ok");
+  sidecar.process.kill("SIGTERM");
   expect(await sidecar.process.exited).toBe(0);
-  expect(existsSync(sidecar.socket)).toBe(false);
 });
+
+test("the sidecar stops when the process that started it dies", async () => {
+  const repo = await gitRepo();
+  const root = await tempDir();
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const parent = Bun.spawn(
+    ["sh", "-c", `sleep 20 | bun ${SIDECAR} --role coordinator --session session-1 & sleep 2`],
+    {
+      cwd: repo,
+      stdout: "pipe",
+      stderr: "ignore",
+      env: { PATH: process.env.PATH, HOME: root, TANDEM_HOME: join(root, "home") },
+    },
+  );
+  const ready = await lineReader(parent.stdout)();
+  if (ready.type !== "ready") throw new Error(`sidecar did not start: ${JSON.stringify(ready)}`);
+  cleanups.push(async () => {
+    try {
+      process.kill(ready.pid, "SIGKILL");
+    } catch {}
+  });
+  await parent.exited;
+  const deadline = Date.now() + 5_000;
+  while (existsSync(ready.socket) && Date.now() < deadline) await Bun.sleep(100);
+  expect(existsSync(ready.socket)).toBe(false);
+}, 10_000);
 
 test("a shutdown event answers, then stops the sidecar", async () => {
   const sidecar = await startSidecar(await gitRepo());

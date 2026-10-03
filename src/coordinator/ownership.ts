@@ -3,8 +3,7 @@ import { dirname, join } from "node:path";
 import { type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner, Endpoint } from "../contracts.ts";
-import { DEFAULT_HARNESS } from "../harness/contract.ts";
-import { harnessFor } from "../harness/resolve.ts";
+import { coordinatorHarnesses, harnessFor } from "../harness/resolve.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
@@ -173,8 +172,7 @@ async function findUnrecordedCoordinator(
     legacySessionDirectory(home, repoPath),
     "coordinator session directory",
   );
-  // Coordinators without a record predate harness choice, so only OMP can have launched them.
-  const legacyHarness = harnessFor(DEFAULT_HARNESS);
+  const harnesses = coordinatorHarnesses();
   for (const pane of panes) {
     const endpoint: Endpoint = {
       sessionId,
@@ -193,19 +191,20 @@ async function findUnrecordedCoordinator(
     }
     if (!inspection.activeWorker) continue;
     for (const process of inspection.processInfo.foregroundProcesses) {
-      if (!legacyHarness.looksLikeAgent(process)) continue;
+      const harness = harnesses.find((candidate) => candidate.looksLikeAgent(process));
+      if (harness === undefined) continue;
       if (process.argv.length === 0) {
         throw ownershipFailure(
-          `active OMP process in pane ${JSON.stringify(pane.paneId)} did not expose argv for legacy identity proof`,
+          `active ${harness.executable} process in pane ${JSON.stringify(pane.paneId)} did not expose argv for legacy identity proof`,
         );
       }
-      const match = await legacyHarness.matchUnrecordedCoordinator(process.argv, {
+      const match = await harness.matchUnrecordedCoordinator(process.argv, {
         repoPath,
         sessionDirectory,
       });
       if (match === "unknown") {
         throw ownershipFailure(
-          `active OMP process in pane ${JSON.stringify(pane.paneId)} exposed an unverifiable Tandem invocation`,
+          `active ${harness.executable} process in pane ${JSON.stringify(pane.paneId)} exposed an unverifiable Tandem invocation`,
         );
       }
       if (match === "match") throw legacyCoordinatorGuidance(sessionId, repoPath, pane.paneId);
@@ -252,7 +251,7 @@ async function liveCoordinatorProcess(
   run: CommandRunner,
   record: CoordinatorRecord,
 ): Promise<string | undefined> {
-  const needle = harnessFor(record.harness).processNeedle(record.command);
+  const needle = harnessFor(record.harness, "coordinator").processNeedle(record.command);
   if (needle === undefined) return "unknown";
   const request: CommandRequest = {
     argv: ["ps", "-axww", "-o", "pid=,command="],
@@ -318,7 +317,7 @@ async function findOwnedCoordinator(
   }
 
   const matchingProcesses = inspection.processInfo.foregroundProcesses.filter((process) =>
-    harnessFor(record.harness).sameCommand(process.argv, record.command),
+    harnessFor(record.harness, "coordinator").sameCommand(process.argv, record.command),
   );
   if (matchingProcesses.length > 1) {
     throw ownershipFailure(

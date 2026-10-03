@@ -5,7 +5,7 @@ import {
   claudeCodeToolCall,
   UNSUPPORTED_EFFECTS,
 } from "../../../src/harness/claude-code/host.ts";
-import type { SidecarLine } from "../../../src/harness/claude-code/protocol.ts";
+import type { SidecarLine } from "../../../src/harness/claude-code/plugins/tandem/hooks/protocol.ts";
 import { HookCalls } from "../../../src/harness/claude-code/sidecar.ts";
 import { WorkerOutputError } from "../../../src/workers/protocol.ts";
 

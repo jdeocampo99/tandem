@@ -1,5 +1,4 @@
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JEV_MODEL, type JevFetch } from "../../src/adapters/typesafe.ts";
 import type {
@@ -264,6 +263,7 @@ function describeCommand(argv: readonly string[]): Readonly<{
   }
   if (program === "omp") return { boundary: "omp", action: `omp ${argv[1] ?? ""}`.trim() };
   if (program === "ps") return { boundary: "ps", action: "ps" };
+  if (program === "kill") return { boundary: "ps", action: "kill" };
   if (program === "gh") return { boundary: "github", action: githubAction(argv) };
   throw new Error(`unexpected scenario command ${JSON.stringify(argv)}`);
 }
@@ -364,6 +364,7 @@ const PERSISTENT_LAUNCHERS: Readonly<Record<string, string>> = {
   node: "omp",
   omp: "omp",
   sh: "omp",
+  claude: "claude",
   glow: "less",
 };
 
@@ -384,8 +385,11 @@ async function bootstrapProcessArgv(command: string): Promise<readonly string[]>
   const executed = lines[lines.indexOf("trap : INT") + 1];
   if (executed === undefined) return tokens;
   const argv = parseQuotedCommand(executed);
-  const start = argv.findIndex((entry, position) => position > 0 && !entry.includes("="));
-  return start === -1 ? argv : argv.slice(start);
+  // `env [-u NAME]... [NAME=VALUE]... argv`: skip the cleared names and the assignments.
+  let start = 1;
+  while (argv[start] === "-u") start += 2;
+  while (argv[start]?.includes("=") === true) start += 1;
+  return start >= argv.length ? argv : argv.slice(start);
 }
 
 export type ScenarioWorldOptions = Readonly<{
@@ -398,7 +402,9 @@ export type ScenarioWorldOptions = Readonly<{
 export async function createScenarioWorld(
   options: ScenarioWorldOptions = {},
 ): Promise<ScenarioWorld> {
-  const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-scenario-")));
+  // Under /tmp, not the platform temp dir: a Claude Code coordinator's sidecar socket lives under
+  // the home, and macOS caps a socket path at 104 bytes.
+  const root = await realpath(await mkdtemp("/tmp/tandem-scenario-"));
   const home = join(root, "home");
   const repoPath = join(root, "repo");
   const poolRoot = join(root, "pool");
@@ -984,6 +990,16 @@ export async function createScenarioWorld(
           pane.processes.map((process) => `${process.pid} ${process.argv.join(" ")}`),
         );
       return commandResult(lines.join("\n"));
+    }
+    if (program === "kill") {
+      // A killed coordinator leaves its pane at the shell.
+      const pids = new Set(request.argv.filter((entry) => /^\d+$/u.test(entry)).map(Number));
+      for (const pane of panes.values()) {
+        if (pane.processes.some((process) => pids.has(process.pid))) {
+          pane.processes = [{ pid: pane.shellPid, name: "sh", argv: ["sh"] }];
+        }
+      }
+      return commandResult();
     }
     throw new Error(`unexpected scenario command ${JSON.stringify(request.argv)}`);
   };

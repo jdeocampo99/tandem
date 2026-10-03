@@ -52,7 +52,7 @@ async function closeSupersededPane(run: CommandRunner, prior: CoordinatorRecord)
     );
   }
   const matches = inspection.processInfo.foregroundProcesses.filter((process) =>
-    harnessFor(prior.harness).sameCommand(process.argv, prior.command),
+    harnessFor(prior.harness, "coordinator").sameCommand(process.argv, prior.command),
   );
   if (inspection.activeWorker) {
     if (matches.length !== 1) {

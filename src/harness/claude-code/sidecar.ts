@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
 import { mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { environmentForContext } from "../../config/environment.ts";
@@ -12,13 +11,14 @@ import {
   parseSidecarEvent,
   SIDECAR_PROTOCOL_VERSION,
   type SidecarLine,
-} from "./protocol.ts";
+} from "./plugins/tandem/hooks/protocol.ts";
+import { sidecarSocketPath } from "./socket.ts";
 
-/** macOS limits a unix socket path to 104 bytes, including the terminating NUL. */
-const MAX_SOCKET_PATH_BYTES = 103;
 /** How long a new sidecar waits for the one it replaces (a mod reload) to let go of the socket. */
 const CLAIM_WAIT_MS = 3_000;
 const CLAIM_POLL_MS = 100;
+/** How often the sidecar checks that the Claude Code process that started it is still alive. */
+const PARENT_POLL_MS = 1_000;
 
 export type SidecarArgs = Readonly<{ role: "coordinator"; sessionId: string }>;
 
@@ -43,18 +43,6 @@ export function parseSidecarArgs(argv: readonly string[]): SidecarArgs {
   }
   if (sessionId === undefined || sessionId.length === 0) throw new Error("--session is required");
   return { role, sessionId };
-}
-
-/** One short socket per session under the home; the session id is hashed to keep it short. */
-export function sidecarSocketPath(home: string, sessionId: string): string {
-  const name = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
-  const path = join(home, "sidecars", `${name}.sock`);
-  if (Buffer.byteLength(path) > MAX_SOCKET_PATH_BYTES) {
-    throw new Error(
-      `the sidecar socket path ${path} is longer than the ${MAX_SOCKET_PATH_BYTES} bytes macOS allows; use a shorter Tandem home`,
-    );
-  }
-  return path;
 }
 
 async function answers(socket: string): Promise<boolean> {
@@ -183,8 +171,8 @@ const timers: SessionDeps["timers"] = {
 };
 
 /**
- * Runs one Claude Code session's sidecar until SIGTERM, SIGHUP, stdin closing, or a `shutdown`
- * event, then stops listening, removes its socket, and shuts the session down.
+ * Runs one Claude Code session's sidecar until SIGTERM, SIGHUP, its parent exiting, or a
+ * `shutdown` event, then stops listening, removes its socket, and shuts the session down.
  */
 async function main(): Promise<void> {
   // Stdout carries only protocol lines; anything else the core prints goes to stderr.
@@ -255,8 +243,11 @@ async function main(): Promise<void> {
   for (const signal of ["SIGTERM", "SIGHUP"] as const) process.removeAllListeners(signal);
   process.on("SIGTERM", () => void stop());
   process.on("SIGHUP", () => void stop());
-  process.stdin.on("end", () => void stop());
-  process.stdin.resume();
+  // `$.process.spawn` closes stdin from the start, so a dead Claude Code shows only as a new parent.
+  const parent = process.ppid;
+  setInterval(() => {
+    if (process.ppid !== parent) void stop();
+  }, PARENT_POLL_MS).unref();
   writeLine({ type: "ready", protocol: SIDECAR_PROTOCOL_VERSION, socket, pid: process.pid });
 }
 

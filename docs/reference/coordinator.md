@@ -9,8 +9,9 @@ src/coordinator/registry.ts, src/coordinator/record.ts, src/coordinator/lock.ts,
 src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/workspace.ts,
 src/coordinator/restart.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
 src/coordinator/renest.ts, src/harness/contract.ts (the launch port), src/harness/resolve.ts,
-src/harness/omp/launch.ts.
-Tests: tests/coordinator/, tests/harness/omp/launch.test.ts, tests/terminal/main.test.ts.
+src/harness/omp/launch.ts, src/harness/claude-code/launch.ts.
+Tests: tests/coordinator/, tests/harness/omp/launch.test.ts, tests/harness/claude-code/launch.test.ts,
+tests/evals/harness-scenarios.test.ts, tests/terminal/main.test.ts.
 
 ## Setting resolution
 
@@ -25,7 +26,9 @@ Tests: tests/coordinator/, tests/harness/omp/launch.test.ts, tests/terminal/main
 Keep overrides consistent across reconnects so the same durable state and Herdr session are reused.
 The low-level launch's `--repo` is the original project identity; launch derives the clean source
 checkout itself. Its `--extension` and `--config` must be Tandem's checked-in files
-(src/harness/omp/extension.ts and src/harness/omp/worker-config.yml).
+(src/harness/omp/extension.ts and src/harness/omp/worker-config.yml); a Claude Code coordinator
+loads neither, so naming one for it is refused. Launch checks every file and directory its harness
+loads before starting anything (see [harness.md](harness.md#the-launch-port)).
 
 ### Remembered setup
 
@@ -168,8 +171,14 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
 
 ## Launch readiness
 
-- Launch succeeds only after Herdr reports a running server and native pane inspection verifies
-  the expected OMP command and clean cwd. A successful `pane run` alone is not readiness.
+- Launch succeeds only after Herdr reports a running server, the harness's ready wait passes, and
+  native pane inspection verifies the expected coordinator command and clean cwd. A successful
+  `pane run` alone is not readiness.
+- OMP's ready wait passes at once. A Claude Code coordinator is ready when its sidecar answers on
+  the conversation's socket; after 30 s without an answer its processes are stopped, the new pane
+  and lease are rolled back, and the error names the trust question and mods switched off as the
+  usual causes ([harness.md](harness.md#the-claude-code-coordinator)). In the caller's own pane the
+  wait runs beside the coordinator and stops it the same way.
 - A private bootstrap script keeps the initial terminal command short.
 - Child-workspace creation and ordering share the central store lock so concurrent dispatch keeps
   each child group beneath its own coordinator.
@@ -178,12 +187,14 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
 
 - The coordinator pane runs a script under `<home>/coordinator-scripts/`. When the coordinator
   exits (Ctrl-C, crash), the script stays and offers to restart: Enter relaunches in the same pane
-  with `--continue`, keeping record, lease, and pane; Ctrl-C drops to the pane's shell.
-- `--continue` is not part of coordinator identity. The script waiting at its offer counts as a
-  stopped coordinator shell, so update and reset may close that pane.
+  with `--continue` (OMP) or `--resume <id>` of the same conversation (Claude Code), keeping record,
+  lease, and pane; Ctrl-C drops to the pane's shell.
+- `--continue` is not part of coordinator identity, and Claude Code's `--session-id <id>` and
+  `--resume <id>` are the same coordinator. The script waiting at its offer counts as a stopped
+  coordinator shell, so update and reset may close that pane.
 - An exited coordinator (Ctrl-C, crash, closed pane) is stopped. If its recorded pane now runs
   something else (a shell, a hand-started `omp`), Tandem scans all processes for the coordinator's
-  own `--session-dir`:
+  own `--session-dir` (OMP) or conversation id (Claude Code):
   - none running: launch opens a fresh pane with `--continue`, leaves the old pane and its process
     untouched, and keeps the old lease under a quarantine note;
   - still running elsewhere, or the record predates `--session-dir`: refuse and name the one step
@@ -191,6 +202,8 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   Reset still refuses to close such a pane, because it is no longer Tandem's.
 - A pre-registry coordinator without a clean lease record is never adopted or duplicated; launch
   refuses and tells the user to stop it and relaunch (`legacyCoordinatorGuidance` in ownership.ts).
+  An unrecorded `claude` loading Tandem's adapter plugin can't be tied to a repository, so launch
+  refuses beside it too.
 - Each record names the coordinator's `harness` (see [harness.md](harness.md)); a record saved
   before that field is OMP. Only a new coordinator takes its harness from its model
   (`harnessOf`), and launch refuses it before checking files or starting anything when Tandem
@@ -201,7 +214,7 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   record whose `command[0]` is not that harness's executable, or whose harness is unknown, is
   unreadable.
 - Commands and processes are matched through the launch port (`Harness` in
-  src/harness/contract.ts, resolved by `harnessFor`). Recorded ownership compares the live argv with the recorded command,
+  src/harness/contract.ts, resolved by `harnessFor(name, "coordinator")`). Recorded ownership compares the live argv with the recorded command,
   so a coordinator launched before the OMP code moved under src/harness/omp/ still matches its
   record, which names the old src/extension.ts. The unrecorded check accepts both extension paths.
   Its pane's "press Enter to start it again" offer reruns the recorded command with the old path,
@@ -325,7 +338,8 @@ recovery.
   before closing the old coordinator.
 - Verifies exact recorded ownership, revalidates pane cwd and process immediately before close,
   confirms the close acknowledgement and that the pane is gone, then launches with the same lease
-  and session directory and `--continue` (omitted with `--fresh`).
+  and session directory and `--continue` (OMP) or `--resume` of the recorded conversation (Claude
+  Code), both omitted with `--fresh`.
 - Preserves child panes, task IDs, generations, worktrees, leases, conversation history, pending
   questions and messages, and reports.
 - Foreign, ambiguous, or missing ownership refuses before any close.
