@@ -960,8 +960,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   const coordinatorCwd = worktree.path;
   const harness = harnessFor(harnessOf(request.model), "coordinator");
   const conversation = await harness.coordinatorConversation(
-    paths.sessionDirectory,
-    request.continueSession,
+    { home: paths.home, directory: paths.sessionDirectory, resume: request.continueSession },
     coordinatorLaunchIo(dependencies),
   );
   const started: StartedCoordinator = {

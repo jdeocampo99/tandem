@@ -128,10 +128,12 @@ export type Harness = Readonly<{
   coordinatorFiles: readonly CoordinatorFile[];
   /** Environment the coordinator needs beyond Tandem's own, in its pane and in a direct run. */
   launchEnvironment: Readonly<Record<string, string>>;
-  /** The conversation a coordinator launch names, from what an earlier launch kept in `directory`. */
+  /**
+   * The conversation a coordinator launch names, from what an earlier launch kept in `directory`.
+   * Refuses, before anything starts, a launch the harness could never get ready under `home`.
+   */
   coordinatorConversation(
-    directory: string,
-    resume: boolean,
+    launch: Readonly<{ home: string; directory: string; resume: boolean }>,
     io: CoordinatorLaunchIo,
   ): Promise<SavedConversation>;
   /**

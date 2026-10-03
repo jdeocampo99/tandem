@@ -138,14 +138,16 @@ function coordinatorCommand(spec: LaunchSpec): readonly string[] {
 }
 
 async function coordinatorConversation(
-  directory: string,
-  resume: boolean,
+  { home, directory, resume }: Readonly<{ home: string; directory: string; resume: boolean }>,
   io: CoordinatorLaunchIo,
 ): Promise<SavedConversation> {
   const path = conversationPointerPath(directory);
   const text = resume ? await io.readText(path) : undefined;
   const recorded = text === undefined ? undefined : parseConversationPointer(text, path);
-  return { kind: "saved", directory, ...chooseConversation(recorded, resume, io.newId) };
+  const conversation = chooseConversation(recorded, resume, io.newId);
+  // A home too long for the sidecar's socket is refused before anything starts.
+  sidecarSocketPath(home, conversation.id);
+  return { kind: "saved", directory, ...conversation };
 }
 
 function notReadyError(poolRoot: string): Error {

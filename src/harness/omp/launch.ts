@@ -223,7 +223,7 @@ export const ompHarness: Harness = {
   ],
   launchEnvironment: {},
   // OMP finds a saved conversation by its directory and loads Tandem before it reads input.
-  coordinatorConversation: async (directory, resume) => ({ kind: "saved", directory, resume }),
+  coordinatorConversation: async ({ directory, resume }) => ({ kind: "saved", directory, resume }),
   awaitCoordinatorReady: async () => undefined,
   command: (spec) =>
     spec.agent === "coordinator" ? coordinatorCommand(spec) : workerCommand(spec),

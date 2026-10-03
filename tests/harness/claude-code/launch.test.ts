@@ -149,7 +149,12 @@ test("a pointer holding anything but a conversation id fails closed with a way o
 
 test("a launch reads the pointer only to resume, and starts fresh when there is none", async () => {
   const recorded = fakeIo({ files: { [POINTER]: `${ID}\n` } });
-  expect(await claudeCodeHarness.coordinatorConversation(DIRECTORY, true, recorded)).toEqual({
+  expect(
+    await claudeCodeHarness.coordinatorConversation(
+      { home: "/home", directory: DIRECTORY, resume: true },
+      recorded,
+    ),
+  ).toEqual({
     kind: "saved",
     directory: DIRECTORY,
     resume: true,
@@ -157,7 +162,12 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
   });
 
   const fresh = fakeIo({ files: { [POINTER]: `${ID}\n` } });
-  expect(await claudeCodeHarness.coordinatorConversation(DIRECTORY, false, fresh)).toEqual({
+  expect(
+    await claudeCodeHarness.coordinatorConversation(
+      { home: "/home", directory: DIRECTORY, resume: false },
+      fresh,
+    ),
+  ).toEqual({
     kind: "saved",
     directory: DIRECTORY,
     resume: false,
@@ -166,11 +176,25 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
   expect(fresh.reads).toEqual([]);
 
   const missing = fakeIo();
-  expect(await claudeCodeHarness.coordinatorConversation(DIRECTORY, true, missing)).toMatchObject({
+  expect(
+    await claudeCodeHarness.coordinatorConversation(
+      { home: "/home", directory: DIRECTORY, resume: true },
+      missing,
+    ),
+  ).toMatchObject({
     resume: false,
     id: OTHER_ID,
   });
   expect(missing.writes).toEqual([]);
+});
+
+test("a home too long for the sidecar's socket is refused before the coordinator starts", async () => {
+  await expect(
+    claudeCodeHarness.coordinatorConversation(
+      { home: `/${"h".repeat(100)}`, directory: DIRECTORY, resume: false },
+      fakeIo(),
+    ),
+  ).rejects.toThrow("use a shorter Tandem home");
 });
 
 const STARTED = {
