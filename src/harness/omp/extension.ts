@@ -1,95 +1,16 @@
-import { realpath } from "node:fs/promises";
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@oh-my-pi/pi-coding-agent";
-import { runCommand } from "../../adapters/commands.ts";
-import { openWelcomePopup } from "../../adapters/herdr.ts";
-import { createHerdrStatusReporter } from "../../adapters/herdr-status.ts";
-import {
-  environmentForContext,
-  processEnvironmentSnapshot,
-  type TandemBoundaryEnvironment,
-  type TandemEnvironmentSource,
-} from "../../config/environment.ts";
-import type { CommandRunner } from "../../contracts.ts";
-import { refreshCoordinatorSourceUnlocked } from "../../coordinator/source.ts";
-import { isTandemCheckout } from "../../coordinator/tandem-checkout.ts";
-import { type PlaybookClassifier, playbookClassifier } from "../../playbooks/classify.ts";
-import { type BriefLanguageChecker, briefLanguageChecker } from "../../requests/plain-language.ts";
-import { appendCoordinatorUsage } from "../../runtime/usage-ledger.ts";
-import { type IssueDraftChecker, issueDraftChecker } from "../../self-improvement/issue-draft.ts";
-import {
-  createTandemService,
-  type TandemService,
-  type TandemServiceOptions,
-} from "../../service/controller.ts";
-import { coordinatorCompactTokens } from "../../session/compaction.ts";
-import { CoordinatorSession } from "../../session/coordinator.ts";
-import { readResearchReport } from "../../session/notifications.ts";
+import { processEnvironmentSnapshot } from "../../config/environment.ts";
+import type { CoordinatorSession } from "../../session/coordinator.ts";
 import type { CoordinatorMessage } from "../../session/onboarding-guide.ts";
 import { promptRoutingConfig } from "../../session/prompt-routing.ts";
-import {
-  type ResearchContinuationClassifier,
-  researchContinuationClassifier,
-  researchContinuationClassifierConfig,
-} from "../../tasks/research-continuation-classifier.ts";
 import { replyUsage } from "../../workers/terminal.ts";
+import {
+  type BoundCoordinator,
+  bindCoordinator,
+  type CoordinatorOptions,
+} from "../coordinator-session.ts";
 import { ompSessionHost, ompToolCall } from "./host.ts";
 import { registerTandemOmp } from "./registration.ts";
-
-const DEFAULT_TICK_INTERVAL_MS = 2_000;
-
-export type TandemExtensionOptions = Readonly<{
-  readonly service?: TandemService;
-  readonly createService?: (options: TandemServiceOptions) => TandemService;
-  readonly environment?: Partial<TandemBoundaryEnvironment>;
-  readonly processEnvironment?: TandemEnvironmentSource;
-  readonly tickIntervalMs?: number;
-  /** Runs the Herdr status commands; the real command runner when absent. */
-  readonly run?: CommandRunner;
-}>;
-
-function createCoordinatorService(
-  options: TandemExtensionOptions,
-  environment: TandemBoundaryEnvironment,
-  classifyResearchContinuation: ResearchContinuationClassifier,
-  classifyPlaybook: PlaybookClassifier,
-  checkIssueDraft: IssueDraftChecker,
-  checkBriefLanguage: BriefLanguageChecker,
-): TandemService {
-  if (options.service !== undefined) return options.service;
-  const sourceRepo = environment.sourceRepo;
-  const createService = options.createService ?? createTandemService;
-  return createService({
-    home: environment.home,
-    sessionId: environment.sessionId,
-    ...(environment.parentWorkspaceId === undefined
-      ? {}
-      : { parentWorkspaceId: environment.parentWorkspaceId }),
-    ...(environment.coordinatorPaneId === undefined
-      ? {}
-      : { coordinatorPaneId: environment.coordinatorPaneId }),
-    poolRoot: environment.poolRoot,
-    classifyResearchContinuation,
-    classifyPlaybook,
-    checkIssueDraft,
-    checkBriefLanguage,
-    ...(sourceRepo === undefined
-      ? {}
-      : {
-          sourceWorkspace: {
-            repoPath: environment.repo,
-            path: sourceRepo,
-          },
-          refreshSource: () =>
-            refreshCoordinatorSourceUnlocked({
-              home: environment.home,
-              sessionId: environment.sessionId,
-              repoPath: environment.repo,
-              sourceRepoPath: sourceRepo,
-              run: runCommand,
-            }),
-        }),
-  });
-}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -133,33 +54,18 @@ function coordinatorMessage(message: unknown): CoordinatorMessage {
   };
 }
 
-type BoundCoordinator = Readonly<{
-  environment: TandemBoundaryEnvironment;
-  session: CoordinatorSession;
-}>;
-
 /** Create the OMP extension factory; all mutable runtime state is per loaded extension instance. */
-export function createTandemExtension(options: TandemExtensionOptions = {}): ExtensionFactory {
+export function createTandemExtension(options: CoordinatorOptions = {}): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
     const environmentSnapshot = processEnvironmentSnapshot(options.processEnvironment);
-    const jevConfig = researchContinuationClassifierConfig(environmentSnapshot);
-    const classifyResearchContinuation = researchContinuationClassifier(jevConfig);
-    const classifyPlaybook = playbookClassifier(jevConfig);
-    const checkIssueDraft = issueDraftChecker(jevConfig);
-    const checkBriefLanguage = briefLanguageChecker(jevConfig);
     let latestContext: ExtensionContext;
     let bound: BoundCoordinator | undefined;
 
     /** The session is built from the first context, since its environment depends on the cwd. */
     const bind = (ctx: ExtensionContext): BoundCoordinator => {
-      const environment = environmentForContext(options, {
-        cwd: ctx.cwd,
-        sessionId: ctx.sessionManager.getSessionId(),
-      });
       const currentContext = (): ExtensionContext => latestContext;
-      const session = new CoordinatorSession({
+      return bindCoordinator(options, {
         host: ompSessionHost(pi, currentContext),
-        clock: { now: () => Date.now(), monotonic: () => performance.now() },
         timers: {
           every: (ms, run) => {
             const timerContext = currentContext();
@@ -172,42 +78,10 @@ export function createTandemExtension(options: TandemExtensionOptions = {}): Ext
             return () => timerContext.clearTimer(timer);
           },
         },
-        status: createHerdrStatusReporter(options.run ?? runCommand, {
-          cwd: ctx.cwd,
-          agentLabel: "tandem-coordinator",
-          ...(options.processEnvironment === undefined
-            ? {}
-            : { environment: options.processEnvironment }),
-        }),
         logError: (message, error) => pi.logger.error(message, { error: errorMessage(error) }),
-        environment,
-        createService: () =>
-          createCoordinatorService(
-            options,
-            environment,
-            classifyResearchContinuation,
-            classifyPlaybook,
-            checkIssueDraft,
-            checkBriefLanguage,
-          ),
-        realpath: (path) => realpath(path),
-        isTandemCheckout: () => isTandemCheckout(environment.repo),
-        openWelcome: async () => {
-          if (environment.coordinatorPaneId === undefined) {
-            throw new Error("the coordinator is not running in a Tandem Herdr pane");
-          }
-          await openWelcomePopup(options.run ?? runCommand, {
-            sessionId: environment.sessionId,
-            cwd: ctx.cwd,
-            paneId: environment.coordinatorPaneId,
-          });
-        },
-        readReport: readResearchReport,
-        appendUsage: (entry) => appendCoordinatorUsage(environment.home, entry),
-        compactTokens: coordinatorCompactTokens(environmentSnapshot),
-        tickIntervalMs: options.tickIntervalMs ?? DEFAULT_TICK_INTERVAL_MS,
+        cwd: ctx.cwd,
+        sessionId: ctx.sessionManager.getSessionId(),
       });
-      return { environment, session };
     };
     const coordinator = (ctx: ExtensionContext): BoundCoordinator => {
       latestContext = ctx;
