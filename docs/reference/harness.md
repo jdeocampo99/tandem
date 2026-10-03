@@ -7,7 +7,7 @@ Code: src/harness/contract.ts (`HarnessName`, `harnessOf`, the `Harness` launch 
 (`harnessFor`, `harnessForRole`), src/harness/claude-code/models.ts (the Claude Code catalogue),
 src/harness/omp/launch.ts, src/coordinator/record.ts, src/workers/jobs.ts, src/harness/coordinator-session.ts
 (coordinator setup both adapters share), src/harness/claude-code/ (`host.ts`,
-`coordinator.ts`, `sidecar.ts`: the Claude Code sidecar; `plugins/tandem/hooks/protocol.ts`: the wire).
+`coordinator.ts`, `sidecar.ts`: the Claude Code sidecar; `tandem-tool.ts`; `plugins/`: the mods).
 Tests: tests/harness/, tests/harness/claude-code/, tests/evals/harness-scenarios.test.ts, tests/coordinator/coordinator-registry.test.ts, tests/workers/jobs.test.ts,
 tests/terminal/cli.test.ts.
 
@@ -108,8 +108,9 @@ listing. Only src/harness/omp/ and tests/harness/omp/ may import `@oh-my-pi/*`.
 On Claude Code, the adapter is a mod: TypeScript inside a plugin, with no Node APIs and no imports
 outside the plugin, so it cannot open `state.sqlite`. It starts a Bun sidecar with
 `$.process.spawn` for the session's life. The sidecar holds the core session and the store; the
-mod forwards Claude Code's hooks and carries out the sidecar's effects. Steps 5 and 6 of issue #200
-add the mods; until then `harnessFor` still refuses `claude-code`.
+mod forwards Claude Code's hooks and carries out the sidecar's effects. The mods are in
+src/harness/claude-code/plugins/ (see [The mods](#the-mods)); until the Claude Code launch lands,
+`harnessFor` still refuses `claude-code`.
 
 ### Lifecycle
 
@@ -163,8 +164,10 @@ without reaching the session; a failure inside the session gets 500 and `refused
 - The sidecar classifies tool calls (`claudeCodeToolCall`): `Read`, `WebFetch` (its URL is the
   path, so the coordinator's web-read guard applies), `Grep`/`Glob`, `Write`, `Edit`, `Bash`,
   `Task`/`Agent`, `TodoWrite`, `mcp__*`, and everything else as `other`.
-- `turnContext.system` goes to `prompt.section`. `turnContext.context` holds deliveries that did
-  not wake the model and goes to `prompt.context`; each is handed over once.
+- `turnContext.system` goes to the `tandem:coordinator` section of each `prompt.compose` in that
+  turn. `turnContext.context` holds deliveries that did not wake the model; each is handed over
+  once, as `prompt.submit` context of a typed prompt, or in the turn's section when the turn has
+  no typed prompt (a wake).
 - `compaction.instructions` is what the mod passes to `$.session.compact({ instructions })`.
 
 **Approval.** `host.confirm` inside a hook ends that hook's HTTP response early with `{"type":"ask",
@@ -186,13 +189,51 @@ a `tandem` call, and otherwise lets Claude Code go on as if Tandem were absent.
 | `promptAsUser` | `submit {text}` | `$.prompt.submit({ text, asUser: true })` |
 | `showCard`, `showStatus` | `log {text}` (and `submit` if `showStatus` wakes) | `$.ui.log` |
 | `notify` | `toast {text, level}` | `$.ui.toast` |
-| `compact` | `compact` | post `compacting`, then `$.session.compact` |
-| `abort` | `abort` | `$.turn.abort()` |
+| `compact` | `compact` | post `compacting`, then `$.session.compact`, after the turn if one is open |
+| `abort` | `abort` | `$.turn.abort({ turnId })` of the running turn; none running, nothing |
 | `recordEntry` | none | see below |
 | `shutdown` | refused (throws) | see below |
 
 The mod parses each line with `parseSidecarLine` and ignores, with a debug log, a line it cannot
 read.
+
+### The mods
+
+Two plugins under src/harness/claude-code/plugins/, loaded with `--plugin-dir`:
+
+- `tandem/` (plugin `tandem`), the adapter. `hooks/register.ts` is the hooks module and carries
+  out decisions made in `hooks/translate.ts`, which never touches `$`. `hooks/protocol.ts` is the
+  wire, which the sidecar imports from here because a mod can import only files inside its own
+  plugin. `hooks/tandem-tool.ts` is the `tandem` tool's description and JSON schema, generated
+  from src/session/tools.ts by `bun src/harness/claude-code/tandem-tool.ts`;
+  tests/harness/claude-code/tandem-tool.test.ts fails when it drifts.
+- `tandem-renderer/` (plugin `tandem-renderer`) draws a `UserMessage` whose origin is
+  `{ kind: 'plugin', name: 'tandem' }` as an empty `Box` until it is expanded, so a wake shows only
+  its `$.ui.log` line and never its hidden part.
+
+| Claude Code event | What the adapter does |
+| --- | --- |
+| `session.start` | Registers `tandem` (as `mcp__tandem__tandem`), then spawns the sidecar beside the plugin with `--session` `$.session.id()`, waits up to 8 s for its ready line, posts `sessionStart` with `$.session.model()`, and only then follows its later lines. A fatal line, an unreadable one, or no line stops it and shows a toast; the mod then has no socket and fails closed. A reload runs this again with a new sidecar. |
+| `prompt.submit` | Skips Tandem's own submits. Posts `userPrompt` (`interactive` when the origin is the composer); `handled` drops the prompt. A prompt typed while idle then posts `agentStart` and carries `turnContext.context` as its `context`. |
+| `turn.start` | Posts `agentStart` when the prompt did not (a wake, or a prompt typed over a running turn), then `turnStart`. Remembers the text and turn id. |
+| `prompt.compose` | Appends `{ id: 'tandem:coordinator', text, scope: 'session' }` when the turn has system text. Needs `--system-prompt-snapshot off` to run per request. |
+| `tool.call` | `mcp__tandem__tandem`: posts `tandemTool` and answers `{ result }`, or `{ deny }` for an error. Any other tool: `toolCall`; a block is `{ deny }`; else `toolStart`, the tool, `toolEnd`. A hook that throws or times out denies. The mod's own `$.ui.ask` arrives here as `AskUserQuestion` and is passed through. |
+| `classic.Stop` | Posts `stopRequested`; a `continueWith` becomes `{ block }`. |
+| `turn.complete` (main loop) | Posts `turnEnd` with the turn's tokens, the rise in `$.session.usage()`'s cost since the last turn as `costUsd` (0 when either reading is missing), and `context.tokens`; then `agentEnd` with `isAborted`, a failure for `error` or `refusal`, the turn's prompt, and `answer`. |
+| `session.compact` (main loop) | Posts `compacting` and adds its instructions after any the compaction had, then `compacted` unless skipped or `precompute`. One the sidecar asked for already has them. |
+| `session.end` | Posts `shutdown` within 1 s, except for `clear` and `resume`. |
+
+Every reply goes through `parseHookReply`; an `ask` goes to `$.ui.ask(question, ["Allow", "Deny"])`,
+where a dismissed question is a denial. A sidecar whose output ends shows a toast and leaves the mod
+failing closed.
+
+Checks: `claude plugin validate --strict` and `claude plugin test` on each plugin directory (with
+`DISABLE_GROWTHBOOK=1` where the mods flag is served off). `register.ts` and the plugins' `tests/`
+import `claude-code`, whose types Claude Code writes into `<plugin>/.claude-plugin/types/` (ignored
+by git) on load. The repository's tsconfig.json excludes them, bunfig.toml keeps `bun test` out of
+the plugins' `tests/`, and Biome skips the written types. Each plugin's tsconfig.json checks them
+with `tsc -p <plugin>` once the types exist. protocol.ts and translate.ts stay under the
+repository's tsc and bun tests.
 
 ### What Claude Code cannot do
 
