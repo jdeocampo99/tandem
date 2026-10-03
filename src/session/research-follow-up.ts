@@ -78,8 +78,9 @@ function followUpSteps(decision: ResearchFollowUpDecision): readonly string[] {
 }
 
 /**
- * Render the durable post-research follow-up as coordinator-facing wake text. Pure: the caller
- * supplies the decision, so the same persisted record produces the same content after a restart.
+ * Render the durable post-research follow-up as directions for the model. They travel in the
+ * wake's hidden part, so the person never sees them. Pure: the caller supplies the decision, so
+ * the same persisted record produces the same content after a restart.
  */
 export function buildResearchFollowUpContent(decision: ResearchFollowUpDecision): string {
   const reason =

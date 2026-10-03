@@ -212,7 +212,8 @@ test("a completed scout wake carries its durable follow-up and repeats it after 
 
     expect(first).toHaveLength(2);
     expect(first[1]).toContain("Evidence report: ");
-    expect(first[1]).toContain("Research follow-up: implementation-interview");
+    expect(first[0]).toContain("Research follow-up: implementation-interview");
+    expect(first[1]).not.toContain("Research follow-up");
     expect(second).toEqual(first);
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -239,8 +240,9 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
     });
 
     expect(sent).toHaveLength(2);
-    expect(sent[1]).toContain("Research follow-up: disclose-blocker");
-    expect(sent[1]).toContain("there is no readable report");
+    expect(sent[0]).toContain("Research follow-up: disclose-blocker");
+    expect(sent[0]).toContain("there is no readable report");
+    expect(sent[1]).not.toContain("Research follow-up");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -268,7 +270,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
     expect(after.map((entry) => entry.id)).toEqual(["scout-task"]);
     expect(after.every((entry) => entry.kind === "scout")).toBe(true);
     expect(after[0]?.researchHandoffs).toBeUndefined();
-    expect(sent[1]).toContain("its own confirmation is the single approval ask");
+    expect(sent[0]).toContain("its own confirmation is the single approval ask");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -374,7 +376,41 @@ test("the delivered wake matches the pure decision for the same durable record",
     const expected = buildResearchFollowUpContent(
       decideResearchFollowUp({ task: record, reportReadable: true }),
     );
-    expect(sent[1]).toContain(expected);
+    expect(sent[0]).toContain(expected);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the research follow-up directions reach the model unseen", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-follow-up-unseen-"));
+  try {
+    const { directory } = await completedScout(home, "report-only");
+    const store = createTaskStore({ directory, clock: () => NOW, idFactory: () => "unused" });
+    const record = await store.read("scout-task");
+    if (record === undefined) throw new Error("scout task was not persisted");
+
+    let shown = "";
+    let hidden = "";
+    await deliverPendingNotifications({
+      host: {
+        perform: async (effect) => {
+          if (effect.type !== "deliver") return;
+          shown = effect.text;
+          hidden = effect.hidden?.text ?? "";
+        },
+      },
+      service: noopAcknowledge(record),
+      tasks: [record],
+      delivered: new Set<string>(),
+      unacknowledged: new Set<string>(),
+      readReport: readResearchReport,
+    });
+
+    expect(shown).not.toContain("Research follow-up");
+    expect(shown).not.toContain("Give the user a summary");
+    expect(hidden).toContain("Research follow-up: report-only.");
+    expect(hidden).toContain("Give the user a summary");
   } finally {
     await rm(home, { recursive: true, force: true });
   }
