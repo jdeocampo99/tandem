@@ -5,9 +5,10 @@ port every harness implements.
 
 Code: src/harness/contract.ts (`HarnessName`, `harnessOf`, the `Harness` launch port), src/harness/resolve.ts
 (`harnessFor`, `harnessForRole`), src/harness/claude-code/models.ts (the Claude Code catalogue),
-src/harness/omp/launch.ts, src/coordinator/record.ts, src/workers/jobs.ts, src/harness/coordinator-session.ts
-(coordinator setup both adapters share), src/harness/claude-code/ (`protocol.ts`, `host.ts`,
-`coordinator.ts`, `sidecar.ts`: the Claude Code sidecar).
+src/harness/omp/launch.ts, src/harness/claude-code/launch.ts (the Claude Code launch port),
+src/coordinator/launch.ts (the ready wait), src/coordinator/record.ts, src/workers/jobs.ts,
+src/harness/coordinator-session.ts (coordinator setup both adapters share), src/harness/claude-code/
+(`protocol.ts`, `host.ts`, `coordinator.ts`, `sidecar.ts`, `socket.ts`: the Claude Code sidecar).
 Tests: tests/harness/, tests/harness/claude-code/, tests/evals/harness-scenarios.test.ts, tests/coordinator/coordinator-registry.test.ts, tests/workers/jobs.test.ts,
 tests/terminal/cli.test.ts.
 
@@ -17,9 +18,10 @@ Tandem supports exactly two harnesses: OMP (`"omp"`) and Claude Code (`"claude-c
 no third harness and no remote harness. Tasks, approvals, panes, durable state, and recovery behave
 the same on either.
 
-OMP works today. Claude Code is recognized but not runnable yet: resolving it throws
-`HarnessUnavailableError` with a plain-English message naming the role and its model, so nothing
-launches.
+OMP runs every role. Claude Code runs the coordinator only (see [The Claude Code
+coordinator](#the-claude-code-coordinator)); resolving it for any other role throws
+`HarnessUnavailableError` with a plain-English message naming the role, so no worker launches on it.
+Workers come with issue #200, step 6.
 
 ## The harness comes from the model
 
@@ -80,9 +82,11 @@ Claude Code runs an unsupported level at the highest level it supports below it.
 
 ## Resolving a harness
 
-`harnessFor(name)` in src/harness/resolve.ts is the one place a name becomes a `Harness`.
+`harnessFor(name, role)` in src/harness/resolve.ts is the one place a recorded name becomes a
+`Harness`; coordinator records pass `"coordinator"` and worker job specs pass the job's role, so a
+Claude Code coordinator record resolves while a Claude Code job spec is refused.
 `harnessForRole(role, model)` does the same for a role about to launch, and its refusal names the
-role and the model. Callers outside src/harness/ never import src/harness/omp/launch.ts; Biome
+role and the model. Callers outside src/harness/ never import either harness's `launch.ts`; Biome
 enforces it.
 
 - Launching a new coordinator derives its harness from its model and resolves it before checking
@@ -92,24 +96,98 @@ enforces it.
 - A worker job runs on the harness its spec records. New jobs take it from the task's pinned
   model, so a `models.json` change never moves an existing task to another harness.
 - A worker resolves its job's harness before running setup commands.
-- A coordinator with no record predates harness choice, so the unrecorded-coordinator check uses
-  OMP.
-- The OMP model listing and MCP listing are home-wide, so they always come from OMP.
+- A coordinator with no record is checked against both harnesses (`coordinatorHarnesses`): each
+  foreground process goes to the harness whose `looksLikeAgent` claims it. An unrecorded `claude`
+  loading Tandem's adapter plugin is `unknown`, because its command line names no repository, so
+  launch refuses rather than start a second coordinator beside it.
+- The OMP model listing and MCP listing are home-wide, so they always come from OMP
+  (`catalogueHarness`).
 
 ## The launch port
 
-`Harness` in src/harness/contract.ts is what launch and ownership need from one harness: the
-executable, the coordinator's checked-in files, building a command from a `LaunchSpec`, matching
-live processes to a recorded command, the `ps` needle for a recorded session, and model and MCP
-listing. Only src/harness/omp/ and tests/harness/omp/ may import `@oh-my-pi/*`.
+`Harness` in src/harness/contract.ts is what launch and ownership need from one harness:
+
+| Member | OMP | Claude Code |
+| --- | --- | --- |
+| `executable` | `omp` | `claude` |
+| `coordinatorFiles` (name, path, file or directory) | `extension`, `config` files | `adapter plugin`, `renderer plugin` directories |
+| `launchEnvironment` | none | `DISABLE_GROWTHBOOK=1` |
+| `coordinatorConversation` | the directory, as asked | the recorded id or a new one (below) |
+| `awaitCoordinatorReady` | resolves at once | waits for the sidecar (below) |
+| `command(spec)` | coordinator and workers | coordinator only; a worker kind throws |
+| `sameCommand` | ignores `--continue` | `--session-id X` and `--resume X` match |
+| `processNeedle` | `--session-dir <dir>` | the conversation id |
+| `listModels`, `validateModel` | `omp models --json` | the fixed catalogue, no command run |
+| `listMcpServers` | OMP's servers | none (`--strict-mcp-config`) |
+
+Launch hands the harness a `CoordinatorLaunchIo` (read and write a file, new id, ask a socket for
+`/health`, sleep, a monotonic clock), so each harness's decisions are tested without real effects.
+The CLI's `--extension` and `--config` confirm the coordinator files with those names; naming one
+for a Claude Code coordinator, which loads neither, is refused. `doctor` checks each file by its
+name. Only src/harness/omp/ and tests/harness/omp/ may import `@oh-my-pi/*`.
+
+## The Claude Code coordinator
+
+A coordinator on a `claude-code/<model>` selector runs:
+
+```
+claude --plugin-dir <tandem> --plugin-dir <tandem-renderer> (--session-id <id> | --resume <id>)
+  --model <alias> [--effort <level>] --setting-sources project,local --strict-mcp-config
+  --no-chrome --disable-slash-commands --system-prompt-snapshot off --tools Read,AskUserQuestion
+  [prompt]
+```
+
+The two plugins live in src/harness/claude-code/plugins/: `tandem` is the adapter mod and
+`tandem-renderer` hides the prompts the adapter submits for Tandem. It runs in the coordinator's
+clean worktree, the pane's working directory, with environment `DISABLE_GROWTHBOOK=1`.
+
+| Flag | Why |
+| --- | --- |
+| `--plugin-dir` (twice) | Loads Tandem's adapter and renderer. `--safe-mode` would also drop them, so it is not used. |
+| `--session-id` / `--resume` | Names the conversation: a new one is started with `--session-id`, a saved one continued with `--resume`. |
+| `--model`, `--effort` | The alias after `claude-code/`; the thinking level as effort. Haiku (`off`) gets no `--effort`. |
+| `--setting-sources project,local` | Keeps the Claude login but drops user settings, so the user's own plugins and hooks do not load. |
+| `--strict-mcp-config`, `--no-chrome` | No MCP servers, and none of Claude in Chrome's built-in MCP tools. |
+| `--disable-slash-commands` | Turns off every skill, so none loads into the coordinator. |
+| `--system-prompt-snapshot off` | Lets the adapter add context on every turn, not only the first. |
+| `--tools Read,AskUserQuestion` | The coordinator reads and asks; the adapter's `tandem` tool (`mcp__tandem__tandem`) is added by the plugin. |
+| `DISABLE_GROWTHBOOK=1` | Keeps mods on when Claude Code's server-side flag would switch them off. |
+
+**Conversation.** `--session-id` refuses an id already used, so each fresh conversation gets a new
+UUID. Once the coordinator is ready, launch writes that id to
+`<conversation directory>/claude-code-conversation` (the coordinator's `coordinator-sessions/<key>`).
+A resuming launch (`tandem` without `--fresh`, `tandem update`) reads it and runs `--resume <id>`;
+with no file it starts a fresh conversation. A file holding anything but a UUID fails closed and
+says to run `tandem --fresh`. The pane's "press Enter to start it again" command names the same id
+with `--resume`. The id is chosen before the command is built (`chooseConversation` is pure), and
+the file is written only after the ready wait proves Claude Code started on that id.
+
+**Ready wait.** The adapter starts the sidecar as Claude Code's session starts, so launch polls
+`GET /health` on `sidecarSocketPath(home, id)` every 250 ms. The first answer means Claude Code
+trusted the folder and loaded the plugin. A home too long for the socket path is refused before the
+pane starts. After 30 s with no answer the launch fails closed: the processes whose command line
+names the id are stopped with SIGTERM, the startup rollback retires the new pane and releases the
+lease, and the error says Claude Code did not load Tandem's plugin, that the usual causes are the
+trust question and mods switched off, and what to do. In the caller's own pane (direct mode) the
+wait runs beside the coordinator and ends when it exits; on timeout the same stop and error apply.
+
+**Trust.** Claude Code loads mods only in a folder the user trusted, and a folder inside a trusted
+one is trusted too. Coordinators run in fresh worktrees under the pool root, so trust the pool root
+(or a parent) once: run `claude` there and choose "Yes, I trust this folder".
+
+**Identity.** `sameCommand` holds only for two `claude` commands (argv[0] named `claude`, any
+directory) that name exactly one conversation, the same id, with otherwise identical arguments.
+A flag given twice (other than `--plugin-dir`), both conversation flags, or a conversation flag
+without a value never matches. `looksLikeAgent` reads argv[0], because a native install runs a
+versioned binary whose process name is its version.
 
 ## The Claude Code sidecar
 
 On Claude Code, the adapter is a mod: TypeScript inside a plugin, with no Node APIs and no imports
 outside the plugin, so it cannot open `state.sqlite`. It starts a Bun sidecar with
 `$.process.spawn` for the session's life. The sidecar holds the core session and the store; the
-mod forwards Claude Code's hooks and carries out the sidecar's effects. Steps 5 and 6 of issue #200
-add the mods; until then `harnessFor` still refuses `claude-code`.
+mod forwards Claude Code's hooks and carries out the sidecar's effects. Step 5 of issue #200 runs
+the coordinator this way; step 6 adds workers.
 
 ### Lifecycle
 
@@ -117,7 +195,8 @@ add the mods; until then `harnessFor` still refuses `claude-code`.
   <id>` in the session's working directory, with Claude Code's environment, which carries
   `TANDEM_HOME` and the rest of the boundary environment. Only `coordinator` is accepted until the
   worker binding exists; any other role fails closed.
-- **Socket.** `<home>/sidecars/<first 16 hex of sha256(session id)>.sock`, in a directory created
+- **Socket.** `<home>/sidecars/<first 16 hex of sha256(session id)>.sock` (`sidecarSocketPath` in
+  `socket.ts`, which launch also uses for its ready wait), in a directory created
   with mode 0700. A path over 103 bytes (macOS allows 104 with the NUL) is refused with a message
   to use a shorter home.
 - **Idempotent start.** A socket file nobody answers on was left by a killed sidecar and is
@@ -211,5 +290,5 @@ read.
 ## Later
 
 - The setup page groups models by harness and offers presets such as "Claude coordinates, Codex
-  researches and reviews". It waits until Claude Code runs, because offering a choice that fails
-  closed is worse than not offering it.
+  researches and reviews". It waits until Claude Code runs workers too, because offering a choice
+  that fails closed is worse than not offering it.
