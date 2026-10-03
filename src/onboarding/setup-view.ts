@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
+import { type ModelPreset, modelPresets } from "../config/model-presets.ts";
 import {
   type AgentRole,
   type IsoTimestamp,
@@ -9,7 +10,9 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
-import type { ModelRecord } from "../harness/contract.ts";
+import type { ClaudeCodeAvailability } from "../harness/claude-code/availability.ts";
+import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
+import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harness/contract.ts";
 import type { SetupPageDraft } from "./setup-answer.ts";
 
 /**
@@ -21,7 +24,10 @@ export type SetupSearchStatus = Readonly<{ kind: "ok" | "error"; message: string
 export type SetupView = Readonly<{
   schemaVersion: 1;
   generatedAt: IsoTimestamp;
+  /** Claude Code's models first, then OMP's, so each harness is one run in the pickers. */
   models: readonly SetupModel[];
+  harnesses: readonly SetupHarness[];
+  presets: readonly ModelPreset[];
   roles: readonly SetupRole[];
   /** What each thinking level means, in a word or two. */
   thinkingNotes: Readonly<Record<ThinkingLevel, string>>;
@@ -35,8 +41,17 @@ export type SetupView = Readonly<{
   searchStatus?: SetupSearchStatus;
 }>;
 
+/** One harness's group in the model pickers; `unavailable` says why it offers no models. */
+export type SetupHarness = Readonly<{
+  id: KnownHarness;
+  name: string;
+  note: string;
+  unavailable?: string;
+}>;
+
 export type SetupModel = Readonly<{
   selector: string;
+  harness: KnownHarness;
   name: string;
   provider: string;
   /** Supported thinking levels, in THINKING_LEVELS order. */
@@ -95,7 +110,9 @@ export type SetupViewInput = Readonly<{
   generatedAt: IsoTimestamp;
   /** The user's home folder, shown as `~`. */
   homeFolder: string;
-  catalogue: readonly ModelRecord[];
+  /** OMP's listing; the Claude Code catalogue is added when Claude Code is ready. */
+  ompCatalogue: readonly ModelRecord[];
+  claudeCode: ClaudeCodeAvailability;
   savedModels?: RepoPolicy["models"];
   searchedFolders: readonly string[];
   pendingFolders?: readonly string[];
@@ -167,12 +184,46 @@ export const THINKING_NOTES: Readonly<Record<ThinkingLevel, string>> = {
   auto: "model decides",
 };
 
+const CLAUDE_CODE_UNAVAILABLE: Readonly<Record<Exclude<ClaudeCodeAvailability, "ready">, string>> =
+  {
+    "not-installed": "Not installed on this computer.",
+    "mods-off":
+      "Its managed settings switch off mods (disableAllHooks), so Tandem can't run in it.",
+  };
+
+/** The models a role may be set to on this computer: OMP's listing, plus Claude Code's when ready. */
+export function setupCatalogue(
+  ompCatalogue: readonly ModelRecord[],
+  claudeCode: ClaudeCodeAvailability,
+): readonly ModelRecord[] {
+  return claudeCode === "ready" ? [...CLAUDE_CODE_MODELS, ...ompCatalogue] : ompCatalogue;
+}
+
 export function buildSetupView(input: SetupViewInput): SetupView {
-  const models = input.catalogue.map(setupModel);
+  const models = setupCatalogue(input.ompCatalogue, input.claudeCode).map(setupModel);
   return {
     schemaVersion: 1,
     generatedAt: input.generatedAt,
     models,
+    harnesses: [
+      {
+        id: "claude-code",
+        name: "Claude Code",
+        note: "Uses your Claude subscription.",
+        ...(input.claudeCode === "ready"
+          ? {}
+          : { unavailable: CLAUDE_CODE_UNAVAILABLE[input.claudeCode] }),
+      },
+      {
+        id: "omp",
+        name: "OMP",
+        note: "Models from OMP's catalogue, billed by each provider.",
+        ...(input.ompCatalogue.length === 0
+          ? { unavailable: "No models yet. Configure a provider in OMP, then reopen this page." }
+          : {}),
+      },
+    ],
+    presets: modelPresets({ ompCatalogue: input.ompCatalogue, claudeCode: input.claudeCode }),
     roles: MODEL_ROLE_ORDER.map((id) => {
       const pick = savedPick(input.savedModels?.[id], models);
       return { id, ...SETUP_ROLE_COPY[id], ...(pick === undefined ? {} : { pick }) };
@@ -194,6 +245,7 @@ export function buildSetupView(input: SetupViewInput): SetupView {
 function setupModel(record: ModelRecord): SetupModel {
   return {
     selector: record.selector,
+    harness: harnessOfSelector(record.selector),
     name: record.name ?? record.id,
     provider: record.provider,
     thinking: THINKING_LEVELS.filter((level) => record.thinking.includes(level)),

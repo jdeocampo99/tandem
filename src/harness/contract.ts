@@ -28,7 +28,12 @@ const CLAUDE_CODE: HarnessName = parseHarnessName("claude-code", "harness");
  * and every other selector, or no model at all (the harness's own default), runs in OMP.
  */
 export function harnessOf(model: ModelSpec | undefined): HarnessName {
-  return model?.model.startsWith(`${CLAUDE_CODE_PROVIDER}/`) ? CLAUDE_CODE : DEFAULT_HARNESS;
+  return model === undefined ? DEFAULT_HARNESS : harnessOfSelector(model.model);
+}
+
+/** `harnessOf` for a bare `provider/model` selector, such as a catalogue entry's. */
+export function harnessOfSelector(selector: string): HarnessName {
+  return selector.startsWith(`${CLAUDE_CODE_PROVIDER}/`) ? CLAUDE_CODE : DEFAULT_HARNESS;
 }
 
 /**

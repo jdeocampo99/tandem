@@ -1,5 +1,6 @@
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
+import { CLAUDE_CODE_PROVIDER } from "../harness/claude-code/models.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import { SETUP_ROLE_COPY } from "./setup-view.ts";
 
@@ -52,6 +53,7 @@ export type SetupRepoCheck =
   | Readonly<{ kind: "not-a-repo" }>;
 
 export type SetupAnswerFacts = Readonly<{
+  /** OMP's listing, plus the Claude Code catalogue when Claude Code is ready. */
   catalogue: readonly ModelRecord[];
   /** Keyed by the answer's own path spelling. */
   repositories: ReadonlyMap<string, SetupRepoCheck>;
@@ -469,7 +471,7 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
     const matches = facts.catalogue.filter((model) => model.selector === spec.model);
     const [model] = matches;
     if (model === undefined || matches.length !== 1) {
-      problems.push(`${name}: ${spec.model} is not one of your OMP models.`);
+      problems.push(`${name}: ${spec.model} isn't available on this computer.`);
     } else if (!model.thinking.includes(spec.thinking)) {
       problems.push(`${name}: ${spec.model} doesn't support thinking ${spec.thinking}.`);
     }
@@ -491,7 +493,10 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
   }
   return problems;
 }
-/** Returns the unique providers selected by the answer's model choices. */
+/**
+ * The providers Tandem may spend on: those of the answer's OMP models. Claude Code runs on the
+ * user's own Claude login and is never enabled, so Tandem never picks it on its own.
+ */
 export function setupProviders(
   answer: SetupAnswer,
   catalogue: readonly ModelRecord[],
@@ -499,7 +504,9 @@ export function setupProviders(
   const providers = new Set<string>();
   for (const role of MODEL_ROLE_ORDER) {
     const model = catalogue.find((candidate) => candidate.selector === answer.models[role].model);
-    if (model !== undefined) providers.add(model.provider);
+    if (model !== undefined && model.provider !== CLAUDE_CODE_PROVIDER) {
+      providers.add(model.provider);
+    }
   }
   return [...providers].sort();
 }

@@ -76,11 +76,37 @@ Claude Code runs an unsupported level at the highest level it supports below it.
 
 - `configure-models` and models.json validation accept these selectors alongside the OMP listing,
   and reject any other `claude-code/*` selector or an unsupported thinking level.
-- Tandem never picks a Claude Code model on its own: onboarding's model choices, the balanced
-  profile, and model reassignment read only the OMP listing. A Claude Code model is used only when
-  the user names it.
+- Tandem never picks a Claude Code model on its own: the balanced profile and model reassignment
+  read only the OMP listing. A Claude Code model is used only when the user names it or picks a
+  preset that names it (see [Presets](#presets)), and then approves the recap.
 - `claude-code` does not need to be in `enabledProviders`. That list gates only Tandem's automatic
   picks, never a selector the user chose, and Claude Code runs on the user's own Claude login.
+
+## Presets
+
+Setup offers three one-click choices for all five roles, on the setup page and in chat
+onboarding (the `models` action returns them as `presets`). A preset only fills the choices: the
+user can still change any role and approves the full recap, which names each role's harness.
+Code: src/config/model-presets.ts (pure), src/harness/claude-code/availability.ts (the probe).
+
+| Preset | Planning | Research | Coding | Review | Mockups |
+| --- | --- | --- | --- | --- | --- |
+| Claude coordinates, Codex researches and reviews | `claude-code/opus` | top Codex | `claude-code/opus` | top Codex | `claude-code/sonnet` |
+| All Claude Code | `claude-code/opus` | `claude-code/sonnet` | `claude-code/opus` | `claude-code/fable` | `claude-code/sonnet` |
+| All OMP | Balanced | Balanced | Balanced | Balanced | Balanced |
+
+- Thinking is the Balanced profile's level for the role, moved to the nearest level the model
+  supports. Balanced is `resolveBalancedProfile` over every provider OMP lists; the user's Save
+  approves the providers the recap names.
+- Top Codex is the reasoning model with the highest published output price, then input price,
+  from OMP's `openai-codex` provider, else from `openai`. Names always come from the live listing.
+- A preset is disabled, with its reason, when a role has no model: Claude Code is not installed
+  (`claude --version` fails), its managed settings
+  (`/Library/Application Support/ClaudeCode/managed-settings.json`) set `disableAllHooks`, OMP lists
+  no Codex or OpenAI model, or Balanced finds no model for a role.
+- The setup page's model pickers group models by harness: Claude Code's catalogue (only when it
+  is ready), then OMP's listing. Thinking choices follow the picked model's levels. Claude Code is
+  never added to `enabledProviders`; the recap says its roles use the Claude subscription.
 
 ## Resolving a harness
 
@@ -446,8 +472,3 @@ starts with that prompt (`agentStart.prompt`). Nothing is ever removed from the 
 batch lists every active message, so after several steers the model has read several cumulative
 batches, newest last, where OMP's model holds only the newest. The receipt, `appliedRevision`, and
 the controller's check that a result carries the canonical revision are the same on both.
-
-## Later
-
-- The setup page groups models by harness and offers presets such as "Claude coordinates, Codex
-  researches and reviews". Claude Code now runs every role, so nothing blocks it.
