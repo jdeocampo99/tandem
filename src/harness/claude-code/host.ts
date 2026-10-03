@@ -1,6 +1,7 @@
+import type { TodoItem } from "../../playbooks/progress.ts";
 import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../../session/events.ts";
 import { WorkerOutputError } from "../../workers/protocol.ts";
-import type { ReplyUsage } from "../../workers/terminal.ts";
+import { COPY_ASSET_TOOL, type ReplyUsage, SUBMIT_REPORT_TOOL } from "../../workers/terminal.ts";
 import { CLAUDE_CODE_PROVIDER } from "./models.ts";
 import type {
   SidecarEvent,
@@ -92,6 +93,8 @@ const CLAUDE_CODE_TOOL_KINDS: ReadonlyMap<string, ToolKind> = new Map([
   ["Task", "subagent"],
   ["Agent", "subagent"],
   ["TodoWrite", "todo"],
+  [`${claudeCodeMcpToolPrefix("tandem")}${COPY_ASSET_TOOL}`, "copy-asset"],
+  [`${claudeCodeMcpToolPrefix("tandem")}${SUBMIT_REPORT_TOOL}`, "other"],
 ]);
 
 function inputText(input: WireToolCall["input"], key: string): string | undefined {
@@ -127,6 +130,19 @@ export function claudeCodeMcpToolPrefix(server: string): string {
   return `mcp__${server}__`;
 }
 
+/** The to-do list a `TodoWrite` call sets; Claude Code's list is the whole of it each time. */
+export function claudeCodeTodos(call: WireToolCall): readonly TodoItem[] | undefined {
+  if (call.name !== "TodoWrite" || !Array.isArray(call.input.todos)) return undefined;
+  const items: TodoItem[] = [];
+  for (const item of call.input.todos as unknown[]) {
+    if (typeof item !== "object" || item === null) return undefined;
+    const { content, status } = item as Readonly<Record<string, unknown>>;
+    if (typeof content !== "string" || typeof status !== "string") return undefined;
+    items.push({ content, status });
+  }
+  return items;
+}
+
 export function claudeCodeUsage(usage: WireUsage): ReplyUsage {
   const { model, ...counts } = usage;
   return { provider: CLAUDE_CODE_PROVIDER, model, ...counts };
@@ -145,6 +161,8 @@ export function runsSelectedModel(selector: string, reported: string | undefined
 
 export type PaneDeps = Readonly<{
   write(line: SidecarLine): void;
+  /** Claude Code was started with a prompt, which it runs before anything Tandem submits. */
+  startsWithPrompt?: boolean;
   /** Asks inside the hook being answered; false when no hook is waiting. */
   confirm(title: string, message: string): Promise<boolean>;
 }>;
@@ -158,10 +176,13 @@ export class ClaudeCodePane {
   private contextTokens: number | undefined;
   private running = false;
   /** Submits written since the last agent run began; Claude Code queues them until idle. */
-  private queuedSubmits = 0;
+  private queuedSubmits: number;
+  private draft = false;
   private heldForNextTurn: string[] = [];
 
-  constructor(private readonly deps: PaneDeps) {}
+  constructor(private readonly deps: PaneDeps) {
+    this.queuedSubmits = deps.startsWithPrompt === true ? 1 : 0;
+  }
 
   /** Records what an event says about the session, before the session handles it. */
   observe(event: SidecarEvent): void {
@@ -178,6 +199,12 @@ export class ClaudeCodePane {
         return;
       case "turnEnd":
         if (event.contextTokens !== undefined) this.contextTokens = event.contextTokens;
+        return;
+      case "promptEdit":
+        this.draft = event.draft;
+        return;
+      case "userPrompt":
+        if (event.interactive) this.draft = false;
         return;
       default:
         return;
@@ -201,11 +228,11 @@ export class ClaudeCodePane {
     perform: async (effect) => this.perform(effect),
     confirm: (title, message) => this.deps.confirm(title, message),
     contextTokens: () => this.contextTokens,
-    // A mod cannot read the input box, so Claude Code always reports it empty.
+    // The mod reports each edit of the prompt box, so a draft is known without reading the box.
     paneState: () => ({
       idle: !this.running,
       pendingMessages: this.queuedSubmits > 0,
-      draft: false,
+      draft: this.draft,
     }),
     assertSelectedModel: (selector) => {
       if (!runsSelectedModel(selector, this.model)) {

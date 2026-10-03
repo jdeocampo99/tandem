@@ -1,18 +1,23 @@
 import { expect, test } from "bun:test";
 import {
   agentEndEvent,
+  agentStartEvent,
   compactionInstructions,
   costDelta,
+  draftAfterEdit,
+  editAllowed,
   endsSidecar,
   isOwnPrompt,
   LineReader,
   logLines,
+  pluginToolAnswer,
+  pluginToolEvent,
+  pluginToolName,
   promptHandled,
   sidecarArgv,
   stopBlock,
   TurnLedger,
-  tandemToolAnswer,
-  tandemToolEvent,
+  toolContext,
   toolRefusal,
   turnEndEvent,
   userPromptEvent,
@@ -23,8 +28,6 @@ test("the sidecar runs from the checkout that holds the plugin", () => {
   expect(sidecarArgv("/tandem/src/harness/claude-code/plugins/tandem", "s-1")).toEqual([
     "bun",
     "/tandem/src/harness/claude-code/plugins/tandem/../../sidecar.ts",
-    "--role",
-    "coordinator",
     "--session",
     "s-1",
   ]);
@@ -69,8 +72,50 @@ test("a tool call's arguments are every field Claude Code does not reserve", () 
     input: { file_path: "src/a.ts" },
   });
   expect(
-    tandemToolEvent({ tool: "mcp__tandem__tandem", tool_use_id: "toolu_2", request: { a: 1 } }),
-  ).toEqual({ type: "tandemTool", id: "toolu_2", input: { request: { a: 1 } } });
+    pluginToolEvent(
+      { tool: "mcp__tandem__submit_report", tool_use_id: "toolu_2", outcome: "completed" },
+      "submit_report",
+    ),
+  ).toEqual({
+    type: "pluginTool",
+    id: "toolu_2",
+    name: "submit_report",
+    input: { outcome: "completed" },
+  });
+});
+
+test("only a tool the sidecar listed is the mod's own", () => {
+  const listed = new Set(["submit_report"]);
+  expect(pluginToolName("mcp__tandem__submit_report", listed)).toBe("submit_report");
+  expect(pluginToolName("mcp__tandem__tandem", listed)).toBeUndefined();
+  expect(pluginToolName("mcp__other__submit_report", listed)).toBeUndefined();
+  expect(pluginToolName("Read", listed)).toBeUndefined();
+});
+
+test("steering after a tool result rides as its context; a refusal adds none", () => {
+  expect(toolContext({ type: "toolContext", context: ["New direction."] })).toEqual([
+    "New direction.",
+  ]);
+  expect(toolContext({ type: "refused", reason: "socket gone" })).toEqual([]);
+});
+
+test("a run's prompt goes with its start; an empty one is left out", () => {
+  expect(agentStartEvent("Research the cache.")).toEqual({
+    type: "agentStart",
+    prompt: "Research the cache.",
+  });
+  expect(agentStartEvent("")).toEqual({ type: "agentStart" });
+  expect(agentStartEvent(undefined)).toEqual({ type: "agentStart" });
+});
+
+test("an edit leaves a draft when text remains, and only Tandem's refusal holds it back", () => {
+  expect(draftAfterEdit({ text: "", start: 0, end: 0, inputText: "h" })).toBe(true);
+  expect(draftAfterEdit({ text: "h", start: 0, end: 1, inputText: "" })).toBe(false);
+  expect(draftAfterEdit({ text: "ab", start: 1, end: 1, inputText: " " })).toBe(true);
+  expect(draftAfterEdit({ text: " x", start: 1, end: 2, inputText: "" })).toBe(false);
+  expect(editAllowed({ type: "editDecision", allowed: false })).toBe(false);
+  expect(editAllowed({ type: "editDecision", allowed: true })).toBe(true);
+  expect(editAllowed({ type: "refused", reason: "socket gone" })).toBe(true);
 });
 
 test("a tool runs only when the guard clears it; a refusal or an odd reply denies it", () => {
@@ -82,14 +127,14 @@ test("a tool runs only when the guard clears it; a refusal or an odd reply denie
   expect(toolRefusal({ type: "done" })).toContain("did not run");
 });
 
-test("the tandem tool answers with its result, and an error or refusal denies the call", () => {
-  expect(tandemToolAnswer({ type: "toolResult", text: "0 tasks", isError: false })).toEqual({
+test("the mod's own tool answers with its result, and an error or refusal denies the call", () => {
+  expect(pluginToolAnswer({ type: "toolResult", text: "0 tasks", isError: false })).toEqual({
     result: "0 tasks",
   });
-  expect(tandemToolAnswer({ type: "toolResult", text: "bad input", isError: true })).toEqual({
+  expect(pluginToolAnswer({ type: "toolResult", text: "bad input", isError: true })).toEqual({
     deny: "bad input",
   });
-  expect(tandemToolAnswer({ type: "refused", reason: "socket gone" })).toEqual({
+  expect(pluginToolAnswer({ type: "refused", reason: "socket gone" })).toEqual({
     deny: "Tandem is not available: socket gone",
   });
 });

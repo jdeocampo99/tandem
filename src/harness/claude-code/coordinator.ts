@@ -14,18 +14,27 @@ import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
 import { tandemRequestSchema } from "../../session/tools.ts";
 import { bindCoordinator, type CoordinatorOptions } from "../coordinator-session.ts";
 import { type ClaudeCodePane, claudeCodeToolCall, claudeCodeUsage } from "./host.ts";
-import type { HookEventType, HookReply, SidecarEvent } from "./plugins/tandem/hooks/protocol.ts";
+import type {
+  HookEventType,
+  HookReply,
+  SidecarEvent,
+  WireToolSpec,
+} from "./plugins/tandem/hooks/protocol.ts";
+import { coordinatorTools, TANDEM_TOOL } from "./tool-specs.ts";
 
 /** The events a session answers; the sidecar itself handles `shutdown` and `askAnswer`. */
 export type SessionHookEvent = Extract<SidecarEvent, { type: Exclude<HookEventType, "shutdown"> }>;
 
 /** What the sidecar drives: one core session, answering each hook event. */
 export type SessionBinding = Readonly<{
+  /** The tools the mod registers for this session. */
+  tools: readonly WireToolSpec[];
   handle(event: SessionHookEvent): Promise<HookReply>;
   shutdown(): Promise<void>;
 }>;
 
 const DONE: HookReply = { type: "done" };
+const NO_TOOL_CONTEXT: HookReply = { type: "toolContext", context: [] };
 
 /**
  * The one exchange a finished Claude Code run is made of, as the messages the core reads at its
@@ -89,6 +98,9 @@ export function claudeCodeCoordinator(
       case "turnStart":
         session.turnStart();
         return DONE;
+      // The coordinator's host reports no streaming progress, so nothing watches for stalls.
+      case "streaming":
+        return DONE;
       case "toolCall": {
         session.recordTurnAction("other");
         const reason = await coordinatorToolRefusal(claudeCodeToolCall(event.call), {
@@ -102,7 +114,10 @@ export function claudeCodeCoordinator(
           ? { type: "toolDecision", block: false }
           : { type: "toolDecision", block: true, reason };
       }
-      case "tandemTool": {
+      case "pluginTool": {
+        if (event.name !== TANDEM_TOOL) {
+          return { type: "toolResult", text: `no tool named ${event.name}`, isError: true };
+        }
         const request = tandemRequestSchema.safeParse(event.input);
         if (!request.success) {
           return { type: "toolResult", text: request.error.message, isError: true };
@@ -115,7 +130,7 @@ export function claudeCodeCoordinator(
         return DONE;
       case "toolEnd":
         session.toolEnd(claudeCodeToolCall(event.call));
-        return DONE;
+        return NO_TOOL_CONTEXT;
       case "turnEnd":
         await session.turnEnd(event.usage === undefined ? undefined : claudeCodeUsage(event.usage));
         return DONE;
@@ -124,6 +139,8 @@ export function claudeCodeCoordinator(
         return DONE;
       case "stopRequested":
         return { type: "stop" };
+      case "promptEdit":
+        return { type: "editDecision", allowed: true };
       case "compacting": {
         const { context } = await session.compacting();
         return { type: "compaction", instructions: context.join("\n\n") };
@@ -134,5 +151,5 @@ export function claudeCodeCoordinator(
     }
   }
 
-  return { handle, shutdown: () => session.shutdown() };
+  return { tools: coordinatorTools(), handle, shutdown: () => session.shutdown() };
 }

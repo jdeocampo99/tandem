@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   ClaudeCodePane,
   claudeCodeEffect,
+  claudeCodeTodos,
   claudeCodeToolCall,
   UNSUPPORTED_EFFECTS,
 } from "../../../src/harness/claude-code/host.ts";
@@ -72,6 +73,41 @@ test("Claude Code tools become the kinds the core's guards read", () => {
     mcpTool: "mcp__linear__get_issue",
   });
   expect(claudeCodeToolCall({ id: "5", name: "Mystery", input: {} }).kind).toBe("other");
+  const kinds = Object.fromEntries(
+    ["Edit", "Write", "NotebookEdit", "Agent", "TodoWrite", "Glob"].map((name) => [
+      name,
+      claudeCodeToolCall({ id: "6", name, input: {} }).kind,
+    ]),
+  );
+  expect(kinds).toEqual({
+    Edit: "edit",
+    Write: "write",
+    NotebookEdit: "edit",
+    Agent: "subagent",
+    TodoWrite: "todo",
+    Glob: "search",
+  });
+  expect(claudeCodeToolCall({ id: "7", name: "mcp__tandem__copy_asset", input: {} }).kind).toBe(
+    "copy-asset",
+  );
+  expect(claudeCodeToolCall({ id: "8", name: "mcp__tandem__submit_report", input: {} }).kind).toBe(
+    "other",
+  );
+});
+
+test("a TodoWrite call sets the whole to-do list; anything else sets none", () => {
+  const todos = [
+    { content: "Read the brief", status: "completed", activeForm: "Reading" },
+    { content: "Run the tests", status: "pending", activeForm: "Running" },
+  ];
+  expect(claudeCodeTodos({ id: "1", name: "TodoWrite", input: { todos } })).toEqual([
+    { content: "Read the brief", status: "completed" },
+    { content: "Run the tests", status: "pending" },
+  ]);
+  expect(claudeCodeTodos({ id: "2", name: "TodoWrite", input: { todos: [{ content: 1 }] } })).toBe(
+    undefined,
+  );
+  expect(claudeCodeTodos({ id: "3", name: "Edit", input: { todos } })).toBeUndefined();
 });
 
 function pane(confirm: (title: string, message: string) => Promise<boolean> = async () => false) {
@@ -94,6 +130,28 @@ test("the pane writes effects as lines and reports queued submits until a run st
   await expect(claude.host.perform({ type: "shutdown" })).rejects.toThrow(
     UNSUPPORTED_EFFECTS.shutdown,
   );
+});
+
+test("a pane started with a prompt reads busy with it until the run starts", () => {
+  const claude = new ClaudeCodePane({
+    write: () => undefined,
+    confirm: async () => false,
+    startsWithPrompt: true,
+  });
+  expect(claude.host.paneState()).toEqual({ idle: true, pendingMessages: true, draft: false });
+  claude.observe({ type: "agentStart", prompt: "Research the cache." });
+  expect(claude.host.paneState()).toEqual({ idle: false, pendingMessages: false, draft: false });
+});
+
+test("the person's draft is known from each edit and cleared when they send it", () => {
+  const { pane: claude } = pane();
+  claude.observe({ type: "promptEdit", draft: true });
+  expect(claude.host.paneState().draft).toBe(true);
+  claude.observe({ type: "userPrompt", text: "stop", interactive: true, attachments: 0 });
+  expect(claude.host.paneState().draft).toBe(false);
+  claude.observe({ type: "promptEdit", draft: true });
+  claude.observe({ type: "promptEdit", draft: false });
+  expect(claude.host.paneState().draft).toBe(false);
 });
 
 test("held deliveries reach the model once, at the next turn", async () => {

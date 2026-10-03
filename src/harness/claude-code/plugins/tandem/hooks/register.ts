@@ -8,25 +8,28 @@ import {
   parseSidecarLine,
   type SidecarEvent,
 } from "./protocol.ts";
-import { TANDEM_TOOL } from "./tandem-tool.ts";
 import {
   ALLOW,
   agentEndEvent,
+  agentStartEvent,
   askQuestion,
   compactionInstructions,
   costDelta,
   DENY,
+  draftAfterEdit,
+  editAllowed,
   endsSidecar,
   isOwnPrompt,
   LineReader,
   logLines,
+  pluginToolAnswer,
+  pluginToolEvent,
+  pluginToolName,
   promptHandled,
   sidecarArgv,
   stopBlock,
-  TANDEM_TOOL_CALL,
   TurnLedger,
-  tandemToolAnswer,
-  tandemToolEvent,
+  toolContext,
   toolRefusal,
   turnContext,
   turnEndEvent,
@@ -41,9 +44,13 @@ type Sidecar = AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult>;
 const READY_WAIT_MS = 8_000;
 /** Every `session.end` hook together gets 1.5 s. */
 const SHUTDOWN_WAIT_MS = 1_000;
+/** How often a streaming response is reported; the stall watchdog's window is minutes. */
+const STREAMING_REPORT_MS = 5_000;
 
 /** The ready sidecar's socket. Unset, every hook fails closed as if Tandem refused it. */
 let socket: string | undefined;
+/** The tools the ready sidecar listed and this mod registered, by short name. */
+let tools: ReadonlySet<string> = new Set();
 /** Bumped by each start, so a replaced sidecar's output loop changes nothing. */
 let generation = 0;
 /** The session's cost when the last turn ended, to price the next one. */
@@ -56,6 +63,7 @@ let compactAfterTurn = false;
 let requestedCompaction: { seen: boolean } | undefined;
 /** `$.ui.ask` reaches this mod's own `tool.call` hook as an `AskUserQuestion` call. */
 let asking = 0;
+let streamingReportedAt = Number.NEGATIVE_INFINITY;
 
 function debug($: Api, text: string): void {
   $.ui.log(text, { to: "debug" });
@@ -88,6 +96,20 @@ async function allowed($: Api, ask: Extract<HookReply, { type: "ask" }>): Promis
     return false;
   } finally {
     asking -= 1;
+  }
+}
+
+/** Passes a model response through, telling the sidecar it is streaming every few seconds. */
+async function* reportStreaming<C, R>($: Api, stream: AsyncGenerator<C, R>): AsyncGenerator<C, R> {
+  for (;;) {
+    const piece = await stream.next();
+    if (piece.done) return piece.value;
+    const now = await $.clock.now();
+    if (now - streamingReportedAt >= STREAMING_REPORT_MS) {
+      streamingReportedAt = now;
+      void post($, "streaming", { type: "streaming" });
+    }
+    yield piece.value;
   }
 }
 
@@ -223,6 +245,8 @@ async function startSidecar($: Api): Promise<void> {
   }
   const ready = line === undefined ? undefined : parseSidecarLine(line);
   if (ready?.ok && ready.value.type === "ready") {
+    for (const tool of ready.value.tools) await $.tool.register(tool);
+    tools = new Set(ready.value.tools.map((tool) => tool.name));
     socket = ready.value.socket;
     sessionCostUsd = (await $.session.usage()).cost?.usd;
     await exchange($, { type: "sessionStart", model: await $.session.model() });
@@ -243,7 +267,6 @@ async function startSidecar($: Api): Promise<void> {
 
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
-    await $.tool.register(TANDEM_TOOL);
     const started = await next(e);
     await startSidecar($);
     return started;
@@ -253,7 +276,7 @@ export const register: Register = (on) => {
     if (isOwnPrompt(e)) return next(e);
     if (promptHandled(await exchange($, userPromptEvent(e)))) return { drop: "Handled by Tandem." };
     if (e.turnId !== undefined) return next(e);
-    const context = turnContext(await exchange($, { type: "agentStart" }));
+    const context = turnContext(await exchange($, agentStartEvent(e.text)));
     turns.promptStarted(context);
     return next({ ...e, context: [...(e.context ?? []), ...context.context] });
   });
@@ -261,10 +284,15 @@ export const register: Register = (on) => {
   on("turn.start", async ($, e, next) => {
     turnOpen = true;
     if (!turns.begin(e.text, e.turnId)) {
-      turns.turnStarted(turnContext(await exchange($, { type: "agentStart" })));
+      turns.turnStarted(turnContext(await exchange($, agentStartEvent(e.text))));
     }
     await exchange($, { type: "turnStart" });
     return next(e);
+  });
+
+  on("turn.step", async function* ($, e, next) {
+    if (e.agentId !== undefined) return yield* next(e);
+    return yield* reportStreaming($, next(e));
   });
 
   on("prompt.compose", async (_$, e, next) => {
@@ -274,17 +302,25 @@ export const register: Register = (on) => {
   });
 
   on("tool.call", async ($, e, next) => {
-    const tool: string = e.tool;
-    if (tool === TANDEM_TOOL_CALL) return tandemToolAnswer(await exchange($, tandemToolEvent(e)));
+    const own = pluginToolName(e.tool, tools);
+    if (own !== undefined) return pluginToolAnswer(await exchange($, pluginToolEvent(e, own)));
     if (asking > 0 && e.tool === "AskUserQuestion") return next(e);
     const call = wireToolCall(e);
     const refusal = toolRefusal(await exchange($, { type: "toolCall", call }));
     if (refusal !== undefined) return { deny: refusal };
     await exchange($, { type: "toolStart", call });
     const result = await next(e);
-    await exchange($, { type: "toolEnd", call });
-    return result;
+    const context = toolContext(await exchange($, { type: "toolEnd", call }));
+    if (result.deny !== undefined || context.length === 0) return result;
+    return { ...result, context: [...(result.context ?? []), ...context] };
   }).catch(async () => ({ deny: "Tandem's tool check failed, so this tool call did not run." }));
+
+  on("prompt.edit", async ($, e, next) => {
+    if (editAllowed(await exchange($, { type: "promptEdit", draft: draftAfterEdit(e) }))) {
+      return next(e);
+    }
+    return { text: e.text, cursor: e.cursor };
+  });
 
   on("classic.Stop", async ($, e, next) => {
     const block = stopBlock(await exchange($, { type: "stopRequested", aborted: false }));

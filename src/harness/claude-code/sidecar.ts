@@ -3,6 +3,7 @@ import { mkdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { environmentForContext } from "../../config/environment.ts";
 import type { SessionDeps } from "../../session/events.ts";
+import { workerJobPath } from "../worker-session.ts";
 import { claudeCodeCoordinator, type SessionBinding } from "./coordinator.ts";
 import { ClaudeCodePane } from "./host.ts";
 import {
@@ -13,6 +14,7 @@ import {
   type SidecarLine,
 } from "./plugins/tandem/hooks/protocol.ts";
 import { sidecarSocketPath } from "./socket.ts";
+import { openClaudeCodeWorker } from "./worker.ts";
 
 /** How long a new sidecar waits for the one it replaces (a mod reload) to let go of the socket. */
 const CLAIM_WAIT_MS = 3_000;
@@ -20,29 +22,21 @@ const CLAIM_POLL_MS = 100;
 /** How often the sidecar checks that the Claude Code process that started it is still alive. */
 const PARENT_POLL_MS = 1_000;
 
-export type SidecarArgs = Readonly<{ role: "coordinator"; sessionId: string }>;
+export type SidecarArgs = Readonly<{ sessionId: string }>;
 
-/**
- * `--role coordinator --session <id>`. Workers are not bound yet (issue #200, step 6), so any
- * other role is refused rather than run without its guards.
- */
+/** `--session <id>`: the Claude Code session this sidecar serves. */
 export function parseSidecarArgs(argv: readonly string[]): SidecarArgs {
-  const values = new Map<string, string>();
-  for (let index = 0; index < argv.length; index += 2) {
-    const flag = argv[index];
-    const value = argv[index + 1];
-    if (flag === undefined || !["--role", "--session"].includes(flag) || value === undefined) {
-      throw new Error(`usage: sidecar --role coordinator --session <id>, not ${argv.join(" ")}`);
-    }
-    values.set(flag, value);
+  const [flag, value, ...rest] = argv;
+  const sessionId = value?.trim();
+  if (
+    flag !== "--session" ||
+    sessionId === undefined ||
+    sessionId.length === 0 ||
+    rest.length > 0
+  ) {
+    throw new Error(`usage: sidecar --session <id>, not ${argv.join(" ")}`);
   }
-  const role = values.get("--role");
-  const sessionId = values.get("--session")?.trim();
-  if (role !== "coordinator") {
-    throw new Error(`the Claude Code sidecar runs only a coordinator, not ${role ?? "no role"}`);
-  }
-  if (sessionId === undefined || sessionId.length === 0) throw new Error("--session is required");
-  return { role, sessionId };
+  return { sessionId };
 }
 
 async function answers(socket: string): Promise<boolean> {
@@ -182,16 +176,22 @@ async function main(): Promise<void> {
   const { home } = environmentForContext({}, { cwd, sessionId: args.sessionId });
   const socket = sidecarSocketPath(home, args.sessionId);
   const hooks = new HookCalls();
+  // Tandem launches a worker's Claude Code with its job in the environment, and with a brief.
+  const jobPath = workerJobPath(process.env);
   const pane = new ClaudeCodePane({
     write: writeLine,
     confirm: (title, message) => hooks.confirm(title, message),
+    startsWithPrompt: jobPath !== undefined,
   });
-  const binding: SessionBinding = claudeCodeCoordinator(pane, {
-    timers,
-    logError: (message, error) => console.error(`${message}: ${errorMessage(error)}`),
-    cwd,
-    sessionId: args.sessionId,
-  });
+  const binding: SessionBinding =
+    jobPath === undefined
+      ? claudeCodeCoordinator(pane, {
+          timers,
+          logError: (message, error) => console.error(`${message}: ${errorMessage(error)}`),
+          cwd,
+          sessionId: args.sessionId,
+        })
+      : await openClaudeCodeWorker(pane, jobPath, process.env, timers);
 
   mkdirSync(join(home, "sidecars"), { recursive: true, mode: 0o700 });
   await claimSocket(socket);
@@ -248,7 +248,13 @@ async function main(): Promise<void> {
   setInterval(() => {
     if (process.ppid !== parent) void stop();
   }, PARENT_POLL_MS).unref();
-  writeLine({ type: "ready", protocol: SIDECAR_PROTOCOL_VERSION, socket, pid: process.pid });
+  writeLine({
+    type: "ready",
+    protocol: SIDECAR_PROTOCOL_VERSION,
+    socket,
+    pid: process.pid,
+    tools: binding.tools,
+  });
 }
 
 if (import.meta.main) {

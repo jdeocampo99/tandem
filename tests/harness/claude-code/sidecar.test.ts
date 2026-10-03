@@ -54,11 +54,15 @@ function lineReader(stream: ReadableStream<Uint8Array>): () => Promise<SidecarLi
   };
 }
 
-async function startSidecar(cwd: string, home?: string): Promise<Running> {
+async function startSidecar(
+  cwd: string,
+  home?: string,
+  environment: Readonly<Record<string, string>> = {},
+): Promise<Running & Readonly<{ tools: readonly string[] }>> {
   const root = await tempDir();
   const tandemHome = home ?? join(root, "home");
   cleanups.push(() => rm(root, { recursive: true, force: true }));
-  const child = Bun.spawn(["bun", SIDECAR, "--role", "coordinator", "--session", "session-1"], {
+  const child = Bun.spawn(["bun", SIDECAR, "--session", "session-1"], {
     cwd,
     stdin: "pipe",
     stdout: "pipe",
@@ -68,6 +72,7 @@ async function startSidecar(cwd: string, home?: string): Promise<Running> {
       HOME: root,
       XDG_CONFIG_HOME: join(root, "config"),
       TANDEM_HOME: tandemHome,
+      ...environment,
       ...(process.env.TANDEM_IN_PROCESS_STORE_LOCK === undefined
         ? {}
         : { TANDEM_IN_PROCESS_STORE_LOCK: process.env.TANDEM_IN_PROCESS_STORE_LOCK }),
@@ -88,7 +93,14 @@ async function startSidecar(cwd: string, home?: string): Promise<Running> {
     });
     return { status: response.status, reply: (await response.json()) as HookReply };
   };
-  return { process: child, socket: ready.socket, home: tandemHome, nextLine, post };
+  return {
+    process: child,
+    socket: ready.socket,
+    home: tandemHome,
+    nextLine,
+    post,
+    tools: ready.tools.map((tool) => tool.name),
+  };
 }
 
 async function gitRepo(): Promise<string> {
@@ -106,13 +118,15 @@ function expectReply(event: HookEventType, reply: HookReply): void {
 test("the sidecar announces its socket under the home and answers events over it", async () => {
   const sidecar = await startSidecar(await gitRepo());
   expect(sidecar.socket).toBe(sidecarSocketPath(sidecar.home, "session-1"));
+  expect(sidecar.tools).toEqual(["tandem"]);
 
   const started = await sidecar.post({ type: "sessionStart", model: "claude-opus-5-5" });
   expect(started).toEqual({ status: 200, reply: { type: "done" } });
 
   const listed = await sidecar.post({
-    type: "tandemTool",
+    type: "pluginTool",
     id: "toolu_1",
+    name: "tandem",
     input: { request: { action: "list" } },
   });
   expect(listed).toEqual({
@@ -148,7 +162,12 @@ test("malformed events and unknown questions are refused without reaching the se
     status: 200,
     reply: { type: "refused", reason: "no question ask-9 is waiting" },
   });
-  const tool = await sidecar.post({ type: "tandemTool", id: "toolu_1", input: { action: "list" } });
+  const tool = await sidecar.post({
+    type: "pluginTool",
+    id: "toolu_1",
+    name: "tandem",
+    input: { action: "list" },
+  });
   expect(tool.reply).toMatchObject({ type: "toolResult", isError: true });
 });
 
@@ -192,7 +211,7 @@ test("the sidecar stops when the process that started it dies", async () => {
   const root = await tempDir();
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const parent = Bun.spawn(
-    ["sh", "-c", `sleep 20 | bun ${SIDECAR} --role coordinator --session session-1 & sleep 2`],
+    ["sh", "-c", `sleep 20 | bun ${SIDECAR} --session session-1 & sleep 2`],
     {
       cwd: repo,
       stdout: "pipe",
@@ -247,15 +266,102 @@ test("a socket a live sidecar still answers on is never taken over", async () =>
   expect(existsSync(socket)).toBe(true);
 });
 
-test("a role the sidecar cannot run yet fails closed with a fatal line", async () => {
-  const child = Bun.spawn(["bun", SIDECAR, "--role", "worker", "--session", "s"], {
+test("a worker whose job cannot be read fails closed with a fatal line", async () => {
+  const root = await tempDir();
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const child = Bun.spawn(["bun", SIDECAR, "--session", "s"], {
+    cwd: root,
     stdin: "pipe",
     stdout: "pipe",
+    env: {
+      PATH: process.env.PATH,
+      HOME: root,
+      TANDEM_HOME: join(root, "home"),
+      TANDEM_WORKER_JOB_PATH: join(root, "missing.json"),
+    },
   });
   const line = await lineReader(child.stdout)();
-  expect(line).toMatchObject({
-    type: "fatal",
-    reason: "the Claude Code sidecar runs only a coordinator, not worker",
-  });
+  expect(line).toMatchObject({ type: "fatal", reason: expect.stringContaining("missing.json") });
   expect(await child.exited).toBe(1);
 });
+
+/** A worker job in a fresh checkout, as Tandem writes it for a Claude Code worker. */
+async function workerJob(
+  role: "reviewer" | "scout",
+): Promise<Readonly<{ jobPath: string; resultPath: string; cwd: string }>> {
+  const cwd = await gitRepo();
+  const jobs = join(cwd, "..", "jobs");
+  await mkdir(jobs);
+  const jobPath = join(jobs, "job.json");
+  const resultPath = join(jobs, "result.json");
+  await writeFile(
+    jobPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      id: "job-1",
+      taskId: "task-1",
+      generation: 0,
+      role,
+      cwd,
+      harness: "claude-code",
+      model: { model: "claude-code/sonnet", thinking: "low" },
+      prompt: "Look at the cache.",
+      resultPath,
+    }),
+  );
+  return { jobPath, resultPath, cwd };
+}
+
+test("a reviewer's sidecar offers submit_report and refuses Edit, Write, and a mutating Bash", async () => {
+  const { jobPath, cwd } = await workerJob("reviewer");
+  const sidecar = await startSidecar(cwd, undefined, { TANDEM_WORKER_JOB_PATH: jobPath });
+  expect(sidecar.tools).toEqual(["submit_report"]);
+  await sidecar.post({ type: "sessionStart", model: "claude-sonnet-5-5" });
+  const calls = [
+    { id: "t1", name: "Edit", input: { file_path: "a.ts", old_string: "a", new_string: "b" } },
+    { id: "t2", name: "Write", input: { file_path: "a.ts", content: "x" } },
+    { id: "t3", name: "Bash", input: { command: "rm -rf src" } },
+  ];
+  for (const call of calls) {
+    expect((await sidecar.post({ type: "toolCall", call })).reply).toEqual({
+      type: "toolDecision",
+      block: true,
+      reason: "A reviewer only reads: it cannot edit files or run commands.",
+    });
+  }
+  const read = { id: "t4", name: "Read", input: { file_path: "a.ts" } };
+  expect((await sidecar.post({ type: "toolCall", call: read })).reply).toEqual({
+    type: "toolDecision",
+    block: false,
+  });
+}, 30_000);
+
+test("a scout's sidecar takes its report through submit_report and writes the job's result", async () => {
+  const { jobPath, resultPath, cwd } = await workerJob("scout");
+  const sidecar = await startSidecar(cwd, undefined, { TANDEM_WORKER_JOB_PATH: jobPath });
+  expect(sidecar.tools).toEqual(["submit_report", "copy_asset"]);
+  await sidecar.post({ type: "sessionStart", model: "claude-sonnet-5-5" });
+  await sidecar.post({ type: "agentStart", prompt: "Look at the cache." });
+  const submitted = await sidecar.post({
+    type: "pluginTool",
+    id: "t1",
+    name: "submit_report",
+    input: { outcome: "completed", report: "The cache is keyed by path." },
+  });
+  expect(submitted.reply).toEqual({
+    type: "toolResult",
+    text: "Report submitted with status completed.",
+    isError: false,
+  });
+  expect(JSON.parse(await Bun.file(resultPath).text())).toMatchObject({
+    status: "completed",
+    text: expect.stringContaining("The cache is keyed by path."),
+  });
+  const again = await sidecar.post({
+    type: "pluginTool",
+    id: "t2",
+    name: "submit_report",
+    input: { outcome: "completed", report: "Again." },
+  });
+  expect(again.reply).toMatchObject({ type: "toolResult", isError: true });
+}, 30_000);

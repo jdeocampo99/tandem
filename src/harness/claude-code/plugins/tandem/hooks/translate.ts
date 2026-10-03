@@ -6,15 +6,18 @@
 
 import type { HookEvent, HookReply, WireToolCall, WireUsage } from "./protocol.ts";
 
-/** Claude Code names the tool a mod registers `mcp__<plugin>__<tool>`. */
-export const TANDEM_TOOL_CALL = "mcp__tandem__tandem";
+/** Claude Code names a tool this mod registers `mcp__tandem__<tool>`. */
+const PLUGIN_TOOL_PREFIX = "mcp__tandem__";
 
 /** The section of the system prompt that carries the coordinator's instructions each request. */
 export const COORDINATOR_SECTION_ID = "tandem:coordinator";
 
-/** The plugin directory sits two levels under src/harness/claude-code/, beside the sidecar. */
+/**
+ * The plugin directory sits two levels under src/harness/claude-code/, beside the sidecar. The
+ * sidecar tells a coordinator from a worker by the environment Tandem launched Claude Code with.
+ */
 export function sidecarArgv(pluginRoot: string, sessionId: string): readonly string[] {
-  return ["bun", `${pluginRoot}/../../sidecar.ts`, "--role", "coordinator", "--session", sessionId];
+  return ["bun", `${pluginRoot}/../../sidecar.ts`, "--session", sessionId];
 }
 
 /** Whole lines out of a child's output, which arrives in pieces that need not end at a newline. */
@@ -47,6 +50,13 @@ type PromptFields = Readonly<{
 /** The mod's own submits are Tandem's wakes, which Tandem already knows about. */
 export function isOwnPrompt(prompt: PromptFields): boolean {
   return prompt.origin.kind === "plugin" && prompt.origin.name === "tandem";
+}
+
+/** A run begins: with the text it starts from, when there is one. */
+export function agentStartEvent(text: string | undefined): HookEvent {
+  return text === undefined || text.length === 0
+    ? { type: "agentStart" }
+    : { type: "agentStart", prompt: text };
 }
 
 export function userPromptEvent(prompt: PromptFields): HookEvent {
@@ -145,8 +155,20 @@ export function wireToolCall(call: ToolCallFields): WireToolCall {
   return { id: call.tool_use_id ?? call.tool, name: call.tool, input: toolInput(call) };
 }
 
-export function tandemToolEvent(call: ToolCallFields): HookEvent {
-  return { type: "tandemTool", id: call.tool_use_id ?? call.tool, input: toolInput(call) };
+/** The short name of a call to one of `registered`, the tools the sidecar listed; else undefined. */
+export function pluginToolName(tool: string, registered: ReadonlySet<string>): string | undefined {
+  if (!tool.startsWith(PLUGIN_TOOL_PREFIX)) return undefined;
+  const name = tool.slice(PLUGIN_TOOL_PREFIX.length);
+  return registered.has(name) ? name : undefined;
+}
+
+export function pluginToolEvent(call: ToolCallFields, name: string): HookEvent {
+  return { type: "pluginTool", id: call.tool_use_id ?? call.tool, name, input: toolInput(call) };
+}
+
+/** What the model reads after a tool's result; nothing when Tandem refused or failed. */
+export function toolContext(reply: HookReply): readonly string[] {
+  return reply.type === "toolContext" ? reply.context : [];
 }
 
 /** A tool the coordinator guard did not clear never runs, including when Tandem is unreachable. */
@@ -163,7 +185,7 @@ export function toolRefusal(reply: HookReply): string | undefined {
 
 export type ToolAnswer = Readonly<{ result: string }> | Readonly<{ deny: string }>;
 
-export function tandemToolAnswer(reply: HookReply): ToolAnswer {
+export function pluginToolAnswer(reply: HookReply): ToolAnswer {
   switch (reply.type) {
     case "toolResult":
       return reply.isError ? { deny: reply.text } : { result: reply.text };
@@ -265,4 +287,17 @@ export function endsSidecar(reason: string): boolean {
  */
 export function logLines(text: string): readonly string[] {
   return text.split("\n").filter((line) => line.trim().length > 0);
+}
+
+type PromptEditFields = Readonly<{ text: string; start: number; end: number; inputText: string }>;
+
+/** Whether the prompt box holds text once this edit is applied. */
+export function draftAfterEdit(edit: PromptEditFields): boolean {
+  const next = edit.text.slice(0, edit.start) + edit.inputText + edit.text.slice(edit.end);
+  return next.trim().length > 0;
+}
+
+/** Only a refusal from Tandem holds an edit back; an unreachable sidecar never locks the box. */
+export function editAllowed(reply: HookReply): boolean {
+  return reply.type !== "editDecision" || reply.allowed;
 }

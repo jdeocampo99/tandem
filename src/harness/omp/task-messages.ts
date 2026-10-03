@@ -5,7 +5,6 @@ import {
   isRecord,
   type Marker,
   markersFromText,
-  type TaskMessageBatch,
 } from "../../tasks/communication-protocol.ts";
 
 export type MarkerInsertion = { inserted: boolean };
