@@ -45,7 +45,6 @@ const SHUTDOWN_WAIT_MS = 1_000;
 let socket: string | undefined;
 /** Bumped by each start, so a replaced sidecar's output loop changes nothing. */
 let generation = 0;
-let stopping = false;
 /** The session's cost when the last turn ended, to price the next one. */
 let sessionCostUsd: number | undefined;
 const turns = new TurnLedger();
@@ -154,24 +153,34 @@ async function perform($: Api, line: string): Promise<void> {
   }
 }
 
-/** Carries out the sidecar's effects until it exits, then leaves the mod failing closed. */
+/**
+ * Carries out the sidecar's effects until it exits. A sidecar that exits 0 was asked to stop (the
+ * session ending, or Claude Code stopping it); any other end leaves the mod failing closed.
+ */
 async function followSidecar(
   $: Api,
   sidecar: Sidecar,
   lines: LineReader,
   started: number,
 ): Promise<void> {
+  let ended: ProcessSpawnResult | undefined;
   try {
-    for await (const piece of sidecar) {
+    for (;;) {
+      const piece = await sidecar.next();
       if (generation !== started) return;
-      if (piece.stream === "stderr") debug($, piece.text);
-      else for (const line of lines.push(piece.text)) await perform($, line);
+      if (piece.done) {
+        ended = piece.value;
+        break;
+      }
+      if (piece.value.stream === "stderr") debug($, piece.value.text);
+      else for (const line of lines.push(piece.value.text)) await perform($, line);
     }
   } catch (error) {
     debug($, `Tandem's sidecar output ended: ${message(error)}`);
   }
-  if (generation !== started || stopping) return;
+  if (generation !== started) return;
   socket = undefined;
+  if (ended?.code === 0) return;
   $.ui.toast(
     "Tandem stopped. This conversation goes on without Tandem until Claude Code restarts.",
   );
@@ -317,7 +326,6 @@ export const register: Register = (on) => {
 
   on("session.end", async ($, e, next) => {
     if (endsSidecar(e.reason) && socket !== undefined) {
-      stopping = true;
       await Promise.race([exchange($, { type: "shutdown" }), $.clock.sleep(SHUTDOWN_WAIT_MS)]);
       socket = undefined;
     }

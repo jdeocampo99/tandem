@@ -13,12 +13,17 @@ type Stubs = Parameters<TestBody>[1];
 function sidecar(
   on: Stubs,
   reply: (event: SidecarEvent) => HookReply,
-  options: Readonly<{ first?: SidecarLine; effects?: readonly SidecarLine[] }> = {},
+  options: Readonly<{
+    first?: SidecarLine;
+    effects?: readonly SidecarLine[];
+    exitCode?: number;
+  }> = {},
 ) {
   const posted: SidecarEvent[] = [];
   const spawned: (readonly string[])[] = [];
   const shown: string[] = [];
   const toasts: string[] = [];
+  const { promise: toasted, resolve: toast } = Promise.withResolvers<void>();
   const submitted: string[] = [];
   const { promise: effectsDone, resolve: finishEffects } = Promise.withResolvers<void>();
   mock.clock(on);
@@ -41,6 +46,7 @@ function sidecar(
       yield { stream: "stdout", text: `${JSON.stringify(effect)}\n` };
     }
     finishEffects();
+    if (options.exitCode !== undefined) return { value: { code: options.exitCode, signal: null } };
     await new Promise(() => {});
     return { value: { code: 0, signal: null } };
   });
@@ -55,13 +61,14 @@ function sidecar(
   });
   on("ui.toast", (_$, e) => {
     toasts.push(e.text);
+    toast();
     return { value: undefined };
   });
   on("prompt.submit", (_$, e) => {
     submitted.push(e.text);
     return { text: e.text, context: e.context };
   });
-  return { posted, spawned, shown, toasts, submitted, effectsDone };
+  return { posted, spawned, shown, toasts, toasted, submitted, effectsDone };
 }
 
 const start = { surface: "terminal", isInteractive: true, cwd: "/work" } as const;
@@ -346,4 +353,17 @@ test("a compaction the sidecar asks for asks for Tandem's instructions once", as
   await compacted;
   expect(instructions).toEqual(["Keep T-1."]);
   expect(posted.slice(1).map((event) => event.type)).toEqual(["compacting", "compacted"]);
+});
+
+test("a sidecar that dies is reported, and the mod fails closed after it", async ($, on) => {
+  const { toasts, toasted } = sidecar(on, () => DONE, { exitCode: 1 });
+  on("tool.call", () => ({ result: "ran" }));
+  await $.session.start(start);
+  await toasted;
+  expect(toasts).toEqual([
+    "Tandem stopped. This conversation goes on without Tandem until Claude Code restarts.",
+  ]);
+  expect(await $.tool.call({ tool: "Read", file_path: "a.ts" })).toEqual({
+    deny: "Tandem could not check this tool call, so it did not run: Tandem's sidecar is not running",
+  });
 });

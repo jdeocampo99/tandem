@@ -224,8 +224,8 @@ Two plugins under src/harness/claude-code/plugins/, loaded with `--plugin-dir`:
 | `session.end` | Posts `shutdown` within 1 s, except for `clear` and `resume`. |
 
 Every reply goes through `parseHookReply`; an `ask` goes to `$.ui.ask(question, ["Allow", "Deny"])`,
-where a dismissed question is a denial. A sidecar whose output ends shows a toast and leaves the mod
-failing closed.
+where a dismissed question is a denial. A sidecar that exits leaves the mod failing closed, and shows
+a toast unless it exited 0, which it does only when asked to stop.
 
 Checks: `claude plugin validate --strict` and `claude plugin test` on each plugin directory (with
 `DISABLE_GROWTHBOOK=1` where the mods flag is served off). `register.ts` and the plugins' `tests/`
