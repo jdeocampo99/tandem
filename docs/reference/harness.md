@@ -239,7 +239,10 @@ only read-only commands; the tool guard below enforces both.
   common directory), since a worktree is trusted when its project is.
 - **Closing.** Herdr sends both exit keys at once (`herdr pane send-keys <pane> ctrl+d ctrl+d`);
   the closer reads the harness from the job's spec. While the pane closes, the adapter refuses
-  each prompt-box edit, which is how OMP's raw-key swallow behaves.
+  each prompt-box edit, which is how OMP's raw-key swallow behaves. The closer then waits up to 20 s
+  for the process to leave the pane, and re-sends the exit keys once if it is still there after 6 s:
+  a Claude Code whose first keys were lost or raced the turn's final render sits at "Press Ctrl-D
+  again to exit", and a second delivery completes the exit, as a manual retry did in #256.
 - **Mixing.** A coordinator on either harness launches workers on either: each job's harness
   follows its own pinned model. Checked live both ways on 2.1.288 (an OMP coordinator with a
   Claude Code scout; a Claude Code coordinator with Claude Code implementer and reviewer).
