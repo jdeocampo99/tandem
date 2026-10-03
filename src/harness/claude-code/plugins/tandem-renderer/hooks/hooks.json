@@ -1,0 +1,4 @@
+{
+  "description": "Hides Tandem's own submitted prompts in the transcript",
+  "modules": ["./register.ts"]
+}
