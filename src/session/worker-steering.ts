@@ -83,6 +83,11 @@ export class WorkerSteering {
     return new WorkerSteering(deps, receipt);
   }
 
+  /** The task whose inbox steers this worker. */
+  get taskId(): string {
+    return this.deps.config.taskId;
+  }
+
   /** Records harness activity; a failed receipt write aborts the worker. */
   recordActivity(phase: WorkerReceipt["phase"], tool?: string): void {
     void this.touch({ phase, tool, meaningful: true }).catch((error) => this.fail(error));

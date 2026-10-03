@@ -3,20 +3,10 @@ import type {
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import type { WorkerReceipt } from "../../contracts.ts";
-import { WorkerSteering } from "../../session/worker-steering.ts";
-import { readTaskInbox, writeWorkerReceipt } from "../../tasks/communication-persistence.ts";
-import {
-  parseWorkerControlConfig,
-  toolName,
-  WORKER_CONTROL_ENV,
-} from "../../workers/control-protocol.ts";
-import { traceWorkerTurn, WORKER_JOB_PATH_ENV } from "../../workers/terminal.ts";
+import { toolName } from "../../workers/control-protocol.ts";
+import { jobTrace, openWorkerSteering, workerJobPath } from "../worker-session.ts";
 import { contextWithTaskMessages, newestTaskMarker } from "./task-messages.ts";
-import {
-  OmpWorkerPane,
-  registerWorkerTerminalExtension,
-  SYSTEM_CLOCK,
-} from "./terminal-extension.ts";
+import { OmpWorkerPane, registerWorkerTerminalExtension } from "./terminal-extension.ts";
 
 export default async function workerControlExtension(pi: ExtensionAPI): Promise<void> {
   try {
@@ -38,28 +28,16 @@ function failClosed(pi: ExtensionAPI, error: unknown): void {
   });
 }
 
-function jobTrace(
-  jobPath: string | undefined,
-): (event: string, detail?: Readonly<Record<string, unknown>>) => void {
-  return (event, detail) => {
-    if (jobPath !== undefined && jobPath.trim().length > 0) traceWorkerTurn(jobPath, event, detail);
-  };
-}
-
 async function registerWorkerSteering(pi: ExtensionAPI): Promise<void> {
-  const config = parseWorkerControlConfig(process.env[WORKER_CONTROL_ENV]);
-  if (config === undefined) return;
   const pane = new OmpWorkerPane(pi);
-  const trace = jobTrace(process.env[WORKER_JOB_PATH_ENV]);
-  const steering = await WorkerSteering.open({
+  const jobPath = workerJobPath(process.env);
+  const trace = jobPath === undefined ? () => undefined : jobTrace(jobPath);
+  const steering = await openWorkerSteering(process.env, {
     host: pane.host,
-    clock: SYSTEM_CLOCK,
     timers: pane.timers,
-    config,
-    readInbox: () => readTaskInbox(config.inboxPath),
-    writeReceipt: (receipt) => writeWorkerReceipt(config.receiptPath, receipt),
     trace,
   });
+  if (steering === undefined) return;
   const record = (ctx: ExtensionContext, phase: WorkerReceipt["phase"], tool?: string) => {
     pane.enter(ctx);
     steering.recordActivity(phase, tool);
@@ -67,7 +45,7 @@ async function registerWorkerSteering(pi: ExtensionAPI): Promise<void> {
 
   pi.on("context", async (event, ctx) => {
     pane.enter(ctx);
-    const newest = newestTaskMarker(event.messages, config.taskId);
+    const newest = newestTaskMarker(event.messages, steering.taskId);
     const { taskMessages } = await steering.onContextBuild(newest?.batch);
     if (taskMessages === undefined) return undefined;
     return { messages: contextWithTaskMessages(event.messages, taskMessages, Date.now()) };

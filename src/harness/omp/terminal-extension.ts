@@ -1,13 +1,9 @@
-import { copyFile, lstat, readFile, realpath } from "node:fs/promises";
-import { basename, isAbsolute, relative, resolve } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { matchesKey } from "@oh-my-pi/pi-tui";
-import { runCommand } from "../../adapters/commands.ts";
-import { createHerdrStatusReporter } from "../../adapters/herdr-status.ts";
 import { todoItems } from "../../playbooks/progress.ts";
 import type {
   SessionDeps,
@@ -17,11 +13,15 @@ import type {
   ToolOutcome,
   UsageCounts,
 } from "../../session/events.ts";
-import { copyAssetSchema, submitReportSchema } from "../../session/tools.ts";
-import { type WorkerHost, WorkerSession } from "../../session/worker.ts";
-import { readWorkerReceipt } from "../../tasks/communication-persistence.ts";
+import {
+  COPY_ASSET_DESCRIPTION,
+  copyAssetSchema,
+  SUBMIT_REPORT_DESCRIPTION,
+  submitReportSchema,
+} from "../../session/tools.ts";
+import type { WorkerHost } from "../../session/worker.ts";
 import type { TranscriptRef } from "../../tasks/timeline.ts";
-import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "../../workers/jobs.ts";
+import type { WorkerJob } from "../../workers/jobs.ts";
 import {
   assertSelectedModel,
   expectedModelParts,
@@ -30,22 +30,12 @@ import {
 } from "../../workers/protocol.ts";
 import {
   COPY_ASSET_TOOL,
-  readWorkerTerminalCommand,
   replyUsage,
   SUBMIT_REPORT_TOOL,
   taskUsage,
-  traceWorkerTurn,
-  WORKER_JOB_PATH_ENV,
-  writeWorkerTerminal,
-  writeWorkerTokenTally,
 } from "../../workers/terminal.ts";
+import { jobTrace, readWorkerJob, workerJobPath, workerSession } from "../worker-session.ts";
 import { ompToolParameters } from "./tool-schema.ts";
-
-/** The wall and monotonic clocks a worker session runs on. */
-export const SYSTEM_CLOCK: SessionDeps["clock"] = {
-  now: () => Date.now(),
-  monotonic: () => performance.now(),
-};
 
 /**
  * OMP wakes an idle agent with an `async-result` message when a backgrounded command finishes.
@@ -173,57 +163,6 @@ export class OmpWorkerPane {
   }
 }
 
-const MAX_ASSET_BYTES = 20 * 1024 * 1024;
-const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-
-/** Copies one file from the scout's checkout next to its mockup, byte for byte. */
-export async function copyMockupAsset(
-  input: Readonly<{ cwd: string; artifactDir: string; from: string; name: string }>,
-): Promise<string> {
-  if (!ASSET_NAME.test(input.name)) {
-    throw new Error("name must be a plain file name such as jr-thinking.webp");
-  }
-  const [root, source] = await Promise.all([
-    realpath(input.cwd),
-    realpath(resolve(input.cwd, input.from)),
-  ]);
-  if (!isWithin(root, source))
-    throw new Error("from must be a file inside the repository checkout");
-  const entry = await lstat(source);
-  if (!entry.isFile()) throw new Error("from must be a regular file");
-  if (entry.size > MAX_ASSET_BYTES) throw new Error("from is larger than 20 MB");
-  const target = resolve(input.artifactDir, input.name);
-  if (basename(target) !== input.name) throw new Error("name must be a plain file name");
-  await copyFile(source, target);
-  return target;
-}
-
-function isWithin(root: string, candidate: string): boolean {
-  const path = relative(root, candidate);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
-}
-
-async function readJob(path: string): Promise<WorkerJob> {
-  const value: unknown = JSON.parse(await Bun.file(path).text());
-  return parseWorkerJob(value);
-}
-
-/**
- * The worktree's `git status --porcelain=v1` output, or undefined when git cannot report it. The
- * settle-time checkpoint check stays authoritative, so an unreadable status never blocks a report.
- */
-async function worktreeStatus(cwd: string): Promise<string | undefined> {
-  try {
-    const result = await runCommand({
-      argv: ["git", "-C", cwd, "status", "--porcelain=v1", "--untracked-files=all"],
-      cwd,
-    });
-    return result.code === 0 ? result.stdout : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 /** The usage all subagents of one OMP `task` call reported, without a provider or model. */
 function subagentUsage(result: unknown): UsageCounts | undefined {
   const usage = taskUsage(result, undefined);
@@ -260,46 +199,17 @@ function ompToolResult(outcome: ToolOutcome): {
 const loadedJobs = new Set<string>();
 
 export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise<void> {
-  const jobPath = process.env[WORKER_JOB_PATH_ENV];
-  if (jobPath === undefined || jobPath.trim().length === 0) return;
+  const jobPath = workerJobPath(process.env);
+  if (jobPath === undefined) return;
   const subagent = loadedJobs.has(jobPath);
   loadedJobs.add(jobPath);
-  const job = await readJob(jobPath);
+  const job = await readWorkerJob(jobPath);
   const pane = new OmpWorkerPane(pi);
-  const trace = (event: string, detail?: Readonly<Record<string, unknown>>) =>
-    traceWorkerTurn(jobPath, event, detail);
-  const session = new WorkerSession({
+  const trace = jobTrace(jobPath);
+  const session = workerSession(job, jobPath, {
     host: pane.host,
-    clock: SYSTEM_CLOCK,
     timers: pane.timers,
-    status: createHerdrStatusReporter(runCommand, {
-      cwd: job.cwd,
-      agentLabel: `tandem-${job.role}-${job.taskId.slice(0, 8)}`,
-    }),
-    job,
-    pid: process.pid,
-    terminal: {
-      readCommand: () => readWorkerTerminalCommand(jobPath, job),
-      writeState: (state) => writeWorkerTerminal(jobPath, state),
-      writeTokenTally: (tally) => writeWorkerTokenTally(jobPath, tally),
-    },
-    persistResult: (result) => {
-      const transcript = pane.transcript();
-      return persistWorkerResult(
-        job.resultPath,
-        transcript === undefined ? result : { ...result, transcript },
-      );
-    },
-    readReceipt: (receiptPath) =>
-      readWorkerReceipt(receiptPath, {
-        jobId: job.id,
-        taskId: job.taskId,
-        generation: job.generation,
-      }),
-    gitStatus: worktreeStatus,
-    readFile: (path) => readFile(path, "utf8"),
-    copyAsset: copyMockupAsset,
-    trace,
+    transcript: () => pane.transcript(),
   });
   if (subagent) {
     // A subagent keeps the worker's role limits but never drives the job: its turns, idle time,
@@ -318,8 +228,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
   pi.registerTool({
     name: SUBMIT_REPORT_TOOL,
     label: "Submit report",
-    description:
-      "Submit your final report to the Tandem coordinator once the delegated work is done. Only this call delivers the report; ordinary replies are conversation. A rejected submission explains what to fix; correct it and call again.",
+    description: SUBMIT_REPORT_DESCRIPTION,
     parameters: ompToolParameters(reportSchema),
     strict: true,
     loadMode: "essential",
@@ -334,8 +243,7 @@ export async function registerWorkerTerminalExtension(pi: ExtensionAPI): Promise
     pi.registerTool({
       name: COPY_ASSET_TOOL,
       label: "Copy asset",
-      description:
-        "Copy an image, font, or other file from the repository checkout into the mockup folder, byte for byte, so the mockup can load it by relative path (for example ./jr-thinking.webp). Only works while drawing a mockup.",
+      description: COPY_ASSET_DESCRIPTION,
       parameters: ompToolParameters(copyAssetSchema),
       strict: true,
       approval: "read",
