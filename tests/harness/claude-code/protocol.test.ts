@@ -36,6 +36,7 @@ const EVENTS: readonly SidecarEvent[] = [
   },
   { type: "agentEnd", interrupted: false },
   { type: "agentEnd", interrupted: true, failure: "rate limited" },
+  { type: "agentEnd", interrupted: false, prompt: "status?", answer: "Nothing is running." },
   { type: "stopRequested", aborted: false },
   { type: "compacting" },
   { type: "compacted" },
@@ -77,6 +78,7 @@ test("malformed or unknown events are refused with the reason", () => {
       '{"type":"turnEnd","usage":{"model":"m","input":1,"output":1,"cacheRead":0,"cacheWrite":0,"costUsd":-1}}',
       "turnEnd event.usage.costUsd must be a number of zero or more",
     ],
+    ['{"type":"agentEnd","interrupted":false,"answer":7}', "agentEnd event.answer must be text"],
   ];
   for (const [body, reason] of refusals) {
     expect(parseSidecarEvent(body)).toEqual({ ok: false, reason });

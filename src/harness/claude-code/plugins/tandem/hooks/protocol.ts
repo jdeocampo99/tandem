@@ -42,7 +42,14 @@ export type SidecarEvent =
   | Readonly<{ type: "toolEnd"; call: WireToolCall }>
   /** `contextTokens` is the context size `$.session.usage()` reported after the turn. */
   | Readonly<{ type: "turnEnd"; usage?: WireUsage; contextTokens?: number }>
-  | Readonly<{ type: "agentEnd"; interrupted: boolean; failure?: string }>
+  /** `prompt` is the text the run began with (`turn.start`), `answer` its final text. */
+  | Readonly<{
+      type: "agentEnd";
+      interrupted: boolean;
+      failure?: string;
+      prompt?: string;
+      answer?: string;
+    }>
   | Readonly<{ type: "stopRequested"; aborted: boolean }>
   | Readonly<{ type: "compacting" }>
   | Readonly<{ type: "compacted" }>
@@ -230,11 +237,13 @@ function eventFrom(value: unknown): SidecarEvent {
         ...optional(record, "contextTokens", count, where),
       };
     case "agentEnd":
-      shape("interrupted", "failure");
+      shape("interrupted", "failure", "prompt", "answer");
       return {
         type,
         interrupted: flag(record, "interrupted", where),
         ...optional(record, "failure", text, where),
+        ...optional(record, "prompt", text, where),
+        ...optional(record, "answer", text, where),
       };
     case "stopRequested":
       shape("aborted");

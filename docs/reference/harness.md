@@ -153,7 +153,7 @@ without reaching the session; a failure inside the session gets 500 and `refused
 | `tandemTool` | `id`, `input` | `toolResult {text, isError}` | the `tandem` tool |
 | `toolStart`, `toolEnd` | `call` | `done` | status line |
 | `turnEnd` | `usage?`, `contextTokens?` | `done` | usage ledger |
-| `agentEnd` | `interrupted`, `failure?` | `done` | `agentEnd`, final reconcile |
+| `agentEnd` | `interrupted`, `failure?`, `prompt?`, `answer?` | `done` | `agentEnd` with the run as one prompt and answer, final reconcile |
 | `stopRequested` | `aborted` | `stop {continueWith?}` | none for the coordinator |
 | `compacting` | | `compaction {instructions}` | `compacting` |
 | `compacted` | | `done` | `compacted` |
@@ -205,7 +205,7 @@ read.
 | No raw keystrokes | Nothing maps OMP's `onTerminalInput` swallow while a worker pane closes; the worker binding (step 6) decides how a closing pane refuses input. |
 | No session entries | `recordEntry` writes nothing. OMP saves these in its session file and nothing in Tandem reads them back; the store stays the record. |
 | No editor text | `paneState().draft` is always false. Only the worker reads it, to hold a close back while the person types; step 6 revisits it. |
-| No message list at turn end | `agentEnd` passes no messages, so the setup page's wait for the coordinator's answer to a comment never matches and ends when the page closes. |
+| No message list at turn end | `agentEnd` carries the run's prompt (`turn.start`'s text) and final answer (`turn.complete`'s `answer`), which the core reads as one user message and one assistant message, so the setup page's wait for the coordinator's answer to a comment matches. Without a prompt there are no messages and nothing matches. |
 | Model id, not selector | `assertSelectedModel("claude-code/<alias>")` passes when the reported id is the alias or contains it as a word (`claude-opus-5-5` for `opus`), and fails closed when no model was reported. |
 
 ## Later
