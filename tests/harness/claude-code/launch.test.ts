@@ -199,7 +199,7 @@ test("a home too long for the sidecar's socket is refused before the coordinator
 
 const STARTED = {
   home: "/home",
-  poolRoot: "/pool",
+  repo: "/repo",
   conversation: {
     kind: "saved",
     directory: DIRECTORY,
@@ -218,7 +218,7 @@ test("the coordinator is ready once its sidecar answers, and only then is its co
 test("a coordinator that never loads Tandem's plugin fails in plain English after 30 seconds", async () => {
   const io = fakeIo();
   await expect(claudeCodeHarness.awaitCoordinatorReady(STARTED, io)).rejects.toThrow(
-    `Claude Code started but did not load Tandem's plugin within 30 seconds, so Tandem stopped this coordinator. Usually Claude Code is asking whether to trust the folder, or its mods are switched off. To trust the folder, run \`claude\` once in /pool (or a folder above it) and choose "Yes, I trust this folder"; folders inside it are then trusted too. If mods are switched off, turn them back on in your Claude Code settings. Then run \`tandem\` again.`,
+    `Claude Code started but did not load Tandem's plugin within 30 seconds, so Tandem stopped this coordinator. Usually Claude Code is asking whether to trust the project, or its mods are switched off. To trust the project, run \`claude\` once in /repo and choose "Yes, I trust this folder"; Tandem's worktrees of the project are then trusted too. If mods are switched off, check that no Claude Code settings file sets \`disableAllHooks\`. Then run \`tandem\` again.`,
   );
   expect(io.probes).toHaveLength(121);
   expect(io.writes).toEqual([]);

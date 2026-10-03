@@ -114,7 +114,8 @@ export type CoordinatorLaunchIo = Readonly<{
 /** A coordinator whose command has just started, as its ready handshake needs it. */
 export type StartedCoordinator = Readonly<{
   home: string;
-  poolRoot: string;
+  /** The project's own checkout; Claude Code trusts the coordinator's worktree when it trusts this. */
+  repo: string;
   conversation: SavedConversation;
 }>;
 

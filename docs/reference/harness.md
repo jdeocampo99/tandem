@@ -165,16 +165,19 @@ the file is written only after the ready wait proves Claude Code started on that
 
 **Ready wait.** The adapter starts the sidecar as Claude Code's session starts, so launch polls
 `GET /health` on `sidecarSocketPath(home, id)` every 250 ms. The first answer means Claude Code
-trusted the folder and loaded the plugin. A home too long for the socket path is refused before the
+trusted the project and loaded the plugin. A home too long for the socket path is refused before the
 pane starts. After 30 s with no answer the launch fails closed: the processes whose command line
 names the id are stopped with SIGTERM, the startup rollback retires the new pane and releases the
 lease, and the error says Claude Code did not load Tandem's plugin, that the usual causes are the
 trust question and mods switched off, and what to do. In the caller's own pane (direct mode) the
 wait runs beside the coordinator and ends when it exits; on timeout the same stop and error apply.
 
-**Trust.** Claude Code loads mods only in a folder the user trusted, and a folder inside a trusted
-one is trusted too. Coordinators run in fresh worktrees under the pool root, so trust the pool root
-(or a parent) once: run `claude` there and choose "Yes, I trust this folder".
+**Trust.** Claude Code loads mods only in a folder the user trusted. A coordinator runs in a fresh
+git worktree of the project, and Claude Code trusts a worktree when it trusts the project's own
+checkout (checked on 2.1.288). Trust is not inherited from a parent folder into a separate git
+repository, so trusting the pool root does not help. Precondition: open `claude` once in the
+project and choose "Yes, I trust this folder". Tandem never answers the trust question for the
+user; an untrusted project ends in the ready wait's error, which names the project folder.
 
 **Identity.** `sameCommand` holds only for two `claude` commands (argv[0] named `claude`, any
 directory) that name exactly one conversation, the same id, with otherwise identical arguments.

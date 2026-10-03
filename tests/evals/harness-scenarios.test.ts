@@ -175,7 +175,7 @@ test("a Claude Code coordinator that never loads Tandem's plugin is stopped and 
     await expect(launch).rejects.toThrow(
       `Claude Code started but did not load Tandem's plugin within 30 seconds`,
     );
-    await expect(launch).rejects.toThrow(`run \`claude\` once in ${world.poolRoot}`);
+    await expect(launch).rejects.toThrow(`run \`claude\` once in ${world.repoPath}`);
     const snapshot = await world.snapshot();
     expect(snapshot.trace.some((event) => event.action === "kill")).toBe(true);
     expect(snapshot.resources.released).toContain("lease:lease-1");

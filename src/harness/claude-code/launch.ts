@@ -150,13 +150,13 @@ async function coordinatorConversation(
   return { kind: "saved", directory, ...conversation };
 }
 
-function notReadyError(poolRoot: string): Error {
+function notReadyError(repo: string): Error {
   return new Error(
     [
       `Claude Code started but did not load Tandem's plugin within ${READY_TIMEOUT_MS / 1000} seconds, so Tandem stopped this coordinator.`,
-      "Usually Claude Code is asking whether to trust the folder, or its mods are switched off.",
-      `To trust the folder, run \`claude\` once in ${poolRoot} (or a folder above it) and choose "Yes, I trust this folder"; folders inside it are then trusted too.`,
-      "If mods are switched off, turn them back on in your Claude Code settings.",
+      "Usually Claude Code is asking whether to trust the project, or its mods are switched off.",
+      `To trust the project, run \`claude\` once in ${repo} and choose "Yes, I trust this folder"; Tandem's worktrees of the project are then trusted too.`,
+      "If mods are switched off, check that no Claude Code settings file sets `disableAllHooks`.",
       "Then run `tandem` again.",
     ].join(" "),
   );
@@ -164,7 +164,7 @@ function notReadyError(poolRoot: string): Error {
 
 /**
  * The adapter plugin starts the sidecar as Claude Code's session starts, so a sidecar answering on
- * this conversation's socket proves Claude Code trusted the folder and loaded the plugin.
+ * this conversation's socket proves Claude Code trusted the project and loaded the plugin.
  */
 async function awaitCoordinatorReady(
   started: StartedCoordinator,
@@ -182,7 +182,7 @@ async function awaitCoordinatorReady(
       await io.writeText(conversationPointerPath(directory), `${id}\n`);
       return;
     }
-    if (io.now() >= deadline) throw notReadyError(started.poolRoot);
+    if (io.now() >= deadline) throw notReadyError(started.repo);
     await io.sleep(READY_POLL_MS, signal);
   }
 }

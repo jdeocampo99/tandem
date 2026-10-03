@@ -965,7 +965,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   );
   const started: StartedCoordinator = {
     home: paths.home,
-    poolRoot: paths.poolRoot,
+    repo: paths.repo,
     conversation,
   };
   const argvFor = (resume: boolean, prompt: string | undefined): readonly string[] =>
