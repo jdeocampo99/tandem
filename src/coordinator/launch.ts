@@ -16,7 +16,7 @@ import type {
   WorktreeLease,
 } from "../contracts.ts";
 import { type Harness, harnessOf } from "../harness/contract.ts";
-import { harnessFor } from "../harness/resolve.ts";
+import { harnessFor, harnessForRole } from "../harness/resolve.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
@@ -120,6 +120,8 @@ export type CoordinatorLaunchDependencies = Readonly<{
   readonly clock?: () => string;
   /** Names quarantine notes; defaults to a random UUID. */
   readonly newId?: () => string;
+  /** Checks the files and model a new coordinator needs on the harness it would launch on. */
+  readonly checkNewCoordinator?: (harness: Harness, model: ModelSpec | undefined) => Promise<void>;
   readonly rehomeTaskWorkspaces?: (
     input: Readonly<{
       readonly home: string;
@@ -189,6 +191,25 @@ function coordinatorPaths(request: CoordinatorLaunchRequest): CoordinatorPaths {
     repo,
     sessionDirectory: join(home, "coordinator-sessions", repositoryKey),
   };
+}
+
+/**
+ * Refuses a coordinator that cannot launch, before anything is replaced. Only a new coordinator
+ * takes its harness from the model; a running one keeps the harness its record names.
+ */
+export async function checkNewCoordinator(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+): Promise<void> {
+  const harness = harnessForRole("coordinator", request.model);
+  await dependencies.checkNewCoordinator?.(harness, request.model);
+  buildCoordinatorArgv({
+    cwd: request.cwd,
+    model: request.model,
+    continueSession: request.continueSession,
+    sessionDirectory: coordinatorPaths(request).sessionDirectory,
+    ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
+  });
 }
 
 function coordinatorHash(value: string): string {
@@ -639,13 +660,6 @@ export async function launchCoordinatorUnlocked(
     );
   }
   const headless = request.headless || request.noAttach;
-  buildCoordinatorArgv({
-    cwd: request.cwd,
-    model: request.model,
-    continueSession: request.continueSession,
-    sessionDirectory: paths.sessionDirectory,
-    ...(request.prompt === undefined ? {} : { prompt: request.prompt }),
-  });
   const running = await findRunningCoordinator(dependencies.run, {
     home: paths.home,
     sessionId: request.sessionId,
@@ -655,6 +669,8 @@ export async function launchCoordinatorUnlocked(
     await assertRunningCoordinatorSource(request, dependencies, running, context);
     if (request.restart !== true) return coordinatorResultFromRecord(running);
   }
+  // A restart checks before it closes the coordinator it replaces.
+  if (request.restart !== true) await checkNewCoordinator(request, dependencies);
   const sourceHead =
     request.sourceHead ?? (await resolveCoordinatorSourceHead(dependencies.run, paths.repo)).head;
   const previous =

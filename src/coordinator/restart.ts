@@ -7,6 +7,7 @@ import {
   type CoordinatorLaunchDependencies,
   type CoordinatorLaunchRequest,
   type CoordinatorLaunchResult,
+  checkNewCoordinator,
   launchCoordinatorUnlocked,
   withClaimedCoordinatorRepository,
 } from "./launch.ts";
@@ -119,6 +120,7 @@ export async function restartCoordinator(
           })
         : undefined;
     const prior = previous ?? stopped;
+    await checkNewCoordinator(request, dependencies);
     const sourceHead = await resolveCoordinatorSourceHead(dependencies.run, request.repo);
     if (prior !== undefined) {
       await closeSupersededPane(dependencies.run, prior);

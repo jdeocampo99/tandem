@@ -118,13 +118,14 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
   const model = ompDefault
     ? undefined
     : modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
-  const harness = harnessForRole("coordinator", model);
-  const files = coordinatorFiles(harness, invocation.options);
-  await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
-  await verifyRegularPath(statPath, files.configPath, "configPath");
-  if (model !== undefined) await harness.validateModel(run, environment.repo, model);
   const launchDependencies: CoordinatorLaunchDependencies = {
     run,
+    checkNewCoordinator: async (harness, newModel) => {
+      const files = coordinatorFiles(harness, invocation.options);
+      await verifyRegularPath(statPath, files.extensionPath, "extensionPath");
+      await verifyRegularPath(statPath, files.configPath, "configPath");
+      if (newModel !== undefined) await harness.validateModel(run, environment.repo, newModel);
+    },
     startPersistent: capabilities.startPersistent,
     runInteractive: capabilities.runInteractive,
     sleep: capabilities.sleep,

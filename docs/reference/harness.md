@@ -73,8 +73,12 @@ Claude Code models are not in `omp models --json`, so Tandem keeps a fixed catal
 role and the model. Callers outside src/harness/ never import src/harness/omp/launch.ts; Biome
 enforces it.
 
-- Launch derives the coordinator's harness from its model and resolves it before checking files,
-  validating the model, or starting anything.
+- Launching a new coordinator derives its harness from its model and resolves it before checking
+  files, validating the model, or starting anything. Launch first looks for a running coordinator
+  and reconnects to it on its recorded harness, so a `models.json` change never blocks reconnect.
+  A restart resolves the replacement's harness before it closes the running coordinator.
+- A worker job runs on the harness its spec records. New jobs take it from the task's pinned
+  model, so a `models.json` change never moves an existing task to another harness.
 - A worker resolves its job's harness before running setup commands.
 - A coordinator with no record predates harness choice, so the unrecorded-coordinator check uses
   OMP.
