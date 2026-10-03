@@ -8,7 +8,7 @@ import {
   SIDECAR_PROTOCOL_VERSION,
   type SidecarEvent,
   type SidecarLine,
-} from "../../../src/harness/claude-code/protocol.ts";
+} from "../../../src/harness/claude-code/plugins/tandem/hooks/protocol.ts";
 
 const call = { id: "toolu_1", name: "Read", input: { file_path: "src/a.ts" } };
 

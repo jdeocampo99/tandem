@@ -6,8 +6,8 @@ port every harness implements.
 Code: src/harness/contract.ts (`HarnessName`, `harnessOf`, the `Harness` launch port), src/harness/resolve.ts
 (`harnessFor`, `harnessForRole`), src/harness/claude-code/models.ts (the Claude Code catalogue),
 src/harness/omp/launch.ts, src/coordinator/record.ts, src/workers/jobs.ts, src/harness/coordinator-session.ts
-(coordinator setup both adapters share), src/harness/claude-code/ (`protocol.ts`, `host.ts`,
-`coordinator.ts`, `sidecar.ts`: the Claude Code sidecar).
+(coordinator setup both adapters share), src/harness/claude-code/ (`host.ts`,
+`coordinator.ts`, `sidecar.ts`: the Claude Code sidecar; `plugins/tandem/hooks/protocol.ts`: the wire).
 Tests: tests/harness/, tests/harness/claude-code/, tests/evals/harness-scenarios.test.ts, tests/coordinator/coordinator-registry.test.ts, tests/workers/jobs.test.ts,
 tests/terminal/cli.test.ts.
 

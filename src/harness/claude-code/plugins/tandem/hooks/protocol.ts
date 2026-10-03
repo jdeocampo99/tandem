@@ -3,8 +3,8 @@
  * object per `POST /event` over the sidecar's unix socket, and the HTTP response carries the
  * hook's answer. Effects go sidecar → mod as one JSON object per stdout line.
  *
- * This file imports nothing, so the mod, which can import only files inside its own plugin and
- * has no Node APIs, can bundle it as is.
+ * It lives inside the `tandem` plugin and imports nothing, because a mod can import only files
+ * inside its own plugin and has no Node APIs; the sidecar imports it from here.
  */
 
 export const SIDECAR_PROTOCOL_VERSION = 1;

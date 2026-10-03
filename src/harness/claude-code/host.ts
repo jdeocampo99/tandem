@@ -2,7 +2,12 @@ import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../../sessi
 import { WorkerOutputError } from "../../workers/protocol.ts";
 import type { ReplyUsage } from "../../workers/terminal.ts";
 import { CLAUDE_CODE_PROVIDER } from "./models.ts";
-import type { SidecarEvent, SidecarLine, WireToolCall, WireUsage } from "./protocol.ts";
+import type {
+  SidecarEvent,
+  SidecarLine,
+  WireToolCall,
+  WireUsage,
+} from "./plugins/tandem/hooks/protocol.ts";
 
 /** What one core effect becomes on Claude Code. */
 export type ClaudeCodeEffect = Readonly<{

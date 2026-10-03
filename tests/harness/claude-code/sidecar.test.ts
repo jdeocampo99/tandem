@@ -10,7 +10,7 @@ import {
   parseSidecarLine,
   type SidecarEvent,
   type SidecarLine,
-} from "../../../src/harness/claude-code/protocol.ts";
+} from "../../../src/harness/claude-code/plugins/tandem/hooks/protocol.ts";
 import { claimSocket, sidecarSocketPath } from "../../../src/harness/claude-code/sidecar.ts";
 
 const SIDECAR = join(TANDEM_CHECKOUT, "src", "harness", "claude-code", "sidecar.ts");

@@ -12,7 +12,7 @@ import {
   parseSidecarEvent,
   SIDECAR_PROTOCOL_VERSION,
   type SidecarLine,
-} from "./protocol.ts";
+} from "./plugins/tandem/hooks/protocol.ts";
 
 /** macOS limits a unix socket path to 104 bytes, including the terminating NUL. */
 const MAX_SOCKET_PATH_BYTES = 103;

@@ -13,7 +13,7 @@ import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
 import { tandemRequestSchema } from "../../session/tools.ts";
 import { bindCoordinator, type CoordinatorOptions } from "../coordinator-session.ts";
 import { type ClaudeCodePane, claudeCodeToolCall, claudeCodeUsage } from "./host.ts";
-import type { HookEventType, HookReply, SidecarEvent } from "./protocol.ts";
+import type { HookEventType, HookReply, SidecarEvent } from "./plugins/tandem/hooks/protocol.ts";
 
 /** The events a session answers; the sidecar itself handles `shutdown` and `askAnswer`. */
 export type SessionHookEvent = Extract<SidecarEvent, { type: Exclude<HookEventType, "shutdown"> }>;
