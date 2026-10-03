@@ -5,7 +5,7 @@ import {
   implementerShellRefusal,
   mockupWriteDecision,
   reportlessTurnEnd,
-  reviewShellRefusal,
+  reviewerToolRefusal,
   reviewSummary,
   submittedReportText,
   turnStalled,
@@ -232,14 +232,51 @@ test("only read-only tools and the to-do list run once the worker is settled, ti
   }
 });
 
-test("a PR reviewer's shell is limited to read-only commands; other workers are not", () => {
+test("a reviewer only reads; a PR reviewer's shell runs read-only commands", () => {
   const bash = (command?: string) =>
-    call("shell", { name: "bash", ...(command === undefined ? {} : { command }) });
-  expect(reviewShellRefusal(true, bash("git diff"))).toBeUndefined();
-  expect(reviewShellRefusal(true, bash("rm -rf src"))).toBeString();
-  expect(reviewShellRefusal(true, bash())).toBe("bash needs a command");
-  expect(reviewShellRefusal(false, bash("rm -rf src"))).toBeUndefined();
-  expect(reviewShellRefusal(true, call("read"))).toBeUndefined();
+    call("shell", { name: "Bash", ...(command === undefined ? {} : { command }) });
+  const reviewer = { role: "reviewer" } as const;
+  const prReviewer = { role: "scout", prReview: { structuredReport: true } } as const;
+  const readOnly = "A reviewer only reads: it cannot edit files or run commands.";
+  for (const kind of ["write", "edit", "shell", "subagent", "copy-asset"] as const) {
+    expect(reviewerToolRefusal(reviewer, call(kind))).toBe(readOnly);
+  }
+  for (const kind of ["read", "search", "web-search", "todo", "other"] as const) {
+    expect(reviewerToolRefusal(reviewer, call(kind))).toBeUndefined();
+  }
+  expect(reviewerToolRefusal(prReviewer, bash("git diff"))).toBeUndefined();
+  expect(reviewerToolRefusal(prReviewer, bash("rm -rf src"))).toBeString();
+  expect(reviewerToolRefusal(prReviewer, bash())).toBe("Bash needs a command");
+  expect(reviewerToolRefusal(prReviewer, call("read"))).toBeUndefined();
+  for (const role of ["implementer", "scout", "presentation"] as const) {
+    expect(reviewerToolRefusal({ role }, bash("rm -rf src"))).toBeUndefined();
+    expect(reviewerToolRefusal({ role }, call("edit"))).toBeUndefined();
+  }
+});
+
+test("reviewer sessions refuse edits and mutating shell through the tool guard", () => {
+  const worker = workerSession({ role: "reviewer" });
+  for (const kind of ["edit", "write", "shell"] as const) {
+    expect(
+      worker.session.guardToolCall(call(kind, { path: "src/a.ts", command: "touch a" })),
+    ).toEqual({
+      block: true,
+      reason: "A reviewer only reads: it cannot edit files or run commands.",
+    });
+  }
+  expect(worker.session.guardToolCall(call("read", { path: "src/a.ts" }))).toEqual({
+    block: false,
+  });
+  const prReview = workerSession({ role: "scout", prReview: { structuredReport: true } });
+  expect(prReview.session.guardToolCall(call("edit", { path: "src/a.ts" }))).toMatchObject({
+    block: true,
+  });
+  expect(prReview.session.guardToolCall(call("shell", { command: "rm -rf src" }))).toMatchObject({
+    block: true,
+  });
+  expect(prReview.session.guardToolCall(call("shell", { command: "git diff" }))).toEqual({
+    block: false,
+  });
 });
 
 test("an implementer may not run a pinned validation command; other shell calls still run", () => {
