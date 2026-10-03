@@ -80,8 +80,13 @@ test("a preset whose models aren't available is disabled with a plain reason", (
     "Claude Code isn't installed. Install it, then reopen setup.",
     "ready",
   ]);
-  expect(reasons({ ompCatalogue: omp, claudeCode: "mods-off" })[1]).toBe(
-    "Claude Code's managed settings switch off mods (disableAllHooks), so Tandem can't run in it.",
+  expect(
+    reasons({
+      ompCatalogue: omp,
+      claudeCode: { setting: "disableAllHooks", source: "project" },
+    })[1],
+  ).toBe(
+    "The disableAllHooks setting in this project's .claude/settings.json switches off mods, so Tandem can't run in Claude Code.",
   );
   const noCodex: readonly ModelRecord[] = [
     { ...codex("x", 1, 1), selector: "google/gemini", provider: "google" },

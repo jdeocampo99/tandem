@@ -5,7 +5,7 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
-import type { ClaudeCodeAvailability } from "../harness/claude-code/availability.ts";
+import { type ClaudeCodeAvailability, modsOffReason } from "../harness/claude-code/availability.ts";
 import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import {
@@ -95,12 +95,11 @@ const PRESETS: readonly PresetDefinition[] = [
 /** OMP providers serving OpenAI's models, most preferred first. */
 const CODEX_PROVIDERS = ["openai-codex", "openai"] as const;
 
-const CLAUDE_CODE_UNAVAILABLE: Readonly<Record<Exclude<ClaudeCodeAvailability, "ready">, string>> =
-  {
-    "not-installed": "Claude Code isn't installed. Install it, then reopen setup.",
-    "mods-off":
-      "Claude Code's managed settings switch off mods (disableAllHooks), so Tandem can't run in it.",
-  };
+function claudeCodeUnavailable(claudeCode: Exclude<ClaudeCodeAvailability, "ready">): string {
+  return claudeCode === "not-installed"
+    ? "Claude Code isn't installed. Install it, then reopen setup."
+    : modsOffReason(claudeCode);
+}
 
 type RoleOutcome =
   | Readonly<{ ok: true; spec: ModelSpec }>
@@ -116,7 +115,7 @@ export function modelPresets(facts: ModelPresetFacts): readonly ModelPreset[] {
     switch (source.kind) {
       case "claude-code": {
         if (facts.claudeCode !== "ready") {
-          return { ok: false, reason: CLAUDE_CODE_UNAVAILABLE[facts.claudeCode] };
+          return { ok: false, reason: claudeCodeUnavailable(facts.claudeCode) };
         }
         const model = CLAUDE_CODE_MODELS.find((candidate) => candidate.id === source.alias);
         if (model === undefined) {

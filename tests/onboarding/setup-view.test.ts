@@ -118,7 +118,7 @@ test("a saved Claude Code choice is kept only while Claude Code is ready", () =>
     buildSetupView({ ...input, claudeCode, savedModels }).roles.find((role) => role.id === "scout")
       ?.pick;
   expect(scoutPick("ready")).toEqual({ model: "claude-code/sonnet", thinking: "medium" });
-  expect(scoutPick("mods-off")).toBeUndefined();
+  expect(scoutPick({ setting: "disableAllHooks", source: "managed" })).toBeUndefined();
 });
 
 test("repositories say where their commands came from, with the home folder as ~", () => {

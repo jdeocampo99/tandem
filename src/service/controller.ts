@@ -1,4 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1122,6 +1122,7 @@ class TandemController {
         run: this.#deps.run,
         cwd: source.checkoutPath,
         readText: (path) => readFile(path, "utf8").catch(() => undefined),
+        listDirectory: (path) => readdir(path).catch(() => []),
       }),
     ]);
     return {

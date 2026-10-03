@@ -10,7 +10,7 @@ import {
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
-import type { ClaudeCodeAvailability } from "../harness/claude-code/availability.ts";
+import { type ClaudeCodeAvailability, modsOffReason } from "../harness/claude-code/availability.ts";
 import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harness/contract.ts";
 import type { SetupPageDraft } from "./setup-answer.ts";
@@ -184,12 +184,11 @@ export const THINKING_NOTES: Readonly<Record<ThinkingLevel, string>> = {
   auto: "model decides",
 };
 
-const CLAUDE_CODE_UNAVAILABLE: Readonly<Record<Exclude<ClaudeCodeAvailability, "ready">, string>> =
-  {
-    "not-installed": "Not installed on this computer.",
-    "mods-off":
-      "Its managed settings switch off mods (disableAllHooks), so Tandem can't run in it.",
-  };
+function claudeCodeUnavailable(claudeCode: Exclude<ClaudeCodeAvailability, "ready">): string {
+  return claudeCode === "not-installed"
+    ? "Not installed on this computer."
+    : modsOffReason(claudeCode);
+}
 
 /** The models a role may be set to on this computer: OMP's listing, plus Claude Code's when ready. */
 export function setupCatalogue(
@@ -212,7 +211,7 @@ export function buildSetupView(input: SetupViewInput): SetupView {
         note: "Uses your Claude subscription.",
         ...(input.claudeCode === "ready"
           ? {}
-          : { unavailable: CLAUDE_CODE_UNAVAILABLE[input.claudeCode] }),
+          : { unavailable: claudeCodeUnavailable(input.claudeCode) }),
       },
       {
         id: "omp",

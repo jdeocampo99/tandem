@@ -101,9 +101,22 @@ Code: src/config/model-presets.ts (pure), src/harness/claude-code/availability.t
 - Top Codex is the reasoning model with the highest published output price, then input price,
   from OMP's `openai-codex` provider, else from `openai`. Names always come from the live listing.
 - A preset is disabled, with its reason, when a role has no model: Claude Code is not installed
-  (`claude --version` fails), its managed settings
-  (`/Library/Application Support/ClaudeCode/managed-settings.json`) set `disableAllHooks`, OMP lists
+  (`claude --version` fails), a settings file a launch reads switches mods off (below), OMP lists
   no Codex or OpenAI model, or Balanced finds no model for a role.
+- Mods are off when one of these is `true`. The reason names the setting and the file.
+
+  | File | Settings read |
+  | --- | --- |
+  | `/Library/Application Support/ClaudeCode/managed-settings.json` and `managed-settings.d/*.json` | `disableAllHooks`, `allowManagedHooksOnly`, `disableSideloadFlags` (rejects `--plugin-dir`), and the built-in guard's `pluginConfigs["cc-plugin-sec-default@builtin"].options.allowManagedModsOnly` |
+  | `<checkout>/.claude/settings.json` | `disableAllHooks` |
+  | `<checkout>/.claude/settings.local.json` | `disableAllHooks` |
+
+  Only these apply to Tandem's launches. `--setting-sources project,local` drops user settings, so
+  `disableAllHooks` in `~/.claude/settings.json` does not stop Tandem's plugin; managed settings
+  always apply. A worktree reads the main checkout's `settings.local.json`, and its committed
+  `settings.json` matches the checkout's. Claude Code honors the other three settings only from
+  managed settings. The MDM profile (`com.anthropic.claudecode`) is not read; mods it switches off
+  end in the ready wait's error.
 - The setup page's model pickers group models by harness: Claude Code's catalogue (only when it
   is ready), then OMP's listing. Thinking choices follow the picked model's levels. Claude Code is
   never added to `enabledProviders`; the recap says its roles use the Claude subscription.
