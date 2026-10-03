@@ -65,6 +65,7 @@ import {
   publishReviewedTask,
   publishTaskDraft,
 } from "../delivery/pull-requests.ts";
+import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import { DEFAULT_HARNESS, type Harness, type ModelRecord } from "../harness/contract.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
@@ -561,8 +562,8 @@ type ServiceDependencies = Readonly<{
 const QUESTION_ANSWERED = "Its question was answered.";
 
 /**
- * Model choices and MCP servers are home-wide, not per project, so they come from the default
- * harness until a harness can own its own model choices.
+ * OMP lists the models Tandem offers and picks on its own, and the MCP servers. Claude Code models
+ * are never offered or picked automatically; a role gets one only when the user names it.
  */
 function catalogueHarness(): Harness {
   return harnessFor(DEFAULT_HARNESS);
@@ -1178,11 +1179,8 @@ class TandemController {
     if (!isRecord(input)) throw new TypeError("configureModels input must be an object");
     const source = await mapTaskSource(this.#deps.run, input.repoPath, this.#deps.sourceWorkspace);
     const models = parseModelAssignments(input.models);
-    const availableModels = await catalogueHarness().listModels(
-      this.#deps.run,
-      source.checkoutPath,
-    );
-    validateModelAssignments(models, availableModels);
+    const ompModels = await catalogueHarness().listModels(this.#deps.run, source.checkoutPath);
+    validateModelAssignments(models, [...ompModels, ...CLAUDE_CODE_MODELS]);
 
     return writeModelSettings({
       repoPath: source.repoPath,
