@@ -13,6 +13,9 @@ src/instructions.ts
 
 - The implementer is stopped or paused and one fresh, read-only reviewer pane opens in the same
   worktree with no implementer conversation. That session is the whole review for the round.
+  Read-only is enforced twice: the reviewer's tool list has nothing that edits, and the worker's
+  tool guard (`reviewerToolRefusal` in src/session/worker.ts) refuses Write, Edit, Bash, subagents,
+  and `copy_asset` on either harness.
 - The requirement is exactly one passing `review` lens result at the reviewed HEAD and generation.
   Legacy lens names and the `verifier` role still decode (`LEGACY_REVIEW_LENSES`,
   `LEGACY_ENDPOINT_ROLES` in src/contracts.ts) but never count.

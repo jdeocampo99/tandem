@@ -47,6 +47,15 @@ const STALLED_TURN_MINUTES = 5;
 const STALLED_TURN_MS = STALLED_TURN_MINUTES * 60_000;
 const IDLE_AFTER_RESULT_GRACE_MS = 30_000;
 const READ_ONLY_KINDS: ReadonlySet<ToolKind> = new Set(["read", "search", "web-search"]);
+/** Tools that change files, run commands, or start an agent that could; a reviewer gets none. */
+const REVIEWER_REFUSED_KINDS: ReadonlySet<ToolKind> = new Set([
+  "write",
+  "edit",
+  "shell",
+  "subagent",
+  "copy-asset",
+]);
+const REVIEWER_REFUSAL = "A reviewer only reads: it cannot edit files or run commands.";
 /** The tools a scout may use only on the mockup Tandem asked it to draw. */
 const MOCKUP_WRITE_KINDS: ReadonlySet<ToolKind> = new Set(["write", "edit", "copy-asset"]);
 
@@ -216,12 +225,23 @@ export function workerToolRefusal(
   return "worker terminal is paused or completed; mutating tools are disabled";
 }
 
-/** Why a PR reviewer's shell call is refused: its shell may only read. */
-export function reviewShellRefusal(prReview: boolean, call: ToolCall): string | undefined {
-  if (!prReview || call.kind !== "shell") return undefined;
-  return call.command === undefined
-    ? `${call.name} needs a command`
-    : readOnlyCommandRefusal(call.command);
+/**
+ * Why a reviewer's call is refused: a review only reads. A fresh reviewer's harness offers it no
+ * tool that edits, and this holds even where the harness's tool list is wider. A PR review runs as
+ * a scout whose shell may only run read-only commands; its writes fall under the scout's mockup rule.
+ */
+export function reviewerToolRefusal(
+  job: Pick<WorkerJob, "role" | "prReview">,
+  call: ToolCall,
+): string | undefined {
+  if (job.prReview !== undefined) {
+    if (call.kind !== "shell") return undefined;
+    return call.command === undefined
+      ? `${call.name} needs a command`
+      : readOnlyCommandRefusal(call.command);
+  }
+  if (job.role !== "reviewer") return undefined;
+  return REVIEWER_REFUSED_KINDS.has(call.kind) ? REVIEWER_REFUSAL : undefined;
 }
 
 /** Why an implementer's shell call is refused: it runs a pinned validation command itself. */
@@ -351,7 +371,7 @@ export class WorkerSession {
         },
         call.kind,
       ) ??
-      reviewShellRefusal(this.job.prReview !== undefined, call) ??
+      reviewerToolRefusal(this.job, call) ??
       implementerShellRefusal(this.job.validationCommands, call);
     return refusal === undefined ? { block: false } : { block: true, reason: refusal };
   }

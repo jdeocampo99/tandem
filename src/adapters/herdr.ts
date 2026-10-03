@@ -1024,7 +1024,12 @@ export async function sendCommand(
   return { endpoint: input.endpoint, command: input.command, result };
 }
 
-export async function sendExitKey(run: CommandRunner, input: CloseEndpointInput): Promise<void> {
+/** Sends the agent's exit keys, in one burst, to an idle agent's pane. */
+export async function sendExitKeys(
+  run: CommandRunner,
+  input: CloseEndpointInput,
+  keys: readonly string[],
+): Promise<void> {
   validateEndpoint(input.endpoint);
   await runChecked(
     run,
@@ -1032,7 +1037,7 @@ export async function sendExitKey(run: CommandRunner, input: CloseEndpointInput)
       "pane",
       "send-keys",
       input.endpoint.paneId,
-      "ctrl+d",
+      ...keys,
     ]),
     "herdr pane graceful exit",
   );

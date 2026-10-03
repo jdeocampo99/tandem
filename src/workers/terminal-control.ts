@@ -1,7 +1,10 @@
-import { inspectEndpoint, interruptEndpoint, sendExitKey } from "../adapters/herdr.ts";
+import { readFile } from "node:fs/promises";
+import { inspectEndpoint, interruptEndpoint, sendExitKeys } from "../adapters/herdr.ts";
 import { EndpointBusyError } from "../adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../contracts.ts";
+import { harnessFor } from "../harness/resolve.ts";
 import type { DurableJob } from "../runtime/schema.ts";
+import { parseWorkerJob } from "./jobs.ts";
 import {
   liveWorkerTerminal,
   readWorkerTerminal,
@@ -59,6 +62,12 @@ export async function workerJobOccupyingEndpoint(
   return newest;
 }
 
+/** The keys that make the job's agent exit, from the harness its job spec records. */
+async function exitKeys(job: WorkerTerminalJob): Promise<readonly string[]> {
+  const spec = parseWorkerJob(JSON.parse(await readFile(job.jobPath, "utf8")));
+  return harnessFor(spec.harness).exitKeys;
+}
+
 export async function prepareWorkerTerminal(
   run: CommandRunner,
   input: WorkerTerminalInput,
@@ -88,7 +97,7 @@ export async function prepareWorkerTerminal(
   if (!closingInspection.activeWorker) return;
   const closingTerminal = await liveWorkerTerminal(closingInspection, input.job);
   if (closingTerminal?.phase !== "closing") throw new EndpointBusyError(input.endpoint);
-  await sendExitKey(run, input);
+  await sendExitKeys(run, input, await exitKeys(input.job));
   const deadline = Date.now() + 10_000;
   while ((await inspectEndpoint(run, input)).activeWorker) {
     if (Date.now() >= deadline) {

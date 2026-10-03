@@ -15,6 +15,7 @@ const DELIVERY_MESSAGE_TYPE: Readonly<
   "prompt-route": "tandem-prompt-route",
   "stall-reminder": "tandem-stall-reminder",
   "report-reminder": "tandem-report-reminder",
+  steering: "tandem-steering",
 };
 
 /** The custom message type a catch-up card is saved under; its renderer draws it in color. */

@@ -98,8 +98,8 @@ export type CoordinatorFile = Readonly<{
   kind: "file" | "directory";
 }>;
 
-/** The effects a coordinator launch lends its harness, injected so the harness's decisions stay testable. */
-export type CoordinatorLaunchIo = Readonly<{
+/** The effects a launch lends its harness, injected so the harness's decisions stay testable. */
+export type LaunchIo = Readonly<{
   /** The file's text, or undefined when it does not exist. */
   readText(path: string): Promise<string | undefined>;
   writeText(path: string, text: string): Promise<void>;
@@ -111,12 +111,13 @@ export type CoordinatorLaunchIo = Readonly<{
   now(): number;
 }>;
 
-/** A coordinator whose command has just started, as its ready handshake needs it. */
-export type StartedCoordinator = Readonly<{
+/** An agent whose command has just started, as its ready handshake needs it. */
+export type StartedAgent = Readonly<{
+  agent: AgentKind;
   home: string;
-  /** The project's own checkout; Claude Code trusts the coordinator's worktree when it trusts this. */
+  /** The project's own checkout; Claude Code trusts a worktree of it when it trusts this. */
   repo: string;
-  conversation: SavedConversation;
+  conversation: Conversation;
 }>;
 
 /** Whether a live process is a coordinator Tandem launched for this repository without a record. */
@@ -126,31 +127,32 @@ export type UnrecordedCoordinatorMatch = "match" | "no-match" | "unknown";
 export type Harness = Readonly<{
   /** The program every command this harness builds starts with. */
   executable: string;
+  /** What people call it. */
+  displayName: string;
   coordinatorFiles: readonly CoordinatorFile[];
-  /** Environment the coordinator needs beyond Tandem's own, in its pane and in a direct run. */
+  /** Environment every agent needs beyond Tandem's own, in its pane and in a direct run. */
   launchEnvironment: Readonly<Record<string, string>>;
   /**
-   * Variables removed from the coordinator's environment, so a coordinator launched from inside
-   * another session of the same program starts as a session of its own.
+   * Variables removed from every agent's environment, so an agent launched from inside another
+   * session of the same program starts as a session of its own.
    */
   clearedEnvironment: readonly string[];
+  /** The keys Herdr sends to make an idle agent exit. */
+  exitKeys: readonly string[];
   /**
-   * The conversation a coordinator launch names, from what an earlier launch kept in `directory`.
-   * Refuses, before anything starts, a launch the harness could never get ready under `home`.
+   * The conversation a launch names, from what an earlier launch kept in `directory`; OMP keeps
+   * none without a directory. Refuses, before anything starts, a launch that could never get ready
+   * under `home`.
    */
-  coordinatorConversation(
-    launch: Readonly<{ home: string; directory: string; resume: boolean }>,
-    io: CoordinatorLaunchIo,
-  ): Promise<SavedConversation>;
+  conversation(
+    launch: Readonly<{ home: string; directory: string | undefined; resume: boolean }>,
+    io: LaunchIo,
+  ): Promise<Conversation>;
   /**
-   * Resolves once the started coordinator has loaded Tandem, and keeps its conversation for the
-   * next launch to resume; rejects in plain English when it does not. An aborted wait resolves.
+   * Resolves once the started agent has loaded Tandem, and keeps its conversation for the next
+   * launch to resume; rejects in plain English when it does not. An aborted wait resolves.
    */
-  awaitCoordinatorReady(
-    started: StartedCoordinator,
-    io: CoordinatorLaunchIo,
-    signal?: AbortSignal,
-  ): Promise<void>;
+  awaitReady(started: StartedAgent, io: LaunchIo, signal?: AbortSignal): Promise<void>;
   command(spec: LaunchSpec): readonly string[];
   /** False unless both commands provably launch the same agent; resuming does not distinguish. */
   sameCommand(live: readonly string[], recorded: readonly string[]): boolean;

@@ -443,3 +443,9 @@ export const copyAssetSchema = z.strictObject({
   from: z.string().describe("Path of the file in the repository checkout."),
   name: z.string().describe("Plain file name to save it as in the mockup folder."),
 });
+
+export const SUBMIT_REPORT_DESCRIPTION =
+  "Submit your final report to the Tandem coordinator once the delegated work is done. Only this call delivers the report; ordinary replies are conversation. A rejected submission explains what to fix; correct it and call again.";
+
+export const COPY_ASSET_DESCRIPTION =
+  "Copy an image, font, or other file from the repository checkout into the mockup folder, byte for byte, so the mockup can load it by relative path (for example ./jr-thinking.webp). Only works while drawing a mockup.";

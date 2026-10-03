@@ -7,13 +7,20 @@
  * inside its own plugin and has no Node APIs; the sidecar imports it from here.
  */
 
-export const SIDECAR_PROTOCOL_VERSION = 1;
+export const SIDECAR_PROTOCOL_VERSION = 2;
 
 /** A tool call as Claude Code names it; the sidecar classifies it into the core's tool kinds. */
 export type WireToolCall = Readonly<{
   id: string;
   name: string;
   input: Readonly<Record<string, unknown>>;
+}>;
+
+/** A tool the mod registers with `$.tool.register`; the model calls it as `mcp__tandem__<name>`. */
+export type WireToolSpec = Readonly<{
+  name: string;
+  description: string;
+  inputSchema: Readonly<Record<string, unknown>>;
 }>;
 
 /** One finished model turn's tokens, from Claude Code's `turn.complete`. */
@@ -27,19 +34,23 @@ export type WireUsage = Readonly<{
 }>;
 
 /**
- * Everything the mod forwards. There is no `streaming` or `contextBuild`: Claude Code exposes no
- * per-token progress and no message history to a mod.
+ * Everything the mod forwards. There is no `contextBuild`: Claude Code shows a mod no message
+ * history to rewrite.
  */
 export type SidecarEvent =
   | Readonly<{ type: "sessionStart"; model: string }>
   | Readonly<{ type: "userPrompt"; text: string; interactive: boolean; attachments: number }>
-  | Readonly<{ type: "agentStart" }>
+  /** `prompt` is the text the run begins with, when it begins with one. */
+  | Readonly<{ type: "agentStart"; prompt?: string }>
   | Readonly<{ type: "turnStart" }>
+  /** The model is streaming a response; the mod sends it at most every few seconds. */
+  | Readonly<{ type: "streaming" }>
   | Readonly<{ type: "toolCall"; call: WireToolCall }>
-  /** A call to the mod's own `tandem` tool; `input` is parsed by the sidecar. */
-  | Readonly<{ type: "tandemTool"; id: string; input: unknown }>
+  /** A call to one of the tools the ready line listed; `input` is parsed by the sidecar. */
+  | Readonly<{ type: "pluginTool"; id: string; name: string; input: unknown }>
   | Readonly<{ type: "toolStart"; call: WireToolCall }>
-  | Readonly<{ type: "toolEnd"; call: WireToolCall }>
+  /** `result` is the tool's own record, sent only for tools whose result Tandem reads. */
+  | Readonly<{ type: "toolEnd"; call: WireToolCall; result?: unknown }>
   /** `contextTokens` is the context size `$.session.usage()` reported after the turn. */
   | Readonly<{ type: "turnEnd"; usage?: WireUsage; contextTokens?: number }>
   /** `prompt` is the text the run began with (`turn.start`), `answer` its final text. */
@@ -51,6 +62,8 @@ export type SidecarEvent =
       answer?: string;
     }>
   | Readonly<{ type: "stopRequested"; aborted: boolean }>
+  /** The person edited the prompt box; `draft` says whether text is left in it. */
+  | Readonly<{ type: "promptEdit"; draft: boolean }>
   | Readonly<{ type: "compacting" }>
   | Readonly<{ type: "compacted" }>
   | Readonly<{ type: "shutdown" }>
@@ -73,6 +86,10 @@ export type HookReply =
   /** `system` goes to `prompt.section`, `context` (deliveries held for this turn) to `prompt.context`. */
   | Readonly<{ type: "turnContext"; system: readonly string[]; context: readonly string[] }>
   | Readonly<{ type: "toolResult"; text: string; isError: boolean }>
+  /** Text the model reads after the tool's result, never shown to the person. */
+  | Readonly<{ type: "toolContext"; context: readonly string[] }>
+  /** Whether the person's edit to the prompt box goes through. */
+  | Readonly<{ type: "editDecision"; allowed: boolean }>
   | Readonly<{ type: "stop"; continueWith?: string }>
   | Readonly<{ type: "compaction"; instructions: string }>
   | Readonly<{ type: "ask"; ask: string; title: string; message: string }>
@@ -88,13 +105,15 @@ const REPLIES: Readonly<Record<HookEventType, HookReply["type"]>> = {
   userPrompt: "promptRoute",
   agentStart: "turnContext",
   turnStart: "done",
+  streaming: "done",
   toolCall: "toolDecision",
-  tandemTool: "toolResult",
+  pluginTool: "toolResult",
   toolStart: "done",
-  toolEnd: "done",
+  toolEnd: "toolContext",
   turnEnd: "done",
   agentEnd: "done",
   stopRequested: "stop",
+  promptEdit: "editDecision",
   compacting: "compaction",
   compacted: "done",
   shutdown: "done",
@@ -102,7 +121,14 @@ const REPLIES: Readonly<Record<HookEventType, HookReply["type"]>> = {
 
 /** One stdout line. `ready` or `fatal` comes first and once; every later line is an effect. */
 export type SidecarLine =
-  | Readonly<{ type: "ready"; protocol: number; socket: string; pid: number }>
+  /** `tools` are the session's own tools, which the mod registers before the first prompt. */
+  | Readonly<{
+      type: "ready";
+      protocol: number;
+      socket: string;
+      pid: number;
+      tools: readonly WireToolSpec[];
+    }>
   | Readonly<{ type: "fatal"; protocol: number; reason: string }>
   /** `$.prompt.submit({ text, asUser: true })`: starts a turn once the session is idle. */
   | Readonly<{ type: "submit"; text: string }>
@@ -216,7 +242,10 @@ function eventFrom(value: unknown): SidecarEvent {
         attachments: count(record, "attachments", where),
       };
     case "agentStart":
+      shape("prompt");
+      return { type, ...optional(record, "prompt", text, where) };
     case "turnStart":
+    case "streaming":
     case "compacting":
     case "compacted":
     case "shutdown":
@@ -224,12 +253,23 @@ function eventFrom(value: unknown): SidecarEvent {
       return { type };
     case "toolCall":
     case "toolStart":
-    case "toolEnd":
       shape("call");
       return { type, call: toolCall(record, "call", where) };
-    case "tandemTool":
-      shape("id", "input");
-      return { type, id: name(record, "id", where), input: record.input };
+    case "toolEnd":
+      shape("call", "result");
+      return {
+        type,
+        call: toolCall(record, "call", where),
+        ...(record.result === undefined ? {} : { result: record.result }),
+      };
+    case "pluginTool":
+      shape("id", "name", "input");
+      return {
+        type,
+        id: name(record, "id", where),
+        name: name(record, "name", where),
+        input: record.input,
+      };
     case "turnEnd":
       shape("usage", "contextTokens");
       return {
@@ -249,6 +289,9 @@ function eventFrom(value: unknown): SidecarEvent {
     case "stopRequested":
       shape("aborted");
       return { type, aborted: flag(record, "aborted", where) };
+    case "promptEdit":
+      shape("draft");
+      return { type, draft: flag(record, "draft", where) };
     case "askAnswer":
       shape("ask", "allowed");
       return { type, ask: name(record, "ask", where), allowed: flag(record, "allowed", where) };
@@ -286,6 +329,12 @@ function replyFrom(value: unknown): HookReply {
     case "toolResult":
       shape("text", "isError");
       return { type, text: text(record, "text", where), isError: flag(record, "isError", where) };
+    case "toolContext":
+      shape("context");
+      return { type, context: texts(record, "context", where) };
+    case "editDecision":
+      shape("allowed");
+      return { type, allowed: flag(record, "allowed", where) };
     case "stop":
       shape("continueWith");
       return { type, ...optional(record, "continueWith", name, where) };
@@ -306,6 +355,21 @@ function replyFrom(value: unknown): HookReply {
     default:
       throw new WireError(`unknown reply type ${JSON.stringify(type)}`);
   }
+}
+
+function toolSpecs(record: Fields, key: string, where: string): readonly WireToolSpec[] {
+  const value = record[key];
+  if (!Array.isArray(value)) throw new WireError(`${where}.${key} must be a list of tools`);
+  return value.map((item, index) => {
+    const at = `${where}.${key}[${index}]`;
+    const spec = fields(item, at);
+    only(spec, ["name", "description", "inputSchema"], at);
+    return {
+      name: name(spec, "name", at),
+      description: text(spec, "description", at),
+      inputSchema: fields(spec.inputSchema, `${at}.inputSchema`),
+    };
+  });
 }
 
 function texts(record: Fields, key: string, where: string): readonly string[] {
@@ -334,12 +398,13 @@ function lineFrom(value: unknown): SidecarLine {
         shape("protocol", "reason");
         return { type, protocol, reason: name(record, "reason", where) };
       }
-      shape("protocol", "socket", "pid");
+      shape("protocol", "socket", "pid", "tools");
       return {
         type,
         protocol,
         socket: name(record, "socket", where),
         pid: count(record, "pid", where),
+        tools: toolSpecs(record, "tools", where),
       };
     }
     case "submit":

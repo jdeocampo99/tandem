@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReviewerEndpoint, type HerdrPaneInspection } from "../../src/adapters/herdr.ts";
@@ -353,6 +353,64 @@ test("a mockup request carries its brief and resolves once the scout takes it, o
     await writeWorkerTerminal(job.jobPath, { ...state, settledCommandId: "request-1" });
     await requestWorkerMockup(job, "request-1", mockup, 25);
     expect(await readWorkerTerminalCommand(job.jobPath, job)).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("closing a finished Claude Code worker sends Claude Code's two exit keys at once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-interactive-close-"));
+  try {
+    const { job, endpoint, state, inspection } = fixture(root);
+    await writeFile(
+      job.jobPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        id: job.id,
+        taskId: job.taskId,
+        generation: job.generation,
+        role: "implementer",
+        cwd: root,
+        harness: "claude-code",
+        model: { model: "claude-code/sonnet", thinking: "low" },
+        prompt: "Implement it.",
+        resultPath: join(root, "result.json"),
+      }),
+    );
+    await writeWorkerTerminal(job.jobPath, state);
+    const native = nativeRunner(inspection);
+    const sent: string[][] = [];
+    const run: CommandRunner = async (request) => {
+      if (request.argv[4] === "send-keys") {
+        sent.push(request.argv.slice(6));
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (request.argv[4] === "process-info" && sent.length > 0) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            result: { process_info: { pane_id: endpoint.paneId, foreground_processes: [] } },
+          }),
+          stderr: "",
+        };
+      }
+      return native(request);
+    };
+    // The worker takes the close request and says it is closing, as its session does.
+    const answering = setInterval(async () => {
+      const command = await readWorkerTerminalCommand(job.jobPath, job);
+      if (command?.action === "close") {
+        await writeWorkerTerminal(job.jobPath, {
+          ...state,
+          phase: "closing",
+          commandId: command.id,
+        });
+      }
+    }, 10);
+    await prepareWorkerTerminal(run, { endpoint, cwd: root, job }).finally(() =>
+      clearInterval(answering),
+    );
+    expect(sent).toEqual([["ctrl+d", "ctrl+d"]]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

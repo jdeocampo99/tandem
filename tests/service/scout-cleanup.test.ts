@@ -255,6 +255,21 @@ async function writeScoutTerminal(
   job: DurableJob,
   state: Pick<WorkerTerminalState, "phase" | "completed" | "commandId">,
 ): Promise<void> {
+  await writeFile(
+    job.jobPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      id: job.id,
+      taskId: job.taskId,
+      generation: job.generation,
+      role: "scout",
+      cwd: job.cwd,
+      harness: "omp",
+      model: { model: "openai-codex/gpt-5.6", thinking: "high" },
+      prompt: "Research.",
+      resultPath: job.resultPath,
+    }),
+  );
   await writeWorkerTerminal(job.jobPath, {
     schemaVersion: 1,
     jobId: job.id,

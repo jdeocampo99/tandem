@@ -10,7 +10,8 @@ import { renestWorkspaces } from "../coordinator/renest.ts";
 import { restartCoordinator } from "../coordinator/restart.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import type { CoordinatorFile } from "../harness/contract.ts";
-import { harnessForRole } from "../harness/resolve.ts";
+import { harnessOf } from "../harness/contract.ts";
+import { harnessFor } from "../harness/resolve.ts";
 import type { TandemService } from "../service/controller.ts";
 import {
   type CliCommand,
@@ -185,7 +186,7 @@ async function doctor(context: CliCommandContext): Promise<CliCommandOutcome> {
       throw new Error("policy check did not produce coordinator model");
     return policyModel;
   };
-  const coordinatorHarness = () => harnessForRole("coordinator", coordinatorModel());
+  const coordinatorHarness = () => harnessFor(harnessOf(coordinatorModel()));
   const checks: DoctorCheck[] = [];
   let files: readonly CoordinatorFile[] = [];
   const filesCheck = await runDoctorCheck("coordinator files", async () => {

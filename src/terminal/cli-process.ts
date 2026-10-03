@@ -25,7 +25,11 @@ export type RunInteractive = (
     readonly argv: readonly string[];
     readonly cwd: string;
     readonly env?: Readonly<Record<string, string>>;
+    /** Inherited variables the child must not see. */
+    readonly unset?: readonly string[];
     readonly timeoutMs?: number;
+    /** Aborting stops the child with SIGTERM. */
+    readonly signal?: AbortSignal;
   }>,
 ) => Promise<number>;
 
@@ -72,18 +76,31 @@ export const defaultStartPersistent: StartPersistent = async (request) => {
 };
 
 export const defaultRunInteractive: RunInteractive = async (request) => {
+  const unset = request.unset ?? [];
   const child = Bun.spawn({
     cmd: [...request.argv],
     cwd: request.cwd,
-    ...(request.env === undefined
+    ...(request.env === undefined && unset.length === 0
       ? {}
-      : { env: { ...mergeInheritedEnvironment({}, request.env) } }),
+      : {
+          env: Object.fromEntries(
+            Object.entries(mergeInheritedEnvironment({}, request.env ?? {})).filter(
+              ([name]) => !unset.includes(name),
+            ),
+          ),
+        }),
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
     ...(request.timeoutMs === undefined ? {} : { timeout: request.timeoutMs }),
   });
-  return child.exited;
+  const stop = () => child.kill("SIGTERM");
+  request.signal?.addEventListener("abort", stop, { once: true });
+  try {
+    return await child.exited;
+  } finally {
+    request.signal?.removeEventListener("abort", stop);
+  }
 };
 
 export const defaultSleep: Sleep = async (milliseconds, signal) => {

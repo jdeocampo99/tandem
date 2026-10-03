@@ -16,9 +16,16 @@ const EVENTS: readonly SidecarEvent[] = [
   { type: "sessionStart", model: "claude-opus-5-5" },
   { type: "userPrompt", text: "status?", interactive: true, attachments: 0 },
   { type: "agentStart" },
+  { type: "agentStart", prompt: "Research the cache." },
   { type: "turnStart" },
+  { type: "streaming" },
   { type: "toolCall", call },
-  { type: "tandemTool", id: "toolu_2", input: { request: { action: "list" } } },
+  {
+    type: "pluginTool",
+    id: "toolu_2",
+    name: "tandem",
+    input: { request: { action: "list" } },
+  },
   { type: "toolStart", call },
   { type: "toolEnd", call },
   { type: "turnEnd" },
@@ -38,6 +45,7 @@ const EVENTS: readonly SidecarEvent[] = [
   { type: "agentEnd", interrupted: true, failure: "rate limited" },
   { type: "agentEnd", interrupted: false, prompt: "status?", answer: "Nothing is running." },
   { type: "stopRequested", aborted: false },
+  { type: "promptEdit", draft: true },
   { type: "compacting" },
   { type: "compacted" },
   { type: "shutdown" },
@@ -54,7 +62,7 @@ test("malformed or unknown events are refused with the reason", () => {
   const refusals: ReadonlyArray<readonly [string, string]> = [
     ["{", "event is not JSON"],
     ["[]", "event must be a JSON object"],
-    ['{"type":"streaming"}', 'unknown event type "streaming"'],
+    ['{"type":"streaming","tokens":3}', "streaming event has unknown fields: tokens"],
     ['{"type":"contextBuild"}', 'unknown event type "contextBuild"'],
     ['{"type":"agentStart","extra":1}', "agentStart event has unknown fields: extra"],
     ['{"type":"sessionStart","model":" "}', "sessionStart event.model must not be empty"],
@@ -92,11 +100,14 @@ test("a hook reply parses only for the event that can get it", () => {
     ["toolCall", { type: "toolDecision", block: true, reason: "Research is running." }],
     ["userPrompt", { type: "promptRoute", handled: true }],
     ["agentStart", { type: "turnContext", system: ["You are Tandem."], context: [] }],
-    ["tandemTool", { type: "toolResult", text: "list returned 0 task(s).", isError: false }],
+    ["pluginTool", { type: "toolResult", text: "list returned 0 task(s).", isError: false }],
+    ["toolEnd", { type: "toolContext", context: [] }],
+    ["toolEnd", { type: "toolContext", context: ["TANDEM_TASK_COMMUNICATION_V1 {}"] }],
+    ["promptEdit", { type: "editDecision", allowed: false }],
     ["stopRequested", { type: "stop" }],
     ["stopRequested", { type: "stop", continueWith: "Submit your report." }],
     ["compacting", { type: "compaction", instructions: "Keep the digest." }],
-    ["tandemTool", { type: "ask", ask: "ask-1", title: "Publish?", message: "Open a PR" }],
+    ["pluginTool", { type: "ask", ask: "ask-1", title: "Publish?", message: "Open a PR" }],
     ["turnEnd", { type: "refused", reason: "the store is locked" }],
   ];
   for (const [event, reply] of replies) {
@@ -118,7 +129,19 @@ test("a hook reply parses only for the event that can get it", () => {
 
 test("stdout lines round-trip, and a line from another protocol version is refused", () => {
   const lines: readonly SidecarLine[] = [
-    { type: "ready", protocol: SIDECAR_PROTOCOL_VERSION, socket: "/h/sidecars/a.sock", pid: 42 },
+    {
+      type: "ready",
+      protocol: SIDECAR_PROTOCOL_VERSION,
+      socket: "/h/sidecars/a.sock",
+      pid: 42,
+      tools: [
+        {
+          name: "submit_report",
+          description: "Submit your report.",
+          inputSchema: { type: "object", properties: { outcome: { type: "string" } } },
+        },
+      ],
+    },
     { type: "fatal", protocol: SIDECAR_PROTOCOL_VERSION, reason: "no home" },
     { type: "submit", text: "Owner decision required." },
     { type: "log", text: "Welcome to Tandem" },
@@ -131,10 +154,15 @@ test("stdout lines round-trip, and a line from another protocol version is refus
     expect(encoded).not.toContain("\n");
     expect(parseSidecarLine(encoded)).toEqual({ ok: true, value: line });
   }
-  expect(parseSidecarLine('{"type":"ready","protocol":2,"socket":"/s","pid":1}')).toEqual({
+  expect(parseSidecarLine('{"type":"ready","protocol":1,"socket":"/s","pid":1}')).toEqual({
     ok: false,
-    reason: `the sidecar speaks protocol 2, and this mod speaks ${SIDECAR_PROTOCOL_VERSION}`,
+    reason: `the sidecar speaks protocol 1, and this mod speaks ${SIDECAR_PROTOCOL_VERSION}`,
   });
+  expect(
+    parseSidecarLine(
+      `{"type":"ready","protocol":${SIDECAR_PROTOCOL_VERSION},"socket":"/s","pid":1,"tools":[{"name":"x","description":"y"}]}`,
+    ),
+  ).toEqual({ ok: false, reason: "ready line.tools[0].inputSchema must be a JSON object" });
   expect(parseSidecarLine('{"type":"shutdown"}')).toEqual({
     ok: false,
     reason: 'unknown line type "shutdown"',

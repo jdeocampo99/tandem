@@ -251,7 +251,7 @@ async function liveCoordinatorProcess(
   run: CommandRunner,
   record: CoordinatorRecord,
 ): Promise<string | undefined> {
-  const needle = harnessFor(record.harness, "coordinator").processNeedle(record.command);
+  const needle = harnessFor(record.harness).processNeedle(record.command);
   if (needle === undefined) return "unknown";
   const request: CommandRequest = {
     argv: ["ps", "-axww", "-o", "pid=,command="],
@@ -317,7 +317,7 @@ async function findOwnedCoordinator(
   }
 
   const matchingProcesses = inspection.processInfo.foregroundProcesses.filter((process) =>
-    harnessFor(record.harness, "coordinator").sameCommand(process.argv, record.command),
+    harnessFor(record.harness).sameCommand(process.argv, record.command),
   );
   if (matchingProcesses.length > 1) {
     throw ownershipFailure(

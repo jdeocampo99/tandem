@@ -1,7 +1,14 @@
 import { expect, mock, type TestBody, test } from "claude-code/testing";
 import type { HookReply, SidecarEvent, SidecarLine } from "../hooks/protocol.ts";
 
-const READY: SidecarLine = { type: "ready", protocol: 1, socket: "/home/sidecars/a.sock", pid: 7 };
+const TANDEM_TOOL = { name: "tandem", description: "Run Tandem.", inputSchema: { type: "object" } };
+const READY: SidecarLine = {
+  type: "ready",
+  protocol: 2,
+  socket: "/home/sidecars/a.sock",
+  pid: 7,
+  tools: [TANDEM_TOOL],
+};
 const DONE: HookReply = { type: "done" };
 
 type Stubs = Parameters<TestBody>[1];
@@ -25,10 +32,14 @@ function sidecar(
   const toasts: string[] = [];
   const { promise: toasted, resolve: toast } = Promise.withResolvers<void>();
   const submitted: string[] = [];
+  const registered: unknown[] = [];
   const { promise: effectsDone, resolve: finishEffects } = Promise.withResolvers<void>();
   mock.clock(on);
   on("session.start", () => ({ cwd: "/work" }));
-  on("tool.register", () => ({ value: { tool: "mcp__tandem__tandem" } }));
+  on("tool.register", (_$, e) => {
+    registered.push(e);
+    return { value: { tool: `mcp__tandem__${e.name}` } };
+  });
   on("session.id", () => ({ value: "session-1" }));
   on("session.model", () => ({ value: "claude-sonnet-5-5" }));
   on("session.usage", () => ({
@@ -68,29 +79,53 @@ function sidecar(
     submitted.push(e.text);
     return { text: e.text, context: e.context };
   });
-  return { posted, spawned, shown, toasts, toasted, submitted, effectsDone };
+  return { posted, spawned, shown, toasts, toasted, submitted, effectsDone, registered };
 }
 
 const start = { surface: "terminal", isInteractive: true, cwd: "/work" } as const;
+
+type Engine = Parameters<TestBody>[0];
+
+/**
+ * Calls one of the mod's own tools. Claude Code types `$.tool.call` from the tools the last real
+ * session registered, and which those are depends on whether it ran a coordinator or a worker.
+ */
+function callOwnTool($: Engine, input: Readonly<Record<string, unknown>>) {
+  return $.tool.call(input as unknown as Parameters<Engine["tool"]["call"]>[0]);
+}
 
 test("the session starts the sidecar beside the plugin and reports the running model", async ($, on) => {
   const { posted, spawned } = sidecar(on, () => DONE);
   await $.session.start(start);
   expect(spawned).toHaveLength(1);
-  expect(spawned[0]?.slice(1)).toEqual([
-    `${spawned[0]?.[1]}`,
-    "--role",
-    "coordinator",
-    "--session",
-    "session-1",
-  ]);
+  expect(spawned[0]?.slice(1)).toEqual([`${spawned[0]?.[1]}`, "--session", "session-1"]);
   expect(spawned[0]?.[1]).toMatch(/plugins\/tandem\/\.\.\/\.\.\/sidecar\.ts$/);
   expect(posted).toEqual([{ type: "sessionStart", model: "claude-sonnet-5-5" }]);
 });
 
+test("the session registers exactly the tools the sidecar's ready line lists", async ($, on) => {
+  const report = { name: "submit_report", description: "Report.", inputSchema: { type: "object" } };
+  const { registered } = sidecar(on, () => DONE, { first: { ...READY, tools: [report] } });
+  let ran = 0;
+  on("tool.call", () => {
+    ran += 1;
+    return { result: "ran" };
+  });
+  await $.session.start(start);
+  expect(registered).toEqual([report]);
+  expect(await callOwnTool($, { tool: "mcp__tandem__tandem", request: {} })).toMatchObject({
+    deny: expect.stringContaining("did not run"),
+  });
+  expect(ran).toBe(0);
+});
+
 test("a tool the guard clears runs between its start and end", async ($, on) => {
   const { posted } = sidecar(on, (event) =>
-    event.type === "toolCall" ? { type: "toolDecision", block: false } : DONE,
+    event.type === "toolCall"
+      ? { type: "toolDecision", block: false }
+      : event.type === "toolEnd"
+        ? { type: "toolContext", context: [] }
+        : DONE,
   );
   on("tool.call", () => ({ result: "file text" }));
   await $.session.start(start);
@@ -102,6 +137,50 @@ test("a tool the guard clears runs between its start and end", async ($, on) => 
     { type: "toolStart", call },
     { type: "toolEnd", call },
   ]);
+});
+
+test("steering the sidecar hands over after a tool rides as the result's context", async ($, on) => {
+  sidecar(on, (event) =>
+    event.type === "toolCall"
+      ? { type: "toolDecision", block: false }
+      : event.type === "toolEnd"
+        ? { type: "toolContext", context: ["New direction."] }
+        : DONE,
+  );
+  on("tool.call", () => ({ result: "file text" }));
+  await $.session.start(start);
+  const result = await $.tool.call({ tool: "Read", file_path: "a.ts", tool_use_id: "toolu_1" });
+  expect(result).toMatchObject({ result: "file text", context: ["New direction."] });
+});
+
+test("a streaming response passes through whole and tells the sidecar it is streaming", async ($, on) => {
+  const { posted } = sidecar(on, () => DONE);
+  on("turn.step", async function* (_$, e) {
+    yield { kind: "text", index: 0, text: "Hel" };
+    yield { kind: "text", index: 0, text: "lo" };
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: "Hello",
+      toolUses: [],
+      stopReason: "end_turn",
+      usage: null,
+    };
+  });
+  await $.session.start(start);
+  const stream = $.turn.step({ turnId: "turn-1", index: 0, model: "m", messageCount: 1 });
+  const pieces: unknown[] = [];
+  let piece = await stream.next();
+  while (piece.done !== true) {
+    pieces.push(piece.value);
+    piece = await stream.next();
+  }
+  expect(pieces).toEqual([
+    { kind: "text", index: 0, text: "Hel" },
+    { kind: "text", index: 0, text: "lo" },
+  ]);
+  expect(piece.value).toMatchObject({ answer: "Hello" });
+  expect(posted.slice(1)).toEqual([{ type: "streaming" }]);
 });
 
 test("a tool the guard blocks, or any tool while the sidecar is down, never runs", async ($, on) => {
@@ -132,23 +211,26 @@ test("a tool the guard blocks, or any tool while the sidecar is down, never runs
 });
 
 test("a sidecar that fails to start is reported, and its tools stay off", async ($, on) => {
-  const { posted, toasts } = sidecar(on, () => DONE, {
-    first: { type: "fatal", protocol: 1, reason: "TANDEM_HOME is not set" },
+  const { posted, toasts, registered } = sidecar(on, () => DONE, {
+    first: { type: "fatal", protocol: 2, reason: "TANDEM_HOME is not set" },
   });
   on("tool.call", () => ({ result: "ran" }));
   await $.session.start(start);
   expect(toasts).toEqual([
     "Tandem could not start (TANDEM_HOME is not set). Its tools are turned off in this conversation.",
   ]);
-  expect(await $.tool.call({ tool: "mcp__tandem__tandem", request: { action: "list" } })).toEqual({
-    deny: "Tandem is not available: Tandem's sidecar is not running",
+  expect(registered).toEqual([]);
+  expect(
+    await callOwnTool($, { tool: "mcp__tandem__tandem", request: { action: "list" } }),
+  ).toEqual({
+    deny: "Tandem could not check this tool call, so it did not run: Tandem's sidecar is not running",
   });
   expect(posted).toEqual([]);
 });
 
 test("a tandem call that needs approval asks the person, then answers with the result", async ($, on) => {
   const { posted } = sidecar(on, (event) => {
-    if (event.type === "tandemTool") {
+    if (event.type === "pluginTool") {
       return { type: "ask", ask: "ask-1", title: "Publish?", message: "Opens a PR." };
     }
     if (event.type === "askAnswer") {
@@ -163,7 +245,7 @@ test("a tandem call that needs approval asks the person, then answers with the r
     return { result: { answers: { [question]: "Allow" } } };
   });
   await $.session.start(start);
-  const result = await $.tool.call({
+  const result = await callOwnTool($, {
     tool: "mcp__tandem__tandem",
     tool_use_id: "toolu_9",
     request: { action: "publish", taskId: "T-1" },
@@ -171,7 +253,12 @@ test("a tandem call that needs approval asks the person, then answers with the r
   expect(result).toEqual({ result: "published: true" });
   expect(asked).toEqual(["Publish?\n\nOpens a PR."]);
   expect(posted.slice(1)).toEqual([
-    { type: "tandemTool", id: "toolu_9", input: { request: { action: "publish", taskId: "T-1" } } },
+    {
+      type: "pluginTool",
+      id: "toolu_9",
+      name: "tandem",
+      input: { request: { action: "publish", taskId: "T-1" } },
+    },
     { type: "askAnswer", ask: "ask-1", allowed: true },
   ]);
 });

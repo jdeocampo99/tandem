@@ -2,8 +2,10 @@ import { expect, setSystemTime, test } from "bun:test";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { sidecarSocketPath } from "../../src/harness/claude-code/socket.ts";
+import { DEFAULT_HARNESS, type LaunchIo } from "../../src/harness/contract.ts";
 import { registerWorkerTerminalExtension } from "../../src/harness/omp/terminal-extension.ts";
+import type { RunInteractive } from "../../src/terminal/cli-process.ts";
 import { runWorkerJob } from "../../src/worker.ts";
 import type { WorkerJob, WorkerResult } from "../../src/workers/jobs.ts";
 import {
@@ -711,25 +713,45 @@ test("a job written before harness choice runs on OMP and an unknown harness is 
   );
 });
 
-test("a Claude Code job fails closed before running setup or any agent", async () => {
-  const root = await mkdtemp(join(tmpdir(), "tandem-worker-harness-"));
+/** A Claude Code scout job on disk, admitted, and a fake launch whose sidecar answers or never does. */
+async function claudeCodeJob(root: string, sidecarAnswers: boolean) {
+  const job = {
+    ...makeJob(root, "scout"),
+    harness: "claude-code",
+    model: { model: "claude-code/sonnet", thinking: "low" },
+    execution: {
+      schemaVersion: 1 as const,
+      home: root,
+      operationId: "operation-1",
+      fencingRevision: 1,
+      claimOwner: "test-owner",
+    },
+  };
+  const jobPath = join(root, "job.json");
+  await writeFile(jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
+  let clock = 0;
+  const probes: string[] = [];
+  const launchIo: LaunchIo = {
+    readText: async () => undefined,
+    writeText: async () => undefined,
+    newId: () => "0f8fad5b-d9cb-469f-a165-70867728950e",
+    answersHealth: async (socket) => {
+      probes.push(socket);
+      return sidecarAnswers;
+    },
+    sleep: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+  };
+  return { jobPath, launchIo, probes };
+}
+
+test("a Claude Code job runs claude with its role's tools once its sidecar answers", async () => {
+  const root = await mkdtemp("/tmp/tandem-cc-job-");
   try {
-    const job = {
-      ...makeJob(root),
-      harness: "claude-code",
-      model: { model: "claude-code/sonnet", thinking: "high" },
-      setup: [{ name: "install", argv: ["bun", "install"], timeoutMs: 5_000 }],
-      execution: {
-        schemaVersion: 1 as const,
-        home: root,
-        operationId: "operation-1",
-        fencingRevision: 1,
-        claimOwner: "test-owner",
-      },
-    };
-    const jobPath = join(root, "job.json");
-    await writeFile(jobPath, `${JSON.stringify(job)}\n`, { mode: 0o600 });
-    const calls: unknown[] = [];
+    const { jobPath, launchIo, probes } = await claudeCodeJob(root, true);
+    const calls: Parameters<RunInteractive>[0][] = [];
     const result = await runWorkerJob(jobPath, {
       run: async (request) => {
         calls.push(request);
@@ -737,10 +759,51 @@ test("a Claude Code job fails closed before running setup or any agent", async (
       },
       now: () => "2030-01-02T03:04:05.000Z",
       executionGate: async () => ({ admitted: true }),
+      launchIo,
+      home: root,
     });
-    expect(calls).toEqual([]);
+    expect(calls).toHaveLength(1);
+    const [call] = calls;
+    expect(call?.argv.slice(0, 1)).toEqual(["claude"]);
+    expect(call?.argv).toContain("--session-id");
+    expect(call?.argv[call.argv.indexOf("--tools") + 1]).toBe(
+      "Read,Grep,Glob,WebSearch,WebFetch,Agent,Write,Edit",
+    );
+    expect(call?.env).toMatchObject({
+      DISABLE_GROWTHBOOK: "1",
+      TANDEM_WORKER_JOB_PATH: jobPath,
+    });
+    expect(call?.unset).toContain("CLAUDECODE");
+    expect(probes).toEqual([sidecarSocketPath(root, "0f8fad5b-d9cb-469f-a165-70867728950e")]);
+    expect(result.error).toBe("Claude Code exited without persisting a worker result");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a Claude Code job whose plugin never loads is stopped and fails in plain English", async () => {
+  const root = await mkdtemp("/tmp/tandem-cc-job-");
+  try {
+    const { jobPath, launchIo } = await claudeCodeJob(root, false);
+    let stopped = false;
+    const result = await runWorkerJob(jobPath, {
+      run: (request) =>
+        new Promise((resolve) => {
+          request.signal?.addEventListener("abort", () => {
+            stopped = true;
+            resolve(143);
+          });
+        }),
+      now: () => "2030-01-02T03:04:05.000Z",
+      executionGate: async () => ({ admitted: true }),
+      launchIo,
+      home: root,
+    });
+    expect(stopped).toBe(true);
     expect(result.status).toBe("failed");
-    expect(result.error).toContain("Tandem can run only the coordinator so far");
+    expect(result.error).toStartWith(
+      "Claude Code started but did not load Tandem's plugin within 30 seconds, so Tandem stopped this scout.",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -1,11 +1,23 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
-import type { CommandRequest } from "./contracts.ts";
-import type { AgentKind, Harness } from "./harness/contract.ts";
+import { dirname, resolve } from "node:path";
+import { runCommand } from "./adapters/commands.ts";
+import { environmentForContext } from "./config/environment.ts";
+import type {
+  AgentKind,
+  Conversation,
+  Harness,
+  LaunchIo,
+  StartedAgent,
+} from "./harness/contract.ts";
+import { launchIo } from "./harness/launch-io.ts";
 import { harnessFor } from "./harness/resolve.ts";
 import { readTaskInbox } from "./tasks/communication-persistence.ts";
 import { formatTaskMessages } from "./tasks/communication-protocol.ts";
-import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
+import {
+  defaultRunInteractive,
+  defaultSleep,
+  type RunInteractive,
+} from "./terminal/cli-process.ts";
 import { WORKER_CONTROL_ENV } from "./workers/control-protocol.ts";
 import {
   claimExecutionStart,
@@ -31,6 +43,10 @@ export type WorkerRunOptions = Readonly<{
   readonly executionGate?: (
     input: ExecutionGateInput,
   ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
+  /** The effects the harness's conversation choice and ready wait use. */
+  readonly launchIo?: LaunchIo;
+  /** The Tandem home, where a Claude Code worker's sidecar listens. */
+  readonly home?: string;
 }>;
 
 async function promptWithInitialCommunication(job: WorkerJob): Promise<string> {
@@ -73,27 +89,70 @@ function workerEnvironment(job: WorkerJob, jobPath: string): Readonly<Record<str
   return environment;
 }
 
+type AgentRequest = Parameters<RunInteractive>[0];
+
 function buildWorkerCommand(
   harness: Harness,
   job: WorkerJob,
   prompt: string,
   jobPath: string,
-): CommandRequest {
-  const environment = workerEnvironment(job, jobPath);
+  conversation: Conversation,
+): AgentRequest {
   return {
     argv: harness.command({
       agent: agentForJob(job),
       cwd: job.cwd,
       model: job.model,
-      conversation:
-        job.sessionDirectory === undefined
-          ? { kind: "none" }
-          : { kind: "saved", directory: job.sessionDirectory, resume: true },
+      conversation,
       prompt,
     }),
     cwd: job.cwd,
-    env: environment,
+    env: { ...harness.launchEnvironment, ...workerEnvironment(job, jobPath) },
+    unset: harness.clearedEnvironment,
   };
+}
+
+/** The project's own checkout, which Claude Code's trust covers; the worktree when git can't say. */
+async function projectCheckout(cwd: string): Promise<string> {
+  try {
+    const result = await runCommand({
+      argv: ["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+      cwd,
+    });
+    return result.code === 0 ? dirname(result.stdout.trim()) : cwd;
+  } catch {
+    return cwd;
+  }
+}
+
+/**
+ * Runs the agent with its ready wait beside it. An agent that never loads Tandem is stopped and
+ * the job fails with the harness's reason; one that exits first ends the wait.
+ */
+async function runWhenReady(
+  harness: Harness,
+  request: AgentRequest,
+  started: StartedAgent,
+  io: LaunchIo,
+  run: RunInteractive,
+): Promise<number> {
+  const stop = new AbortController();
+  const exited = new AbortController();
+  const outcome = run({ ...request, signal: stop.signal }).then(
+    (code) => ({ ok: true as const, code }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+  void outcome.then(() => exited.abort());
+  try {
+    await harness.awaitReady(started, io, exited.signal);
+  } catch (error) {
+    stop.abort();
+    await outcome;
+    throw error;
+  }
+  const result = await outcome;
+  if (!result.ok) throw result.error;
+  return result.code;
 }
 
 function failureResult(job: WorkerJob, error: unknown, now: WorkerClock): WorkerResult {
@@ -190,12 +249,26 @@ export async function runWorkerJob(
 
   const writeResult = options.writeResult ?? persistWorkerResult;
   const run = options.run ?? defaultRunInteractive;
+  const harness = harnessFor(job.harness);
   let childExit: number;
   try {
-    const harness = harnessFor(job.harness, job.role);
     await runSetup(job, run);
     const prompt = await promptWithInitialCommunication(job);
-    childExit = await run(buildWorkerCommand(harness, job, prompt, absoluteJobPath));
+    const io = options.launchIo ?? launchIo({ sleep: defaultSleep });
+    const home =
+      options.home ?? environmentForContext({}, { cwd: job.cwd, sessionId: "tandem" }).home;
+    const conversation = await harness.conversation(
+      { home, directory: job.sessionDirectory, resume: true },
+      io,
+    );
+    const request = buildWorkerCommand(harness, job, prompt, absoluteJobPath, conversation);
+    const started: StartedAgent = {
+      agent: agentForJob(job),
+      home,
+      repo: await projectCheckout(job.cwd),
+      conversation,
+    };
+    childExit = await runWhenReady(harness, request, started, io, run);
   } catch (error) {
     const completed = await existingResult(job);
     if (completed !== undefined) return completed;
@@ -209,8 +282,8 @@ export async function runWorkerJob(
   const result = failureResult(
     job,
     childExit === 0
-      ? "OMP exited without persisting a worker result"
-      : `OMP exited with code ${childExit}`,
+      ? `${harness.displayName} exited without persisting a worker result`
+      : `${harness.displayName} exited with code ${childExit}`,
     now,
   );
   await writeResult(job.resultPath, result);
