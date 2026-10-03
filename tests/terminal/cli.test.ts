@@ -14,6 +14,7 @@ import {
 } from "../../src/coordinator/launch.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
+import { DEFAULT_HARNESS, parseHarnessName } from "../../src/harness/contract.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   type CliApplication,
@@ -668,6 +669,44 @@ test("CLI launches a clean coordinator while preserving dirty original source id
   }
 });
 
+test("CLI refuses to launch a project set to Claude Code before running anything", async () => {
+  const policy = { ...defaultPolicy(), harness: parseHarnessName("claude-code", "harness") };
+  const service = {
+    onboard: async () => ({ policy, modelSettings: { configured: true } }),
+    shutdown: async () => undefined,
+  } as unknown as TandemService;
+  const commands: unknown[] = [];
+  const stderr: string[] = [];
+  const result = await runCli(
+    ["launch", "--home", "/tmp/tandem-home", "--repo", "/repo", "--session", "s", "--json"],
+    {
+      cwd: "/repo",
+      processEnvironment: {},
+      createService: () => service,
+      run: async (request) => {
+        commands.push(request);
+        throw new Error("nothing may run");
+      },
+      runInteractive: async (request) => {
+        commands.push(request);
+        return 0;
+      },
+      startPersistent: async (request) => {
+        commands.push(request);
+        return undefined;
+      },
+      stdout: () => undefined,
+      stderr: (value) => stderr.push(value),
+    },
+  );
+
+  expect(result.exitCode).not.toBe(0);
+  expect(result.error?.message).toContain(
+    "This project is set to run on Claude Code, which Tandem cannot run yet.",
+  );
+  expect(commands).toEqual([]);
+});
+
 test("CLI reports a failed direct coordinator child as a nonzero outcome", async () => {
   const root = await mkdtemp(join(tmpdir(), "tandem-cli-failed-launch-"));
   try {
@@ -766,6 +805,7 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
       home,
       poolRoot,
       sessionId: "pane-session",
+      harness: DEFAULT_HARNESS,
       model,
       continueSession: true,
       headless: true,
@@ -775,6 +815,7 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
     const sessionKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
     const recordedCommand = buildCoordinatorArgv({
       cwd: cleanRepo,
+      harness: DEFAULT_HARNESS,
       model: request.model,
       continueSession: request.continueSession,
       sessionDirectory: join(home, "coordinator-sessions", sessionKey),
@@ -985,6 +1026,7 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
       home,
       poolRoot,
       sessionId: "reconnect-session",
+      harness: DEFAULT_HARNESS,
       model,
       continueSession: true,
       headless: true,
@@ -993,6 +1035,7 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     const sessionKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
     const recordedCommand = buildCoordinatorArgv({
       cwd: cleanRepo,
+      harness: DEFAULT_HARNESS,
       model,
       continueSession: true,
       sessionDirectory: join(home, "coordinator-sessions", sessionKey),
@@ -1068,6 +1111,7 @@ test("launchCoordinator retires the old generated workspace label before replaci
       home,
       poolRoot,
       sessionId: "retire-session",
+      harness: DEFAULT_HARNESS,
       model,
       continueSession: true,
       headless: true,
@@ -1076,6 +1120,7 @@ test("launchCoordinator retires the old generated workspace label before replaci
     const sessionKey = createHash("sha256").update(repo).digest("hex").slice(0, 24);
     const recordedCommand = buildCoordinatorArgv({
       cwd: cleanRepo,
+      harness: DEFAULT_HARNESS,
       model,
       continueSession: true,
       sessionDirectory: join(home, "coordinator-sessions", sessionKey),
@@ -1294,6 +1339,7 @@ test("launchCoordinator rejects an unsafe reused coordinator lease without clean
           home,
           poolRoot,
           sessionId,
+          harness: DEFAULT_HARNESS,
           model: defaultPolicy().models.coordinator,
           continueSession: false,
           headless: true,

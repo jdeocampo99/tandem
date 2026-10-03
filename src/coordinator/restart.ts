@@ -1,8 +1,8 @@
 import { realpath } from "node:fs/promises";
 import { type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
-import type { CommandRequest, CommandRunner, Endpoint } from "../contracts.ts";
-import { ompHarness } from "../harness/omp/launch.ts";
+import type { CommandRequest, CommandRunner } from "../contracts.ts";
+import { harnessFor } from "../harness/resolve.ts";
 import {
   type CoordinatorLaunchDependencies,
   type CoordinatorLaunchRequest,
@@ -17,6 +17,7 @@ import {
   findRunningCoordinator,
   parseJson,
 } from "./ownership.ts";
+import type { CoordinatorRecord } from "./record.ts";
 import { resolveCoordinatorSourceHead } from "./source.ts";
 
 export type CoordinatorRestartResult = CoordinatorLaunchResult &
@@ -27,12 +28,9 @@ export type CoordinatorRestartResult = CoordinatorLaunchResult &
     renestWarnings?: readonly string[];
   }>;
 
-async function closeSupersededPane(
-  run: CommandRunner,
-  endpoint: Endpoint,
-  cwd: string,
-  command: readonly string[],
-): Promise<void> {
+async function closeSupersededPane(run: CommandRunner, prior: CoordinatorRecord): Promise<void> {
+  const { endpoint } = prior;
+  const cwd = prior.worktree.path;
   let inspection: HerdrPaneInspection;
   try {
     inspection = await inspectEndpoint(run, { endpoint, cwd });
@@ -53,7 +51,7 @@ async function closeSupersededPane(
     );
   }
   const matches = inspection.processInfo.foregroundProcesses.filter((process) =>
-    ompHarness.sameCommand(process.argv, command),
+    harnessFor(prior.harness).sameCommand(process.argv, prior.command),
   );
   if (inspection.activeWorker) {
     if (matches.length !== 1) {
@@ -123,12 +121,7 @@ export async function restartCoordinator(
     const prior = previous ?? stopped;
     const sourceHead = await resolveCoordinatorSourceHead(dependencies.run, request.repo);
     if (prior !== undefined) {
-      await closeSupersededPane(
-        dependencies.run,
-        prior.endpoint,
-        prior.worktree.path,
-        prior.command,
-      );
+      await closeSupersededPane(dependencies.run, prior);
     }
     const launch = await launchCoordinatorUnlocked(
       {

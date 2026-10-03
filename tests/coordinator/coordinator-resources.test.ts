@@ -16,6 +16,7 @@ import {
   listCoordinatorQuarantineRecords,
 } from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import {
   FIRST_HEAD,
   fakePool,
@@ -67,6 +68,7 @@ async function fixture(): Promise<Fixture> {
       home,
       poolRoot,
       sessionId: SESSION_ID,
+      harness: DEFAULT_HARNESS,
       model,
       continueSession: false,
       headless: true,
@@ -109,6 +111,7 @@ function previousRecord(
   return {
     schemaVersion: 1 as const,
     repoPath: "/repo",
+    harness: DEFAULT_HARNESS,
     endpoint: {
       sessionId: SESSION_ID,
       workspaceId: "workspace-a",

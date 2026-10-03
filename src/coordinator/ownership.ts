@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner, Endpoint } from "../contracts.ts";
-import { ompHarness } from "../harness/omp/launch.ts";
+import { DEFAULT_HARNESS } from "../harness/contract.ts";
+import { harnessFor } from "../harness/resolve.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
@@ -172,6 +173,8 @@ async function findUnrecordedCoordinator(
     legacySessionDirectory(home, repoPath),
     "coordinator session directory",
   );
+  // Coordinators without a record predate harness choice, so only OMP can have launched them.
+  const legacyHarness = harnessFor(DEFAULT_HARNESS);
   for (const pane of panes) {
     const endpoint: Endpoint = {
       sessionId,
@@ -190,13 +193,13 @@ async function findUnrecordedCoordinator(
     }
     if (!inspection.activeWorker) continue;
     for (const process of inspection.processInfo.foregroundProcesses) {
-      if (!ompHarness.looksLikeAgent(process)) continue;
+      if (!legacyHarness.looksLikeAgent(process)) continue;
       if (process.argv.length === 0) {
         throw ownershipFailure(
           `active OMP process in pane ${JSON.stringify(pane.paneId)} did not expose argv for legacy identity proof`,
         );
       }
-      const match = await ompHarness.matchUnrecordedCoordinator(process.argv, {
+      const match = await legacyHarness.matchUnrecordedCoordinator(process.argv, {
         repoPath,
         sessionDirectory,
       });
@@ -249,7 +252,7 @@ async function liveCoordinatorProcess(
   run: CommandRunner,
   record: CoordinatorRecord,
 ): Promise<string | undefined> {
-  const needle = ompHarness.processNeedle(record.command);
+  const needle = harnessFor(record.harness).processNeedle(record.command);
   if (needle === undefined) return "unknown";
   const request: CommandRequest = {
     argv: ["ps", "-axww", "-o", "pid=,command="],
@@ -315,7 +318,7 @@ async function findOwnedCoordinator(
   }
 
   const matchingProcesses = inspection.processInfo.foregroundProcesses.filter((process) =>
-    ompHarness.sameCommand(process.argv, record.command),
+    harnessFor(record.harness).sameCommand(process.argv, record.command),
   );
   if (matchingProcesses.length > 1) {
     throw ownershipFailure(

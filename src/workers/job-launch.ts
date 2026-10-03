@@ -1,6 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { inspectEndpoint, sendCommand } from "../adapters/herdr.ts";
 import { EndpointBusyError } from "../adapters/primitives.ts";
+import { policyHarness } from "../config/policy.ts";
 import type {
   BlockCause,
   Clock,
@@ -101,6 +102,7 @@ function workerJobSpec(
     generation: task.generation,
     role,
     cwd: runtime.worktree?.path ?? taskSourcePath(task, runtime),
+    harness: policyHarness(task.policy.config),
     model: resolvedExecutionModel(
       runtime.operation?.routing,
       task.policy.config.models[modelRoleForTask(task, role)],

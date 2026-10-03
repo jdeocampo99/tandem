@@ -5,6 +5,7 @@ import {
   inspectEndpoint,
   taskWorkspaceLabel,
 } from "../adapters/herdr.ts";
+import { policyHarness } from "../config/policy.ts";
 import type {
   BlockCause,
   Clock,
@@ -489,6 +490,7 @@ export class ReviewStage {
       generation: task.generation,
       role,
       cwd: round.cwd,
+      harness: policyHarness(task.policy.config),
       model: resolvedExecutionModel(operation?.routing, task.policy.config.models[role]),
       prompt: buildPrompt(
         task,

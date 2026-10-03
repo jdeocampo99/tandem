@@ -26,6 +26,7 @@ import {
   readCoordinatorRecord,
 } from "../../src/coordinator/registry.ts";
 import { listCoordinatorQuarantineRecords } from "../../src/coordinator/resources.ts";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { FIRST_HEAD, fakePool, type Pool, TASK_LEASE_ID } from "./fake-pool.ts";
 
 const FIRST_SESSION = "tandem";
@@ -73,6 +74,7 @@ async function fixture(): Promise<Fixture> {
       home,
       poolRoot,
       sessionId,
+      harness: DEFAULT_HARNESS,
       model,
       continueSession: false,
       headless: true,
@@ -133,6 +135,7 @@ function foundRecord(
         leaseHolder: "coordinator:holder",
         leasedAt: "2030-01-02T03:04:05.000Z",
       },
+      harness: DEFAULT_HARNESS,
       command: ["omp"],
     },
   };

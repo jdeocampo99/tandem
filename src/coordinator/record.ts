@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Endpoint, WorktreeLease } from "../contracts.ts";
+import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
+import { harnessFor } from "../harness/resolve.ts";
 
 export const REGISTRY_DIRECTORY = "coordinator-registry";
 /** Prefix of every Treehouse lease holder Tandem uses for a coordinator, and for nothing else. */
@@ -22,6 +24,8 @@ export type CoordinatorRecord = Readonly<{
   readonly repoPath: string;
   readonly endpoint: Endpoint;
   readonly worktree: WorktreeLease;
+  /** The harness the coordinator runs on. Records saved before this field ran on OMP. */
+  readonly harness: HarnessName;
   readonly command: readonly string[];
   readonly pendingSourceRefresh?: PendingSourceRefresh;
 }>;
@@ -99,7 +103,7 @@ function ensureExactKeys(value: JsonRecord, keys: readonly string[], field: stri
 }
 function ensureCoordinatorRecordKeys(value: JsonRecord, field: string): void {
   const required = ["schemaVersion", "repoPath", "endpoint", "worktree", "command"];
-  const allowed = new Set([...required, "pendingSourceRefresh"]);
+  const allowed = new Set([...required, "harness", "pendingSourceRefresh"]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
       throw new TypeError(`${field} contains unknown key ${JSON.stringify(key)}`);
@@ -166,12 +170,19 @@ function parsePendingSourceRefresh(value: unknown, field: string): PendingSource
   };
 }
 
-function parseCommand(value: unknown, field: string): readonly string[] {
+function parseRecordedHarness(value: unknown, field: string): HarnessName {
+  return value === undefined ? DEFAULT_HARNESS : parseHarnessName(value, field);
+}
+
+function parseCommand(value: unknown, field: string, harness: HarnessName): readonly string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new TypeError(`${field} must be a non-empty array`);
   }
   const command = value.map((entry, index) => text(entry, `${field}[${index}]`));
-  if (command[0] !== "omp") throw new TypeError(`${field}[0] must be "omp"`);
+  const { executable } = harnessFor(harness);
+  if (command[0] !== executable) {
+    throw new TypeError(`${field}[0] must be ${JSON.stringify(executable)}`);
+  }
   return command;
 }
 
@@ -189,6 +200,7 @@ export async function canonicalizeRecord(record: CoordinatorRecord): Promise<Coo
   }
   const endpoint = parseEndpoint(record.endpoint, "record.endpoint");
   const worktree = parseWorktree(record.worktree, "record.worktree");
+  const harness = parseRecordedHarness(record.harness, "record.harness");
   const pendingSourceRefresh =
     record.pendingSourceRefresh === undefined
       ? undefined
@@ -204,7 +216,8 @@ export async function canonicalizeRecord(record: CoordinatorRecord): Promise<Coo
     repoPath,
     endpoint: { ...endpoint, sessionId: endpoint.sessionId },
     worktree: { ...worktree, root, path: worktreePath },
-    command: parseCommand(record.command, "record.command"),
+    harness,
+    command: parseCommand(record.command, "record.command", harness),
     ...(pendingSourceRefresh === undefined ? {} : { pendingSourceRefresh }),
   };
 }
@@ -218,6 +231,7 @@ export function parseStoredRecord(value: unknown, source: string): CoordinatorRe
   const repoPath = absolutePath(value.repoPath, `${source}.repoPath`);
   const endpoint = parseEndpoint(value.endpoint, `${source}.endpoint`);
   const worktree = parseWorktree(value.worktree, `${source}.worktree`);
+  const harness = parseRecordedHarness(value.harness, `${source}.harness`);
   const pendingSourceRefresh =
     value.pendingSourceRefresh === undefined
       ? undefined
@@ -230,7 +244,8 @@ export function parseStoredRecord(value: unknown, source: string): CoordinatorRe
     repoPath,
     endpoint,
     worktree,
-    command: parseCommand(value.command, `${source}.command`),
+    harness,
+    command: parseCommand(value.command, `${source}.command`, harness),
     ...(pendingSourceRefresh === undefined ? {} : { pendingSourceRefresh }),
   };
 }

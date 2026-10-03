@@ -9,6 +9,7 @@ import { onboardRepo } from "../../src/config/repositories.ts";
 import type { CommandRequest, CommandResult, ModelSpec, RepoPolicy } from "../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import type { ModelRecord } from "../../src/harness/contract.ts";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { parseReportSince, parseTerminalArgs } from "../../src/terminal/arguments.ts";
@@ -1137,6 +1138,7 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
           leaseHolder: "coordinator-a",
           leasedAt: "2030-01-02T03:04:05.000Z",
         },
+        harness: DEFAULT_HARNESS,
         command: ["omp"],
         workspaceRetirement: {
           outcome: "quarantined" as const,
@@ -1673,6 +1675,7 @@ test("update refuses only from the coordinator pane it would close", async () =>
       leaseHolder: "coordinator",
       leasedAt: "2030-01-02T03:04:05.000Z",
     },
+    harness: DEFAULT_HARNESS,
     command: ["omp"],
   });
   const fake = onboardingService({ existingConfig: true, configured: true });

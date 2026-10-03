@@ -27,6 +27,10 @@
               {
                 "group": ["@oh-my-pi/**"],
                 "message": "Only src/harness/omp/ and its tests may import OMP. Go through the launch port in src/harness/contract.ts."
+              },
+              {
+                "group": ["**/harness/omp/launch.ts"],
+                "message": "Resolve a harness with harnessFor in src/harness/resolve.ts instead of importing the OMP harness."
               }
             ]
           }
@@ -49,6 +53,26 @@
         "rules": {
           "style": {
             "noRestrictedImports": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/harness/resolve.ts", "tests/harness/resolve.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@oh-my-pi/**"],
+                    "message": "Only src/harness/omp/ and its tests may import OMP. Go through the launch port in src/harness/contract.ts."
+                  }
+                ]
+              }
+            }
           }
         }
       }
