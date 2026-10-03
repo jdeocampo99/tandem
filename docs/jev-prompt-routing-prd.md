@@ -34,8 +34,8 @@ The implementation lives at:
 
 - `src/session/prompt-routing.ts`: normalization, Jev questions, confidence gate, allowlist,
   action construction, result display, and diagnostics;
-- `src/extension/registration.ts`: OMP `input` hook;
-- `src/extension.ts`: process-boundary configuration and service/home dependencies;
+- `src/harness/omp/registration.ts`: OMP `input` hook;
+- `src/harness/omp/extension.ts`: process-boundary configuration and service/home dependencies;
 - `src/adapters/typesafe.ts`: pinned transport, request validation, timeout, and response validation;
 - `src/runtime/diagnostics.ts`: append-only local route events.
 

@@ -83,4 +83,4 @@ assigned to new work.
   they do not protect multiple machines or network filesystems.
 - Authoritative contracts are in code: src/contracts.ts (types and roles), src/config/ (policy),
   src/tasks/lifecycle.ts (transitions), src/adapters/ (native tools), src/service/controller.ts
-  (composition), src/extension.ts, src/extension/, src/session/, src/instructions.ts (OMP integration).
+  (composition), src/harness/omp/, src/session/, src/instructions.ts (OMP integration).

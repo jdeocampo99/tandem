@@ -8,7 +8,8 @@ src/config/environment.ts, src/coordinator/launch.ts, src/coordinator/ownership.
 src/coordinator/registry.ts, src/coordinator/record.ts, src/coordinator/lock.ts,
 src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/workspace.ts,
 src/coordinator/restart.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
-src/coordinator/renest.ts. Tests: tests/coordinator/, tests/terminal/main.test.ts.
+src/coordinator/renest.ts, src/harness/contract.ts (the launch port), src/harness/omp/launch.ts.
+Tests: tests/coordinator/, tests/harness/omp/launch.test.ts, tests/terminal/main.test.ts.
 
 ## Setting resolution
 
@@ -22,7 +23,8 @@ src/coordinator/renest.ts. Tests: tests/coordinator/, tests/terminal/main.test.t
 
 Keep overrides consistent across reconnects so the same durable state and Herdr session are reused.
 The low-level launch's `--repo` is the original project identity; launch derives the clean source
-checkout itself. Its `--extension` and `--config` must be Tandem's checked-in files.
+checkout itself. Its `--extension` and `--config` must be Tandem's checked-in files
+(src/harness/omp/extension.ts and src/harness/omp/worker-config.yml).
 
 ### Remembered setup
 
@@ -188,6 +190,12 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   Reset still refuses to close such a pane, because it is no longer Tandem's.
 - A pre-registry coordinator without a clean lease record is never adopted or duplicated; launch
   refuses and tells the user to stop it and relaunch (`legacyCoordinatorGuidance` in ownership.ts).
+- Commands and processes are matched through the launch port (`Harness` in
+  src/harness/contract.ts). Recorded ownership compares the live argv with the recorded command,
+  so a coordinator launched before the OMP code moved under src/harness/omp/ still matches its
+  record, which names the old src/extension.ts. The unrecorded check accepts both extension paths.
+  Its pane's "press Enter to start it again" offer reruns the recorded command with the old path,
+  which no longer exists, so run `tandem update` once after upgrading to relaunch it.
 
 ## Retiring a coordinator workspace
 
