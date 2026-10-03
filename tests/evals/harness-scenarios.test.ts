@@ -146,6 +146,7 @@ test("a Claude Code coordinator starts a conversation, waits for its sidecar, an
     expect(record?.harness).toBe(parseHarnessName("claude-code", "harness"));
     const script = await readBootstrap(world);
     expect(script).toContain("'DISABLE_GROWTHBOOK=1'");
+    expect(script).toContain("'env' '-u' 'CLAUDECODE' '-u' 'CLAUDE_CODE_CHILD_SESSION'");
     expect(script).toContain(`'--resume' '${id}'`);
     const sessions = join(world.home, "coordinator-sessions");
     const [key] = await readdir(sessions);
@@ -203,6 +204,7 @@ test("a direct Claude Code coordinator that never gets ready is stopped in the c
           HERDR_SESSION: world.sessionId,
           HERDR_WORKSPACE_ID: caller.workspaceId,
           HERDR_PANE_ID: caller.paneId,
+          CLAUDE_CODE_CHILD_SESSION: "1",
         },
         runInteractive: (request) => {
           environments.push(request.env);
@@ -216,6 +218,9 @@ test("a direct Claude Code coordinator that never gets ready is stopped in the c
 
     await expect(launch).rejects.toThrow("did not load Tandem's plugin");
     expect(environments.map((environment) => environment?.DISABLE_GROWTHBOOK)).toEqual(["1"]);
+    expect(environments.map((environment) => environment?.CLAUDE_CODE_CHILD_SESSION)).toEqual([
+      undefined,
+    ]);
     const snapshot = await world.snapshot();
     expect(snapshot.trace.filter((event) => event.action === "kill")).toHaveLength(1);
     expect(snapshot.resources.released).toContain("lease:lease-1");

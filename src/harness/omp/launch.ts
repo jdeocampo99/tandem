@@ -222,6 +222,7 @@ export const ompHarness: Harness = {
     { name: "config", path: CONFIG_PATH, kind: "file" },
   ],
   launchEnvironment: {},
+  clearedEnvironment: [],
   // OMP finds a saved conversation by its directory and loads Tandem before it reads input.
   coordinatorConversation: async ({ directory, resume }) => ({ kind: "saved", directory, resume }),
   awaitCoordinatorReady: async () => undefined,

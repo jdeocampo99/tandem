@@ -130,6 +130,11 @@ export type Harness = Readonly<{
   /** Environment the coordinator needs beyond Tandem's own, in its pane and in a direct run. */
   launchEnvironment: Readonly<Record<string, string>>;
   /**
+   * Variables removed from the coordinator's environment, so a coordinator launched from inside
+   * another session of the same program starts as a session of its own.
+   */
+  clearedEnvironment: readonly string[];
+  /**
    * The conversation a coordinator launch names, from what an earlier launch kept in `directory`.
    * Refuses, before anything starts, a launch the harness could never get ready under `home`.
    */

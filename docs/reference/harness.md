@@ -113,6 +113,7 @@ enforces it.
 | `executable` | `omp` | `claude` |
 | `coordinatorFiles` (name, path, file or directory) | `extension`, `config` files | `adapter plugin`, `renderer plugin` directories |
 | `launchEnvironment` | none | `DISABLE_GROWTHBOOK=1` |
+| `clearedEnvironment` | none | Claude Code's nested-session variables (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, its session, bridge, and messaging ids, `CLAUDE_PID`) |
 | `coordinatorConversation` | the directory, as asked | the recorded id or a new one (below) |
 | `awaitCoordinatorReady` | resolves at once | waits for the sidecar (below) |
 | `command(spec)` | coordinator and workers | coordinator only; a worker kind throws |
@@ -153,6 +154,7 @@ clean worktree, the pane's working directory, with environment `DISABLE_GROWTHBO
 | `--system-prompt-snapshot off` | Lets the adapter add context on every turn, not only the first. |
 | `--tools Read,AskUserQuestion` | The coordinator reads and asks; the adapter's `tandem` tool (`mcp__tandem__tandem`) is added by the plugin. |
 | `DISABLE_GROWTHBOOK=1` | Keeps mods on when Claude Code's server-side flag would switch them off. |
+| `env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION ...` | A coordinator launched from inside Claude Code (or in a Herdr server started there) would inherit the parent's child-session marker and save no transcript, so `--resume` could never find it. Seen live on 2.1.288. |
 
 **Conversation.** `--session-id` refuses an id already used, so each fresh conversation gets a new
 UUID. Once the coordinator is ready, launch writes that id to

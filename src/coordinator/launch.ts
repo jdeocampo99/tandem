@@ -380,12 +380,22 @@ function coordinatorEnvironmentOverrides(
   };
 }
 
-function coordinatorPaneCommand(
-  argv: readonly string[],
+function withoutVariables(
   environment: Readonly<Record<string, string>>,
-): string {
-  const assignments = Object.entries(environment).map(([key, value]) => `${key}=${value}`);
-  return quoteShellCommand(["env", ...assignments, ...argv]);
+  cleared: readonly string[],
+): Readonly<Record<string, string>> {
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => !cleared.includes(key)));
+}
+
+type PaneEnvironment = Readonly<{
+  set: Readonly<Record<string, string>>;
+  cleared: readonly string[];
+}>;
+
+function coordinatorPaneCommand(argv: readonly string[], environment: PaneEnvironment): string {
+  const clears = environment.cleared.flatMap((name) => ["-u", name]);
+  const assignments = Object.entries(environment.set).map(([key, value]) => `${key}=${value}`);
+  return quoteShellCommand(["env", ...clears, ...assignments, ...argv]);
 }
 
 /**
@@ -398,7 +408,7 @@ async function writeCoordinatorBootstrap(
   request: CoordinatorLaunchRequest,
   argv: readonly string[],
   resumeArgv: readonly string[],
-  environment: Readonly<Record<string, string>>,
+  environment: PaneEnvironment,
 ): Promise<string> {
   const directory = join(paths.home, COORDINATOR_SCRIPT_DIRECTORY);
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -990,11 +1000,14 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       ? { TYPESAFE_API_KEY: "" }
       : {};
   if (context !== undefined && !headless) {
-    const environment = mergeInheritedEnvironment(dependencies.processEnvironment, {
-      ...sourceEnvironment,
-      ...harness.launchEnvironment,
-      ...jevOverride,
-    });
+    const environment = withoutVariables(
+      mergeInheritedEnvironment(dependencies.processEnvironment, {
+        ...sourceEnvironment,
+        ...harness.launchEnvironment,
+        ...jevOverride,
+      }),
+      harness.clearedEnvironment,
+    );
     const processExitCode = await runDirectCoordinator(dependencies, harness, started, {
       argv,
       cwd: coordinatorCwd,
@@ -1070,13 +1083,10 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     ...jevOverride,
   };
   const resumeArgv = argvFor(true, undefined);
-  const bootstrapPath = await writeCoordinatorBootstrap(
-    paths,
-    request,
-    argv,
-    resumeArgv,
-    coordinatorEnvironment,
-  );
+  const bootstrapPath = await writeCoordinatorBootstrap(paths, request, argv, resumeArgv, {
+    set: coordinatorEnvironment,
+    cleared: harness.clearedEnvironment,
+  });
   await runExternal(dependencies.run, {
     argv: [
       "herdr",

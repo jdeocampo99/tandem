@@ -385,8 +385,11 @@ async function bootstrapProcessArgv(command: string): Promise<readonly string[]>
   const executed = lines[lines.indexOf("trap : INT") + 1];
   if (executed === undefined) return tokens;
   const argv = parseQuotedCommand(executed);
-  const start = argv.findIndex((entry, position) => position > 0 && !entry.includes("="));
-  return start === -1 ? argv : argv.slice(start);
+  // `env [-u NAME]... [NAME=VALUE]... argv`: skip the cleared names and the assignments.
+  let start = 1;
+  while (argv[start] === "-u") start += 2;
+  while (argv[start]?.includes("=") === true) start += 1;
+  return start >= argv.length ? argv : argv.slice(start);
 }
 
 export type ScenarioWorldOptions = Readonly<{

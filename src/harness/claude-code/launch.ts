@@ -237,6 +237,18 @@ async function validateModel(model: ModelSpec): Promise<ModelRecord> {
 }
 
 /** Runs only the coordinator: the worker binding comes with issue #200, step 6. */
+const NESTED_SESSION_VARIABLES = [
+  "CLAUDECODE",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_BRIDGE_SESSION_ID",
+  "CLAUDE_CODE_HOST_SESSION_ID",
+  "CLAUDE_CODE_MESSAGING_SOCKET",
+  "CLAUDE_CODE_MESSAGING_TOKEN",
+  "CLAUDE_PID",
+] as const;
+
 export const claudeCodeHarness: Harness = {
   executable: "claude",
   coordinatorFiles: [
@@ -245,6 +257,9 @@ export const claudeCodeHarness: Harness = {
   ],
   // Mods stay on even when Claude Code's server-side flag would switch them off.
   launchEnvironment: { DISABLE_GROWTHBOOK: "1" },
+  // Claude Code marks the processes it runs as its children; a coordinator that inherits the marks
+  // (Tandem launched from inside Claude Code) saves no transcript, so it could never be resumed.
+  clearedEnvironment: NESTED_SESSION_VARIABLES,
   coordinatorConversation,
   awaitCoordinatorReady,
   command: (spec) => {
