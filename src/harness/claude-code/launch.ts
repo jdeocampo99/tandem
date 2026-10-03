@@ -3,13 +3,14 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModelSpec } from "../../contracts.ts";
 import type {
+  AgentKind,
   AgentProcess,
-  CoordinatorLaunchIo,
   Harness,
+  LaunchIo,
   LaunchSpec,
   ModelRecord,
   SavedConversation,
-  StartedCoordinator,
+  StartedAgent,
   UnrecordedCoordinatorMatch,
 } from "../contract.ts";
 import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER } from "./models.ts";
@@ -106,14 +107,31 @@ function modelFlags(model: ModelSpec | undefined): readonly string[] {
 }
 
 /**
+ * Claude Code's built-in tools for each agent, mirroring OMP's. Write, Edit, and `copy_asset` reach
+ * only the mockup folder Tandem names (see mockupWriteDecision), and a PR review's Bash runs only
+ * read-only commands; the adapter's tool guard enforces both. `submit_report`, `copy_asset`, and
+ * the coordinator's `tandem` are the adapter's own tools, which the plugin adds.
+ */
+const TOOLS: Readonly<Record<AgentKind, readonly string[]>> = {
+  coordinator: ["Read", "AskUserQuestion"],
+  scout: ["Read", "Grep", "Glob", "WebSearch", "WebFetch", "Agent", "Write", "Edit"],
+  reviewer: ["Read", "Grep", "Glob"],
+  "pr-reviewer": ["Read", "Grep", "Glob", "Bash"],
+  implementer: ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "TodoWrite"],
+  presentation: ["Read", "Grep", "Glob", "Write", "Edit"],
+};
+
+/**
  * Only the Tandem plugins load: `--setting-sources project,local` keeps the Claude login but drops
  * user settings, plugins, and hooks; `--strict-mcp-config` and `--no-chrome` drop every MCP tool.
  * `--system-prompt-snapshot off` lets the adapter add context on every turn, not only the first.
+ * A worker runs unattended, as on OMP: Claude Code asks no permission, and Tandem's tool guard
+ * decides instead.
  */
-function coordinatorCommand(spec: LaunchSpec): readonly string[] {
+function agentCommand(spec: LaunchSpec): readonly string[] {
   const conversation = spec.conversation;
   if (conversation.kind !== "saved" || conversation.id === undefined) {
-    throw new Error("a Claude Code coordinator needs a saved conversation id");
+    throw new Error(`a Claude Code ${spec.agent} needs a conversation id`);
   }
   return [
     "claude",
@@ -131,33 +149,43 @@ function coordinatorCommand(spec: LaunchSpec): readonly string[] {
     "--disable-slash-commands",
     "--system-prompt-snapshot",
     "off",
+    ...(spec.agent === "coordinator" ? [] : ["--permission-mode", "bypassPermissions"]),
     "--tools",
-    "Read,AskUserQuestion",
+    TOOLS[spec.agent].join(","),
     ...(spec.prompt === undefined ? [] : [spec.prompt]),
   ];
 }
 
-async function coordinatorConversation(
-  { home, directory, resume }: Readonly<{ home: string; directory: string; resume: boolean }>,
-  io: CoordinatorLaunchIo,
+/**
+ * Every Claude Code agent names its conversation, because its sidecar's socket is named by it.
+ * Only one with a directory keeps the id there for a later launch to resume.
+ */
+async function conversation(
+  {
+    home,
+    directory,
+    resume,
+  }: Readonly<{ home: string; directory: string | undefined; resume: boolean }>,
+  io: LaunchIo,
 ): Promise<SavedConversation> {
-  const path = conversationPointerPath(directory);
-  const text = resume ? await io.readText(path) : undefined;
-  const recorded = text === undefined ? undefined : parseConversationPointer(text, path);
+  const path = directory === undefined ? undefined : conversationPointerPath(directory);
+  const text = resume && path !== undefined ? await io.readText(path) : undefined;
+  const recorded =
+    text === undefined || path === undefined ? undefined : parseConversationPointer(text, path);
   const conversation = chooseConversation(recorded, resume, io.newId);
   // A home too long for the sidecar's socket is refused before anything starts.
   sidecarSocketPath(home, conversation.id);
   return { kind: "saved", directory, ...conversation };
 }
 
-function notReadyError(repo: string): Error {
+function notReadyError(agent: AgentKind, repo: string): Error {
   return new Error(
     [
-      `Claude Code started but did not load Tandem's plugin within ${READY_TIMEOUT_MS / 1000} seconds, so Tandem stopped this coordinator.`,
+      `Claude Code started but did not load Tandem's plugin within ${READY_TIMEOUT_MS / 1000} seconds, so Tandem stopped this ${agent}.`,
       "Usually Claude Code is asking whether to trust the project, or its mods are switched off.",
       `To trust the project, run \`claude\` once in ${repo} and choose "Yes, I trust this folder"; Tandem's worktrees of the project are then trusted too.`,
       "If mods are switched off, check that no Claude Code settings file sets `disableAllHooks`.",
-      "Then run `tandem` again.",
+      agent === "coordinator" ? "Then run `tandem` again." : "Then restart the task.",
     ].join(" "),
   );
 }
@@ -166,23 +194,26 @@ function notReadyError(repo: string): Error {
  * The adapter plugin starts the sidecar as Claude Code's session starts, so a sidecar answering on
  * this conversation's socket proves Claude Code trusted the project and loaded the plugin.
  */
-async function awaitCoordinatorReady(
-  started: StartedCoordinator,
-  io: CoordinatorLaunchIo,
+async function awaitReady(
+  started: StartedAgent,
+  io: LaunchIo,
   signal?: AbortSignal,
 ): Promise<void> {
-  const { id, directory } = started.conversation;
-  if (id === undefined || directory === undefined) {
-    throw new Error("a Claude Code coordinator needs a saved conversation id and directory");
+  const { agent, conversation } = started;
+  if (conversation.kind !== "saved" || conversation.id === undefined) {
+    throw new Error(`a Claude Code ${agent} needs a conversation id`);
   }
+  const { id, directory } = conversation;
   const socket = sidecarSocketPath(started.home, id);
   const deadline = io.now() + READY_TIMEOUT_MS;
   while (signal?.aborted !== true) {
     if (await io.answersHealth(socket)) {
-      await io.writeText(conversationPointerPath(directory), `${id}\n`);
+      if (directory !== undefined) {
+        await io.writeText(conversationPointerPath(directory), `${id}\n`);
+      }
       return;
     }
-    if (io.now() >= deadline) throw notReadyError(started.repo);
+    if (io.now() >= deadline) throw notReadyError(agent, started.repo);
     await io.sleep(READY_POLL_MS, signal);
   }
 }
@@ -236,7 +267,6 @@ async function validateModel(model: ModelSpec): Promise<ModelRecord> {
   return record;
 }
 
-/** Runs only the coordinator: the worker binding comes with issue #200, step 6. */
 const NESTED_SESSION_VARIABLES = [
   "CLAUDECODE",
   "CLAUDE_CODE_CHILD_SESSION",
@@ -251,25 +281,21 @@ const NESTED_SESSION_VARIABLES = [
 
 export const claudeCodeHarness: Harness = {
   executable: "claude",
+  displayName: "Claude Code",
   coordinatorFiles: [
     { name: "adapter plugin", path: ADAPTER_PLUGIN_PATH, kind: "directory" },
     { name: "renderer plugin", path: RENDERER_PLUGIN_PATH, kind: "directory" },
   ],
   // Mods stay on even when Claude Code's server-side flag would switch them off.
   launchEnvironment: { DISABLE_GROWTHBOOK: "1" },
-  // Claude Code marks the processes it runs as its children; a coordinator that inherits the marks
+  // Claude Code marks the processes it runs as its children; an agent that inherits the marks
   // (Tandem launched from inside Claude Code) saves no transcript, so it could never be resumed.
   clearedEnvironment: NESTED_SESSION_VARIABLES,
-  coordinatorConversation,
-  awaitCoordinatorReady,
-  command: (spec) => {
-    if (spec.agent !== "coordinator") {
-      throw new Error(
-        `Tandem runs only the coordinator in Claude Code so far, not a ${spec.agent}. Pick a model from another provider for that role with \`tandem configure\`.`,
-      );
-    }
-    return coordinatorCommand(spec);
-  },
+  // The first Ctrl-D only asks "Press Ctrl-D again to exit" (2.1.288).
+  exitKeys: ["ctrl+d", "ctrl+d"],
+  conversation,
+  awaitReady,
+  command: agentCommand,
   sameCommand,
   looksLikeAgent,
   matchUnrecordedCoordinator,

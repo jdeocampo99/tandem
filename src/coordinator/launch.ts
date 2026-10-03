@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { quoteShellCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
 import { readHerdrStatus } from "../adapters/herdr.ts";
@@ -17,13 +17,14 @@ import type {
 } from "../contracts.ts";
 import {
   type CoordinatorFile,
-  type CoordinatorLaunchIo,
   type Harness,
   harnessOf,
+  type LaunchIo,
   type LaunchSpec,
-  type StartedCoordinator,
+  type StartedAgent,
 } from "../harness/contract.ts";
-import { harnessFor, harnessForRole } from "../harness/resolve.ts";
+import { launchIo } from "../harness/launch-io.ts";
+import { harnessFor } from "../harness/resolve.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
@@ -35,12 +36,7 @@ import {
 } from "./exclusivity.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { COORDINATOR_SCRIPT_DIRECTORY, findRunningCoordinator } from "./ownership.ts";
-import {
-  COORDINATOR_LEASE_HOLDER_PREFIX,
-  type CoordinatorRecord,
-  isMissing,
-  recordPath,
-} from "./record.ts";
+import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
   applyCoordinatorReplacement,
@@ -175,7 +171,7 @@ function coordinatorLaunchSpec(input: CoordinatorLaunchInput): LaunchSpec {
 
 /** Checks caller-supplied launch values, then builds the coordinator command. */
 export function buildCoordinatorArgv(input: CoordinatorLaunchInput): readonly string[] {
-  return harnessFor(harnessOf(input.model), "coordinator").command(coordinatorLaunchSpec(input));
+  return harnessFor(harnessOf(input.model)).command(coordinatorLaunchSpec(input));
 }
 
 /** The CLI's options that may name a coordinator file, only to confirm it. */
@@ -245,7 +241,7 @@ export async function checkNewCoordinator(
   request: CoordinatorLaunchRequest,
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<void> {
-  const harness = harnessForRole("coordinator", request.model);
+  const harness = harnessFor(harnessOf(request.model));
   await dependencies.checkNewCoordinator?.(harness, request.model);
   coordinatorLaunchSpec({
     cwd: request.cwd,
@@ -853,33 +849,15 @@ type CoordinatorStartupResult = Readonly<{
   readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
 }>;
 
-async function answersHealth(socket: string): Promise<boolean> {
-  try {
-    return (await fetch("http://sidecar/health", { unix: socket })).ok;
-  } catch {
-    return false;
-  }
-}
-
-function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): CoordinatorLaunchIo {
-  return {
-    readText: async (path) => {
-      try {
-        return await readFile(path, "utf8");
-      } catch (error) {
-        if (isMissing(error)) return undefined;
-        throw error;
-      }
-    },
-    writeText: async (path, text) => {
-      await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      await writeFile(path, text, { encoding: "utf8", mode: 0o600 });
-    },
-    newId: dependencies.newId ?? randomUUID,
-    answersHealth: dependencies.answersHealth ?? answersHealth,
+function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): LaunchIo {
+  return launchIo({
     sleep: dependencies.sleep,
-    now: dependencies.now ?? (() => performance.now()),
-  };
+    ...(dependencies.newId === undefined ? {} : { newId: dependencies.newId }),
+    ...(dependencies.answersHealth === undefined
+      ? {}
+      : { answersHealth: dependencies.answersHealth }),
+    ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+  });
 }
 
 async function processIdsNaming(
@@ -921,13 +899,13 @@ async function stopUnreadyCoordinator(
 async function awaitReadyOrStop(
   dependencies: CoordinatorLaunchDependencies,
   harness: Harness,
-  started: StartedCoordinator,
+  started: StartedAgent,
   argv: readonly string[],
   cwd: string,
   signal?: AbortSignal,
 ): Promise<void> {
   try {
-    await harness.awaitCoordinatorReady(started, coordinatorLaunchIo(dependencies), signal);
+    await harness.awaitReady(started, coordinatorLaunchIo(dependencies), signal);
   } catch (error) {
     try {
       await stopUnreadyCoordinator(dependencies, harness, argv, cwd);
@@ -948,7 +926,7 @@ async function awaitReadyOrStop(
 async function runDirectCoordinator(
   dependencies: CoordinatorLaunchDependencies,
   harness: Harness,
-  started: StartedCoordinator,
+  started: StartedAgent,
   request: Parameters<RunInteractive>[0],
 ): Promise<number> {
   const exited = new AbortController();
@@ -968,12 +946,15 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   const { request, dependencies, paths, context, headless, worktree, previous } = startup;
   let workspaceRetirement = startup.workspaceRetirement;
   const coordinatorCwd = worktree.path;
-  const harness = harnessFor(harnessOf(request.model), "coordinator");
-  const conversation = await harness.coordinatorConversation(
+  const harness = harnessFor(harnessOf(request.model));
+  const conversation = await harness.conversation(
     { home: paths.home, directory: paths.sessionDirectory, resume: request.continueSession },
     coordinatorLaunchIo(dependencies),
   );
-  const started: StartedCoordinator = {
+  // Every harness keeps a coordinator's conversation, which always has a directory.
+  if (conversation.kind !== "saved") throw new Error("the coordinator has no saved conversation");
+  const started: StartedAgent = {
+    agent: "coordinator",
     home: paths.home,
     repo: paths.repo,
     conversation,

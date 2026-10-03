@@ -148,7 +148,7 @@ function sameCoordinatorIdentity(left: CoordinatorRecord, right: CoordinatorReco
     left.worktree.leaseHolder === right.worktree.leaseHolder &&
     left.worktree.leasedAt === right.worktree.leasedAt &&
     left.harness === right.harness &&
-    harnessFor(left.harness, "coordinator").sameCommand(left.command, right.command)
+    harnessFor(left.harness).sameCommand(left.command, right.command)
   );
 }
 
@@ -175,7 +175,7 @@ async function assertIdleResetCoordinator(
   if (inspection.activeWorker) {
     if (
       inspection.processInfo.foregroundProcesses.filter((process) =>
-        harnessFor(record.harness, "coordinator").sameCommand(process.argv, record.command),
+        harnessFor(record.harness).sameCommand(process.argv, record.command),
       ).length !== 1
     ) {
       throw ownershipFailure("coordinator foreground process changed before reset");

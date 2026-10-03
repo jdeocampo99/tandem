@@ -7,11 +7,7 @@ import {
   parseConversationPointer,
 } from "../../../src/harness/claude-code/launch.ts";
 import { sidecarSocketPath } from "../../../src/harness/claude-code/socket.ts";
-import type {
-  CoordinatorLaunchIo,
-  LaunchSpec,
-  SavedConversation,
-} from "../../../src/harness/contract.ts";
+import type { LaunchIo, LaunchSpec, SavedConversation } from "../../../src/harness/contract.ts";
 
 const PLUGINS = fileURLToPath(
   new URL("../../../src/harness/claude-code/plugins/", import.meta.url),
@@ -45,7 +41,7 @@ const FLAGS = [
   "Read,AskUserQuestion",
 ];
 
-type FakeIo = CoordinatorLaunchIo & {
+type FakeIo = LaunchIo & {
   readonly reads: string[];
   readonly writes: Array<readonly [string, string]>;
   readonly probes: string[];
@@ -122,15 +118,86 @@ test("Haiku runs without --effort", () => {
   expect(argv).not.toContain("--effort");
 });
 
-test("a coordinator command needs a conversation id, and workers are refused", () => {
+test("every command needs a conversation id", () => {
   expect(() =>
     claudeCodeHarness.command(
       coordinatorSpec({ conversation: { kind: "saved", directory: DIRECTORY, resume: false } }),
     ),
-  ).toThrow("a Claude Code coordinator needs a saved conversation id");
-  expect(() => claudeCodeHarness.command(coordinatorSpec({ agent: "scout" }))).toThrow(
-    "Tandem runs only the coordinator in Claude Code so far, not a scout.",
+  ).toThrow("a Claude Code coordinator needs a conversation id");
+  expect(() =>
+    claudeCodeHarness.command(coordinatorSpec({ agent: "scout", conversation: { kind: "none" } })),
+  ).toThrow("a Claude Code scout needs a conversation id");
+});
+
+test("a worker runs unattended with its role's tools, its model, and its brief", () => {
+  const worker = (agent: LaunchSpec["agent"]) =>
+    claudeCodeHarness.command(
+      coordinatorSpec({
+        agent,
+        cwd: "/pool/task",
+        model: { model: "claude-code/sonnet", thinking: "low" },
+        conversation: { kind: "saved", directory: undefined, resume: false, id: ID },
+        prompt: "Look at the cache.",
+      }),
+    );
+  expect(worker("scout")).toEqual([
+    "claude",
+    "--plugin-dir",
+    ADAPTER,
+    "--plugin-dir",
+    RENDERER,
+    "--session-id",
+    ID,
+    "--model",
+    "sonnet",
+    "--effort",
+    "low",
+    ...FLAGS.slice(0, -2),
+    "--permission-mode",
+    "bypassPermissions",
+    "--tools",
+    "Read,Grep,Glob,WebSearch,WebFetch,Agent,Write,Edit",
+    "Look at the cache.",
+  ]);
+  const tools = (agent: LaunchSpec["agent"]) => {
+    const argv = worker(agent);
+    return argv[argv.indexOf("--tools") + 1];
+  };
+  expect(tools("reviewer")).toBe("Read,Grep,Glob");
+  expect(tools("pr-reviewer")).toBe("Read,Grep,Glob,Bash");
+  expect(tools("implementer")).toBe("Read,Grep,Glob,Edit,Write,Bash,TodoWrite");
+  expect(tools("presentation")).toBe("Read,Grep,Glob,Write,Edit");
+  expect(claudeCodeHarness.command(coordinatorSpec())).not.toContain("--permission-mode");
+});
+
+test("a worker with no conversation directory gets a new id and keeps none", async () => {
+  const io = fakeIo({ healthyAfter: 0 });
+  const conversation = await claudeCodeHarness.conversation(
+    { home: "/home", directory: undefined, resume: true },
+    io,
   );
+  expect(conversation).toEqual({
+    kind: "saved",
+    directory: undefined,
+    resume: false,
+    id: OTHER_ID,
+  });
+  await claudeCodeHarness.awaitReady(
+    { agent: "scout", home: "/home", repo: "/repo", conversation },
+    io,
+  );
+  expect(io.reads).toEqual([]);
+  expect(io.writes).toEqual([]);
+});
+
+test("a worker that never loads Tandem's plugin says to restart the task", async () => {
+  await expect(
+    claudeCodeHarness.awaitReady({ ...STARTED, agent: "reviewer" }, fakeIo()),
+  ).rejects.toThrow(/so Tandem stopped this reviewer\..*Then restart the task\.$/u);
+});
+
+test("Claude Code exits on a second Ctrl-D", () => {
+  expect(claudeCodeHarness.exitKeys).toEqual(["ctrl+d", "ctrl+d"]);
 });
 
 test("resuming continues the recorded conversation; anything else starts a new one", () => {
@@ -150,7 +217,7 @@ test("a pointer holding anything but a conversation id fails closed with a way o
 test("a launch reads the pointer only to resume, and starts fresh when there is none", async () => {
   const recorded = fakeIo({ files: { [POINTER]: `${ID}\n` } });
   expect(
-    await claudeCodeHarness.coordinatorConversation(
+    await claudeCodeHarness.conversation(
       { home: "/home", directory: DIRECTORY, resume: true },
       recorded,
     ),
@@ -163,7 +230,7 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
 
   const fresh = fakeIo({ files: { [POINTER]: `${ID}\n` } });
   expect(
-    await claudeCodeHarness.coordinatorConversation(
+    await claudeCodeHarness.conversation(
       { home: "/home", directory: DIRECTORY, resume: false },
       fresh,
     ),
@@ -177,7 +244,7 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
 
   const missing = fakeIo();
   expect(
-    await claudeCodeHarness.coordinatorConversation(
+    await claudeCodeHarness.conversation(
       { home: "/home", directory: DIRECTORY, resume: true },
       missing,
     ),
@@ -190,7 +257,7 @@ test("a launch reads the pointer only to resume, and starts fresh when there is 
 
 test("a home too long for the sidecar's socket is refused before the coordinator starts", async () => {
   await expect(
-    claudeCodeHarness.coordinatorConversation(
+    claudeCodeHarness.conversation(
       { home: `/${"h".repeat(100)}`, directory: DIRECTORY, resume: false },
       fakeIo(),
     ),
@@ -198,6 +265,7 @@ test("a home too long for the sidecar's socket is refused before the coordinator
 });
 
 const STARTED = {
+  agent: "coordinator" as const,
   home: "/home",
   repo: "/repo",
   conversation: {
@@ -210,14 +278,14 @@ const STARTED = {
 
 test("the coordinator is ready once its sidecar answers, and only then is its conversation kept", async () => {
   const io = fakeIo({ healthyAfter: 2 });
-  await claudeCodeHarness.awaitCoordinatorReady(STARTED, io);
+  await claudeCodeHarness.awaitReady(STARTED, io);
   expect(io.probes).toEqual(Array(3).fill(sidecarSocketPath("/home", ID)));
   expect(io.writes).toEqual([[POINTER, `${ID}\n`]]);
 });
 
 test("a coordinator that never loads Tandem's plugin fails in plain English after 30 seconds", async () => {
   const io = fakeIo();
-  await expect(claudeCodeHarness.awaitCoordinatorReady(STARTED, io)).rejects.toThrow(
+  await expect(claudeCodeHarness.awaitReady(STARTED, io)).rejects.toThrow(
     `Claude Code started but did not load Tandem's plugin within 30 seconds, so Tandem stopped this coordinator. Usually Claude Code is asking whether to trust the project, or its mods are switched off. To trust the project, run \`claude\` once in /repo and choose "Yes, I trust this folder"; Tandem's worktrees of the project are then trusted too. If mods are switched off, check that no Claude Code settings file sets \`disableAllHooks\`. Then run \`tandem\` again.`,
   );
   expect(io.probes).toHaveLength(121);
@@ -227,7 +295,7 @@ test("a coordinator that never loads Tandem's plugin fails in plain English afte
 test("an abandoned ready wait resolves without keeping the conversation", async () => {
   const stop = new AbortController();
   const io = fakeIo({ onSleep: () => stop.abort() });
-  await claudeCodeHarness.awaitCoordinatorReady(STARTED, io, stop.signal);
+  await claudeCodeHarness.awaitReady(STARTED, io, stop.signal);
   expect(io.probes).toHaveLength(1);
   expect(io.writes).toEqual([]);
 });

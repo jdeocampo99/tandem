@@ -15,7 +15,8 @@ import {
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
-import { harnessForRole } from "../../src/harness/resolve.ts";
+import { harnessOf } from "../../src/harness/contract.ts";
+import { harnessFor } from "../../src/harness/resolve.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   type CliApplication,
@@ -722,8 +723,7 @@ test("CLI checks a new Claude Code coordinator's plugins before starting anythin
       ]),
     );
 
-    const adapter = harnessForRole("coordinator", CLAUDE_CODE_COORDINATOR).coordinatorFiles[0]
-      ?.path;
+    const adapter = harnessFor(harnessOf(CLAUDE_CODE_COORDINATOR)).coordinatorFiles[0]?.path;
     await expect(launch).rejects.toThrow(`adapter plugin is unavailable at ${adapter}`);
     expect(effects).toEqual([adapter]);
     expect(runner.calls.map((call) => call.argv[0])).not.toContain("omp");

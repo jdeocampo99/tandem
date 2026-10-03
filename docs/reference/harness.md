@@ -114,15 +114,15 @@ enforces it.
 | `coordinatorFiles` (name, path, file or directory) | `extension`, `config` files | `adapter plugin`, `renderer plugin` directories |
 | `launchEnvironment` | none | `DISABLE_GROWTHBOOK=1` |
 | `clearedEnvironment` | none | Claude Code's nested-session variables (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, its session, bridge, and messaging ids, `CLAUDE_PID`) |
-| `coordinatorConversation` | the directory, as asked | the recorded id or a new one (below) |
-| `awaitCoordinatorReady` | resolves at once | waits for the sidecar (below) |
+| `conversation` | the directory, as asked | the recorded id or a new one (below) |
+| `awaitReady` | resolves at once | waits for the sidecar (below) |
 | `command(spec)` | coordinator and workers | coordinator only; a worker kind throws |
 | `sameCommand` | ignores `--continue` | `--session-id X` and `--resume X` match |
 | `processNeedle` | `--session-dir <dir>` | the conversation id |
 | `listModels`, `validateModel` | `omp models --json` | the fixed catalogue, no command run |
 | `listMcpServers` | OMP's servers | none (`--strict-mcp-config`) |
 
-Launch hands the harness a `CoordinatorLaunchIo` (read and write a file, new id, ask a socket for
+Launch hands the harness a `LaunchIo` (read and write a file, new id, ask a socket for
 `/health`, sleep, a monotonic clock), so each harness's decisions are tested without real effects.
 The CLI's `--extension` and `--config` confirm the coordinator files with those names; naming one
 for a Claude Code coordinator, which loads neither, is refused. `doctor` checks each file by its

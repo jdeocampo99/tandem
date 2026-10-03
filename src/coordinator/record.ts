@@ -179,7 +179,7 @@ function parseCommand(value: unknown, field: string, harness: HarnessName): read
     throw new TypeError(`${field} must be a non-empty array`);
   }
   const command = value.map((entry, index) => text(entry, `${field}[${index}]`));
-  const { executable } = harnessFor(harness, "coordinator");
+  const { executable } = harnessFor(harness);
   if (command[0] !== executable) {
     throw new TypeError(`${field}[0] must be ${JSON.stringify(executable)}`);
   }

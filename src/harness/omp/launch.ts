@@ -217,15 +217,18 @@ function processNeedle(recorded: readonly string[]): string | undefined {
 
 export const ompHarness: Harness = {
   executable: "omp",
+  displayName: "OMP",
   coordinatorFiles: [
     { name: "extension", path: COORDINATOR_EXTENSION_PATH, kind: "file" },
     { name: "config", path: CONFIG_PATH, kind: "file" },
   ],
   launchEnvironment: {},
   clearedEnvironment: [],
+  exitKeys: ["ctrl+d"],
   // OMP finds a saved conversation by its directory and loads Tandem before it reads input.
-  coordinatorConversation: async ({ directory, resume }) => ({ kind: "saved", directory, resume }),
-  awaitCoordinatorReady: async () => undefined,
+  conversation: async ({ directory, resume }) =>
+    directory === undefined ? { kind: "none" } : { kind: "saved", directory, resume },
+  awaitReady: async () => undefined,
   command: (spec) =>
     spec.agent === "coordinator" ? coordinatorCommand(spec) : workerCommand(spec),
   sameCommand,
