@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { HomeSettings } from "../../src/config/home-settings.ts";
 import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
+import type { ClaudeCodeAvailability } from "../../src/harness/claude-code/availability.ts";
 import type { ModelRecord } from "../../src/harness/contract.ts";
 import { type SetupPageDependencies, SetupPageWorkflow } from "../../src/onboarding/setup-page.ts";
 import { findCheckoutsByName } from "../../src/repos/locate.ts";
@@ -41,6 +42,7 @@ async function machine(
     failScan?: boolean;
     savedRoots?: (code: string, outside: string) => string[];
     availableModels?: readonly ModelRecord[];
+    claudeCode?: ClaudeCodeAvailability;
   }> = {},
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-setup-")));
@@ -104,6 +106,7 @@ async function machine(
         enabledProviders: [],
         jev: "off",
       },
+      claudeCode: options.claudeCode ?? "ready",
     }),
     roots: async () => [code, join(root, "missing")],
     homeSettings: async () => settings,
@@ -266,6 +269,31 @@ test("approved mixed-model choices enable only the providers used by those model
   expect(saved).toEqual([]);
   await workflow.apply("/tandem", event.answerId);
   expect(saved[0]).toBe("models anthropic,openai");
+});
+
+test("a Claude Code role is saved without enabling Claude Code for spending", async () => {
+  const { workflow, saved } = await machine({
+    polls: () => [answerFeedback([], "claude-code/sonnet")],
+  });
+  await workflow.open("/tandem");
+  const event = await workflow.listen("/tandem", new AbortController().signal);
+  if (event.kind !== "answer") throw new Error(`expected an answer, got ${event.kind}`);
+  await workflow.apply("/tandem", event.answerId);
+  expect(saved[0]).toBe("models anthropic");
+});
+
+test("a Claude Code role is refused when Claude Code isn't installed", async () => {
+  const { workflow, saved } = await machine({
+    claudeCode: "not-installed",
+    polls: () => [answerFeedback([], "claude-code/sonnet")],
+  });
+  await workflow.open("/tandem");
+  const event = await workflow.listen("/tandem", new AbortController().signal);
+  expect(event).toMatchObject({
+    kind: "invalid",
+    problems: ["Research: claude-code/sonnet isn't available on this computer."],
+  });
+  expect(saved).toEqual([]);
 });
 
 test("a pasted repo outside the scanned folders makes its parent searchable after saving", async () => {

@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { CLAUDE_CODE_MODELS } from "../../src/harness/claude-code/models.ts";
 import type { ModelRecord } from "../../src/harness/contract.ts";
 import {
   checkSetupAnswer,
@@ -233,6 +234,16 @@ test("selected models authorize only their providers, regardless of the rest of 
   expect(setupProviders(value, available)).toEqual(["anthropic", "openai"]);
 });
 
+test("Claude Code roles never enable Claude Code for spending", () => {
+  const value = parsed({
+    ...answer,
+    models: { ...answer.models, scout: { model: "claude-code/sonnet", thinking: "medium" } },
+  });
+  const available = [...catalogue, ...CLAUDE_CODE_MODELS];
+  expect(checkSetupAnswer(value, { ...facts, catalogue: available })).toEqual([]);
+  expect(setupProviders(value, available)).toEqual(["anthropic"]);
+});
+
 test("the shape is strict: unknown fields, missing jobs, and bad modes are named", () => {
   const { models: _models, ...noModels } = answer;
   const result = parseSetupAnswer(
@@ -288,7 +299,7 @@ test("each problem on this machine is one sentence the user can act on", () => {
   });
   expect(problems).toEqual([
     "Review: anthropic/opus doesn't support thinking low.",
-    "Visual mockups: nobody/model is not one of your OMP models.",
+    "Visual mockups: nobody/model isn't available on this computer.",
     "/code/api/src is inside the repository at /code/api; add that folder.",
     "/tmp/plain is not a Git repository.",
     "/code/done is already set up.",

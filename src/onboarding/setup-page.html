@@ -32,6 +32,19 @@ h2{font-size:15px;font-weight:600;margin:0}
 .meta{grid-column:2/-1;display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;font:11.5px/1.4 var(--mono);color:var(--faint);font-variant-numeric:tabular-nums}
 .meta .example{color:var(--muted);font-style:italic}
 .meta .off{color:var(--tandem)}
+.meta .where{color:var(--muted)}
+/* Presets: one click fills every job */
+.presets{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.preset{display:grid;gap:4px;align-content:start;text-align:left;padding:12px 14px;background:var(--raise);border:1px solid var(--line);border-radius:var(--rp);color:inherit;font:inherit;cursor:pointer;transition:border-color .2s,background .2s}
+.preset:hover:not(:disabled){border-color:var(--line2)}
+.preset[aria-pressed="true"]:not(:disabled){border-color:var(--you);background:color-mix(in srgb,var(--you) 6%,var(--raise))}
+.preset b{font-weight:600;font-size:13.5px}
+.preset small{color:var(--muted);font-size:12.5px;line-height:1.4}
+.preset:disabled{cursor:not-allowed;opacity:.75;color:var(--muted)}
+.preset .why{color:var(--tandem)}
+.harness-notes{display:flex;flex-wrap:wrap;gap:4px 18px;margin:0;font-size:12px;color:var(--faint)}
+.harness-notes b{color:var(--muted);font-weight:500}
+.harness-notes .off{color:var(--tandem)}
 @media (max-width:720px){.cols{display:none}.role{grid-template-columns:minmax(0,1fr) 104px}.r-title{grid-column:1/-1}.meta{grid-column:1/-1}}
 /* Choice card */
 .card{padding:16px;display:grid;gap:10px;align-content:start}
@@ -104,7 +117,9 @@ h2{font-size:15px;font-weight:600;margin:0}
 
   <section class="stage" data-stage="models" aria-labelledby="h-models">
     <h2 id="h-models">Which model does each job?</h2>
-    <p class="sec-note">Pick from the full OMP catalogue. Each job shows an example setup to give you an idea; use whatever you have access to and like.</p>
+    <p class="sec-note">Start from a preset, then change any job. Each job runs in Claude Code or OMP, whichever its model belongs to; its thinking choices follow the model.</p>
+    <div class="presets" id="presets"></div>
+    <p class="harness-notes" id="harness-notes"></p>
     <div class="panel">
       <div class="cols"><span>Job</span><span>Model</span><span>Thinking</span></div>
       <div id="roles"></div>
@@ -189,6 +204,9 @@ const { esc, words, combobox } = window.TandemUI;
 const $ = (s) => document.querySelector(s);
 const MODELS = VIEW.models;
 const ROLES = VIEW.roles;
+const HARNESSES = VIEW.harnesses;
+const PRESETS = VIEW.presets;
+const harnessName = (id) => HARNESSES.find((h) => h.id === id)?.name ?? id;
 const NOTES = VIEW.thinkingNotes;
 const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"];
 const STAGES = [
@@ -248,10 +266,47 @@ const money = (n) => `$${n.toFixed(2)}`;
 const fmtCtx = (n) => `${n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)} context`;
 
 
-function renderRoles() {
+function presetApplied(preset) {
+  return preset.status === "ready" && ROLES.every((r) => {
+    const pick = state.picks[r.id];
+    const want = preset.models[r.id];
+    return pick && pick.model === want.model && pick.thinking === want.thinking;
+  });
+}
+function renderPresets() {
+  const box = $("#presets");
+  box.innerHTML = "";
+  for (const preset of PRESETS) {
+    const ready = preset.status === "ready";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "preset";
+    button.disabled = !ready;
+    button.setAttribute("aria-pressed", String(presetApplied(preset)));
+    button.innerHTML = `<b>${esc(preset.name)}</b><small>${esc(preset.summary)}</small>${ready ? "" : `<small class="why">${esc(preset.reason)}</small>`}`;
+    if (ready) {
+      button.addEventListener("click", () => {
+        for (const r of ROLES) state.picks[r.id] = { ...preset.models[r.id] };
+        renderRoles(true);
+        renderPresets();
+        renderSummary();
+      });
+    }
+    box.appendChild(button);
+  }
+  $("#harness-notes").innerHTML = HARNESSES.map((h) =>
+    `<span><b>${esc(h.name)}:</b> ${h.unavailable ? `<span class="off">${esc(h.unavailable)}</span>` : esc(h.note)}</span>`,
+  ).join("");
+}
+
+function renderRoles(settled = false) {
   const box = $("#roles");
   box.innerHTML = "";
-  for (const role of ROLES) box.appendChild(roleRow(role));
+  for (const role of ROLES) {
+    const row = roleRow(role);
+    if (settled) row.classList.add("settled");
+    box.appendChild(row);
+  }
 }
 /** Redraws one job after a pick, without replaying the entrance animation on any row. */
 function rerow(role) {
@@ -270,7 +325,7 @@ function roleRow(role) {
   row.style.setProperty("--i", String(ROLES.indexOf(role)));
   const title = `<div class="r-title"><i class="sw"></i><div><strong>${esc(role.name)}</strong> <span class="r-what">(${esc(role.what)})</span><p class="hint"><b>${esc(role.hintLead)}</b> ${esc(role.hintRest)}</p></div></div>`;
   if (pool.length === 0) {
-    row.innerHTML = `${title}<p class="meta"><span class="off">No models in the OMP catalogue yet. Configure a provider in OMP, then reopen this page.</span></p>`;
+    row.innerHTML = `${title}<p class="meta"><span class="off">No models yet. Configure a provider in OMP or install Claude Code, then reopen this page.</span></p>`;
     return row;
   }
   const model = pick && pool.find((m) => m.selector === pick.model);
@@ -283,10 +338,19 @@ function roleRow(role) {
     <div class="combo-slot"></div>
     <select id="t-${role.id}" aria-label="${esc(role.name)} thinking" ${model ? "" : "disabled"}>${levelOpts}</select>
     <p class="meta">
-      ${model ? `${price}${context}<span>${esc(pick.thinking)}: ${esc(NOTES[pick.thinking])}</span>` : ""}
+      ${model ? `<span class="where">runs in ${esc(harnessName(model.harness))}</span>${price}${context}<span>${esc(pick.thinking)}: ${esc(NOTES[pick.thinking])}</span>` : ""}
       <span class="example">For example: ${esc(role.example)}</span>
     </p>`;
-  const item = (m) => ({ model: m, label: `${m.name} · ${m.provider}`, search: `${m.name} ${m.provider} ${m.selector}`, cells: [m.cost ? money(m.cost.input) : "–"] });
+  const item = (m) => {
+    const claude = m.harness === "claude-code";
+    return {
+      model: m,
+      group: claude ? "Claude Code · your Claude subscription" : "OMP",
+      label: claude ? `${m.name} · Claude Code` : `${m.name} · ${m.provider}`,
+      search: `${m.name} ${m.provider} ${m.selector} ${harnessName(m.harness)}`,
+      cells: [claude ? "subscription" : m.cost ? money(m.cost.input) : "–"],
+    };
+  };
   row.querySelector(".combo-slot").replaceWith(
     combobox({
       id: `m-${role.id}`,
@@ -298,6 +362,7 @@ function roleRow(role) {
       onPick: ({ model: m }) => {
         state.picks[role.id] = { model: m.selector, thinking: nearest(m.thinking, pick ? pick.thinking : role.thinking) };
         rerow(role).querySelector(`#t-${role.id}`).focus();
+        renderPresets();
         renderSummary();
       },
     }),
@@ -305,6 +370,7 @@ function roleRow(role) {
   row.querySelector(`#t-${role.id}`).addEventListener("change", (e) => {
     state.picks[role.id] = { model: pick.model, thinking: e.target.value };
     rerow(role).querySelector(`#t-${role.id}`).focus();
+    renderPresets();
     renderSummary();
   });
   return row;
@@ -594,7 +660,7 @@ function answer() {
 }
 function renderReview() {
   const a = answer();
-  const modelName = (sel) => MODELS.find((m) => m.selector === sel)?.name ?? sel;
+  const modelOf = (sel) => MODELS.find((m) => m.selector === sel);
   const edit = (n) => `<button class="link" type="button" data-go="${n}">Change</button>`;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const pending = [...pendingFolders];
@@ -603,10 +669,12 @@ function renderReview() {
   const reposReview = repoItems.length
     ? `<ul>${repoItems.join("")}</ul>`
     : '<span class="dim">None yet. Add them later in the chat.</span>';
+  const chosen = ROLES.map((r) => ({ role: r, spec: a.models[r.id], model: modelOf(a.models[r.id].model) }));
   const selectedProviders = [...new Set(
-    ROLES.map((r) => MODELS.find((m) => m.selector === a.models[r.id]?.model)?.provider).filter(Boolean),
+    chosen.filter((c) => c.model && c.model.harness !== "claude-code").map((c) => c.model.provider),
   )].sort();
-  const modelReview = `<ul>${ROLES.map((r) => `<li>${esc(r.name)} <span class="m dim">${esc(modelName(a.models[r.id].model))}, ${esc(a.models[r.id].thinking)}</span></li>`).join("")}</ul><p class="m dim">Tandem may spend on: ${selectedProviders.length ? selectedProviders.map(esc).join(", ") : "none"}</p>`;
+  const usesClaudeCode = chosen.some((c) => c.model?.harness === "claude-code");
+  const modelReview = `<ul>${chosen.map(({ role, spec, model }) => `<li>${esc(role.name)} <span class="m dim">${esc(model?.name ?? spec.model)}, ${esc(spec.thinking)} · ${esc(harnessName(model?.harness ?? "omp"))}</span></li>`).join("")}</ul><p class="m dim">Tandem may spend on: ${selectedProviders.length ? selectedProviders.map(esc).join(", ") : "none"}${usesClaudeCode ? ". Claude Code jobs use your Claude subscription." : ""}</p>`;
   const rows = [
     ["Models", modelReview, 0],
     ["Repos", reposReview, 1],
@@ -646,6 +714,7 @@ $("#next").addEventListener("click", () => {
   panel.scrollIntoView({ behavior: "smooth", block: "start" });
   renderSummary();
 });
+renderPresets();
 renderRoles();
 renderFolderRoots();
 renderRepoResults();

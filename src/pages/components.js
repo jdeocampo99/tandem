@@ -12,7 +12,8 @@ window.TandemUI = (() => {
    * keys to move, Enter to pick, Escape to put the last pick back. The list widens to fit and
    * opens upward when it would run under the page's bottom bar (`.bar`) or off the screen.
    *
-   * items: [{ label, search, cells: [text...] }]; chosen: the picked item or undefined;
+   * items: [{ label, search, cells: [text...], group? }], with each group's items adjacent; a
+   * heading names the group above its first item. chosen: the picked item or undefined;
    * onPick(item) runs on a pick and usually redraws the row that holds the box.
    */
   function combobox({ id, label, items, chosen, placeholder, empty, onPick }) {
@@ -32,7 +33,7 @@ window.TandemUI = (() => {
         ? matches
             .map(
               (item, n) =>
-                `<li role="option" id="${esc(id)}-o${n}" aria-selected="${n === active}" data-n="${n}"><b>${esc(item.label)}</b>${item.cells.map((cell) => `<span class="num">${esc(cell)}</span>`).join("")}</li>`,
+                `${item.group !== undefined && item.group !== matches[n - 1]?.group ? `<li class="group" role="presentation">${esc(item.group)}</li>` : ""}<li role="option" id="${esc(id)}-o${n}" aria-selected="${n === active}" data-n="${n}"><b>${esc(item.label)}</b>${item.cells.map((cell) => `<span class="num">${esc(cell)}</span>`).join("")}</li>`,
             )
             .join("")
         : `<li class="none">${esc(empty)}</li>`;

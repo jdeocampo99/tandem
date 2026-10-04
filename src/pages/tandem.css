@@ -483,6 +483,15 @@ input[type="text"] {
 .combo-list li[aria-selected="true"] b {
   color: var(--you);
 }
+.combo-list .group {
+  display: block;
+  padding: 9px 9px 3px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  cursor: default;
+}
 .combo-list .none {
   display: block;
   color: var(--faint);

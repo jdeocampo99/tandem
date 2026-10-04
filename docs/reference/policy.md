@@ -110,7 +110,8 @@ The coordinator delegates research and does judgement itself.
   fails closed. Writes replace the file atomically.
 - The catalogue comes from `omp models --json`, one lookup per operation, plus a fixed Claude Code
   catalogue (`claude-code/fable`, `claude-code/opus`, `claude-code/sonnet`, `claude-code/haiku`) that only explicit
-  choices such as `configure-models` accept; Tandem never offers or picks those on its own. Never parse private
+  choices accept: `configure-models`, a setup-page pick, or a preset the user picks (see
+  [harness.md](harness.md#presets)). Tandem never picks those on its own. Never parse private
   model configuration or invent names. Catalogue cost is descriptive, not a price guarantee.
 - `configure-models` takes a file mapping all five roles directly to `{ model, thinking }` (not
   the storage envelope), with no model-controlled approval field. It refuses without `--yes`, and
@@ -126,6 +127,9 @@ The coordinator delegates research and does judgement itself.
 - **Not now** stops before `configure-models`, `setup`, or `launch` and never falls through to
   built-in defaults. Never infer omitted roles, merge roles, or treat recommendation approval as
   consent. Empty or failed discovery stays visible and never falls back.
+- A preset (see [harness.md](harness.md#presets)), picked on the setup page or named in plain words
+  in chat, fills all five roles at once; the user may change any role, and the recap shows each
+  role's harness. Picking a preset is not approval: the recap still is.
 - `configure-models` runs once, only after explicit approval of the complete recap.
 
 ### Resolution order

@@ -56,11 +56,15 @@ Model choices apply to every project and take effect on the next launch.
 
 ```sh
 bun "<tandem-root>/src/cli.ts" models --repo "<repo>" --home "<home>" --json |
-  jq '{modelSettings, availableModels: ((.availableModels // []) | map({selector, provider, thinking, name, cost}))}'
+  jq '{modelSettings, presets, availableModels: ((.availableModels // []) | map({selector, provider, thinking, name, cost}))}'
 ```
 
-For each of the five roles, suggest a model from that catalogue and the thinking levels it supports,
-with one line on why. The user must pick or accept a model and thinking level for every role; one
+Offer the presets first, each by name with its five roles on one line: "Claude coordinates, Codex
+researches and reviews", "All Claude Code", and "All OMP". A `claude-code/<model>` role runs in
+Claude Code on the user's Claude subscription; any other runs in OMP. For a preset whose `status`
+is `disabled`, say its `reason` in plain words. The user may name a preset in their own words
+("all Claude", "Claude plus Codex"), then change any role. Otherwise, for each of the five roles,
+suggest a model from that catalogue and the thinking levels it supports, with one line on why. The user must pick or accept a model and thinking level for every role; one
 reply may cover all five. Each role needs its own explicit answer, so an unanswered role is asked
 again rather than filled in. Offer **Not now**, which ends onboarding with nothing saved.
 
@@ -68,7 +72,7 @@ again rather than filled in. Offer **Not now**, which ends onboarding with nothi
 **Change roles** (rerun the catalogue and ask role by role; unchanged roles keep their value), or
 **Not now** (stop, nothing saved).
 
-Before saving, show all five roles in one recap. After the user approves it, save with
+Before saving, show all five roles in one recap, each with its harness (Claude Code or OMP). After the user approves it, save with
 `bun "<tandem-root>/src/cli.ts" configure-models --repo "<repo>" --home "<home>" --input <file> --yes`,
 using a temporary JSON file outside the project that you delete afterward. (Users who prefer to
 choose in the terminal can run `tandem configure <repo>` instead.) Suggest only models from the

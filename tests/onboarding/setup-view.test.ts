@@ -28,7 +28,8 @@ const saved: RepoPolicy["models"] = {
 const input: SetupViewInput = {
   generatedAt: "2026-09-26T12:00:00.000Z",
   homeFolder: "/Users/me",
-  catalogue,
+  ompCatalogue: catalogue,
+  claudeCode: "not-installed",
   searchedFolders: ["/Users/me/code", "/srv/git"],
   repos: [
     {
@@ -78,6 +79,46 @@ test("saved choices remain available across providers while invalid model or thi
   expect(picks.implementer).toBeUndefined(); // medium is not supported
   expect(picks.reviewer).toBeUndefined(); // no longer in the catalogue
   expect(view.selfImprovement).toBe("off");
+});
+
+test("pickers group Claude Code's models before OMP's, and only offer Claude Code when it is ready", () => {
+  const ready = buildSetupView({ ...input, claudeCode: "ready" });
+  expect(ready.models.map((model) => `${model.harness} ${model.selector}`)).toEqual([
+    "claude-code claude-code/fable",
+    "claude-code claude-code/opus",
+    "claude-code claude-code/sonnet",
+    "claude-code claude-code/haiku",
+    "omp anthropic/claude-opus",
+    "omp openai/gpt",
+  ]);
+  expect(ready.models.find((model) => model.selector === "claude-code/haiku")?.thinking).toEqual([
+    "off",
+  ]);
+  expect(ready.harnesses).toEqual([
+    { id: "claude-code", name: "Claude Code", note: "Uses your Claude subscription." },
+    { id: "omp", name: "OMP", note: "Models from OMP's catalogue, billed by each provider." },
+  ]);
+
+  const missing = buildSetupView(input);
+  expect(missing.models.map((model) => model.harness)).toEqual(["omp", "omp"]);
+  expect(missing.harnesses[0]?.unavailable).toBe("Not installed on this computer.");
+  expect(missing.presets.map((preset) => [preset.id, preset.status])).toEqual([
+    ["claude-codex", "disabled"],
+    ["all-claude-code", "disabled"],
+    ["all-omp", "disabled"],
+  ]);
+});
+
+test("a saved Claude Code choice is kept only while Claude Code is ready", () => {
+  const savedModels = {
+    ...saved,
+    scout: { model: "claude-code/sonnet", thinking: "medium" },
+  } as const;
+  const scoutPick = (claudeCode: SetupViewInput["claudeCode"]) =>
+    buildSetupView({ ...input, claudeCode, savedModels }).roles.find((role) => role.id === "scout")
+      ?.pick;
+  expect(scoutPick("ready")).toEqual({ model: "claude-code/sonnet", thinking: "medium" });
+  expect(scoutPick({ setting: "disableAllHooks", source: "managed" })).toBeUndefined();
 });
 
 test("repositories say where their commands came from, with the home folder as ~", () => {
