@@ -72,6 +72,8 @@ export const defaultStartPersistent: StartPersistent = async (request) => {
     stderr: "ignore",
     detached: true,
   });
+  // Bun keeps the parent alive until a spawned child exits; the server must outlive the launcher.
+  child.unref();
   return { pid: child.pid, exited: child.exited };
 };
 
