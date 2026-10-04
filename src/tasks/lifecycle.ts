@@ -814,6 +814,7 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
       ...(policy.config.reviewLevels === undefined
         ? {}
         : { reviewLevels: { ...policy.config.reviewLevels } }),
+      ...(policy.config.standards === undefined ? {} : { standards: policy.config.standards }),
     },
     guidance: {
       implementation: cloneGuidanceEntries(policy.guidance.implementation),
