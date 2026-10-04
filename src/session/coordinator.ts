@@ -1,5 +1,5 @@
 import type { HerdrAgentState, HerdrStatusReporter } from "../adapters/herdr-status.ts";
-import { type BoardRow, notifiesUser } from "../board/view.ts";
+import { type BoardRow, type BoardView, notifiesUser } from "../board/view.ts";
 import {
   coordinatorSourceGuidance,
   type TandemBoundaryEnvironment,
@@ -272,6 +272,7 @@ export class CoordinatorSession {
   private readonly heldNotifications = new Set<string>();
   /** "Needs you" keys already notified or there at start; unset until the first reconcile. */
   private needsYouSeen: ReadonlySet<string> | undefined;
+  private snapshotFailing = false;
   /** When the user last took part in the open thread; unset when no thread is open. */
   private threadActiveAt: number | undefined;
 
@@ -549,6 +550,22 @@ export class CoordinatorSession {
       );
   }
 
+  /**
+   * Writes the panel's snapshot on every reconcile, since its age tells panels a coordinator is
+   * alive. A failure never blocks the reconcile and is logged once until a write succeeds again.
+   */
+  private async saveBoardSnapshot(service: TandemService, board: BoardView): Promise<void> {
+    try {
+      await service.writeBoardSnapshot(board);
+      this.snapshotFailing = false;
+    } catch (error) {
+      if (!this.snapshotFailing) {
+        this.deps.logError("Tandem could not save the board for the panel", error);
+      }
+      this.snapshotFailing = true;
+    }
+  }
+
   private async reconcileOnce(runTick: boolean): Promise<void> {
     try {
       const service = this.service();
@@ -570,11 +587,7 @@ export class CoordinatorSession {
       await deliverPrWatchNotices({ host: this.deps.host, service });
       const board = await service.board();
       await this.notifyOnArrival(service, board.needsYou);
-      await service
-        .writeBoardSnapshot(board)
-        .catch((error: unknown) =>
-          this.deps.logError("Tandem could not save the board for the panel", error),
-        );
+      await this.saveBoardSnapshot(service, board);
       await deliverInvestigationQuestions({ host: this.deps.host, service });
       // Setup moves on after the user's actions, not on the timer.
       if (!runTick && (await this.tandemCheckout())) await this.onboarding().afterAction();

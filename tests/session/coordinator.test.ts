@@ -386,6 +386,32 @@ test("each reconcile reads the board once and saves that same board for the pane
   expect(saved).toEqual([board]);
 });
 
+test("a snapshot write that keeps failing is retried every reconcile but logged once until it works", async () => {
+  const logged: string[] = [];
+  const outcomes = ["fail", "fail", "ok", "fail"];
+  let writes = 0;
+  const session = new CoordinatorSession(
+    coordinatorDeps(
+      {
+        list: async () => [],
+        writeBoardSnapshot: async () => {
+          writes += 1;
+          if (outcomes.shift() === "fail") throw new Error("disk full");
+        },
+      },
+      { logError: (message) => logged.push(message) },
+    ),
+  );
+
+  for (let round = 0; round < 4; round += 1) await session.reconcile(false);
+
+  expect(writes).toBe(4);
+  expect(logged).toEqual([
+    "Tandem could not save the board for the panel",
+    "Tandem could not save the board for the panel",
+  ]);
+});
+
 test("one Herdr notification names what of this project's just landed in Needs you, not what was already there or a block", async () => {
   const row = (key: string, repoPath: string, cause: BoardRow["cause"] = "brief") => ({
     key,
