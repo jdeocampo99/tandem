@@ -194,13 +194,15 @@ test("board summaries validate required Running row data", () => {
   const board = {
     now: "2030-01-01T12:00:00.000Z",
     projects: ["app"],
+    projectPaths: ["/work/app"],
     needsYou: [],
     pullRequests: [],
     finished: 0,
+    doneToday: [],
   };
   const complete = {
     ...board,
-    running: [{ ...row, repoPath: "/work/app", since: "12m" }],
+    running: [{ ...row, repoPath: "/work/app", taskId: "task-1", since: "12m" }],
   };
   expect(summarizeTandemActionValue("board", complete)).toContain(
     "- 🔨 **app** · **Fix the flaky login test** — implementing · 12m",
@@ -1838,6 +1840,7 @@ test("the coordinator board tool shows one terminal-formatted status card", asyn
   const view = {
     now: "2030-01-01T00:00:05.000Z",
     projects: ["app"],
+    projectPaths: ["/work/app"],
     needsYou: [
       {
         key: "brief:req-1",
@@ -1852,6 +1855,7 @@ test("the coordinator board tool shows one terminal-formatted status card", asyn
     running: [],
     pullRequests: [],
     finished: 0,
+    doneToday: [],
   } as const;
   const service = { board: async () => view } as unknown as TandemService;
   const shown: unknown[] = [];

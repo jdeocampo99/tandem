@@ -38,12 +38,19 @@ export type BoardState = Readonly<{
   readonly finishedThisWeek: readonly TaskRollup[];
   /** Task id to when its worker last made progress; tasks without a receipt are absent. */
   readonly progressAt: ReadonlyMap<string, IsoTimestamp>;
+  /** Task id to the pane of its live primary worker; tasks without one are absent. */
+  readonly workerPanes: ReadonlyMap<string, WorkerPane>;
 }>;
+
+/** Where a task's worker runs in Herdr, so the panel can focus it. */
+export type WorkerPane = Readonly<{ readonly workspaceId: string; readonly paneId: string }>;
 
 export type BoardView = Readonly<{
   readonly now: IsoTimestamp;
   /** Project names, for the header. */
   readonly projects: readonly string[];
+  /** The same projects' checkout paths, in the same order. */
+  readonly projectPaths: readonly string[];
   /** When PR watch last read GitHub. */
   readonly checkedAt?: IsoTimestamp;
   readonly needsYou: readonly BoardRow[];
@@ -52,6 +59,8 @@ export type BoardView = Readonly<{
   readonly pullRequests: readonly PrWatchViewRow[];
   /** Completed, merged, and cancelled tasks, which the board leaves out. */
   readonly finished: number;
+  /** Tasks completed or merged in the last day, newest first; `tandem status` only counts them. */
+  readonly doneToday: readonly BoardRow[];
   /** The last 7 days; absent when no task finished in them. */
   readonly week?: WeekSummary;
 }>;
@@ -68,6 +77,10 @@ export type BoardRow = Readonly<{
   readonly cause: "brief" | "question" | "model-question" | "pull-request" | TaskStage;
   /** The project the row belongs to; absent for a pull request no project claims. */
   readonly repoPath?: string;
+  /** The task the row stands for; absent for briefs and pull requests no task opened. */
+  readonly taskId?: string;
+  /** A pull request row's page. */
+  readonly url?: string;
   readonly project: string;
   readonly mark: string;
   readonly name: string;
@@ -107,8 +120,8 @@ export function isBoardView(value: unknown): value is BoardView {
   return (
     view !== undefined &&
     typeof view.now === "string" &&
-    Array.isArray(view.projects) &&
-    view.projects.every((project) => typeof project === "string") &&
+    isStringArray(view.projects) &&
+    isStringArray(view.projectPaths) &&
     (view.checkedAt === undefined || typeof view.checkedAt === "string") &&
     Array.isArray(view.needsYou) &&
     view.needsYou.every(isBoardRow) &&
@@ -117,6 +130,8 @@ export function isBoardView(value: unknown): value is BoardView {
     Array.isArray(view.pullRequests) &&
     view.pullRequests.every(isPrWatchViewRow) &&
     isFiniteNumber(view.finished) &&
+    Array.isArray(view.doneToday) &&
+    view.doneToday.every(isBoardRow) &&
     (view.week === undefined || isWeekSummary(view.week))
   );
 }
@@ -129,6 +144,8 @@ function isBoardRow(value: unknown): value is BoardRow {
     typeof row.cause === "string" &&
     BOARD_ROW_CAUSES.has(row.cause as BoardRow["cause"]) &&
     (row.repoPath === undefined || typeof row.repoPath === "string") &&
+    (row.taskId === undefined || typeof row.taskId === "string") &&
+    (row.url === undefined || typeof row.url === "string") &&
     typeof row.project === "string" &&
     typeof row.mark === "string" &&
     typeof row.name === "string" &&
@@ -144,8 +161,21 @@ function isRunningBoardRow(value: unknown): value is RunningBoardRow {
     row !== undefined &&
     isRunningStage(row.cause) &&
     typeof row.repoPath === "string" &&
-    typeof row.since === "string"
+    typeof row.taskId === "string" &&
+    typeof row.since === "string" &&
+    (row.worker === undefined || isWorkerPane(row.worker))
   );
+}
+
+function isWorkerPane(value: unknown): value is WorkerPane {
+  const pane = recordOf(value);
+  return (
+    pane !== undefined && typeof pane.workspaceId === "string" && typeof pane.paneId === "string"
+  );
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function isPrWatchViewRow(value: unknown): value is PrWatchViewRow {
@@ -162,7 +192,8 @@ function isPrWatchViewRow(value: unknown): value is PrWatchViewRow {
     (row.checkCounts === undefined || isCheckCounts(row.checkCounts)) &&
     typeof row.status === "string" &&
     typeof row.note === "string" &&
-    (row.link === undefined || typeof row.link === "string")
+    (row.link === undefined || typeof row.link === "string") &&
+    (row.taskId === undefined || typeof row.taskId === "string")
   );
 }
 
@@ -198,14 +229,17 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "since"> &
+export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "taskId" | "since"> &
   Readonly<{
     cause: RunningStage;
     repoPath: string;
+    taskId: string;
     since: string;
+    worker?: WorkerPane;
   }>;
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
 /** A running task whose worker has made no progress for this long shows as idle. */
 const IDLE_MS = 5 * 60 * 1000;
 const NAME_CHARS = 30;
@@ -243,6 +277,7 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
   return {
     now,
     projects: state.projects.map((path) => basename(path)),
+    projectPaths: state.projects,
     ...(pullRequests.readAt === undefined ? {} : { checkedAt: pullRequests.readAt }),
     needsYou: [
       ...state.briefs.filter(awaitsApproval).map(briefRow),
@@ -253,9 +288,15 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
     ],
     running: live
       .filter((task): task is RunningTaskRecord => !needsYou(task) && isRunningStage(task.stage))
-      .map((task) => runningRow(task, now, state.progressAt.get(task.id))),
+      .map((task) =>
+        runningRow(task, now, state.progressAt.get(task.id), state.workerPanes.get(task.id)),
+      ),
     pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
     finished: state.tasks.length - live.length,
+    doneToday: state.tasks
+      .filter((task) => doneWithinDay(task, now))
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(doneRow),
     ...(state.finishedThisWeek.length === 0 ? {} : { week: weekSummary(state.finishedThisWeek) }),
   };
 }
@@ -470,12 +511,14 @@ function runningRow(
   task: RunningTaskRecord,
   now: IsoTimestamp,
   progressAt: IsoTimestamp | undefined,
+  worker: WorkerPane | undefined,
 ): RunningBoardRow {
   const { mark, label } = RUNNING_LABELS[task.stage];
   return {
     key: `task:${task.id}:${task.stage}`,
     cause: task.stage,
     ...taskIdentity(task),
+    ...(worker === undefined ? {} : { worker }),
     name: task.objective,
     mark,
     text: label,
@@ -486,9 +529,31 @@ function runningRow(
   };
 }
 
-function taskIdentity(task: TaskRecord): Readonly<{ repoPath: string; project: string }> {
+function doneWithinDay(task: TaskRecord, now: IsoTimestamp): boolean {
+  return (
+    (task.stage === "completed" || task.stage === "merged") &&
+    Date.parse(now) - Date.parse(task.updatedAt) <= DAY_MS
+  );
+}
+
+function doneRow(task: TaskRecord): BoardRow {
+  return {
+    key: `task:${task.id}:${task.stage}`,
+    cause: task.stage,
+    ...taskIdentity(task),
+    mark: "✅",
+    name: task.objective,
+    text:
+      task.stage === "merged" ? "merged" : task.kind === "scout" ? "notes ready in chat" : "done",
+  };
+}
+
+function taskIdentity(
+  task: TaskRecord,
+): Readonly<{ repoPath: string; taskId: string; project: string }> {
   return {
     repoPath: task.repoPath,
+    taskId: task.id,
     project: basename(task.repoPath),
   };
 }
@@ -505,6 +570,8 @@ function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
     ...(repoPath === undefined ? {} : { repoPath }),
     project:
       repoPath === undefined ? row.repo.slice(row.repo.indexOf("/") + 1) : basename(repoPath),
+    ...(task === undefined ? {} : { taskId: task.id }),
+    ...(row.url.length === 0 ? {} : { url: row.url }),
     mark: "🔴",
     name: `${row.repo}#${row.number} ${row.branch}`.trimEnd(),
     text: note.length > 0 ? note : row.status,

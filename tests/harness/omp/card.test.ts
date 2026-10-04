@@ -35,6 +35,7 @@ const VIEW: CatchUpView = {
 const STATUS_VIEW: BoardView = {
   now: "2030-01-09T12:00:00.000Z",
   projects: ["app"],
+  projectPaths: ["/work/app"],
   needsYou: [
     {
       key: "brief:req-1",
@@ -49,6 +50,7 @@ const STATUS_VIEW: BoardView = {
   running: [],
   pullRequests: [],
   finished: 0,
+  doneToday: [],
 };
 
 type Renderable = { render(width: number): readonly string[]; invalidate?(): void };

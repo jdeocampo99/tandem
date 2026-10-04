@@ -36,7 +36,16 @@ function coordinatorDeps(
     createService: () =>
       ({
         prWatchNotices: async () => [],
-        board: async () => ({ now: "", projects: [], needsYou: [], running: [], pullRequests: [] }),
+        board: async () => ({
+          now: "",
+          projects: [],
+          projectPaths: [],
+          needsYou: [],
+          running: [],
+          pullRequests: [],
+          finished: 0,
+          doneToday: [],
+        }),
         investigationQuestions: async () => [],
         ...service,
       }) as TandemService,
@@ -362,10 +371,12 @@ test("one Herdr notification names what of this project's just landed in Needs y
       board: async () => ({
         now: "",
         projects: [],
+        projectPaths: [],
         needsYou,
         running: [],
         pullRequests: [],
         finished: 0,
+        doneToday: [],
       }),
       notifyNeedsYou: async (repoPath, rows) => {
         notified.push([repoPath, rows.map((each) => each.key)]);
@@ -633,10 +644,12 @@ function welcomeSession(
         board: async () => ({
           now: "",
           projects: options.projects,
+          projectPaths: options.projects,
           needsYou: [],
           running: [],
           finished: 0,
           pullRequests: [],
+          doneToday: [],
         }),
       },
       {

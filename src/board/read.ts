@@ -2,7 +2,12 @@ import { join } from "node:path";
 import type { Clock, IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { withPrWatches } from "../pr-watch/store.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
-import { latestPrimaryReceipt, taskRuntime } from "../runtime/activity.ts";
+import {
+  activeRuntimeJob,
+  currentPrimaryJobs,
+  latestPrimaryReceipt,
+  taskRuntime,
+} from "../runtime/activity.ts";
 import { withStateTransaction } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
 import type { RuntimeState } from "../runtime/schema.ts";
@@ -17,6 +22,7 @@ import {
   boardView,
   finishedWithinWeek,
   isRunningStage,
+  type WorkerPane,
   withinWeek,
 } from "./view.ts";
 
@@ -43,6 +49,7 @@ export async function readBoard(home: string, clock: Clock): Promise<BoardView> 
       ...(await withPrWatches(home, ({ watches, poll }) => ({ watches, poll }))),
       finishedThisWeek: await weekRollups(home, clock, saved, now),
       progressAt: await progressTimes(saved, runtime),
+      workerPanes: workerPanes(saved, runtime),
     };
   });
   return boardView(state, now);
@@ -60,6 +67,23 @@ async function progressTimes(
     if (receipt !== undefined) times.set(task.id, receipt.progressAt);
   }
   return times;
+}
+
+/** Where each running task's live primary worker runs, from its job's Herdr endpoint. */
+function workerPanes(
+  tasks: readonly TaskRecord[],
+  runtime: RuntimeState,
+): ReadonlyMap<string, WorkerPane> {
+  const panes = new Map<string, WorkerPane>();
+  for (const task of tasks) {
+    if (!isRunningStage(task.stage)) continue;
+    const endpoint = currentPrimaryJobs(task, taskRuntime(runtime, task.id)).find(
+      (job) => activeRuntimeJob(job) && job.endpoint !== undefined,
+    )?.endpoint;
+    if (endpoint === undefined) continue;
+    panes.set(task.id, { workspaceId: endpoint.workspaceId, paneId: endpoint.paneId });
+  }
+  return panes;
 }
 
 /** Rollups, with cost, of the tasks whose timeline says they finished in the last 7 days. */

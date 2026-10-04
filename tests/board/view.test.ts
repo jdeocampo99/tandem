@@ -2,70 +2,17 @@ import { expect, test } from "bun:test";
 import { stripVTControlCharacters } from "node:util";
 import { renderStatus, renderStatusBoard, renderStatusLine } from "../../src/board/terminal.ts";
 import {
-  type BoardState,
   boardView,
   finishedWithinWeek,
   needsYouNotice,
   notifiesUser,
   renderBoard,
 } from "../../src/board/view.ts";
-import type { RequestBriefContent } from "../../src/contracts.ts";
-import type { PrWatch } from "../../src/pr-watch/store.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import type { DurableExecutionRoutingPause } from "../../src/runtime/schema.ts";
 import { task } from "../session/fixtures.ts";
 
-const NOW = "2030-01-01T12:00:00.000Z";
-
-function content(goal: string): RequestBriefContent {
-  return {
-    goal,
-    scope: ["the settings page"],
-    constraints: [],
-    nonGoals: [],
-    acceptanceCriteria: ["dark mode follows the system setting"],
-    manualVerification: [],
-    recommendedApproach: "CSS variables",
-    keyDecisions: [],
-    openQuestions: [],
-    researchLinks: [],
-  };
-}
-
-function watch(
-  number: number,
-  row: NonNullable<PrWatch["row"]>,
-  extra: Partial<PrWatch> = {},
-): PrWatch {
-  return {
-    ref: { repo: "acme/app", number },
-    origin: "user",
-    startedAt: "2030-01-01T00:00:00.000Z",
-    log: [],
-    row,
-    summary: {
-      title: "t",
-      branch: `branch-${number}`,
-      url: `https://github.com/acme/app/pull/${number}`,
-      checks: { passed: 12, failed: 0, pending: 4 },
-    },
-    ...extra,
-  };
-}
-
-function state(overrides: Partial<BoardState> = {}): BoardState {
-  return {
-    projects: ["/work/tandem", "/work/app"],
-    tasks: [],
-    briefs: [],
-    routingPauses: [],
-    watches: [],
-    poll: {},
-    finishedThisWeek: [],
-    progressAt: new Map(),
-    ...overrides,
-  };
-}
+import { content, NOW, state, watch } from "./fixtures.ts";
 
 test("status puts what needs you first, then running work and pull requests, then the footer", () => {
   const view = boardView(
@@ -638,4 +585,55 @@ test("a model question from an older generation or a retired reason does not sto
     expect(view.needsYou).toEqual([]);
     expect(view.running.map((row) => row.cause)).toEqual(["scouting"]);
   }
+});
+
+test("board rows carry what the panel navigates by: task ids, worker panes, PR links, done today", () => {
+  const view = boardView(
+    state({
+      tasks: [
+        task({ id: "task-run", repoPath: "/work/app", stage: "implementing", objective: "Run" }),
+        task({ id: "task-stop", repoPath: "/work/app", stage: "blocked", objective: "Stop" }),
+        task({
+          id: "task-merged",
+          repoPath: "/work/app",
+          stage: "merged",
+          objective: "Merged today",
+          updatedAt: "2030-01-01T09:00:00.000Z",
+        }),
+        task({
+          id: "task-notes",
+          kind: "scout",
+          repoPath: "/work/app",
+          stage: "completed",
+          objective: "Research notes",
+          updatedAt: "2030-01-01T11:00:00.000Z",
+        }),
+        task({
+          id: "task-old",
+          stage: "completed",
+          objective: "Finished yesterday",
+          updatedAt: "2029-12-31T11:00:00.000Z",
+        }),
+      ],
+      workerPanes: new Map([["task-run", { workspaceId: "w2", paneId: "w2:p3" }]]),
+      watches: [
+        watch(
+          409,
+          { color: "red", status: "❌ failing", note: "tests failed" },
+          { taskId: "task-run" },
+        ),
+      ],
+    }),
+    NOW,
+  );
+  expect(view.projectPaths).toEqual(["/work/tandem", "/work/app"]);
+  expect(view.running[0]).toMatchObject({ taskId: "task-run", worker: { paneId: "w2:p3" } });
+  expect(view.needsYou.map((row) => [row.taskId, row.url])).toEqual([
+    ["task-stop", undefined],
+    ["task-run", "https://github.com/acme/app/pull/409"],
+  ]);
+  expect(view.doneToday.map((row) => [row.name, row.text])).toEqual([
+    ["Research notes", "notes ready in chat"],
+    ["Merged today", "merged"],
+  ]);
 });

@@ -27,6 +27,8 @@ export type PrWatchViewRow = Readonly<{
   readonly status: string;
   readonly note: string;
   readonly link?: string;
+  /** The Tandem task whose pull request this is. */
+  readonly taskId?: string;
 }>;
 
 export type PrWatchCheckCounts = Readonly<{
@@ -151,6 +153,7 @@ function viewRow(watch: PrWatch): PrWatchViewRow {
     status: row.status,
     note: row.note,
     ...(row.link === undefined ? {} : { link: row.link }),
+    ...(watch.taskId === undefined ? {} : { taskId: watch.taskId }),
   };
 }
 
