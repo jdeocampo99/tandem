@@ -12,6 +12,7 @@ import {
 } from "../../../src/tasks/communication-protocol.ts";
 import type { WorkerJob, WorkerResult } from "../../../src/workers/jobs.ts";
 import type { WorkerTerminalCommand, WorkerTerminalState } from "../../../src/workers/terminal.ts";
+import type { WorkerActivity } from "../../../src/workers/worker-activity.ts";
 import { fakeSessionTime } from "../../evals/scenario.ts";
 
 const TASK = "task-1";
@@ -44,9 +45,17 @@ async function worker(role: WorkerJob["role"] = "scout", extra: Partial<WorkerJo
     inbox: TaskInbox | undefined;
     command: WorkerTerminalCommand | undefined;
     receipts: WorkerReceipt[];
+    activities: WorkerActivity[];
     states: WorkerTerminalState[];
     results: WorkerResult[];
-  } = { inbox: undefined, command: undefined, receipts: [], states: [], results: [] };
+  } = {
+    inbox: undefined,
+    command: undefined,
+    receipts: [],
+    activities: [],
+    states: [],
+    results: [],
+  };
   const job = {
     schemaVersion: 1,
     id: "job-1",
@@ -100,6 +109,9 @@ async function worker(role: WorkerJob["role"] = "scout", extra: Partial<WorkerJo
     readInbox: async () => files.inbox,
     writeReceipt: async (receipt) => {
       files.receipts.push(receipt);
+    },
+    writeActivity: async (activity) => {
+      files.activities.push(activity);
     },
     trace: () => undefined,
   });
@@ -343,4 +355,25 @@ test("an implementer's playbook steps count as done once Claude Code's task tool
   await binding.handle({ type: "toolEnd", call: done });
   expect(await binding.handle(report)).toMatchObject({ isError: false });
   expect(files.results).toHaveLength(1);
+});
+
+test("the activity file gets the running tool's target and the task list; the receipt stays as it was", async () => {
+  const { binding, files } = await worker("implementer");
+  await binding.handle({ type: "agentStart", prompt: BRIEF });
+  await binding.handle({ type: "toolStart", call: read });
+  await settle();
+  expect(files.activities.at(-1)).toMatchObject({ tool: "Read", toolTarget: "src/a.ts" });
+  expect(files.receipts.at(-1)).toMatchObject({ phase: "tool", tool: "Read" });
+  expect(files.receipts.at(-1)).not.toContainKey("toolTarget");
+  await binding.handle({ type: "toolEnd", call: read });
+  await settle();
+  expect(files.activities.at(-1)).toEqual({});
+
+  const create = { id: "c", name: "TaskCreate", input: { subject: "Write the test" } };
+  await binding.handle({ type: "toolStart", call: create });
+  await binding.handle({ type: "toolEnd", call: create, result: { task: { id: "1" } } });
+  await settle();
+  expect(files.activities.at(-1)).toEqual({
+    todos: [{ content: "Write the test", status: "pending" }],
+  });
 });

@@ -46,7 +46,7 @@ async function assertPrivateTarget(path: string, absentOkay: boolean): Promise<v
   }
 }
 
-async function writePrivateJson(pathInput: string, value: unknown): Promise<void> {
+export async function writePrivateJson(pathInput: string, value: unknown): Promise<void> {
   const path = absolutePath(pathInput, "path");
   await assertPrivateTarget(path, true);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
@@ -65,7 +65,7 @@ async function writePrivateJson(pathInput: string, value: unknown): Promise<void
   }
 }
 
-async function readPrivateJson(pathInput: string): Promise<unknown | undefined> {
+export async function readPrivateJson(pathInput: string): Promise<unknown | undefined> {
   const path = absolutePath(pathInput, "path");
   await assertPrivateTarget(path, true);
   let contents: string;
