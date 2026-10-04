@@ -2,6 +2,12 @@ import { expect, test } from "bun:test";
 import { panelProject, panelView } from "../../src/board/panel.ts";
 import type { BoardSnapshot } from "../../src/board/snapshot.ts";
 import { type BoardState, boardView } from "../../src/board/view.ts";
+import {
+  blockCause,
+  type FindingLedgerEntry,
+  type RequestBriefContent,
+  type TaskRecord,
+} from "../../src/contracts.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
 import type { WorkerActivity } from "../../src/workers/worker-activity.ts";
 import { task } from "../session/fixtures.ts";
@@ -363,5 +369,116 @@ test("running rows show the current step, then the tool, its target, and how lon
       activity: { verb: "mcp__docs__lookup", target: "auth", age: "4s" },
       steps: undefined,
     },
+  });
+});
+
+test("each row's second line says what Tandem recorded, and falls back to the row's words without it", () => {
+  const summary = (level: "small" | "medium" | "large") => ({
+    title: "t",
+    beforeAfter: [{ moment: "m", before: "b", after: "a" }],
+    size: { level, reason: "r" },
+    risk: { level: "low" as const, reason: "r" },
+  });
+  const brief = (id: string, extra: Partial<RequestBriefContent>) =>
+    createRequestBriefRecord({ id, repoPath: APP, content: { ...content(id), ...extra } }, NOW);
+  const finding = (id: string, status: FindingLedgerEntry["status"]): FindingLedgerEntry => ({
+    id,
+    lens: "review",
+    severity: "P1",
+    verdict: "confirmed",
+    description: "d",
+    status,
+    raisedAt: { head: "h", generation: 0, reviewRound: 0 },
+    statusAt: { head: "h", generation: 0, reviewRound: 0 },
+  });
+  const at = (id: string, stage: TaskRecord["stage"], extra: Partial<TaskRecord> = {}) =>
+    task({
+      id,
+      repoPath: APP,
+      stage,
+      objective: id,
+      createdAt: "2030-01-01T11:48:00.000Z",
+      ...extra,
+    });
+  const pullRequest = (state: "draft" | "open") => ({
+    repository: "acme/app",
+    number: 421,
+    state,
+    head: "h",
+    base: "main",
+  });
+  const view = panelView(
+    snapshot({
+      briefs: [
+        brief("req-skip", { summary: summary("medium"), skipReview: true }),
+        brief("req-level", { summary: summary("small") }),
+        brief("req-sized", { summary: summary("large") }),
+        brief("req-old", {}),
+      ],
+      tasks: [
+        at("queued-under-brief", "queued", {
+          requestId: "req-level",
+          reviewLevel: { level: "light", reason: "r" },
+        }),
+        at("ready-draft", "ready", { pullRequest: pullRequest("draft") }),
+        at("ready-open", "ready", { pullRequest: pullRequest("open") }),
+        at("ready-bare", "ready"),
+        at("stop-known", "blocked", {
+          blockReason: "One of the reviews failed.",
+          blockCause: blockCause("review-lens-failed", {
+            summary: "One of the reviews failed.",
+            detail: "lens crashed",
+          }),
+        }),
+        at("stop-broad", "blocked", {
+          blockReason: "There's no finished work to review yet.",
+          blockCause: blockCause("prerequisite-not-met", {
+            summary: "There's no finished work to review yet.",
+            detail: "no head",
+          }),
+        }),
+        at("stop-text", "blocked", { blockReason: "reviewer timed out" }),
+        at("fixing", "awaiting-fixes", {
+          findingLedger: [
+            finding("f-1", "unresolved"),
+            finding("f-2", "unresolved"),
+            finding("f-3", "addressed"),
+          ],
+        }),
+        at("fixing-bare", "awaiting-fixes"),
+        at("quiet", "implementing"),
+      ],
+      restarts: new Map([
+        ["stop-known", 2],
+        ["stop-broad", 1],
+      ]),
+      progressAt: new Map([["quiet", "2030-01-01T11:54:00.000Z"]]),
+    }),
+    { project: APP, query: "", now: NOW, readFailed: false },
+  );
+  const lines = Object.fromEntries(
+    view.sections.flatMap((section) =>
+      section.rows.map((row) => [row.name, [row.stage, row.color, ...row.lines]]),
+    ),
+  );
+  expect(lines).toEqual({
+    "req-skip": ["brief to approve", "yellow", "brief: medium change · no review"],
+    "req-level": ["brief to approve", "yellow", "brief: small change · light review"],
+    "req-sized": ["brief to approve", "yellow", "brief: large change"],
+    "req-old": ["brief to approve", "yellow", "brief waiting for approval"],
+    "ready-draft": ["ready to publish", "yellow", "draft PR #421"],
+    "ready-open": ["ready to publish", "yellow", "PR #421"],
+    "ready-bare": ["ready to publish", "yellow", "done, waiting for you"],
+    "stop-known": ["stopped", "red", "stopped after 2 restarts: a review failed"],
+    "stop-broad": [
+      "stopped",
+      "red",
+      "stopped after 1 restart: There's no finished work to review yet",
+    ],
+    "stop-text": ["stopped", "red", "reviewer timed out"],
+    "queued-under-brief": ["waiting to start", "yellow", "waiting for a free worktree"],
+    fixing: ["fixing review findings", "blue", "review found 2 issues · fixing them"],
+    "fixing-bare": ["fixing review findings", "blue", "for 12m"],
+    quiet: ["implementing", "yellow", "no progress for 6m"],
   });
 });
