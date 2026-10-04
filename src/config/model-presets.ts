@@ -39,10 +39,12 @@ type ClaudeCodeAlias = "fable" | "opus" | "sonnet" | "haiku";
 type RoleSource =
   | Readonly<{ kind: "claude-code"; alias: ClaudeCodeAlias }>
   | Readonly<{ kind: "best-codex" }>
+  | Readonly<{ kind: "balanced-codex" }>
   | Readonly<{ kind: "balanced-omp" }>;
 
 const claudeCode = (alias: ClaudeCodeAlias): RoleSource => ({ kind: "claude-code", alias });
 const BEST_CODEX: RoleSource = { kind: "best-codex" };
+const BALANCED_CODEX: RoleSource = { kind: "balanced-codex" };
 const BALANCED_OMP: RoleSource = { kind: "balanced-omp" };
 
 type PresetDefinition = Readonly<{
@@ -57,10 +59,10 @@ const PRESETS: readonly PresetDefinition[] = [
     id: "claude-codex",
     name: "Claude coordinates, Codex researches and reviews",
     summary:
-      "Planning, coding, and mockups in Claude Code; research and review on OMP's top Codex model.",
+      "Planning, coding, and mockups in Claude Code; research on a mid-tier Codex model and review on OMP's top one.",
     roles: {
       coordinator: claudeCode("opus"),
-      scout: BEST_CODEX,
+      scout: BALANCED_CODEX,
       implementer: claudeCode("opus"),
       reviewer: BEST_CODEX,
       presentation: claudeCode("sonnet"),
@@ -111,6 +113,13 @@ export function modelPresets(facts: ModelPresetFacts): readonly ModelPreset[] {
     enabledProviders: new Set(discoveredProviders(facts.ompCatalogue)),
   });
   const codex = bestCodexModel(facts.ompCatalogue);
+  const codexProvider = CODEX_PROVIDERS.find((provider) =>
+    facts.ompCatalogue.some((model) => model.provider === provider),
+  );
+  const balancedCodex = resolveBalancedProfile({
+    catalogue: facts.ompCatalogue,
+    enabledProviders: new Set(codexProvider === undefined ? [] : [codexProvider]),
+  });
   const resolveRole = (role: AgentRole, source: RoleSource): RoleOutcome => {
     switch (source.kind) {
       case "claude-code": {
@@ -131,6 +140,16 @@ export function modelPresets(facts: ModelPresetFacts): readonly ModelPreset[] {
                 "OMP lists no Codex or OpenAI model. Sign in to Codex in OMP, then reopen setup.",
             }
           : { ok: true, spec: specFor(codex, role) };
+      case "balanced-codex": {
+        const proposal = balancedCodex.roles[role];
+        return proposal === undefined
+          ? {
+              ok: false,
+              reason:
+                "OMP lists no Codex or OpenAI model. Sign in to Codex in OMP, then reopen setup.",
+            }
+          : { ok: true, spec: proposal.model };
+      }
       case "balanced-omp": {
         if (facts.ompCatalogue.length === 0) {
           return {
