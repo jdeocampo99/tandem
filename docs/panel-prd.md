@@ -83,12 +83,22 @@ anywhere, including inside a worker, where plain keys go to the agent.
 | `j` `k`, arrows | Move |
 | `Enter`, double-click | Go: needs-you rows focus the chat, running rows open the agent, PRs open in the browser |
 | `Space` | Show or hide a task's step checklist |
+| `/` | Search |
 | `1`-`9`, `[` `]` | Switch project |
-| `Esc` | Close the popup |
+| `Esc` | Close the popup, or clear a search |
 
 - A click on a project chip switches, like a tab. A click on a task row only selects it, so a
   click to focus the pane never pulls you out of the chat.
 - On first run the panel shows these keys in a box that hides after first use or on `x`.
+
+## Search
+
+- `/` opens a search line at the top of the panel or popup. Typing filters as you go; arrows move,
+  `Enter` goes, `Esc` clears.
+- It searches every project, grouped under project headings, so you can find a task without
+  switching first. `Enter` on another project's row switches there.
+- Plain words match the task name and its kind: `stuck`, `review`, `pr`, `queued`, `needs you`,
+  `done`, or a project name. Several words must all match (`stuck tagalingo`). No query syntax.
 
 ## Data
 
@@ -146,12 +156,14 @@ anywhere, including inside a worker, where plain keys go to the agent.
 
 - The view model maps every task state in the table above to its row, from fixed board fixtures.
 - `Enter` resolves to the right target for each row kind; queued rows have none.
+- Search matches names and kind words across projects; every word must match.
 - A project with nothing running renders `✓ All quiet.`; an unreadable snapshot renders the stale
   footer.
 - Panels read only the snapshot file and never take the state lock.
 
 ## Manual checks
 
+- Search `stuck` and `pr`; `Enter` on another project's result lands in that project.
 - With two projects, switch by chip, `1`-`9`, `[` `]`, and `prefix` keys from the chat.
 - Inside a worker, `Esc` reaches the agent; `prefix h` returns home; `prefix t` opens the popup and
   `Enter` there jumps to another worker.
