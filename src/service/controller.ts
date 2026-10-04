@@ -1,6 +1,6 @@
 import { readdir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
@@ -8,6 +8,7 @@ import { closeEndpoint, showNotification } from "../adapters/herdr.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
 import { readBoard } from "../board/read.ts";
+import { writeBoardSnapshot } from "../board/snapshot.ts";
 import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts";
 import {
   type HomeSettings,
@@ -59,6 +60,7 @@ import type {
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { openProject } from "../coordinator/open-project.ts";
+import { listCoordinatorRecords } from "../coordinator/registry.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
 import { type DeliveryPreflightResult, deliveryPreflight } from "../delivery/preflight.ts";
 import {
@@ -490,6 +492,8 @@ export type TandemService = Readonly<{
   readonly board: () => Promise<BoardView>;
   /** Tells the user through a Herdr notification that these rows just arrived in "Needs you". */
   readonly notifyNeedsYou: (repoPath: string, rows: readonly BoardRow[]) => Promise<void>;
+  /** Saves `board` with this session's open coordinators as the snapshot panels draw from. */
+  readonly writeBoardSnapshot: (board: BoardView) => Promise<void>;
   /** The PR watch view, after reading GitHub unless another Tandem is reading it right now. */
   readonly prWatch: () => Promise<PrWatchView>;
   /** Watches a pull request: a link, `owner/repo#N`, or `#N` in `repoPath` (default: this project). */
@@ -958,6 +962,20 @@ class TandemController {
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       board: () => readBoard(this.#deps.home, this.#deps.clock),
       notifyNeedsYou: (repoPath, rows) => this.notifyNeedsYou(repoPath, rows),
+      writeBoardSnapshot: async (board) =>
+        writeBoardSnapshot(this.#deps.home, {
+          version: 1,
+          writtenAt: this.#deps.clock(),
+          board,
+          coordinators: (await listCoordinatorRecords(this.#deps.home, this.#deps.sessionId)).map(
+            (record) => ({
+              repoPath: record.repoPath,
+              project: basename(record.repoPath),
+              workspaceId: record.endpoint.workspaceId,
+              paneId: record.endpoint.paneId,
+            }),
+          ),
+        }),
       prWatch: () => this.#prWatch.view(),
       prWatchStart: async (input) => this.#prWatch.start(await this.namedPullRequest(input)),
       prWatchStop: async (input) => this.#prWatch.stop((await this.namedPullRequest(input)).ref),

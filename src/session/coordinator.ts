@@ -528,8 +528,7 @@ export class CoordinatorSession {
    * land in "Needs you". What was already there when the coordinator started counts as seen, so a
    * relaunch notifies nothing.
    */
-  private async notifyOnArrival(service: TandemService): Promise<void> {
-    const rows = (await service.board()).needsYou;
+  private async notifyOnArrival(service: TandemService, rows: readonly BoardRow[]): Promise<void> {
     const current = new Map<string, BoardRow>();
     if (rows.length > 0) {
       const repo = await this.deps.realpath(this.deps.environment.repo);
@@ -569,7 +568,13 @@ export class CoordinatorSession {
         thread: { open: this.threadOpen(), held: this.heldNotifications },
       });
       await deliverPrWatchNotices({ host: this.deps.host, service });
-      await this.notifyOnArrival(service);
+      const board = await service.board();
+      await this.notifyOnArrival(service, board.needsYou);
+      await service
+        .writeBoardSnapshot(board)
+        .catch((error: unknown) =>
+          this.deps.logError("Tandem could not save the board for the panel", error),
+        );
       await deliverInvestigationQuestions({ host: this.deps.host, service });
       // Setup moves on after the user's actions, not on the timer.
       if (!runTick && (await this.tandemCheckout())) await this.onboarding().afterAction();
