@@ -475,6 +475,11 @@ export class WorkerSession {
     void this.persistState("idle", this.currentState.completed).catch(() => this.abort());
   }
 
+  /** Whether the worker's report has been submitted (or settled for it). */
+  get reportSubmitted(): boolean {
+    return this.resultPublished;
+  }
+
   /**
    * A background command finishing after the report was submitted would hold the pane busy for
    * nothing, so that wake is stopped. It is not the session's own abort: the turn ends quietly.

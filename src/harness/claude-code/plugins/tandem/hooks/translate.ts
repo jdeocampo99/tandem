@@ -4,7 +4,7 @@
  * register.ts only carries them out.
  */
 
-import type { HookEvent, HookReply, WireToolCall, WireUsage } from "./protocol.ts";
+import type { HookEvent, HookReply, PromptOrigin, WireToolCall, WireUsage } from "./protocol.ts";
 
 /** Claude Code names a tool this mod registers `mcp__tandem__<tool>`. */
 const PLUGIN_TOOL_PREFIX = "mcp__tandem__";
@@ -59,11 +59,15 @@ export function agentStartEvent(text: string | undefined): HookEvent {
     : { type: "agentStart", prompt: text };
 }
 
+function promptOrigin(kind: string): PromptOrigin {
+  return kind === "composer" || kind === "task-notification" ? kind : "other";
+}
+
 export function userPromptEvent(prompt: PromptFields): HookEvent {
   return {
     type: "userPrompt",
     text: prompt.text,
-    interactive: prompt.origin.kind === "composer",
+    origin: promptOrigin(prompt.origin.kind),
     attachments: prompt.attachments?.length ?? 0,
   };
 }

@@ -143,7 +143,6 @@ function notificationContent(notifications: readonly NotificationRef[]): string 
       }
       if (notification.reportPath !== undefined)
         lines.push(`Evidence report: ${compactText(notification.reportPath, 180)}`);
-      if (notification.followUp !== undefined) lines.push(notification.followUp);
       return lines.join("\n");
     })
     .join("\n");
@@ -151,8 +150,9 @@ function notificationContent(notifications: readonly NotificationRef[]): string 
 
 /**
  * Judgment-needed notifications shown to the user: no task, notification, or question id in the
- * text. The same ids, needed for the model to act, travel separately through
- * {@link judgmentIdentifiers} on a message the user never sees.
+ * text, and no directions to the model. The ids and the research follow-up directions, needed for
+ * the model to act, travel separately through {@link judgmentIdentifiers} on a message the user
+ * never sees.
  */
 function judgmentDisplayContent(notifications: readonly NotificationRef[]): string {
   return notifications
@@ -167,7 +167,6 @@ function judgmentDisplayContent(notifications: readonly NotificationRef[]): stri
       }
       if (notification.reportPath !== undefined)
         lines.push(`Evidence report: ${compactText(notification.reportPath, 180)}`);
-      if (notification.followUp !== undefined) lines.push(notification.followUp);
       return lines.join("\n");
     })
     .join("\n");
@@ -175,8 +174,9 @@ function judgmentDisplayContent(notifications: readonly NotificationRef[]): stri
 
 /**
  * The task/request and question ids the displayed judgment-needed text just left out, in the same
- * order, for a tool call to act on. Delivered as the hidden part of the wake: it reaches the
- * model's context, but the host never renders it, so the user never sees an id.
+ * order, for a tool call to act on, followed by each scout's research follow-up directions and any
+ * inlined report. Delivered as the hidden part of the wake: it reaches the model's context, but
+ * the host never renders it, so the user never sees an id or a direction meant for the model.
  */
 function judgmentIdentifiers(notifications: readonly NotificationRef[]): string {
   const lines = notifications.map((notification) => {
@@ -185,6 +185,9 @@ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string 
       ? ref
       : `${ref}, question ${notification.questionId}`;
   });
+  const followUps = notifications.flatMap((notification) =>
+    notification.followUp === undefined ? [] : ["", notification.followUp],
+  );
   const reports = notifications.flatMap((notification) =>
     notification.reportText === undefined
       ? []
@@ -197,6 +200,7 @@ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string 
   return [
     "Identifiers for the item(s) above, in the same order (never display or repeat these to the user):",
     ...lines,
+    ...followUps,
     ...reports,
   ].join("\n");
 }

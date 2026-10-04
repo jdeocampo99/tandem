@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModelSpec } from "../../contracts.ts";
@@ -29,18 +30,40 @@ const CONVERSATION_FLAGS: readonly string[] = ["--session-id", "--resume"];
 const REPEATABLE_FLAGS: readonly string[] = ["--plugin-dir"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
+/** A recorded conversation, and whether Claude Code saved it (it writes nothing before a first prompt). */
+export type RecordedConversation = Readonly<{ id: string; saved: boolean }>;
+
 /**
- * Resuming continues the recorded conversation. A fresh launch, or a resume with nothing
- * recorded, starts a new one.
+ * Resuming continues the recorded conversation. One Claude Code never saved (the person quit
+ * before their first message) cannot be resumed, so it starts again under the same id, which
+ * keeps the record true. A fresh launch, or a resume with nothing recorded, starts a new one.
  */
 export function chooseConversation(
-  recorded: string | undefined,
+  recorded: RecordedConversation | undefined,
   resume: boolean,
   newId: () => string,
 ): Readonly<{ id: string; resume: boolean }> {
   return resume && recorded !== undefined
-    ? { id: recorded, resume: true }
+    ? { id: recorded.id, resume: recorded.saved }
     : { id: newId(), resume: false };
+}
+
+/**
+ * Where Claude Code keeps a conversation: under its config directory, in a folder named for the
+ * working directory it ran in, with every character outside `[A-Za-z0-9]` replaced by `-`
+ * (checked on 2.1.289). `--resume` finds a conversation by this file, and `--session-id`
+ * refuses an id that has one.
+ */
+export function claudeTranscriptPath(
+  cwd: string,
+  id: string,
+  configDirectory: string = claudeConfigDirectory(),
+): string {
+  return join(configDirectory, "projects", cwd.replace(/[^A-Za-z0-9]/gu, "-"), `${id}.jsonl`);
+}
+
+function claudeConfigDirectory(): string {
+  return process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 }
 
 /** The conversation id a pointer file holds; anything else fails closed. */
@@ -189,13 +212,16 @@ async function conversation(
     home,
     directory,
     resume,
-  }: Readonly<{ home: string; directory: string | undefined; resume: boolean }>,
+    cwd,
+  }: Readonly<{ home: string; directory: string | undefined; resume: boolean; cwd: string }>,
   io: LaunchIo,
 ): Promise<SavedConversation> {
   const path = directory === undefined ? undefined : conversationPointerPath(directory);
   const text = resume && path !== undefined ? await io.readText(path) : undefined;
-  const recorded =
+  const id =
     text === undefined || path === undefined ? undefined : parseConversationPointer(text, path);
+  const recorded =
+    id === undefined ? undefined : { id, saved: await io.exists(claudeTranscriptPath(cwd, id)) };
   const conversation = chooseConversation(recorded, resume, io.newId);
   // A home too long for the sidecar's socket is refused before anything starts.
   sidecarSocketPath(home, conversation.id);

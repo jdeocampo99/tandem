@@ -163,7 +163,7 @@ test("the person's draft is known from each edit and cleared when they send it",
   const { pane: claude } = pane();
   claude.observe({ type: "promptEdit", draft: true });
   expect(claude.host.paneState().draft).toBe(true);
-  claude.observe({ type: "userPrompt", text: "stop", interactive: true, attachments: 0 });
+  claude.observe({ type: "userPrompt", text: "stop", origin: "composer", attachments: 0 });
   expect(claude.host.paneState().draft).toBe(false);
   claude.observe({ type: "promptEdit", draft: true });
   claude.observe({ type: "promptEdit", draft: false });

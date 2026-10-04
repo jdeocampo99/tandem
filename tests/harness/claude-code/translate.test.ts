@@ -41,16 +41,19 @@ test("output pieces become whole lines, holding back a line until its newline ar
   expect(lines.push(',"text":"hi"}\n\n')).toEqual(['{"type":"log","text":"hi"}']);
 });
 
-test("a typed prompt is interactive and counts its attachments; Tandem's own wakes are skipped", () => {
+test("a prompt carries where it came from and its attachments; Tandem's own wakes are skipped", () => {
   const typed = { text: "status?", origin: { kind: "composer" }, attachments: [{}, {}] };
   expect(userPromptEvent(typed)).toEqual({
     type: "userPrompt",
     text: "status?",
-    interactive: true,
+    origin: "composer",
     attachments: 2,
   });
+  expect(userPromptEvent({ text: "done", origin: { kind: "task-notification" } })).toMatchObject({
+    origin: "task-notification",
+  });
   expect(userPromptEvent({ text: "hi", origin: { kind: "sdk" } })).toMatchObject({
-    interactive: false,
+    origin: "other",
     attachments: 0,
   });
   expect(isOwnPrompt({ text: "wake", origin: { kind: "plugin", name: "tandem" } })).toBe(true);

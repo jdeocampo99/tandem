@@ -231,7 +231,7 @@ export class ClaudeCodePane {
         this.draft = event.draft;
         return;
       case "userPrompt":
-        if (event.interactive) this.draft = false;
+        if (event.origin === "composer") this.draft = false;
         return;
       default:
         return;

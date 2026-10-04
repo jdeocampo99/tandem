@@ -76,8 +76,9 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   part tells the model to list it and offer one item, starting none. With no thread open, notices
   wake the model at once. Thread state is in memory only: the notices stay pending in durable state,
   so a restarted coordinator delivers them with no thread open.
-- A judgment-needed scout notice carries that scout's post-research follow-up, rebuilt from the
-  durable record on every delivery (see [task lifecycle](task-lifecycle.md)). When the follow-up
+- A judgment-needed scout notice carries that scout's post-research follow-up in its hidden
+  identifiers message, never in the shown text, rebuilt from the durable record on every delivery
+  (see [task lifecycle](task-lifecycle.md)). When the follow-up
   asks for a summary and the report is at most 16,000 characters, its full text rides along in the
   hidden identifiers message, so the coordinator answers without a separate `read` call. The
   session entry's `details` keep the identifiers only, not the report.
