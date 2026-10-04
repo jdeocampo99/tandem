@@ -1,0 +1,1004 @@
+diff --git a/docs/reference/harness.md b/docs/reference/harness.md
+index e4969a8..47fd4e5 100644
+--- a/docs/reference/harness.md
++++ b/docs/reference/harness.md
+@@ -122,7 +122,7 @@ never import either harness's `launch.ts`; Biome enforces it.
+ | `launchEnvironment` (every agent) | none | `DISABLE_GROWTHBOOK=1` |
+ | `clearedEnvironment` (every agent) | none | Claude Code's nested-session variables (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, its session, bridge, and messaging ids, `CLAUDE_PID`) |
+ | `exitKeys` | `ctrl+d` | `ctrl+d ctrl+d`: the first only asks "Press Ctrl-D again to exit" |
+-| `conversation` | the directory as asked; none without one | the recorded id or a new one (below), always |
++| `conversation` | the directory as asked; none without one | the recorded id or a new one (below), always; resumed only when Claude Code saved it |
+ | `awaitReady` | resolves at once | waits for the sidecar (below) |
+ | `command(spec)` | coordinator and workers | coordinator and workers |
+ | `sameCommand` | ignores `--continue` | `--session-id X` and `--resume X` match |
+@@ -130,9 +130,9 @@ never import either harness's `launch.ts`; Biome enforces it.
+ | `listModels`, `validateModel` | `omp models --json` | the fixed catalogue, no command run |
+ | `listMcpServers` | OMP's servers | none (`--strict-mcp-config`) |
+ 
+-Coordinator and worker launch hand the harness a `LaunchIo` (read and write a file, new id, ask a
+-socket for `/health`, sleep, a monotonic clock; `launchIo` in src/harness/launch-io.ts), so each
+-harness's decisions are tested without real effects.
++Coordinator and worker launch hand the harness a `LaunchIo` (read and write a file, whether a file
++exists, new id, ask a socket for `/health`, sleep, a monotonic clock; `launchIo` in
++src/harness/launch-io.ts), so each harness's decisions are tested without real effects.
+ The CLI's `--extension` and `--config` confirm the coordinator files with those names; naming one
+ for a Claude Code coordinator, which loads neither, is refused. `doctor` checks each file by its
+ name. Only src/harness/omp/ and tests/harness/omp/ may import `@oh-my-pi/*`.
+@@ -175,6 +175,15 @@ says to run `tandem --fresh`. The pane's "press Enter to start it again" command
+ with `--resume`. The id is chosen before the command is built (`chooseConversation` is pure), and
+ the file is written only after the ready wait proves Claude Code started on that id.
+ 
++Claude Code saves a conversation only once its first prompt is sent, as
++`<config dir>/projects/<cwd with every character outside [A-Za-z0-9] as ->/<id>.jsonl` under
++`CLAUDE_CONFIG_DIR` or `~/.claude` (`claudeTranscriptPath`; checked on 2.1.289). `--resume <id>`
++of an id with no such file prints "No conversation found with session ID" and exits, which left
++the launch to fail 30 s later blaming trust (seen live after quitting a coordinator before typing
++anything). So a resume first checks that file (`LaunchIo.exists`): recorded but never saved, the
++same id runs with `--session-id`, which Claude Code accepts, and the record stays true; the person
++sees a fresh conversation, which is all there was.
++
+ **Ready wait.** The adapter starts the sidecar as Claude Code's session starts, so launch polls
+ `GET /health` on `sidecarSocketPath(home, id)` every 250 ms. The first answer means Claude Code
+ trusted the project and loaded the plugin. A home too long for the socket path is refused before the
+@@ -231,7 +240,8 @@ only read-only commands; the tool guard below enforces both.
+ - **Conversation.** Every Claude Code worker names its conversation, because its sidecar's socket
+   is named by it. A job with a `sessionDirectory` (a scout or implementer Tandem may continue)
+   keeps the id in `<directory>/claude-code-conversation` once its sidecar answers, and a later
+-  launch resumes it with `--resume`; a job without one gets a new id each launch.
++  launch resumes it with `--resume` (or `--session-id`, when Claude Code never saved it, as for
++  the coordinator); a job without one gets a new id each launch.
+ - **Ready wait.** `runWorkerJob` runs the ready wait beside Claude Code, as direct coordinator
+   launch does. After 30 s with no sidecar it stops Claude Code (SIGTERM through the run's abort
+   signal) and fails the job with the same plain-English reason, ending "so Tandem stopped this
+@@ -302,7 +312,7 @@ without reaching the session; a failure inside the session gets 500 and `refused
+ | Event | Fields | Reply | Coordinator | Worker |
+ | --- | --- | --- | --- | --- |
+ | `sessionStart` | `model` (the id Claude Code reports) | `done` | `sessionStart` | steering's and the session's `onSessionStart` |
+-| `userPrompt` | `text`, `interactive`, `attachments` | `promptRoute {handled}` | prompt routing, then `userPrompt` | `onHumanInput` for a typed prompt that is not the brief; never handled |
++| `userPrompt` | `text`, `origin` (`composer`, `task-notification`, or `other`), `attachments` | `promptRoute {handled}` | prompt routing, then `userPrompt` for a composer prompt | `onHumanInput` for a composer prompt that is not the brief; a background task's notification after the report is handled, so the mod drops it |
+ | `agentStart` | `prompt?` (the text the run begins with) | `turnContext {system, context}` | `agentStart` | `onAgentStart`; the prompt's newest steering batch is applied |
+ | `turnStart` | | `done` | `turnStart` | `onTurnStart` |
+ | `streaming` | | `done` | nothing | `onStreaming` |
+@@ -384,7 +394,7 @@ Two plugins under src/harness/claude-code/plugins/, loaded with `--plugin-dir`:
+ | Claude Code event | What the adapter does |
+ | --- | --- |
+ | `session.start` | Spawns the sidecar beside the plugin with `--session` `$.session.id()`, waits up to 8 s for its ready line, registers the tools it lists (as `mcp__tandem__<name>`, before the first prompt, since the first `session.start` is awaited), posts `sessionStart` with `$.session.model()`, and only then follows its later lines. A fatal line, an unreadable one, or no line stops it and shows a toast; the mod then has no tools and no socket and fails closed. A reload runs this again with a new sidecar. |
+-| `prompt.submit` | Skips Tandem's own submits. Posts `userPrompt` (`interactive` when the origin is the composer); `handled` drops the prompt. A prompt typed while idle then posts `agentStart` and carries `turnContext.context` as its `context`. |
++| `prompt.submit` | Skips Tandem's own submits. Posts `userPrompt` with `origin` from `e.origin.kind` (`composer` and `task-notification` as named, anything else `other`); `handled` drops the prompt. A prompt typed while idle then posts `agentStart` and carries `turnContext.context` as its `context`. |
+ | `turn.start` | Posts `agentStart` when the prompt did not (a wake, or a prompt typed over a running turn), then `turnStart`. Remembers the text and turn id. Both `agentStart`s carry the run's text as `prompt`. |
+ | `turn.step` (main loop) | Passes the response through chunk by chunk, posting `streaming` (not awaited) at most every 5 s. |
+ | `prompt.edit` | Posts `promptEdit` with whether text is left after the edit; a refusal returns the box unchanged, which consumes the edit. |
+@@ -421,7 +431,7 @@ repository's tsc and bun tests.
+ | No transcript reference | A Claude Code worker's result carries no `transcript` (OMP's session file and entry id); `tandem trace` has none to link. |
+ | No `TodoWrite` | The to-do list is built from `TaskCreate` and `TaskUpdate` (above). There are no phases, so a playbook step matches an item's subject. |
+ | No message list at turn end | `agentEnd` carries the run's prompt (`turn.start`'s text) and final answer (`turn.complete`'s `answer`), which the core reads as one user message and one assistant message, so the setup page's wait for the coordinator's answer to a comment matches. Without a prompt there are no messages and nothing matches. |
+-| No background-result wake | OMP marks a finished background command's wake, and a submitted worker stops it at once. Claude Code's task notification is an ordinary prompt to the adapter, so the turn runs; a submitted worker idle for 30 s still settles. |
++| No background-result wake | OMP marks a finished background command's wake, and a submitted worker aborts it. Claude Code sends a finished background task as a prompt whose origin is `task-notification`; a submitted worker answers it `handled`, the mod drops it, and no turn runs. |
+ | Model id, not selector | `assertSelectedModel("claude-code/<alias>")` passes when the reported id is the alias or contains it as a word (`claude-opus-5-5` for `opus`), and fails closed when no model was reported. |
+ 
+ ### Steering a Claude Code worker
+diff --git a/docs/reference/omp-extension.md b/docs/reference/omp-extension.md
+index 7d2e06e..1d858d7 100644
+--- a/docs/reference/omp-extension.md
++++ b/docs/reference/omp-extension.md
+@@ -76,8 +76,9 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
+   part tells the model to list it and offer one item, starting none. With no thread open, notices
+   wake the model at once. Thread state is in memory only: the notices stay pending in durable state,
+   so a restarted coordinator delivers them with no thread open.
+-- A judgment-needed scout notice carries that scout's post-research follow-up, rebuilt from the
+-  durable record on every delivery (see [task lifecycle](task-lifecycle.md)). When the follow-up
++- A judgment-needed scout notice carries that scout's post-research follow-up in its hidden
++  identifiers message, never in the shown text, rebuilt from the durable record on every delivery
++  (see [task lifecycle](task-lifecycle.md)). When the follow-up
+   asks for a summary and the report is at most 16,000 characters, its full text rides along in the
+   hidden identifiers message, so the coordinator answers without a separate `read` call. The
+   session entry's `details` keep the identifiers only, not the report.
+diff --git a/src/coordinator/launch.ts b/src/coordinator/launch.ts
+index 2a2ec3e..497528a 100644
+--- a/src/coordinator/launch.ts
++++ b/src/coordinator/launch.ts
+@@ -132,6 +132,8 @@ export type CoordinatorLaunchDependencies = Readonly<{
+   readonly newId?: () => string;
+   /** Whether a unix socket answers `GET /health`; defaults to asking it. */
+   readonly answersHealth?: (socket: string) => Promise<boolean>;
++  /** Whether a file exists, which tells a saved Claude Code conversation from one never saved. */
++  readonly exists?: (path: string) => Promise<boolean>;
+   /** Milliseconds on a monotonic clock, for the ready wait; defaults to `performance.now`. */
+   readonly now?: () => number;
+   /** Checks the files and model a new coordinator needs on the harness it would launch on. */
+@@ -856,6 +858,7 @@ function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): Launc
+     ...(dependencies.answersHealth === undefined
+       ? {}
+       : { answersHealth: dependencies.answersHealth }),
++    ...(dependencies.exists === undefined ? {} : { exists: dependencies.exists }),
+     ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+   });
+ }
+@@ -948,7 +951,12 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
+   const coordinatorCwd = worktree.path;
+   const harness = harnessFor(harnessOf(request.model));
+   const conversation = await harness.conversation(
+-    { home: paths.home, directory: paths.sessionDirectory, resume: request.continueSession },
++    {
++      home: paths.home,
++      directory: paths.sessionDirectory,
++      resume: request.continueSession,
++      cwd: coordinatorCwd,
++    },
+     coordinatorLaunchIo(dependencies),
+   );
+   // Every harness keeps a coordinator's conversation, which always has a directory.
+diff --git a/src/harness/claude-code/coordinator.ts b/src/harness/claude-code/coordinator.ts
+index 80a4260..2ed6671 100644
+--- a/src/harness/claude-code/coordinator.ts
++++ b/src/harness/claude-code/coordinator.ts
+@@ -9,6 +9,7 @@ import {
+   type ChoiceConfirmation,
+   promptRoutingConfig,
+   routeUserPrompt,
++  type UserPrompt,
+ } from "../../session/prompt-routing.ts";
+ import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
+ import { tandemRequestSchema } from "../../session/tools.ts";
+@@ -79,7 +80,14 @@ export function claudeCodeCoordinator(
+         await session.sessionStart();
+         return DONE;
+       case "userPrompt": {
+-        const { handled } = await routeUserPrompt(event, {
++        const interactive = event.origin === "composer";
++        const prompt: UserPrompt = {
++          type: "userPrompt",
++          text: event.text,
++          interactive,
++          attachments: event.attachments,
++        };
++        const { handled } = await routeUserPrompt(prompt, {
+           confirmation,
+           config: routing,
+           service: () => session.service(),
+@@ -88,7 +96,7 @@ export function claudeCodeCoordinator(
+           confirm: pane.host.confirm,
+           diagnostics: (entry) => appendDiagnosticEvent(environment.home, entry),
+         });
+-        if (!handled && event.interactive) session.userPrompt();
++        if (!handled && interactive) session.userPrompt();
+         return { type: "promptRoute", handled };
+       }
+       case "agentStart": {
+diff --git a/src/harness/claude-code/host.ts b/src/harness/claude-code/host.ts
+index c2783e5..f19a711 100644
+--- a/src/harness/claude-code/host.ts
++++ b/src/harness/claude-code/host.ts
+@@ -231,7 +231,7 @@ export class ClaudeCodePane {
+         this.draft = event.draft;
+         return;
+       case "userPrompt":
+-        if (event.interactive) this.draft = false;
++        if (event.origin === "composer") this.draft = false;
+         return;
+       default:
+         return;
+diff --git a/src/harness/claude-code/launch.ts b/src/harness/claude-code/launch.ts
+index 2cba6b1..f273a94 100644
+--- a/src/harness/claude-code/launch.ts
++++ b/src/harness/claude-code/launch.ts
+@@ -1,4 +1,5 @@
+ import { realpath } from "node:fs/promises";
++import { homedir } from "node:os";
+ import { basename, dirname, join, resolve } from "node:path";
+ import { fileURLToPath } from "node:url";
+ import type { ModelSpec } from "../../contracts.ts";
+@@ -29,20 +30,42 @@ const CONVERSATION_FLAGS: readonly string[] = ["--session-id", "--resume"];
+ const REPEATABLE_FLAGS: readonly string[] = ["--plugin-dir"];
+ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+ 
++/** A recorded conversation, and whether Claude Code saved it (it writes nothing before a first prompt). */
++export type RecordedConversation = Readonly<{ id: string; saved: boolean }>;
++
+ /**
+- * Resuming continues the recorded conversation. A fresh launch, or a resume with nothing
+- * recorded, starts a new one.
++ * Resuming continues the recorded conversation. One Claude Code never saved (the person quit
++ * before their first message) cannot be resumed, so it starts again under the same id, which
++ * keeps the record true. A fresh launch, or a resume with nothing recorded, starts a new one.
+  */
+ export function chooseConversation(
+-  recorded: string | undefined,
++  recorded: RecordedConversation | undefined,
+   resume: boolean,
+   newId: () => string,
+ ): Readonly<{ id: string; resume: boolean }> {
+   return resume && recorded !== undefined
+-    ? { id: recorded, resume: true }
++    ? { id: recorded.id, resume: recorded.saved }
+     : { id: newId(), resume: false };
+ }
+ 
++/**
++ * Where Claude Code keeps a conversation: under its config directory, in a folder named for the
++ * working directory it ran in, with every character outside `[A-Za-z0-9]` replaced by `-`
++ * (checked on 2.1.289). `--resume` finds a conversation by this file, and `--session-id`
++ * refuses an id that has one.
++ */
++export function claudeTranscriptPath(
++  cwd: string,
++  id: string,
++  configDirectory: string = claudeConfigDirectory(),
++): string {
++  return join(configDirectory, "projects", cwd.replace(/[^A-Za-z0-9]/gu, "-"), `${id}.jsonl`);
++}
++
++function claudeConfigDirectory(): string {
++  return process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
++}
++
+ /** The conversation id a pointer file holds; anything else fails closed. */
+ export function parseConversationPointer(text: string, path: string): string {
+   const id = text.trim();
+@@ -189,13 +212,16 @@ async function conversation(
+     home,
+     directory,
+     resume,
+-  }: Readonly<{ home: string; directory: string | undefined; resume: boolean }>,
++    cwd,
++  }: Readonly<{ home: string; directory: string | undefined; resume: boolean; cwd: string }>,
+   io: LaunchIo,
+ ): Promise<SavedConversation> {
+   const path = directory === undefined ? undefined : conversationPointerPath(directory);
+   const text = resume && path !== undefined ? await io.readText(path) : undefined;
+-  const recorded =
++  const id =
+     text === undefined || path === undefined ? undefined : parseConversationPointer(text, path);
++  const recorded =
++    id === undefined ? undefined : { id, saved: await io.exists(claudeTranscriptPath(cwd, id)) };
+   const conversation = chooseConversation(recorded, resume, io.newId);
+   // A home too long for the sidecar's socket is refused before anything starts.
+   sidecarSocketPath(home, conversation.id);
+diff --git a/src/harness/claude-code/plugins/tandem/hooks/protocol.ts b/src/harness/claude-code/plugins/tandem/hooks/protocol.ts
+index 1351e96..913a213 100644
+--- a/src/harness/claude-code/plugins/tandem/hooks/protocol.ts
++++ b/src/harness/claude-code/plugins/tandem/hooks/protocol.ts
+@@ -23,6 +23,13 @@ export type WireToolSpec = Readonly<{
+   inputSchema: Readonly<Record<string, unknown>>;
+ }>;
+ 
++/**
++ * Where a prompt came from, as Claude Code's `PromptOrigin.kind` names it: the person's Enter, a
++ * finished background task's notification, or anything else (the bridge, the SDK, a peer).
++ */
++export const PROMPT_ORIGINS = ["composer", "task-notification", "other"] as const;
++export type PromptOrigin = (typeof PROMPT_ORIGINS)[number];
++
+ /** One finished model turn's tokens, from Claude Code's `turn.complete`. */
+ export type WireUsage = Readonly<{
+   model: string;
+@@ -39,7 +46,7 @@ export type WireUsage = Readonly<{
+  */
+ export type SidecarEvent =
+   | Readonly<{ type: "sessionStart"; model: string }>
+-  | Readonly<{ type: "userPrompt"; text: string; interactive: boolean; attachments: number }>
++  | Readonly<{ type: "userPrompt"; text: string; origin: PromptOrigin; attachments: number }>
+   /** `prompt` is the text the run begins with, when it begins with one. */
+   | Readonly<{ type: "agentStart"; prompt?: string }>
+   | Readonly<{ type: "turnStart" }>
+@@ -178,6 +185,15 @@ function flag(record: Fields, key: string, where: string): boolean {
+   return value;
+ }
+ 
++function promptOrigin(record: Fields, key: string, where: string): PromptOrigin {
++  const value = record[key];
++  const origin = PROMPT_ORIGINS.find((known) => known === value);
++  if (origin === undefined) {
++    throw new WireError(`${where}.${key} must be one of ${PROMPT_ORIGINS.join(", ")}`);
++  }
++  return origin;
++}
++
+ function count(record: Fields, key: string, where: string): number {
+   const value = record[key];
+   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+@@ -234,11 +250,11 @@ function eventFrom(value: unknown): SidecarEvent {
+       shape("model");
+       return { type, model: name(record, "model", where) };
+     case "userPrompt":
+-      shape("text", "interactive", "attachments");
++      shape("text", "origin", "attachments");
+       return {
+         type,
+         text: text(record, "text", where),
+-        interactive: flag(record, "interactive", where),
++        origin: promptOrigin(record, "origin", where),
+         attachments: count(record, "attachments", where),
+       };
+     case "agentStart":
+diff --git a/src/harness/claude-code/plugins/tandem/hooks/translate.ts b/src/harness/claude-code/plugins/tandem/hooks/translate.ts
+index 8821dbf..8e0e22a 100644
+--- a/src/harness/claude-code/plugins/tandem/hooks/translate.ts
++++ b/src/harness/claude-code/plugins/tandem/hooks/translate.ts
+@@ -4,7 +4,7 @@
+  * register.ts only carries them out.
+  */
+ 
+-import type { HookEvent, HookReply, WireToolCall, WireUsage } from "./protocol.ts";
++import type { HookEvent, HookReply, PromptOrigin, WireToolCall, WireUsage } from "./protocol.ts";
+ 
+ /** Claude Code names a tool this mod registers `mcp__tandem__<tool>`. */
+ const PLUGIN_TOOL_PREFIX = "mcp__tandem__";
+@@ -59,11 +59,15 @@ export function agentStartEvent(text: string | undefined): HookEvent {
+     : { type: "agentStart", prompt: text };
+ }
+ 
++function promptOrigin(kind: string): PromptOrigin {
++  return kind === "composer" || kind === "task-notification" ? kind : "other";
++}
++
+ export function userPromptEvent(prompt: PromptFields): HookEvent {
+   return {
+     type: "userPrompt",
+     text: prompt.text,
+-    interactive: prompt.origin.kind === "composer",
++    origin: promptOrigin(prompt.origin.kind),
+     attachments: prompt.attachments?.length ?? 0,
+   };
+ }
+diff --git a/src/harness/claude-code/plugins/tandem/tests/register.test.ts b/src/harness/claude-code/plugins/tandem/tests/register.test.ts
+index ac993d2..9bbee2d 100644
+--- a/src/harness/claude-code/plugins/tandem/tests/register.test.ts
++++ b/src/harness/claude-code/plugins/tandem/tests/register.test.ts
+@@ -277,6 +277,28 @@ test("a typed prompt Tandem handles never reaches the model", async ($, on) => {
+   expect(submitted).toEqual([]);
+ });
+ 
++test("a background task's notification the sidecar handles is dropped", async ($, on) => {
++  const { posted, submitted } = sidecar(on, (event) =>
++    event.type === "userPrompt" && event.origin === "task-notification"
++      ? { type: "promptRoute", handled: true }
++      : DONE,
++  );
++  await $.session.start(start);
++  const result = await $.prompt.submit({
++    text: "Background task finished.",
++    origin: { kind: "task-notification" },
++    wait: false,
++  });
++  expect(result).toMatchObject({ drop: "Handled by Tandem." });
++  expect(posted.at(-1)).toEqual({
++    type: "userPrompt",
++    text: "Background task finished.",
++    origin: "task-notification",
++    attachments: 0,
++  });
++  expect(submitted).toEqual([]);
++});
++
+ test("a typed turn carries held deliveries, the coordinator section, and its answer back", async ($, on) => {
+   const { posted } = sidecar(on, (event) => {
+     if (event.type === "userPrompt") return { type: "promptRoute", handled: false };
+diff --git a/src/harness/claude-code/worker.ts b/src/harness/claude-code/worker.ts
+index 7f644fa..d75092e 100644
+--- a/src/harness/claude-code/worker.ts
++++ b/src/harness/claude-code/worker.ts
+@@ -94,7 +94,14 @@ export function claudeCodeWorker(pane: ClaudeCodePane, parts: WorkerParts): Sess
+         return DONE;
+       case "userPrompt":
+         // Tandem's brief, given as Claude Code's first prompt, is not the person at the pane.
+-        if (event.interactive && !event.text.startsWith(job.prompt)) session.onHumanInput();
++        if (event.origin === "composer" && !event.text.startsWith(job.prompt)) {
++          session.onHumanInput();
++        }
++        // A background task finishing after the report would run a turn for nothing; handled
++        // makes the mod drop it, as OMP aborts that wake.
++        if (event.origin === "task-notification" && session.reportSubmitted) {
++          return { type: "promptRoute", handled: true };
++        }
+         return { type: "promptRoute", handled: false };
+       case "agentStart":
+         session.onAgentStart();
+diff --git a/src/harness/contract.ts b/src/harness/contract.ts
+index fd69888..61a19b1 100644
+--- a/src/harness/contract.ts
++++ b/src/harness/contract.ts
+@@ -103,6 +103,7 @@ export type LaunchIo = Readonly<{
+   /** The file's text, or undefined when it does not exist. */
+   readText(path: string): Promise<string | undefined>;
+   writeText(path: string, text: string): Promise<void>;
++  exists(path: string): Promise<boolean>;
+   newId(): string;
+   /** Whether something answers `GET /health` on this unix socket. */
+   answersHealth(socket: string): Promise<boolean>;
+@@ -141,11 +142,11 @@ export type Harness = Readonly<{
+   exitKeys: readonly string[];
+   /**
+    * The conversation a launch names, from what an earlier launch kept in `directory`; OMP keeps
+-   * none without a directory. Refuses, before anything starts, a launch that could never get ready
+-   * under `home`.
++   * none without a directory. `cwd` is where the agent runs, which is where its harness keeps the
++   * conversation. Refuses, before anything starts, a launch that could never get ready under `home`.
+    */
+   conversation(
+-    launch: Readonly<{ home: string; directory: string | undefined; resume: boolean }>,
++    launch: Readonly<{ home: string; directory: string | undefined; resume: boolean; cwd: string }>,
+     io: LaunchIo,
+   ): Promise<Conversation>;
+   /**
+diff --git a/src/harness/launch-io.ts b/src/harness/launch-io.ts
+index e1dc54f..1832528 100644
+--- a/src/harness/launch-io.ts
++++ b/src/harness/launch-io.ts
+@@ -1,5 +1,5 @@
+ import { randomUUID } from "node:crypto";
+-import { mkdir, readFile, writeFile } from "node:fs/promises";
++import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+ import { dirname } from "node:path";
+ import type { LaunchIo } from "./contract.ts";
+ 
+@@ -17,7 +17,8 @@ function isMissing(error: unknown): boolean {
+ 
+ /** The real effects a launch lends its harness; tests replace the ones they script. */
+ export function launchIo(
+-  overrides: Pick<LaunchIo, "sleep"> & Partial<Pick<LaunchIo, "newId" | "answersHealth" | "now">>,
++  overrides: Pick<LaunchIo, "sleep"> &
++    Partial<Pick<LaunchIo, "exists" | "newId" | "answersHealth" | "now">>,
+ ): LaunchIo {
+   return {
+     readText: async (path) => {
+@@ -32,6 +33,13 @@ export function launchIo(
+       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+       await writeFile(path, text, { encoding: "utf8", mode: 0o600 });
+     },
++    exists:
++      overrides.exists ??
++      ((path) =>
++        access(path).then(
++          () => true,
++          () => false,
++        )),
+     newId: overrides.newId ?? randomUUID,
+     answersHealth: overrides.answersHealth ?? answersHealth,
+     sleep: overrides.sleep,
+diff --git a/src/session/notifications.ts b/src/session/notifications.ts
+index 387c2ae..baf28c2 100644
+--- a/src/session/notifications.ts
++++ b/src/session/notifications.ts
+@@ -143,7 +143,6 @@ function notificationContent(notifications: readonly NotificationRef[]): string
+       }
+       if (notification.reportPath !== undefined)
+         lines.push(`Evidence report: ${compactText(notification.reportPath, 180)}`);
+-      if (notification.followUp !== undefined) lines.push(notification.followUp);
+       return lines.join("\n");
+     })
+     .join("\n");
+@@ -151,8 +150,9 @@ function notificationContent(notifications: readonly NotificationRef[]): string
+ 
+ /**
+  * Judgment-needed notifications shown to the user: no task, notification, or question id in the
+- * text. The same ids, needed for the model to act, travel separately through
+- * {@link judgmentIdentifiers} on a message the user never sees.
++ * text, and no directions to the model. The ids and the research follow-up directions, needed for
++ * the model to act, travel separately through {@link judgmentIdentifiers} on a message the user
++ * never sees.
+  */
+ function judgmentDisplayContent(notifications: readonly NotificationRef[]): string {
+   return notifications
+@@ -167,7 +167,6 @@ function judgmentDisplayContent(notifications: readonly NotificationRef[]): stri
+       }
+       if (notification.reportPath !== undefined)
+         lines.push(`Evidence report: ${compactText(notification.reportPath, 180)}`);
+-      if (notification.followUp !== undefined) lines.push(notification.followUp);
+       return lines.join("\n");
+     })
+     .join("\n");
+@@ -175,8 +174,9 @@ function judgmentDisplayContent(notifications: readonly NotificationRef[]): stri
+ 
+ /**
+  * The task/request and question ids the displayed judgment-needed text just left out, in the same
+- * order, for a tool call to act on. Delivered as the hidden part of the wake: it reaches the
+- * model's context, but the host never renders it, so the user never sees an id.
++ * order, for a tool call to act on, followed by each scout's research follow-up directions and any
++ * inlined report. Delivered as the hidden part of the wake: it reaches the model's context, but
++ * the host never renders it, so the user never sees an id or a direction meant for the model.
+  */
+ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string {
+   const lines = notifications.map((notification) => {
+@@ -185,6 +185,9 @@ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string
+       ? ref
+       : `${ref}, question ${notification.questionId}`;
+   });
++  const followUps = notifications.flatMap((notification) =>
++    notification.followUp === undefined ? [] : ["", notification.followUp],
++  );
+   const reports = notifications.flatMap((notification) =>
+     notification.reportText === undefined
+       ? []
+@@ -197,6 +200,7 @@ function judgmentIdentifiers(notifications: readonly NotificationRef[]): string
+   return [
+     "Identifiers for the item(s) above, in the same order (never display or repeat these to the user):",
+     ...lines,
++    ...followUps,
+     ...reports,
+   ].join("\n");
+ }
+diff --git a/src/session/research-follow-up.ts b/src/session/research-follow-up.ts
+index 1205a76..84d6fc7 100644
+--- a/src/session/research-follow-up.ts
++++ b/src/session/research-follow-up.ts
+@@ -78,8 +78,9 @@ function followUpSteps(decision: ResearchFollowUpDecision): readonly string[] {
+ }
+ 
+ /**
+- * Render the durable post-research follow-up as coordinator-facing wake text. Pure: the caller
+- * supplies the decision, so the same persisted record produces the same content after a restart.
++ * Render the durable post-research follow-up as directions for the model. They travel in the
++ * wake's hidden part, so the person never sees them. Pure: the caller supplies the decision, so
++ * the same persisted record produces the same content after a restart.
+  */
+ export function buildResearchFollowUpContent(decision: ResearchFollowUpDecision): string {
+   const reason =
+diff --git a/src/session/worker.ts b/src/session/worker.ts
+index 4adcda3..f469d4b 100644
+--- a/src/session/worker.ts
++++ b/src/session/worker.ts
+@@ -475,6 +475,11 @@ export class WorkerSession {
+     void this.persistState("idle", this.currentState.completed).catch(() => this.abort());
+   }
+ 
++  /** Whether the worker's report has been submitted (or settled for it). */
++  get reportSubmitted(): boolean {
++    return this.resultPublished;
++  }
++
+   /**
+    * A background command finishing after the report was submitted would hold the pane busy for
+    * nothing, so that wake is stopped. It is not the session's own abort: the turn ends quietly.
+diff --git a/src/worker.ts b/src/worker.ts
+index 6a2f10e..c75e0cc 100644
+--- a/src/worker.ts
++++ b/src/worker.ts
+@@ -258,7 +258,7 @@ export async function runWorkerJob(
+     const home =
+       options.home ?? environmentForContext({}, { cwd: job.cwd, sessionId: "tandem" }).home;
+     const conversation = await harness.conversation(
+-      { home, directory: job.sessionDirectory, resume: true },
++      { home, directory: job.sessionDirectory, resume: true, cwd: job.cwd },
+       io,
+     );
+     const request = buildWorkerCommand(harness, job, prompt, absoluteJobPath, conversation);
+diff --git a/tests/evals/harness-scenarios.test.ts b/tests/evals/harness-scenarios.test.ts
+index 32695e0..9eda11b 100644
+--- a/tests/evals/harness-scenarios.test.ts
++++ b/tests/evals/harness-scenarios.test.ts
+@@ -105,10 +105,20 @@ function claudeCodeRequest(world: ScenarioWorld): CoordinatorLaunchRequest {
+   };
+ }
+ 
+-/** A clock the ready wait's sleeps move, and a sidecar that answers when `ready` says so. */
++type FakeClaudeCode = Readonly<{
++  ready: boolean;
++  probes: string[];
++  /** Claude Code saved the conversation (a first prompt was sent); absent means it did. */
++  saved?: boolean;
++}>;
++
++/**
++ * A clock the ready wait's sleeps move, a sidecar that answers when `ready` says so, and a
++ * Claude Code that saved the conversation unless `saved` says otherwise.
++ */
+ function claudeCodeDependencies(
+   world: ScenarioWorld,
+-  sidecar: Readonly<{ ready: boolean; probes: string[] }>,
++  sidecar: FakeClaudeCode,
+ ): CoordinatorLaunchDependencies {
+   let clock = 0;
+   return {
+@@ -125,6 +135,7 @@ function claudeCodeDependencies(
+       sidecar.probes.push(socket);
+       return sidecar.ready;
+     },
++    exists: async () => sidecar.saved ?? true,
+     processEnvironment: {},
+   };
+ }
+@@ -180,6 +191,28 @@ test("a Claude Code coordinator starts a conversation, waits for its sidecar, an
+   });
+ });
+ 
++test("a Claude Code coordinator quit before its first message starts again under the same id", async () => {
++  await withScenario({}, async (world) => {
++    const sidecar = { ready: true, probes: [] as string[], saved: false };
++    const first = await launchCoordinator(
++      claudeCodeRequest(world),
++      claudeCodeDependencies(world, sidecar),
++    );
++    const id = conversationOf(first.command);
++
++    const second = await restartCoordinator(
++      claudeCodeRequest(world),
++      claudeCodeDependencies(world, sidecar),
++    );
++    expect(second.restarted).toBe(true);
++    // Claude Code has nothing to resume, so --resume would print "No conversation found" and
++    // exit; the same id starts fresh instead and the record keeps naming it.
++    expect(second.command).toContain("--session-id");
++    expect(second.command).not.toContain("--resume");
++    expect(conversationOf(second.command)).toBe(id);
++  });
++});
++
+ test("a Claude Code coordinator that never loads Tandem's plugin is stopped and its launch undone", async () => {
+   await withScenario({}, async (world) => {
+     const sidecar = { ready: false, probes: [] as string[] };
+diff --git a/tests/harness/claude-code/host.test.ts b/tests/harness/claude-code/host.test.ts
+index 9aa510d..6d4a7fe 100644
+--- a/tests/harness/claude-code/host.test.ts
++++ b/tests/harness/claude-code/host.test.ts
+@@ -163,7 +163,7 @@ test("the person's draft is known from each edit and cleared when they send it",
+   const { pane: claude } = pane();
+   claude.observe({ type: "promptEdit", draft: true });
+   expect(claude.host.paneState().draft).toBe(true);
+-  claude.observe({ type: "userPrompt", text: "stop", interactive: true, attachments: 0 });
++  claude.observe({ type: "userPrompt", text: "stop", origin: "composer", attachments: 0 });
+   expect(claude.host.paneState().draft).toBe(false);
+   claude.observe({ type: "promptEdit", draft: true });
+   claude.observe({ type: "promptEdit", draft: false });
+diff --git a/tests/harness/claude-code/launch.test.ts b/tests/harness/claude-code/launch.test.ts
+index e90fd4c..8f8db90 100644
+--- a/tests/harness/claude-code/launch.test.ts
++++ b/tests/harness/claude-code/launch.test.ts
+@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
+ import {
+   chooseConversation,
+   claudeCodeHarness,
++  claudeTranscriptPath,
+   parseConversationPointer,
+ } from "../../../src/harness/claude-code/launch.ts";
+ import { sidecarSocketPath } from "../../../src/harness/claude-code/socket.ts";
+@@ -18,6 +19,9 @@ const ID = "0f8fad5b-d9cb-469f-a165-70867728950e";
+ const OTHER_ID = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+ const DIRECTORY = "/home/coordinator-sessions/abc";
+ const POINTER = join(DIRECTORY, "claude-code-conversation");
++const CWD = "/pool/coordinator";
++/** Claude Code's own record of the conversation, which exists once a first prompt was sent. */
++const TRANSCRIPT = claudeTranscriptPath(CWD, ID);
+ 
+ function coordinatorSpec(overrides: Partial<LaunchSpec> = {}): LaunchSpec {
+   return {
+@@ -45,6 +49,8 @@ type FakeIo = LaunchIo & {
+   readonly reads: string[];
+   readonly writes: Array<readonly [string, string]>;
+   readonly probes: string[];
++  /** The paths whose existence was checked. */
++  readonly checks: string[];
+ };
+ 
+ function fakeIo(
+@@ -58,10 +64,12 @@ function fakeIo(
+   const reads: string[] = [];
+   const writes: Array<readonly [string, string]> = [];
+   const probes: string[] = [];
++  const checks: string[] = [];
+   return {
+     reads,
+     writes,
+     probes,
++    checks,
+     readText: async (path) => {
+       reads.push(path);
+       return options.files?.[path];
+@@ -69,6 +77,10 @@ function fakeIo(
+     writeText: async (path, text) => {
+       writes.push([path, text]);
+     },
++    exists: async (path) => {
++      checks.push(path);
++      return options.files?.[path] !== undefined;
++    },
+     newId: () => OTHER_ID,
+     answersHealth: async (socket) => {
+       probes.push(socket);
+@@ -179,7 +191,7 @@ test("a worker runs unattended with its role's tools, its model, and its brief",
+ test("a worker with no conversation directory gets a new id and keeps none", async () => {
+   const io = fakeIo({ healthyAfter: 0 });
+   const conversation = await claudeCodeHarness.conversation(
+-    { home: "/home", directory: undefined, resume: true },
++    { home: "/home", directory: undefined, resume: true, cwd: CWD },
+     io,
+   );
+   expect(conversation).toEqual({
+@@ -208,9 +220,25 @@ test("Claude Code exits on a second Ctrl-D", () => {
+ 
+ test("resuming continues the recorded conversation; anything else starts a new one", () => {
+   const newId = () => OTHER_ID;
+-  expect(chooseConversation(ID, true, newId)).toEqual({ id: ID, resume: true });
++  const saved = { id: ID, saved: true };
++  expect(chooseConversation(saved, true, newId)).toEqual({ id: ID, resume: true });
+   expect(chooseConversation(undefined, true, newId)).toEqual({ id: OTHER_ID, resume: false });
+-  expect(chooseConversation(ID, false, newId)).toEqual({ id: OTHER_ID, resume: false });
++  expect(chooseConversation(saved, false, newId)).toEqual({ id: OTHER_ID, resume: false });
++});
++
++test("a recorded conversation Claude Code never saved starts again under the same id", () => {
++  // The person quit before their first message, so there is nothing to resume; the id stays
++  // valid for --session-id, and the record stays true.
++  expect(chooseConversation({ id: ID, saved: false }, true, () => OTHER_ID)).toEqual({
++    id: ID,
++    resume: false,
++  });
++});
++
++test("a conversation lives under Claude Code's config directory, in a folder named for its cwd", () => {
++  expect(claudeTranscriptPath("/private/var/folders/4c/zx_y/T/repo.1aCA", ID, "/cfg")).toBe(
++    `/cfg/projects/-private-var-folders-4c-zx-y-T-repo-1aCA/${ID}.jsonl`,
++  );
+ });
+ 
+ test("a pointer holding anything but a conversation id fails closed with a way out", () => {
+@@ -221,10 +249,10 @@ test("a pointer holding anything but a conversation id fails closed with a way o
+ });
+ 
+ test("a launch reads the pointer only to resume, and starts fresh when there is none", async () => {
+-  const recorded = fakeIo({ files: { [POINTER]: `${ID}\n` } });
++  const recorded = fakeIo({ files: { [POINTER]: `${ID}\n`, [TRANSCRIPT]: "" } });
+   expect(
+     await claudeCodeHarness.conversation(
+-      { home: "/home", directory: DIRECTORY, resume: true },
++      { home: "/home", directory: DIRECTORY, resume: true, cwd: CWD },
+       recorded,
+     ),
+   ).toEqual({
+@@ -233,11 +261,12 @@ test("a launch reads the pointer only to resume, and starts fresh when there is
+     resume: true,
+     id: ID,
+   });
++  expect(recorded.checks).toEqual([TRANSCRIPT]);
+ 
+-  const fresh = fakeIo({ files: { [POINTER]: `${ID}\n` } });
++  const fresh = fakeIo({ files: { [POINTER]: `${ID}\n`, [TRANSCRIPT]: "" } });
+   expect(
+     await claudeCodeHarness.conversation(
+-      { home: "/home", directory: DIRECTORY, resume: false },
++      { home: "/home", directory: DIRECTORY, resume: false, cwd: CWD },
+       fresh,
+     ),
+   ).toEqual({
+@@ -247,11 +276,12 @@ test("a launch reads the pointer only to resume, and starts fresh when there is
+     id: OTHER_ID,
+   });
+   expect(fresh.reads).toEqual([]);
++  expect(fresh.checks).toEqual([]);
+ 
+   const missing = fakeIo();
+   expect(
+     await claudeCodeHarness.conversation(
+-      { home: "/home", directory: DIRECTORY, resume: true },
++      { home: "/home", directory: DIRECTORY, resume: true, cwd: CWD },
+       missing,
+     ),
+   ).toMatchObject({
+@@ -261,10 +291,24 @@ test("a launch reads the pointer only to resume, and starts fresh when there is
+   expect(missing.writes).toEqual([]);
+ });
+ 
++test("a resume of a conversation Claude Code never saved runs --session-id with the recorded id", async () => {
++  // Seen live on 2.1.289: `claude --resume <id>` of a conversation quit before its first message
++  // printed "No conversation found with session ID" and exited, and the launch failed 30 s later
++  // blaming trust. The same id starts fresh instead.
++  const io = fakeIo({ files: { [POINTER]: `${ID}\n` } });
++  const conversation = await claudeCodeHarness.conversation(
++    { home: "/home", directory: DIRECTORY, resume: true, cwd: CWD },
++    io,
++  );
++  expect(conversation).toEqual({ kind: "saved", directory: DIRECTORY, resume: false, id: ID });
++  expect(io.checks).toEqual([TRANSCRIPT]);
++  expect(claudeCodeHarness.command(coordinatorSpec({ conversation }))).toContain("--session-id");
++});
++
+ test("a home too long for the sidecar's socket is refused before the coordinator starts", async () => {
+   await expect(
+     claudeCodeHarness.conversation(
+-      { home: `/${"h".repeat(100)}`, directory: DIRECTORY, resume: false },
++      { home: `/${"h".repeat(100)}`, directory: DIRECTORY, resume: false, cwd: CWD },
+       fakeIo(),
+     ),
+   ).rejects.toThrow("use a shorter Tandem home");
+diff --git a/tests/harness/claude-code/protocol.test.ts b/tests/harness/claude-code/protocol.test.ts
+index 7b1b179..b075cb5 100644
+--- a/tests/harness/claude-code/protocol.test.ts
++++ b/tests/harness/claude-code/protocol.test.ts
+@@ -14,7 +14,7 @@ const call = { id: "toolu_1", name: "Read", input: { file_path: "src/a.ts" } };
+ 
+ const EVENTS: readonly SidecarEvent[] = [
+   { type: "sessionStart", model: "claude-opus-5-5" },
+-  { type: "userPrompt", text: "status?", interactive: true, attachments: 0 },
++  { type: "userPrompt", text: "status?", origin: "composer", attachments: 0 },
+   { type: "agentStart" },
+   { type: "agentStart", prompt: "Research the cache." },
+   { type: "turnStart" },
+@@ -67,11 +67,11 @@ test("malformed or unknown events are refused with the reason", () => {
+     ['{"type":"agentStart","extra":1}', "agentStart event has unknown fields: extra"],
+     ['{"type":"sessionStart","model":" "}', "sessionStart event.model must not be empty"],
+     [
+-      '{"type":"userPrompt","text":"hi","interactive":"yes","attachments":0}',
+-      "userPrompt event.interactive must be true or false",
++      '{"type":"userPrompt","text":"hi","origin":"bridge","attachments":0}',
++      "userPrompt event.origin must be one of composer, task-notification, other",
+     ],
+     [
+-      '{"type":"userPrompt","text":"hi","interactive":true,"attachments":-1}',
++      '{"type":"userPrompt","text":"hi","origin":"composer","attachments":-1}',
+       "userPrompt event.attachments must be a whole number of zero or more",
+     ],
+     [
+diff --git a/tests/harness/claude-code/translate.test.ts b/tests/harness/claude-code/translate.test.ts
+index 48562e9..94ee0a9 100644
+--- a/tests/harness/claude-code/translate.test.ts
++++ b/tests/harness/claude-code/translate.test.ts
+@@ -41,16 +41,19 @@ test("output pieces become whole lines, holding back a line until its newline ar
+   expect(lines.push(',"text":"hi"}\n\n')).toEqual(['{"type":"log","text":"hi"}']);
+ });
+ 
+-test("a typed prompt is interactive and counts its attachments; Tandem's own wakes are skipped", () => {
++test("a prompt carries where it came from and its attachments; Tandem's own wakes are skipped", () => {
+   const typed = { text: "status?", origin: { kind: "composer" }, attachments: [{}, {}] };
+   expect(userPromptEvent(typed)).toEqual({
+     type: "userPrompt",
+     text: "status?",
+-    interactive: true,
++    origin: "composer",
+     attachments: 2,
+   });
++  expect(userPromptEvent({ text: "done", origin: { kind: "task-notification" } })).toMatchObject({
++    origin: "task-notification",
++  });
+   expect(userPromptEvent({ text: "hi", origin: { kind: "sdk" } })).toMatchObject({
+-    interactive: false,
++    origin: "other",
+     attachments: 0,
+   });
+   expect(isOwnPrompt({ text: "wake", origin: { kind: "plugin", name: "tandem" } })).toBe(true);
+diff --git a/tests/harness/claude-code/worker.test.ts b/tests/harness/claude-code/worker.test.ts
+index 3bf3c74..a11e241 100644
+--- a/tests/harness/claude-code/worker.test.ts
++++ b/tests/harness/claude-code/worker.test.ts
+@@ -174,7 +174,7 @@ test("an idle worker gets steering as a submitted prompt, after its brief has ru
+ 
+ test("the brief is Tandem's; a prompt the person types is theirs", async () => {
+   const { binding, files } = await worker();
+-  await binding.handle({ type: "userPrompt", text: BRIEF, interactive: true, attachments: 0 });
++  await binding.handle({ type: "userPrompt", text: BRIEF, origin: "composer", attachments: 0 });
+   await binding.handle({ type: "agentStart", prompt: BRIEF });
+   await binding.handle({ type: "agentEnd", interrupted: false });
+   // A turn Tandem started that ended without a report is reminded, not conversation.
+@@ -185,7 +185,7 @@ test("the brief is Tandem's; a prompt the person types is theirs", async () => {
+   await typed.binding.handle({
+     type: "userPrompt",
+     text: "What did you find?",
+-    interactive: true,
++    origin: "composer",
+     attachments: 0,
+   });
+   await typed.binding.handle({ type: "agentStart", prompt: "What did you find?" });
+@@ -193,6 +193,34 @@ test("the brief is Tandem's; a prompt the person types is theirs", async () => {
+   expect(typed.lines.filter((line) => line.type === "submit")).toEqual([]);
+ });
+ 
++test("a background task's notification after the report is dropped; before it, and a typed prompt after it, still run", async () => {
++  const { binding } = await worker();
++  const notice = {
++    type: "userPrompt",
++    text: "Background task finished.",
++    origin: "task-notification",
++    attachments: 0,
++  } as const;
++  await binding.handle({ type: "agentStart", prompt: BRIEF });
++  expect(await binding.handle(notice)).toEqual({ type: "promptRoute", handled: false });
++  await binding.handle({
++    type: "pluginTool",
++    id: "t2",
++    name: "submit_report",
++    input: { outcome: "completed", report: "Keyed by path." },
++  });
++  await binding.handle({ type: "agentEnd", interrupted: false });
++  expect(await binding.handle(notice)).toEqual({ type: "promptRoute", handled: true });
++  expect(
++    await binding.handle({
++      type: "userPrompt",
++      text: "What did you find?",
++      origin: "composer",
++      attachments: 0,
++    }),
++  ).toEqual({ type: "promptRoute", handled: false });
++});
++
+ test("submit_report runs through the guard, and a TodoWrite list reaches the playbook gate", async () => {
+   const { binding, files } = await worker("scout");
+   await binding.handle({ type: "agentStart", prompt: BRIEF });
+diff --git a/tests/session/research-follow-up.test.ts b/tests/session/research-follow-up.test.ts
+index 3736bba..444e86b 100644
+--- a/tests/session/research-follow-up.test.ts
++++ b/tests/session/research-follow-up.test.ts
+@@ -212,7 +212,8 @@ test("a completed scout wake carries its durable follow-up and repeats it after
+ 
+     expect(first).toHaveLength(2);
+     expect(first[1]).toContain("Evidence report: ");
+-    expect(first[1]).toContain("Research follow-up: implementation-interview");
++    expect(first[0]).toContain("Research follow-up: implementation-interview");
++    expect(first[1]).not.toContain("Research follow-up");
+     expect(second).toEqual(first);
+   } finally {
+     await rm(home, { recursive: true, force: true });
+@@ -239,8 +240,9 @@ test("an unreadable report downgrades the recorded interview to a disclosed bloc
+     });
+ 
+     expect(sent).toHaveLength(2);
+-    expect(sent[1]).toContain("Research follow-up: disclose-blocker");
+-    expect(sent[1]).toContain("there is no readable report");
++    expect(sent[0]).toContain("Research follow-up: disclose-blocker");
++    expect(sent[0]).toContain("there is no readable report");
++    expect(sent[1]).not.toContain("Research follow-up");
+   } finally {
+     await rm(home, { recursive: true, force: true });
+   }
+@@ -268,7 +270,7 @@ test("an implementation-interview wake approves no scope and creates no implemen
+     expect(after.map((entry) => entry.id)).toEqual(["scout-task"]);
+     expect(after.every((entry) => entry.kind === "scout")).toBe(true);
+     expect(after[0]?.researchHandoffs).toBeUndefined();
+-    expect(sent[1]).toContain("its own confirmation is the single approval ask");
++    expect(sent[0]).toContain("its own confirmation is the single approval ask");
+   } finally {
+     await rm(home, { recursive: true, force: true });
+   }
+@@ -374,7 +376,41 @@ test("the delivered wake matches the pure decision for the same durable record",
+     const expected = buildResearchFollowUpContent(
+       decideResearchFollowUp({ task: record, reportReadable: true }),
+     );
+-    expect(sent[1]).toContain(expected);
++    expect(sent[0]).toContain(expected);
++  } finally {
++    await rm(home, { recursive: true, force: true });
++  }
++});
++
++test("the research follow-up directions reach the model unseen", async () => {
++  const home = await mkdtemp(join(tmpdir(), "tandem-follow-up-unseen-"));
++  try {
++    const { directory } = await completedScout(home, "report-only");
++    const store = createTaskStore({ directory, clock: () => NOW, idFactory: () => "unused" });
++    const record = await store.read("scout-task");
++    if (record === undefined) throw new Error("scout task was not persisted");
++
++    let shown = "";
++    let hidden = "";
++    await deliverPendingNotifications({
++      host: {
++        perform: async (effect) => {
++          if (effect.type !== "deliver") return;
++          shown = effect.text;
++          hidden = effect.hidden?.text ?? "";
++        },
++      },
++      service: noopAcknowledge(record),
++      tasks: [record],
++      delivered: new Set<string>(),
++      unacknowledged: new Set<string>(),
++      readReport: readResearchReport,
++    });
++
++    expect(shown).not.toContain("Research follow-up");
++    expect(shown).not.toContain("Give the user a summary");
++    expect(hidden).toContain("Research follow-up: report-only.");
++    expect(hidden).toContain("Give the user a summary");
+   } finally {
+     await rm(home, { recursive: true, force: true });
+   }
+diff --git a/tests/workers/jobs.test.ts b/tests/workers/jobs.test.ts
+index 406b992..e8f7de0 100644
+--- a/tests/workers/jobs.test.ts
++++ b/tests/workers/jobs.test.ts
+@@ -734,6 +734,7 @@ async function claudeCodeJob(root: string, sidecarAnswers: boolean) {
+   const launchIo: LaunchIo = {
+     readText: async () => undefined,
+     writeText: async () => undefined,
++    exists: async () => false,
+     newId: () => "0f8fad5b-d9cb-469f-a165-70867728950e",
+     answersHealth: async (socket) => {
+       probes.push(socket);

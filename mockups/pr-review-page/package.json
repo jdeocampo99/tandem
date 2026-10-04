@@ -1,0 +1,7 @@
+{
+  "name": "pr-review-page-mockup",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "bun build.ts" },
+  "dependencies": { "shiki": "^4.5.0" }
+}
