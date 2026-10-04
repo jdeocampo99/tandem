@@ -17,6 +17,7 @@ import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
 import { type TaskRollup, taskCost, taskRollup } from "../tasks/trace.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
+import { readWorkerActivity, type WorkerActivity } from "../workers/worker-activity.ts";
 import {
   type BoardView,
   boardView,
@@ -50,6 +51,7 @@ export async function readBoard(home: string, clock: Clock): Promise<BoardView> 
       finishedThisWeek: await weekRollups(home, clock, saved, now),
       progressAt: await progressTimes(saved, runtime),
       workerPanes: workerPanes(saved, runtime),
+      activities: await workerActivities(saved, runtime),
     };
   });
   return boardView(state, now);
@@ -67,6 +69,25 @@ async function progressTimes(
     if (receipt !== undefined) times.set(task.id, receipt.progressAt);
   }
   return times;
+}
+
+/** What each running task's newest primary worker with an activity file is doing. */
+async function workerActivities(
+  tasks: readonly TaskRecord[],
+  runtime: RuntimeState,
+): Promise<ReadonlyMap<string, WorkerActivity>> {
+  const activities = new Map<string, WorkerActivity>();
+  for (const task of tasks) {
+    if (!isRunningStage(task.stage)) continue;
+    for (const job of currentPrimaryJobs(task, taskRuntime(runtime, task.id))) {
+      if (job.receiptPath === undefined) continue;
+      const activity = await readWorkerActivity(job.receiptPath);
+      if (activity === undefined) continue;
+      activities.set(task.id, activity);
+      break;
+    }
+  }
+  return activities;
 }
 
 /** Where each running task's live primary worker runs, from its job's Herdr endpoint. */

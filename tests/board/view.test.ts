@@ -4,6 +4,7 @@ import { renderStatus, renderStatusBoard, renderStatusLine } from "../../src/boa
 import {
   boardView,
   finishedWithinWeek,
+  isBoardView,
   needsYouNotice,
   notifiesUser,
   renderBoard,
@@ -636,4 +637,25 @@ test("board rows carry what the panel navigates by: task ids, worker panes, PR l
     ["Research notes", "notes ready in chat"],
     ["Merged today", "merged"],
   ]);
+});
+
+test("a running row carries its worker's activity for the panel, and the view still checks", () => {
+  const activity = {
+    tool: "edit",
+    toolTarget: "src/auth/session.ts",
+    toolStartedAt: "2030-01-01T11:59:56.000Z",
+    todos: [{ content: "Write the test", status: "in_progress" }],
+  };
+  const view = boardView(
+    state({
+      tasks: [
+        task({ id: "task-a", stage: "implementing" }),
+        task({ id: "task-b", stage: "implementing" }),
+      ],
+      activities: new Map([["task-a", activity]]),
+    }),
+    NOW,
+  );
+  expect(view.running.map((row) => row.activity)).toEqual([activity, undefined]);
+  expect(isBoardView(JSON.parse(JSON.stringify(view)))).toBe(true);
 });
