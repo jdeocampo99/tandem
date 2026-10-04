@@ -1,5 +1,4 @@
 import {
-  type PanelColor,
   type PanelRow,
   type PanelTarget,
   type PanelView,
@@ -27,10 +26,11 @@ export type PanelState = Readonly<{
   readonly seen: ReadonlySet<string> | undefined;
   /** The first-run key help is showing. */
   readonly help: boolean;
+  /** Why the last go or switch did not get there; the next key clears it. */
+  readonly notice?: string;
   readonly lastClick?: Readonly<{ key: string; at: number }>;
 }>;
 
-/** Where a click at a screen cell lands, as the last render laid it out. */
 export type PanelHit = Readonly<{ y: number; from: number; to: number }> &
   (Readonly<{ kind: "chip"; repoPath: string }> | Readonly<{ kind: "row"; key: string }>);
 
@@ -47,26 +47,34 @@ export type PanelEffect =
   | Readonly<{ kind: "switch"; repoPath: string }>
   | Readonly<{ kind: "close" }>;
 
-export type HerdrStep = Readonly<{ readonly argv: readonly string[]; readonly required: boolean }>;
+/** One command; when it fails and has a `failure`, the effect stops there and says so. */
+export type HerdrStep = Readonly<{ readonly argv: readonly string[]; readonly failure?: string }>;
 
 const DOUBLE_CLICK_MS = 400;
 const REFRESH_MS = 1_000;
+/** How long a lone Esc waits for the rest of an escape sequence split across reads. */
+const ESCAPE_WAIT_MS = 50;
 const PANEL_WIDTH = 46;
-const TONES: Readonly<Record<PanelColor, Tone>> = {
-  yellow: "yellow",
-  red: "red",
-  blue: "blue",
-  magenta: "magenta",
-  green: "green",
-};
 const HELP = ["j k ↑ ↓ move · Enter go · / search", "1-9 [ ] project · Esc close · x hide"];
+const NO_COORDINATOR = "⚠ no coordinator is open for that project";
 
-/** Splits raw terminal input into keys, left clicks (SGR mouse), and focus changes. */
-export function parsePanelInput(chunk: string): PanelInput[] {
+/**
+ * Splits raw terminal input into keys, left clicks (SGR mouse), and focus changes. An escape
+ * sequence cut off at the end comes back as `pending` to join the next read, unless `final`.
+ */
+export function parsePanelInput(
+  chunk: string,
+  final: boolean,
+): Readonly<{ inputs: PanelInput[]; pending: string }> {
   const inputs: PanelInput[] = [];
   let rest = chunk;
   while (rest.length > 0) {
     const escaped = rest.startsWith("\x1b") ? rest.slice(1) : undefined;
+    if (escaped !== undefined && /^(?:\[[<0-9;?]*|O)?$/u.test(escaped)) {
+      if (!final) return { inputs, pending: rest };
+      if (escaped.length === 0) inputs.push({ kind: "escape" });
+      return { inputs, pending: "" };
+    }
     const mouse = escaped === undefined ? null : /^\[<(\d+);(\d+);(\d+)([Mm])/u.exec(escaped);
     const csi = escaped === undefined ? null : /^(?:\[[0-9;?]*|O)[@-~]/u.exec(escaped);
     if (mouse !== null) {
@@ -78,12 +86,13 @@ export function parsePanelInput(chunk: string): PanelInput[] {
       const final = csi[0].at(-1);
       if (final === "A") inputs.push({ kind: "up" });
       if (final === "B") inputs.push({ kind: "down" });
-      if (csi[0] === "[I" || csi[0] === "[O")
+      if (csi[0] === "[I" || csi[0] === "[O") {
         inputs.push({ kind: "focus", focused: final === "I" });
+      }
       rest = rest.slice(1 + csi[0].length);
     } else {
-      const char = rest[0] ?? "";
-      rest = rest.slice(1);
+      const char = String.fromCodePoint(rest.codePointAt(0) ?? 0);
+      rest = rest.slice(char.length);
       if (char === "\x1b") inputs.push({ kind: "escape" });
       else if (char === "\r" || char === "\n") inputs.push({ kind: "enter" });
       else if (char === "\x7f" || char === "\b") inputs.push({ kind: "backspace" });
@@ -91,7 +100,7 @@ export function parsePanelInput(chunk: string): PanelInput[] {
       else if (char >= " ") inputs.push({ kind: "char", char });
     }
   }
-  return inputs;
+  return { inputs, pending: "" };
 }
 
 /** What one input does to the panel, and what it asks the outside world to do. */
@@ -124,7 +133,7 @@ export function panelStep(
   if (input.kind === "focus") {
     return input.focused
       ? { state }
-      : { state: { ...state, seen: new Set(rows.map((row) => row.signature)) } };
+      : { state: { ...state, seen: new Set(frame.view.signatures) } };
   }
   if (input.kind === "interrupt") return { state, effect: { kind: "close" } };
   if (input.kind === "click") {
@@ -144,7 +153,9 @@ export function panelStep(
     const key = input.kind === "char" ? input.char : input.kind;
     if (state.query !== undefined) {
       if (input.kind === "char") return { state: { ...state, query: state.query + input.char } };
-      if (key === "backspace") return { state: { ...state, query: state.query.slice(0, -1) } };
+      if (key === "backspace") {
+        return { state: { ...state, query: [...state.query].slice(0, -1).join("") } };
+      }
       if (key === "escape") return { state: { ...state, query: undefined } };
     }
     if (key === "down" || key === "j") return move(1);
@@ -160,13 +171,14 @@ export function panelStep(
     }
     return { state };
   })();
-  return { ...step, state: { ...step.state, help: false } };
+  const { notice: _cleared, ...rest } = step.state;
+  return { ...step, state: { ...rest, help: false } };
 }
 
 /**
- * The Herdr commands for an effect, in order; a step that is not required may fail without
- * failing the effect. Focusing the workspace lands on its active pane; `agent focus` then picks
- * the exact pane, which Herdr allows only for panes it knows run an agent.
+ * The commands for an effect, in order. Focusing the workspace lands on its active pane;
+ * `agent focus` then picks the exact pane, which Herdr allows only for panes it knows run an
+ * agent, so it may fail without failing the effect. No steps means there is nowhere to go.
  */
 export function navigationSteps(
   effect: Exclude<PanelEffect, { kind: "close" }>,
@@ -175,8 +187,8 @@ export function navigationSteps(
 ): readonly HerdrStep[] {
   const herdr = (...args: string[]) => ["herdr", "--session", sessionId, ...args];
   const focus = (workspaceId: string, paneId?: string): HerdrStep[] => [
-    { argv: herdr("workspace", "focus", workspaceId), required: true },
-    ...(paneId === undefined ? [] : [{ argv: herdr("agent", "focus", paneId), required: false }]),
+    { argv: herdr("workspace", "focus", workspaceId), failure: "⚠ Herdr couldn't focus it" },
+    ...(paneId === undefined ? [] : [{ argv: herdr("agent", "focus", paneId) }]),
   ];
   const coordinator = (repoPath: string) =>
     coordinators.find((candidate) => candidate.repoPath === repoPath);
@@ -185,7 +197,9 @@ export function navigationSteps(
     return found === undefined ? [] : focus(found.workspaceId);
   }
   const { target } = effect;
-  if (target.kind === "url") return [{ argv: ["open", target.url], required: true }];
+  if (target.kind === "url") {
+    return [{ argv: ["open", target.url], failure: "⚠ couldn't open the link" }];
+  }
   if (target.kind === "pane") return focus(target.workspaceId, target.paneId);
   if (target.kind === "chat") {
     const found = coordinator(target.repoPath);
@@ -194,63 +208,100 @@ export function navigationSteps(
   return [];
 }
 
-/** The panel as terminal text, plus where each chip and row sits for mouse clicks. */
+/**
+ * The panel as terminal lines, plus where each chip and row sits for mouse clicks. Taller than
+ * `height`, the rows scroll to keep the selection in sight while the top and footer stay put.
+ */
 export function renderPanel(
   view: PanelView,
   state: PanelState,
-  style: Readonly<{ width: number; color: boolean }>,
-): Readonly<{ text: string; hits: readonly PanelHit[] }> {
-  const lines: Line[] = [];
+  style: Readonly<{ width: number; height?: number; color: boolean }>,
+): Readonly<{ lines: readonly string[]; hits: readonly PanelHit[] }> {
   const hits: PanelHit[] = [];
   let x = 1;
   const chips: Line = view.chips.flatMap((chip) => {
     const label = ` ${chip.number} ${chip.name}${chip.needsYou > 0 ? ` ${chip.needsYou}` : ""}${chip.offline ? " offline" : ""} `;
     const width = lineWidth([span(label)]);
-    hits.push({ kind: "chip", repoPath: chip.repoPath, y: 1, from: x, to: x + width - 1 });
+    if (x <= style.width) {
+      const to = Math.min(x + width - 1, style.width);
+      hits.push({ kind: "chip", repoPath: chip.repoPath, y: 1, from: x, to });
+    }
     x += width + 1;
     const tones: Tone[] = chip.current ? ["inverse", "bold"] : chip.offline ? ["dim"] : [];
     return [span(label, ...tones), span(" ")];
   });
-  lines.push(chips);
-  lines.push(
+  const top: Line[] = [
+    chips,
     state.query === undefined
       ? [span(view.summary, "dim")]
       : [span("/ ", "cyan"), span(`${state.query}▏`)],
-  );
+  ];
   if (state.help) {
     const inner = Math.max(...HELP.map((line) => lineWidth([span(line)])));
-    lines.push([span(`╭${"─".repeat(inner + 2)}╮`, "dim")]);
+    top.push([span(`╭${"─".repeat(inner + 2)}╮`, "dim")]);
     for (const help of HELP) {
-      lines.push([span("│ ", "dim"), span(help.padEnd(inner)), span(" │", "dim")]);
+      top.push([span("│ ", "dim"), span(help.padEnd(inner)), span(" │", "dim")]);
     }
-    lines.push([span(`╰${"─".repeat(inner + 2)}╯`, "dim")]);
+    top.push([span(`╰${"─".repeat(inner + 2)}╯`, "dim")]);
   }
-  lines.push([]);
+  const body: Line[] = [[]];
   if (view.quiet && state.query === undefined && view.chips.length > 0) {
-    lines.push([span("✓ All quiet.", "green")], []);
+    body.push([span("✓ All quiet.", "green")], []);
   }
   const rows = view.sections.flatMap((section) => section.rows);
   const selected = rows.find((row) => row.key === state.selected)?.key ?? rows[0]?.key;
+  const spans: { key: string; first: number; last: number }[] = [];
   for (const section of view.sections) {
-    lines.push([span(section.title.toUpperCase(), "bold")]);
+    body.push([span(section.title.toUpperCase(), "bold")]);
     for (const row of section.rows) {
-      const first = lines.length + 1;
-      lines.push(rowLine(row, row.key === selected, style.width));
-      for (const text of row.lines.slice(0, 2)) lines.push([span(`    ${text}`, "dim")]);
-      for (let y = first; y <= lines.length; y += 1) {
-        hits.push({ kind: "row", key: row.key, y, from: 1, to: style.width });
-      }
+      const first = body.length;
+      body.push(rowLine(row, row.key === selected, style.width));
+      for (const text of row.lines.slice(0, 2)) body.push([span(`    ${text}`, "dim")]);
+      spans.push({ key: row.key, first, last: body.length - 1 });
     }
-    lines.push([]);
+    body.push([]);
   }
-  if (view.footer !== undefined) lines.push([span(view.footer, "yellow")]);
-  const drawn = lines.map((line) => draw(line, { color: style.color, columns: style.width }));
-  return { text: `${drawn.join("\n")}\n`, hits };
+  const bottom: Line[] = [view.footer, state.notice].flatMap((text) =>
+    text === undefined ? [] : [[span(text, "yellow")]],
+  );
+  const room =
+    style.height === undefined
+      ? body.length
+      : Math.max(1, style.height - top.length - bottom.length);
+  const chosen = spans.find((each) => each.key === selected);
+  const start = scrollStart(body.length, room, chosen);
+  for (const each of spans) {
+    for (let index = each.first; index <= each.last; index += 1) {
+      if (index < start || index >= start + room) continue;
+      hits.push({
+        kind: "row",
+        key: each.key,
+        y: top.length + index - start + 1,
+        from: 1,
+        to: style.width,
+      });
+    }
+  }
+  const lines = [...top, ...body.slice(start, start + room), ...bottom];
+  return {
+    lines: lines.map((line) => draw(line, { color: style.color, columns: style.width })),
+    hits,
+  };
+}
+
+function scrollStart(
+  length: number,
+  room: number,
+  selected: Readonly<{ first: number; last: number }> | undefined,
+): number {
+  if (length <= room || selected === undefined) return 0;
+  const centered = Math.min(Math.max(0, selected.first - Math.floor(room / 3)), length - room);
+  return selected.last >= centered + room ? selected.last - room + 1 : centered;
 }
 
 function rowLine(row: PanelRow, selected: boolean, width: number): Line {
-  const stage = span(` ${row.stage}`, TONES[row.color]);
-  const lead = [span(row.changed ? "•" : " ", "blue"), span(`${row.glyph} `, TONES[row.color])];
+  const stage = span(` ${row.stage}`, row.color);
+  const lead = [span(row.changed ? "•" : " ", "blue"), span(`${row.glyph} `, row.color)];
   const room = Math.max(1, width - lineWidth(lead) - lineWidth([stage]));
   const name = fit(
     [span(row.name, ...(selected ? (["inverse"] as const) : (["bold"] as const)))],
@@ -263,9 +314,10 @@ function rowLine(row: PanelRow, selected: boolean, width: number): Line {
 export type PanelDeps = Readonly<{
   readonly input: NodeJS.ReadableStream;
   readonly write: (text: string) => void;
-  readonly columns: () => number | undefined;
+  readonly size: () => Readonly<{ columns?: number; rows?: number }>;
   readonly color: boolean;
   readonly clock: () => Date;
+  /** The snapshot, undefined when there is none yet; throws when it cannot be read. */
   readonly readSnapshot: () => Promise<BoardSnapshot | undefined>;
   readonly run: CommandRunner;
   readonly sessionId: string;
@@ -275,17 +327,22 @@ export type PanelDeps = Readonly<{
   /** Whether the first-run key help still shows, and how to remember that it was used. */
   readonly helpUnseen: boolean;
   readonly rememberHelpSeen: () => Promise<void>;
+  /** Calls `stop` when the process is asked to end; returns how to stop listening. */
+  readonly onExitSignal: (stop: () => void) => () => void;
 }>;
 
 const SCREEN_ON = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?1004h";
 const SCREEN_OFF = "\x1b[?1004l\x1b[?1006l\x1b[?1000l\x1b[?25h\x1b[?1049l";
+const HOME_CLEAR = "\x1b[H\x1b[2J";
 
 /**
- * Draws the panel from the snapshot file until it is closed. Without a terminal to read keys
- * from, it draws once and returns.
+ * Draws the panel from the snapshot file until it is closed, a signal ends it, or drawing
+ * fails; the terminal is put back in every case. Without a terminal to read keys from, it draws
+ * once and returns.
  */
 export async function runPanel(deps: PanelDeps): Promise<void> {
-  let snapshot = await deps.readSnapshot();
+  let snapshot: BoardSnapshot | undefined;
+  let readFailed = false;
   let state: PanelState = {
     project: undefined,
     query: undefined,
@@ -293,50 +350,81 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
     seen: undefined,
     help: deps.helpUnseen,
   };
-  let shown = "";
-  let hits: readonly PanelHit[] = [];
-  const frame = (): PanelView => {
-    const now = deps.clock().toISOString();
+  const refresh = async () => {
+    try {
+      snapshot = (await deps.readSnapshot()) ?? snapshot;
+      readFailed = false;
+    } catch {
+      readFailed = true;
+    }
     if (state.project === undefined && snapshot !== undefined) {
       state = { ...state, project: panelProject(snapshot.board.projectPaths, deps.cwd) };
     }
-    return panelView(snapshot, {
+  };
+  const view = () =>
+    panelView(snapshot, {
       project: state.project,
       query: state.query ?? "",
-      now,
+      now: deps.clock().toISOString(),
+      readFailed,
       ...(state.seen === undefined ? {} : { seen: state.seen }),
     });
+  const layout = () => {
+    const { columns, rows } = deps.size();
+    return renderPanel(view(), state, {
+      width: columns ?? PANEL_WIDTH,
+      ...(rows === undefined ? {} : { height: rows }),
+      color: deps.color,
+    });
   };
-  const redraw = (view: PanelView, clear: string) => {
-    const width = deps.columns() ?? PANEL_WIDTH;
-    const rendered = renderPanel(view, state, { width, color: deps.color });
-    hits = rendered.hits;
-    if (rendered.text !== shown) deps.write(`${clear}${rendered.text}`);
-    shown = rendered.text;
-  };
+  await refresh();
   const tty = deps.input as NodeJS.ReadableStream & {
     isTTY?: boolean;
     setRawMode?: (raw: boolean) => void;
   };
   if (tty.isTTY !== true || tty.setRawMode === undefined) {
-    redraw(frame(), "");
+    deps.write(`${layout().lines.join("\n")}\n`);
     return;
   }
-  const { promise: closed, resolve: close } = Promise.withResolvers<void>();
+  const setRawMode = tty.setRawMode.bind(tty);
+  let closing = false;
+  let shown = "";
+  let hits: readonly PanelHit[] = [];
+  const redraw = () => {
+    if (closing) return;
+    const rendered = layout();
+    hits = rendered.hits;
+    const text = rendered.lines.join("\n");
+    if (text !== shown) deps.write(`${HOME_CLEAR}${text}`);
+    shown = text;
+  };
+  const { promise: closed, resolve: close, reject: fail } = Promise.withResolvers<void>();
+  const guarded = (work: () => void) => {
+    try {
+      work();
+    } catch (error) {
+      fail(error);
+    }
+  };
   const navigate = async (effect: Exclude<PanelEffect, { kind: "close" }>) => {
     const steps = navigationSteps(effect, deps.sessionId, snapshot?.coordinators ?? []);
+    let notice = steps.length === 0 ? NO_COORDINATOR : undefined;
     for (const step of steps) {
-      const result = await deps.run({ argv: step.argv, cwd: deps.cwd });
-      if (result.code !== 0 && step.required) return;
+      const result = await deps.run({ argv: step.argv, cwd: deps.cwd }).catch(() => undefined);
+      if (result?.code !== 0 && step.failure !== undefined) {
+        notice = step.failure;
+        break;
+      }
     }
-    if (steps.length > 0 && deps.popup) close();
+    if (notice !== undefined) state = { ...state, notice };
+    else if (deps.popup) close();
+    guarded(redraw);
   };
-  const onData = (chunk: Buffer | string) => {
-    for (const input of parsePanelInput(chunk.toString())) {
-      const view = frame();
+  const handle = (inputs: readonly PanelInput[]) => {
+    for (const input of inputs) {
       const wasHelp = state.help;
       const step = panelStep(state, input, {
-        view,
+        view: view(),
         hits,
         popup: deps.popup,
         now: deps.clock().getTime(),
@@ -346,25 +434,45 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
       if (step.effect?.kind === "close") close();
       else if (step.effect !== undefined) void navigate(step.effect);
     }
-    redraw(frame(), "\x1b[H\x1b[2J");
+    redraw();
   };
-  tty.setRawMode(true);
-  deps.write(SCREEN_ON);
-  deps.input.on("data", onData);
-  deps.input.resume();
-  const timer = setInterval(() => {
-    void deps.readSnapshot().then((read) => {
-      snapshot = read ?? snapshot;
-      redraw(frame(), "\x1b[H\x1b[2J");
+  let pending = "";
+  let flush: ReturnType<typeof setTimeout> | undefined;
+  const onData = (chunk: Buffer | string) =>
+    guarded(() => {
+      clearTimeout(flush);
+      const parsed = parsePanelInput(pending + chunk.toString(), false);
+      pending = parsed.pending;
+      handle(parsed.inputs);
+      if (pending.length === 0) return;
+      flush = setTimeout(
+        () =>
+          guarded(() => {
+            const rest = parsePanelInput(pending, true);
+            pending = "";
+            handle(rest.inputs);
+          }),
+        ESCAPE_WAIT_MS,
+      );
     });
+  const timer = setInterval(() => {
+    void refresh().then(() => guarded(redraw));
   }, REFRESH_MS);
+  const stopListening = deps.onExitSignal(() => close());
   try {
-    redraw(frame(), "\x1b[H\x1b[2J");
+    setRawMode(true);
+    deps.write(SCREEN_ON);
+    deps.input.on("data", onData);
+    deps.input.resume();
+    redraw();
     await closed;
   } finally {
+    closing = true;
     clearInterval(timer);
+    clearTimeout(flush);
+    stopListening();
     deps.input.off("data", onData);
-    tty.setRawMode(false);
+    setRawMode(false);
     deps.input.pause();
     deps.write(SCREEN_OFF);
   }

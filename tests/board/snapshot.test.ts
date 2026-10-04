@@ -36,14 +36,14 @@ test("a written snapshot reads back the same, leaving no temporary file behind",
   }
 });
 
-test("a missing, torn, or other-version snapshot reads as none", async () => {
+test("a missing snapshot reads as none, and a torn or other-version one fails", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-snapshot-"));
   try {
     expect(await readBoardSnapshot(home)).toBeUndefined();
     await writeFile(boardSnapshotPath(home), '{"version":1,"writtenAt":');
-    expect(await readBoardSnapshot(home)).toBeUndefined();
+    await expect(readBoardSnapshot(home)).rejects.toThrow("not a board snapshot");
     await writeFile(boardSnapshotPath(home), JSON.stringify({ ...SNAPSHOT, version: 2 }));
-    expect(await readBoardSnapshot(home)).toBeUndefined();
+    await expect(readBoardSnapshot(home)).rejects.toThrow("not a board snapshot");
   } finally {
     await rm(home, { recursive: true, force: true });
   }

@@ -773,35 +773,6 @@ async function runProjectFlow({
   };
 }
 
-/**
- * `tandem panel` draws from the board snapshot coordinators write, never the state itself, so any
- * number of panels cost nothing. Its project is the one the directory (or `TANDEM_REPO`) is in.
- */
-async function openPanel(
-  invocation: TerminalInvocation,
-  environment: TerminalEnvironment,
-  dependencies: TerminalMainDependencies,
-  run: CommandRunner,
-  stdout: (text: string) => void,
-): Promise<void> {
-  const output = dependencies.output ?? process.stdout;
-  const keysSeen = join(environment.home, "panel-keys-seen");
-  await runPanel({
-    input: dependencies.input ?? process.stdin,
-    write: stdout,
-    columns: () => (output as { columns?: number }).columns,
-    color: streamIsTTY(output) && (environment.source.NO_COLOR ?? "").length === 0,
-    clock: () => new Date(),
-    readSnapshot: () => readBoardSnapshot(environment.home),
-    run,
-    sessionId: environment.sessionId,
-    cwd: environment.source.TANDEM_REPO ?? environment.cwd,
-    popup: invocation.popup,
-    helpUnseen: !(await Bun.file(keysSeen).exists()),
-    rememberHelpSeen: () => Bun.write(keysSeen, "").then(() => undefined),
-  });
-}
-
 /** Runs the shared-session terminal front door and returns a process-style result. */
 export async function runTerminal(
   argv: readonly string[] = process.argv.slice(2),
@@ -832,7 +803,31 @@ export async function runTerminal(
       return await handleMemory({ invocation, environment, dependencies, run, stdout });
     }
     if (invocation.command === "panel") {
-      await openPanel(invocation, environment, dependencies, run, stdout);
+      // Panels read only the snapshot coordinators write, never the state, so they take no lock.
+      const output = dependencies.output ?? process.stdout;
+      const keysSeen = join(environment.home, "panel-keys-seen");
+      await runPanel({
+        input: dependencies.input ?? process.stdin,
+        write: stdout,
+        size: () => output as { columns?: number; rows?: number },
+        color: streamIsTTY(output) && (environment.source.NO_COLOR ?? "").length === 0,
+        clock: () => new Date(),
+        readSnapshot: () => readBoardSnapshot(environment.home),
+        run,
+        sessionId: environment.sessionId,
+        cwd: environment.source.TANDEM_REPO ?? environment.cwd,
+        popup: invocation.popup,
+        helpUnseen: !(await Bun.file(keysSeen).exists()),
+        rememberHelpSeen: () => Bun.write(keysSeen, "").then(() => undefined),
+        onExitSignal: (stop) => {
+          process.once("SIGTERM", stop);
+          process.once("SIGHUP", stop);
+          return () => {
+            process.off("SIGTERM", stop);
+            process.off("SIGHUP", stop);
+          };
+        },
+      });
       return { exitCode: 0, status: "panel" };
     }
     if (invocation.command === "welcome") {

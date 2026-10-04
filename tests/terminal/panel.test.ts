@@ -9,6 +9,7 @@ import { boardView } from "../../src/board/view.ts";
 import { runTerminal } from "../../src/main.ts";
 import {
   navigationSteps,
+  type PanelDeps,
   type PanelEffect,
   type PanelFrame,
   type PanelInput,
@@ -16,6 +17,7 @@ import {
   panelStep,
   parsePanelInput,
   renderPanel,
+  runPanel,
 } from "../../src/terminal/panel.ts";
 import { NOW, state, watch } from "../board/fixtures.ts";
 import { task } from "../session/fixtures.ts";
@@ -43,7 +45,7 @@ const SNAPSHOT: BoardSnapshot = {
   ),
   coordinators: COORDINATORS,
 };
-const VIEW = panelView(SNAPSHOT, { project: APP, query: "", now: NOW });
+const VIEW = panelView(SNAPSHOT, { project: APP, query: "", now: NOW, readFailed: false });
 const START: PanelState = {
   project: APP,
   query: undefined,
@@ -74,12 +76,10 @@ function press(
   return { state: current, effects };
 }
 
-const keys = (text: string) => parsePanelInput(text);
+const keys = (text: string) => parsePanelInput(text, true).inputs;
 
 test("raw input splits into keys, arrows, left clicks, and focus changes", () => {
-  expect(
-    parsePanelInput("j\x1b[B\r\x1b\x7f\x03\x1b[<0;5;1M\x1b[<0;5;1m\x1b[<2;1;1M\x1b[I\x1b[O"),
-  ).toEqual([
+  expect(keys("j\x1b[B\r\x1b\x7f\x03\x1b[<0;5;1M\x1b[<0;5;1m\x1b[<2;1;1M\x1b[I\x1b[O😀")).toEqual([
     { kind: "char", char: "j" },
     { kind: "down" },
     { kind: "enter" },
@@ -89,7 +89,20 @@ test("raw input splits into keys, arrows, left clicks, and focus changes", () =>
     { kind: "click", x: 5, y: 1 },
     { kind: "focus", focused: true },
     { kind: "focus", focused: false },
+    { kind: "char", char: "😀" },
   ]);
+});
+
+test("an escape sequence split across reads waits for its rest instead of reading as Esc", () => {
+  const first = parsePanelInput("j\x1b[<0;5", false);
+  expect(first).toEqual({ inputs: [{ kind: "char", char: "j" }], pending: "\x1b[<0;5" });
+  expect(parsePanelInput(`${first.pending};1M`, false)).toEqual({
+    inputs: [{ kind: "click", x: 5, y: 1 }],
+    pending: "",
+  });
+  expect(parsePanelInput("\x1b", false)).toEqual({ inputs: [], pending: "\x1b" });
+  expect(parsePanelInput("\x1b", true)).toEqual({ inputs: [{ kind: "escape" }], pending: "" });
+  expect(parsePanelInput("\x1b[<0;5", true)).toEqual({ inputs: [], pending: "" });
 });
 
 test("Enter goes to the chat for what needs you, the agent for running work, and the browser for PRs", () => {
@@ -134,16 +147,14 @@ test("search takes every key as text until Esc clears it; arrows still move and 
 test("a click on a chip switches, a click on a row selects it, and a double-click goes", () => {
   const { hits } = frame();
   const tandemChip = hits.find((hit) => hit.kind === "chip" && hit.repoPath === TANDEM);
-  const working = hits.find(
-    (hit) => hit.kind === "row" && hit.key === "task:task-impl:implementing",
-  );
+  const working = hits.find((hit) => hit.kind === "row" && hit.key === "task:task-impl");
   if (tandemChip === undefined || working === undefined) throw new Error("missing hit");
   expect(press([{ kind: "click", x: tandemChip.from, y: tandemChip.y }]).effects).toEqual([
     { kind: "switch", repoPath: TANDEM },
   ]);
   const click = { kind: "click", x: 3, y: working.y } as const;
   const once = press([click]);
-  expect(once.state.selected).toBe("task:task-impl:implementing");
+  expect(once.state.selected).toBe("task:task-impl");
   expect(once.effects).toEqual([]);
   expect(press([click, click], { at: [0, 300] }).effects).toEqual([
     { kind: "go", target: { kind: "pane", workspaceId: "w3", paneId: "w3:p2" } },
@@ -151,10 +162,60 @@ test("a click on a chip switches, a click on a row selects it, and a double-clic
   expect(press([click, click], { at: [0, 900] }).effects).toEqual([]);
 });
 
-test("the key help hides on the first key, and losing focus remembers what was seen", () => {
+test("the key help hides on x or the first key, and the next key clears a notice", () => {
+  expect(press(keys("x"), { from: { ...START, help: true } }).state.help).toBe(false);
   expect(press(keys("j"), { from: { ...START, help: true } }).state.help).toBe(false);
+  expect(press(keys("j"), { from: { ...START, notice: "⚠ oops" } }).state.notice).toBeUndefined();
+});
+
+test("losing focus remembers every project's rows as seen", () => {
   const left = press([{ kind: "focus", focused: false }]).state;
-  expect(left.seen?.size).toBe(VIEW.sections.flatMap((section) => section.rows).length);
+  expect(left.seen).toEqual(new Set(VIEW.signatures));
+});
+
+test("the selection stays on its task when the task changes stage", () => {
+  const selected = press(keys("j")).state;
+  expect(selected.selected).toBe("task:task-impl");
+  const later = panelView(
+    {
+      ...SNAPSHOT,
+      board: boardView(
+        state({
+          tasks: [
+            task({ id: "task-stop", repoPath: APP, stage: "blocked", objective: "Stopped work" }),
+            task({ id: "task-impl", repoPath: APP, stage: "validating", objective: "Working" }),
+          ],
+        }),
+        NOW,
+      ),
+    },
+    { project: APP, query: "", now: NOW, readFailed: false },
+  );
+  const step = panelStep(selected, { kind: "char", char: "j" }, { ...frame(later), now: 0 });
+  expect(step.state.selected).toBe("task:task-impl");
+});
+
+test("rows taller than the terminal scroll to keep the selection in sight, with clicks matching", () => {
+  const last = VIEW.sections.at(-1)?.rows.at(-1)?.key;
+  const rendered = renderPanel(
+    VIEW,
+    { ...START, selected: last },
+    {
+      width: 46,
+      height: 6,
+      color: false,
+    },
+  );
+  expect(rendered.lines).toHaveLength(6);
+  const rowHits = rendered.hits.filter((hit) => hit.kind === "row");
+  expect(rowHits.every((hit) => hit.y >= 3 && hit.y <= 6)).toBe(true);
+  const selectedHit = rowHits.find((hit) => hit.kind === "row" && hit.key === last);
+  expect(rendered.lines[(selectedHit?.y ?? 0) - 1]).toContain("#412");
+});
+
+test("chip click areas stop at the panel's edge", () => {
+  const hits = renderPanel(VIEW, START, { width: 10, color: false }).hits;
+  expect(hits.filter((hit) => hit.kind === "chip").every((hit) => hit.to <= 10)).toBe(true);
 });
 
 test("going focuses the workspace, then the agent pane when Herdr knows it; PRs open in the browser", () => {
@@ -166,8 +227,8 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
       COORDINATORS,
     ),
   ).toEqual([
-    { argv: herdr("workspace", "focus", "w2"), required: true },
-    { argv: herdr("agent", "focus", "w2:p1"), required: false },
+    { argv: herdr("workspace", "focus", "w2"), failure: "⚠ Herdr couldn't focus it" },
+    { argv: herdr("agent", "focus", "w2:p1") },
   ]);
   expect(
     navigationSteps(
@@ -176,14 +237,14 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
       COORDINATORS,
     ),
   ).toEqual([
-    { argv: herdr("workspace", "focus", "w3"), required: true },
-    { argv: herdr("agent", "focus", "w3:p2"), required: false },
+    { argv: herdr("workspace", "focus", "w3"), failure: "⚠ Herdr couldn't focus it" },
+    { argv: herdr("agent", "focus", "w3:p2") },
   ]);
   expect(
     navigationSteps({ kind: "go", target: { kind: "url", url: "https://x/1" } }, "tandem", []),
-  ).toEqual([{ argv: ["open", "https://x/1"], required: true }]);
+  ).toEqual([{ argv: ["open", "https://x/1"], failure: "⚠ couldn't open the link" }]);
   expect(navigationSteps({ kind: "switch", repoPath: TANDEM }, "tandem", COORDINATORS)).toEqual([
-    { argv: herdr("workspace", "focus", "w1"), required: true },
+    { argv: herdr("workspace", "focus", "w1"), failure: "⚠ Herdr couldn't focus it" },
   ]);
   expect(navigationSteps({ kind: "switch", repoPath: "/offline" }, "tandem", COORDINATORS)).toEqual(
     [],
@@ -208,4 +269,85 @@ test("tandem panel draws from the snapshot file alone, never opening the state s
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+});
+
+/** A fake terminal: keys go in through `input`, and every write and raw-mode change is kept. */
+function fakeTerminal() {
+  const input = Object.assign(new PassThrough(), {
+    isTTY: true,
+    raw: [] as boolean[],
+    setRawMode(raw: boolean) {
+      input.raw.push(raw);
+    },
+  });
+  const written: string[] = [];
+  let stop = (): void => {};
+  return {
+    input,
+    written,
+    stop: () => stop(),
+    deps: (overrides: Partial<PanelDeps> = {}): PanelDeps => ({
+      input,
+      write: (text) => written.push(text),
+      size: () => ({ columns: 46, rows: 40 }),
+      color: false,
+      clock: () => new Date(NOW),
+      readSnapshot: async () => SNAPSHOT,
+      run: async () => ({ code: 0, stdout: "", stderr: "" }),
+      sessionId: "tandem",
+      cwd: APP,
+      popup: false,
+      helpUnseen: false,
+      rememberHelpSeen: async () => {},
+      onExitSignal: (handler) => {
+        stop = handler;
+        return () => {
+          stop = () => {};
+        };
+      },
+      ...overrides,
+    }),
+  };
+}
+
+test("a signal closes the panel and puts the terminal back", async () => {
+  const terminal = fakeTerminal();
+  const running = runPanel(terminal.deps());
+  await Bun.sleep(5);
+  terminal.stop();
+  await running;
+  expect(terminal.input.raw).toEqual([true, false]);
+  expect(terminal.written.at(-1)).toContain("\x1b[?1049l");
+});
+
+test("a drawing failure still puts the terminal back before it surfaces", async () => {
+  const terminal = fakeTerminal();
+  let calls = 0;
+  const running = runPanel(
+    terminal.deps({
+      size: () => {
+        calls += 1;
+        if (calls > 1) throw new Error("no size");
+        return { columns: 46, rows: 40 };
+      },
+    }),
+  );
+  await Bun.sleep(5);
+  terminal.input.write("j");
+  await expect(running).rejects.toThrow("no size");
+  expect(terminal.input.raw).toEqual([true, false]);
+  expect(terminal.written.at(-1)).toContain("\x1b[?1049l");
+});
+
+test("a go that Herdr cannot carry out says so in the footer", async () => {
+  const terminal = fakeTerminal();
+  const running = runPanel(
+    terminal.deps({ run: async () => ({ code: 1, stdout: "", stderr: "no such workspace" }) }),
+  );
+  await Bun.sleep(5);
+  terminal.input.write("\r");
+  await Bun.sleep(5);
+  terminal.stop();
+  await running;
+  expect(terminal.written.join("")).toContain("⚠ Herdr couldn't focus it");
 });

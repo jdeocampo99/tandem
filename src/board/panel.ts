@@ -8,7 +8,6 @@ import type {
   RunningStage,
 } from "./view.ts";
 
-/** Yellow waits on the user or is being handled, red failed, blue works, magenta checks, green is done. */
 export type PanelColor = "yellow" | "red" | "blue" | "magenta" | "green";
 
 /** Where `Enter` on a row goes. */
@@ -19,8 +18,9 @@ export type PanelTarget =
   | Readonly<{ kind: "none" }>;
 
 export type PanelRow = Readonly<{
+  /** Stays the same while the row stands for the same task, pull request, or brief. */
   readonly key: string;
-  /** Changes whenever what the row says changes, so the panel can mark rows changed since it was seen. */
+  /** Changes when the row's stage or words change; elapsed times do not count. */
   readonly signature: string;
   readonly name: string;
   readonly stage: string;
@@ -51,6 +51,8 @@ export type PanelView = Readonly<{
   readonly quiet: boolean;
   /** The current project's sections, or each matching project's rows while searching. */
   readonly sections: readonly PanelSection[];
+  /** Every project's row signatures, for remembering what the user has seen. */
+  readonly signatures: readonly string[];
   readonly footer?: string;
 }>;
 
@@ -60,6 +62,8 @@ export type PanelOptions = Readonly<{
   /** Search words; empty shows the current project. */
   readonly query: string;
   readonly now: string;
+  /** The last read of the snapshot file failed. */
+  readonly readFailed: boolean;
   /** Row signatures the user has seen; undefined marks nothing changed. */
   readonly seen?: ReadonlySet<string>;
 }>;
@@ -109,9 +113,8 @@ const PR_COLORS: Readonly<Record<BoardPullRequest["color"], PanelColor>> = {
 type Entry = Readonly<{
   readonly section: SectionTitle;
   readonly repoPath: string | undefined;
-  readonly taskId?: string;
-  /** What search matches by word prefix: the name, the stage, kind words, and the project. */
   readonly words: readonly string[];
+  readonly signature: string;
   readonly row: Omit<PanelRow, "glyph" | "signature" | "changed">;
 }>;
 
@@ -125,13 +128,14 @@ export function panelProject(projectPaths: readonly string[], path: string): str
 
 /** What the panel shows from the last snapshot it could read, if any. */
 export function panelView(snapshot: BoardSnapshot | undefined, options: PanelOptions): PanelView {
-  const footer = staleFooter(snapshot, options.now);
+  const footer = staleFooter(snapshot, options);
   if (snapshot === undefined) {
     return {
       chips: [],
       summary: "",
       quiet: false,
       sections: [],
+      signatures: [],
       ...(footer === undefined ? {} : { footer }),
     };
   }
@@ -153,7 +157,7 @@ export function panelView(snapshot: BoardSnapshot | undefined, options: PanelOpt
   const running = mine.filter(
     (entry) => entry.section === "Running" && entry.row.stage !== "paused",
   ).length;
-  const words = options.query.toLowerCase().split(/\s+/u).filter(Boolean);
+  const words = searchWords(options.query);
   const sections =
     words.length === 0
       ? SECTION_ORDER.map((title) => ({
@@ -180,27 +184,42 @@ export function panelView(snapshot: BoardSnapshot | undefined, options: PanelOpt
     summary: `${needs} ${needs === 1 ? "needs" : "need"} you · ${running} running`,
     quiet: needs === 0 && running === 0,
     sections: sections.filter((section) => section.rows.length > 0),
+    signatures: entries.map((entry) => entry.signature),
     ...(footer === undefined ? {} : { footer }),
   };
 }
 
-function staleFooter(snapshot: BoardSnapshot | undefined, now: string): string | undefined {
-  if (snapshot === undefined) return "⚠ can't read state, retrying";
-  if (Date.parse(now) - Date.parse(snapshot.writtenAt) <= STALE_MS) return undefined;
-  return `⚠ updated ${elapsed(snapshot.writtenAt, now)} ago · can't read state, retrying`;
+function staleFooter(
+  snapshot: BoardSnapshot | undefined,
+  options: PanelOptions,
+): string | undefined {
+  const reason = options.readFailed ? "can't read state, retrying" : "no coordinator running";
+  if (snapshot === undefined) return options.readFailed ? `⚠ ${reason}` : "⚠ no status yet";
+  if (Date.parse(options.now) - Date.parse(snapshot.writtenAt) <= STALE_MS) return undefined;
+  return `⚠ updated ${elapsed(snapshot.writtenAt, options.now)} ago · ${reason}`;
 }
 
 function panelRow(entry: Entry, seen: ReadonlySet<string> | undefined): PanelRow {
-  const signature = [entry.row.key, entry.row.stage, ...entry.row.lines].join("\n");
   return {
     ...entry.row,
-    signature,
+    signature: entry.signature,
     glyph: PANEL_GLYPHS[entry.row.color],
-    changed: seen !== undefined && !seen.has(signature),
+    changed: seen !== undefined && !seen.has(entry.signature),
   };
 }
 
-/** Every project's rows; a running task with a pull request shows only as that pull request. */
+function signature(key: string, ...parts: readonly string[]): string {
+  return [key, ...parts].join("\n");
+}
+
+function rowKey(row: Readonly<{ key: string; taskId?: string }>): string {
+  return row.taskId === undefined ? row.key : `task:${row.taskId}`;
+}
+
+/**
+ * Every project's rows. A running task with a pull request shows only as that pull request, and a
+ * task done today only as its Done row.
+ */
 function boardEntries(board: BoardView): Entry[] {
   const withPullRequest = new Set([
     ...board.pullRequests.flatMap((row) => row.taskId ?? []),
@@ -208,10 +227,13 @@ function boardEntries(board: BoardView): Entry[] {
       .filter((row) => row.cause === "pull-request")
       .flatMap((row) => row.taskId ?? []),
   ]);
+  const done = new Set(board.doneToday.flatMap((row) => row.taskId ?? []));
   return [
     ...board.needsYou.map(needsYouEntry),
     ...board.running.filter((row) => !withPullRequest.has(row.taskId)).map(runningEntry),
-    ...board.pullRequests.map(pullRequestEntry),
+    ...board.pullRequests
+      .filter((row) => row.taskId === undefined || !done.has(row.taskId))
+      .map(pullRequestEntry),
     ...board.doneToday.map(doneEntry),
   ];
 }
@@ -234,8 +256,9 @@ function needsYouEntry(row: BoardRow): Entry {
     section: "Needs you",
     repoPath: row.repoPath,
     words: searchWords(row.name, kind.stage, `needs you ${kind.words ?? ""}`, row.project),
+    signature: signature(rowKey(row), kind.stage, line),
     row: {
-      key: row.key,
+      key: rowKey(row),
       name: row.name,
       stage: kind.stage,
       color: kind.color,
@@ -257,15 +280,15 @@ function runningEntry(row: RunningBoardRow): Entry {
   return {
     section: "Running",
     repoPath: row.repoPath,
-    taskId: row.taskId,
     words: searchWords(
       row.name,
       row.text,
       `running ${row.cause} ${review} ${idle ? "stuck" : ""}`,
       row.project,
     ),
+    signature: signature(rowKey(row), row.text, idle ? "idle" : ""),
     row: {
-      key: row.key,
+      key: rowKey(row),
       name: row.name,
       stage: row.text,
       color: idle ? "yellow" : RUNNING_COLORS[row.cause],
@@ -281,12 +304,14 @@ function runningEntry(row: RunningBoardRow): Entry {
 function pullRequestEntry(row: BoardPullRequest): Entry {
   const stage = row.status.replace(/^\S+\s+/u, "");
   const name = `#${row.number} ${row.branch}`.trimEnd();
+  const key = `pr:${row.repo}#${row.number}`;
   return {
     section: "Pull requests",
     repoPath: row.repoPath,
     words: searchWords(name, stage, "pr pull request", row.repo),
+    signature: signature(key, stage, row.note),
     row: {
-      key: `pr:${row.repo}#${row.number}`,
+      key,
       name,
       stage,
       color: PR_COLORS[row.color],
@@ -301,8 +326,9 @@ function doneEntry(row: BoardRow): Entry {
     section: "Done today",
     repoPath: row.repoPath,
     words: searchWords(row.name, "done", row.text, row.project),
+    signature: signature(rowKey(row), "done", row.text),
     row: {
-      key: row.key,
+      key: rowKey(row),
       name: row.name,
       stage: "done",
       color: "green",

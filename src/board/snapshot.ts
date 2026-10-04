@@ -58,10 +58,19 @@ export async function writeBoardSnapshot(home: string, snapshot: BoardSnapshot):
   }
 }
 
-/** The last snapshot written, or undefined when there is none or it cannot be read. */
+/** The last snapshot written, or undefined when none has been; throws when it cannot be read. */
 export async function readBoardSnapshot(home: string): Promise<BoardSnapshot | undefined> {
-  const text = await readFile(boardSnapshotPath(home), "utf8").catch(() => undefined);
-  return text === undefined ? undefined : parseBoardSnapshot(text);
+  const path = boardSnapshotPath(home);
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as { code?: unknown }).code === "ENOENT") return undefined;
+    throw error;
+  }
+  const snapshot = parseBoardSnapshot(text);
+  if (snapshot === undefined) throw new Error(`${path} is not a board snapshot Tandem can read`);
+  return snapshot;
 }
 
 function isPanelCoordinator(value: unknown): value is PanelCoordinator {

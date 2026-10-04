@@ -65,7 +65,6 @@ export type BoardView = Readonly<{
   readonly week?: WeekSummary;
 }>;
 
-/** A watched pull request and the project it belongs to, when one claims it. */
 export type BoardPullRequest = PrWatchViewRow & Readonly<{ readonly repoPath?: string }>;
 
 export type WeekSummary = Pick<

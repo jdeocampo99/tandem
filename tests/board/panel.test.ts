@@ -88,7 +88,7 @@ const EVERY_KIND = snapshot({
 });
 
 test("every row kind lands in its section with its stage, color, second line, and target", () => {
-  const view = panelView(EVERY_KIND, { project: APP, query: "", now: NOW });
+  const view = panelView(EVERY_KIND, { project: APP, query: "", now: NOW, readFailed: false });
   const rows = Object.fromEntries(
     view.sections.map((section) => [
       section.title,
@@ -160,7 +160,7 @@ test("every row kind lands in its section with its stage, color, second line, an
 });
 
 test("one chip per project numbers it, counts what needs you, marks the current one, and says offline", () => {
-  const view = panelView(EVERY_KIND, { project: APP, query: "", now: NOW });
+  const view = panelView(EVERY_KIND, { project: APP, query: "", now: NOW, readFailed: false });
   expect(view.chips).toEqual([
     { number: 1, name: "tandem", repoPath: TANDEM, needsYou: 1, current: false, offline: true },
     { number: 2, name: "app", repoPath: APP, needsYou: 4, current: true, offline: false },
@@ -169,10 +169,9 @@ test("one chip per project numbers it, counts what needs you, marks the current 
 
 test("search matches names and kind words across projects, grouped by project, every word required", () => {
   const titles = (query: string) =>
-    panelView(EVERY_KIND, { project: APP, query, now: NOW }).sections.map((section) => [
-      section.title,
-      section.rows.map((row) => row.name),
-    ]);
+    panelView(EVERY_KIND, { project: APP, query, now: NOW, readFailed: false }).sections.map(
+      (section) => [section.title, section.rows.map((row) => row.name)],
+    );
   expect(titles("stuck")).toEqual([
     ["tandem", ["Stuck in tandem"]],
     ["app", ["Retry research"]],
@@ -187,41 +186,110 @@ test("search matches names and kind words across projects, grouped by project, e
 });
 
 test("a project with nothing needing the user or running is all quiet", () => {
-  const view = panelView(snapshot(), { project: APP, query: "", now: NOW });
+  const view = panelView(snapshot(), { project: APP, query: "", now: NOW, readFailed: false });
   expect(view.quiet).toBe(true);
   expect(view.sections).toEqual([]);
   expect(view.summary).toBe("0 need you · 0 running");
 });
 
-test("an unreadable or old snapshot turns the footer into a retry warning", () => {
-  expect(panelView(undefined, { project: APP, query: "", now: NOW }).footer).toBe(
+test("the footer says why the panel may be out of date", () => {
+  const options = { project: APP, query: "", now: NOW };
+  expect(panelView(undefined, { ...options, readFailed: false }).footer).toBe("⚠ no status yet");
+  expect(panelView(undefined, { ...options, readFailed: true }).footer).toBe(
     "⚠ can't read state, retrying",
   );
   const old = snapshot({}, "2030-01-01T11:59:17.000Z");
-  expect(panelView(old, { project: APP, query: "", now: NOW }).footer).toBe(
+  expect(panelView(old, { ...options, readFailed: true }).footer).toBe(
     "⚠ updated 43s ago · can't read state, retrying",
   );
+  expect(panelView(old, { ...options, readFailed: false }).footer).toBe(
+    "⚠ updated 43s ago · no coordinator running",
+  );
   const fresh = snapshot({}, "2030-01-01T11:59:55.000Z");
-  expect(panelView(fresh, { project: APP, query: "", now: NOW }).footer).toBeUndefined();
+  expect(panelView(fresh, { ...options, readFailed: false }).footer).toBeUndefined();
 });
 
-test("rows whose words changed since the user last looked are marked", () => {
-  const first = panelView(EVERY_KIND, { project: APP, query: "", now: NOW });
-  const seen = new Set(
-    first.sections.flatMap((section) => section.rows.map((row) => row.signature)),
-  );
+test("rows are marked when their stage or words changed since the user looked, not as time passes", () => {
+  const options = { project: APP, query: "", now: NOW, readFailed: false };
+  const seen = new Set(panelView(EVERY_KIND, options).signatures);
   const later = snapshot({
-    tasks: [task({ id: "task-impl", repoPath: APP, stage: "validating", objective: "Fix login" })],
+    tasks: [
+      task({
+        id: "task-impl",
+        repoPath: APP,
+        stage: "validating",
+        objective: "Fix login",
+        createdAt: "2030-01-01T11:48:00.000Z",
+      }),
+      task({
+        id: "task-review",
+        repoPath: APP,
+        stage: "reviewing",
+        objective: "Add cache",
+        createdAt: "2030-01-01T11:30:00.000Z",
+      }),
+    ],
   });
-  const marked = panelView(later, { project: APP, query: "", now: NOW, seen });
+  const marked = panelView(later, { ...options, seen });
   expect(
-    marked.sections.flatMap((section) => section.rows.map((row) => [row.name, row.changed])),
-  ).toEqual([["Fix login", true]]);
+    marked.sections.flatMap((section) => section.rows.map((row) => [row.key, row.changed])),
+  ).toEqual([
+    ["task:task-impl", true],
+    ["task:task-review", false],
+  ]);
+});
+
+test("what was seen covers every project, so a search or another project marks nothing new", () => {
+  const searching = panelView(EVERY_KIND, {
+    project: APP,
+    query: "stuck",
+    now: NOW,
+    readFailed: false,
+  });
+  const seen = new Set(searching.signatures);
+  const back = panelView(EVERY_KIND, {
+    project: APP,
+    query: "",
+    now: NOW,
+    readFailed: false,
+    seen,
+  });
+  expect(back.sections.flatMap((section) => section.rows.filter((row) => row.changed))).toEqual([]);
+});
+
+test("search reads the query's words the way it reads rows, so branches, numbers, and repos match", () => {
+  const names = (query: string) =>
+    panelView(EVERY_KIND, { project: APP, query, now: NOW, readFailed: false }).sections.flatMap(
+      (section) => section.rows.map((row) => row.name),
+    );
+  expect(names("#412")).toEqual(["#412 branch-412"]);
+  expect(names("branch-409")).toEqual(["acme/app#409 branch-409"]);
+  expect(names("acme/app review")).toEqual(["#412 branch-412"]);
+});
+
+test("a merged task with a finished pull request shows only under Done today", () => {
+  const merged = snapshot({
+    tasks: [
+      task({
+        id: "task-merged",
+        repoPath: APP,
+        stage: "merged",
+        objective: "Shipped",
+        updatedAt: "2030-01-01T10:00:00.000Z",
+      }),
+    ],
+    watches: [
+      watch(
+        420,
+        { color: "done", status: "✅ merged", note: "" },
+        { taskId: "task-merged", repoPath: APP, finishedAt: "2030-01-01T10:00:00.000Z" },
+      ),
+    ],
+  });
+  const view = panelView(merged, { project: APP, query: "", now: NOW, readFailed: false });
   expect(
-    panelView(EVERY_KIND, { project: APP, query: "", now: NOW, seen }).sections.flatMap((section) =>
-      section.rows.filter((row) => row.changed),
-    ),
-  ).toEqual([]);
+    view.sections.map((section) => [section.title, section.rows.map((row) => row.name)]),
+  ).toEqual([["Done today", ["Shipped"]]]);
 });
 
 test("the panel's project is the longest project path holding the directory", () => {
