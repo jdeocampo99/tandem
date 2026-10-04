@@ -167,30 +167,43 @@ tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
 
 - Every coordinator reconcile reads the board once, uses it for the notification below, and
   writes it with its session's coordinator records to `<home>/board-snapshot.json` (temp file and
-  rename; `version: 1`). Panels read only that file, every second, and redraw on change; they
-  never take the state lock. A snapshot that cannot be read, or is older than 10 seconds, shows
-  `⚠ updated 43s ago · can't read state, retrying`.
+  rename; `version: 1`). A failed write never blocks the reconcile and is logged once until a write
+  works again. Panels read only that file, every second, and redraw on change; they never take the
+  state lock.
+- The footer says why the panel may be out of date: `⚠ no status yet` before any snapshot,
+  `⚠ can't read state, retrying` when the file cannot be read, and, once the snapshot is over 10
+  seconds old, `⚠ updated 43s ago · no coordinator running` (or `· can't read state, retrying`).
 - Top to bottom: one chip per project (number, name, how many need you, `offline` without a
   coordinator record), `2 need you · 4 running`, then Needs you, Running, Pull requests, and Done
   today (tasks completed or merged in the last day). Empty sections are left out; with nothing
   needing you or running it says `✓ All quiet.`. A running task with a watched pull request shows
-  only as the pull request. A blue `•` marks rows that changed since the panel last lost focus.
+  only as the pull request, and a task done today only as its Done row.
+- A blue `•` marks rows whose stage or words changed since the panel last lost focus; elapsed
+  times do not count. What was seen covers every project, so searching or switching marks nothing.
 - Running rows use the stage words `tandem status` uses. Second lines: a block's reason, the
   question, `waiting for a free worktree` (queued), `paused by you`, `for 12m` or `idle 42m`, the
   PR's watch note.
 - Keys: `j`/`k`/arrows move, `Enter` goes, `/` searches, `1`-`9` and `[` `]` switch project, `Esc`
   closes a `--popup` or clears a search, Ctrl-C closes. Clicking a chip switches; clicking a row
-  selects it; double-clicking goes. A key help box shows until the first key, remembered by
-  `<home>/panel-keys-seen`.
+  selects it; double-clicking goes. The selection follows its task across stage changes. A key
+  help box shows until `x` or the first key, remembered by `<home>/panel-keys-seen`. An escape
+  sequence split across reads waits 50ms for its rest before it counts as `Esc`.
+- When the rows are taller than the terminal, they scroll to keep the selection in sight; the
+  chips, summary, and footer stay put.
 - Going: Needs you and Done rows focus the project's coordinator, running rows with a live
   primary worker focus that worker's pane, pull requests `open` in the browser; queued and paused
   rows go nowhere. Focusing runs `herdr --session <session> workspace focus <workspace>` then
   `agent focus <pane>`; the second may fail (Herdr focuses only panes it knows run an agent) and
   the workspace focus still counts. Switching project focuses that coordinator's workspace. A
-  `--popup` exits after a successful go or switch.
+  `--popup` exits after a successful go or switch. A go or switch that cannot get there says so
+  in the footer (`⚠ no coordinator is open for that project`, `⚠ Herdr couldn't focus it`,
+  `⚠ couldn't open the link`) until the next key.
 - Search matches every word as a prefix of a word in the row's name, stage, kind (`needs you`,
   `stuck`, `review`, `pr`, `queued`, `done`, `running`), or project, across every project, grouped
-  under project headings.
+  under project headings. Query and rows split into words the same way, so `#412`, `fix-auth`,
+  and `acme/app` match.
+- SIGTERM, SIGHUP, and drawing errors close the panel the same way Esc does: the terminal leaves
+  raw mode, mouse reporting, and the alternate screen before the process ends.
 - Without a terminal to read keys from, it draws once and exits.
 
 ## The notification when something new needs you
