@@ -115,11 +115,18 @@ function coordinatorCommand(spec: LaunchSpec): readonly string[] {
   ];
 }
 
+/**
+ * A worker runs unattended in its pane, so the user's tools.approvalMode must never make it wait
+ * for a confirmation nobody answers. Tandem's worker extension decides what each tool may do.
+ */
+const WORKER_APPROVAL_MODE = "--approval-mode=yolo";
+
 function workerCommand(spec: LaunchSpec): readonly string[] {
   const conversation = spec.conversation;
   return [
     "omp",
     ...modelFlags(spec),
+    WORKER_APPROVAL_MODE,
     "--no-prewalk",
     "--no-rules",
     "--no-title",
