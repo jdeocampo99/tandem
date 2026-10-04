@@ -158,6 +158,41 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
     Herdr?". A plugin already in `herdr plugin list` counts as done; no terminal or a no links
     nothing.
 
+## `tandem panel`
+
+A narrow live view of one project (about 46 columns) that navigates instead of only showing.
+Code: src/board/snapshot.ts (the file), src/board/panel.ts (pure view model),
+src/terminal/panel.ts (keys, mouse, Herdr commands, drawing). Tests: tests/board/panel.test.ts,
+tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
+
+- Every coordinator reconcile reads the board once, uses it for the notification below, and
+  writes it with its session's coordinator records to `<home>/board-snapshot.json` (temp file and
+  rename; `version: 1`). Panels read only that file, every second, and redraw on change; they
+  never take the state lock. A snapshot that cannot be read, or is older than 10 seconds, shows
+  `⚠ updated 43s ago · can't read state, retrying`.
+- Top to bottom: one chip per project (number, name, how many need you, `offline` without a
+  coordinator record), `2 need you · 4 running`, then Needs you, Running, Pull requests, and Done
+  today (tasks completed or merged in the last day). Empty sections are left out; with nothing
+  needing you or running it says `✓ All quiet.`. A running task with a watched pull request shows
+  only as the pull request. A blue `•` marks rows that changed since the panel last lost focus.
+- Running rows use the stage words `tandem status` uses. Second lines: a block's reason, the
+  question, `waiting for a free worktree` (queued), `paused by you`, `for 12m` or `idle 42m`, the
+  PR's watch note.
+- Keys: `j`/`k`/arrows move, `Enter` goes, `/` searches, `1`-`9` and `[` `]` switch project, `Esc`
+  closes a `--popup` or clears a search, Ctrl-C closes. Clicking a chip switches; clicking a row
+  selects it; double-clicking goes. A key help box shows until the first key, remembered by
+  `<home>/panel-keys-seen`.
+- Going: Needs you and Done rows focus the project's coordinator, running rows with a live
+  primary worker focus that worker's pane, pull requests `open` in the browser; queued and paused
+  rows go nowhere. Focusing runs `herdr --session <session> workspace focus <workspace>` then
+  `agent focus <pane>`; the second may fail (Herdr focuses only panes it knows run an agent) and
+  the workspace focus still counts. Switching project focuses that coordinator's workspace. A
+  `--popup` exits after a successful go or switch.
+- Search matches every word as a prefix of a word in the row's name, stage, kind (`needs you`,
+  `stuck`, `review`, `pr`, `queued`, `done`, `running`), or project, across every project, grouped
+  under project headings.
+- Without a terminal to read keys from, it draws once and exits.
+
 ## The notification when something new needs you
 
 - On each scheduler reconcile, a coordinator reads the board and keeps the keys of the "Needs you"

@@ -10,6 +10,7 @@ export type TerminalCommand =
   | "config"
   | "configure"
   | "memory"
+  | "panel"
   | "welcome";
 
 export type TerminalInvocation = Readonly<{
@@ -32,6 +33,8 @@ export type TerminalInvocation = Readonly<{
   readonly watch: boolean;
   readonly line: boolean;
   readonly noOpen: boolean;
+  /** `tandem panel --popup`: Esc closes it, and so does going somewhere. */
+  readonly popup: boolean;
   /** `tandem report --since`, as an ISO timestamp. */
   readonly since?: string;
 }>;
@@ -49,6 +52,7 @@ export type TerminalRunResult = Readonly<{
     | "memory"
     | "fixed"
     | "reset"
+    | "panel"
     | "welcome"
     | "cancelled"
     | "error";
@@ -89,6 +93,7 @@ const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   config: "config",
   configure: "configure",
   memory: "memory",
+  panel: "panel",
   welcome: "welcome",
 };
 
@@ -121,6 +126,7 @@ const FLAGS = {
   "--watch": "watch",
   "--line": "line",
   "--no-open": "noOpen",
+  "--popup": "popup",
 } as const;
 type Flag = (typeof FLAGS)[keyof typeof FLAGS];
 
@@ -139,6 +145,7 @@ const ALLOWED: Readonly<
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
   memory: { flags: ["json"], maxPaths: 1 },
+  panel: { flags: ["popup"], maxPaths: 0 },
   welcome: { flags: [], maxPaths: 0 },
 };
 
@@ -246,6 +253,7 @@ export function parseTerminalArgs(argv: readonly string[]): TerminalInvocation {
     watch: flags.has("watch"),
     line: flags.has("line"),
     noOpen: flags.has("noOpen"),
+    popup: flags.has("popup"),
     ...(since === undefined ? {} : { since }),
     ...(home === undefined ? {} : { home }),
     ...(sessionId === undefined ? {} : { sessionId }),

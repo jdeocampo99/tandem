@@ -509,7 +509,7 @@ function osc8(link: string, text: string): string {
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /** Cuts a line that would wrap, ending it with "…", so each row stays one terminal line. */
-function fit(line: Line, columns: number): Line {
+export function fit(line: Line, columns: number): Line {
   if (lineWidth(line) <= columns) return line;
   const fitted: Span[] = [];
   let room = columns - 1;

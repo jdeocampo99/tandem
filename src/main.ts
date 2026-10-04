@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
+import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
@@ -46,6 +47,7 @@ import {
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
+import { runPanel } from "./terminal/panel.ts";
 import {
   createServiceFor,
   prepareProjects,
@@ -92,6 +94,8 @@ Usage:
   tandem reset --hard      Delete all Tandem state and worktrees; next run onboards from scratch
   tandem configure [PATH]  Inspect or save repository settings
   tandem config [PATH]     Open the project's settings file in $VISUAL/$EDITOR
+  tandem panel             What every agent is doing, and one key to get to it
+                           --popup closes on Esc or after going somewhere
   tandem welcome           Show the welcome message again
 
 Options:
@@ -769,6 +773,35 @@ async function runProjectFlow({
   };
 }
 
+/**
+ * `tandem panel` draws from the board snapshot coordinators write, never the state itself, so any
+ * number of panels cost nothing. Its project is the one the directory (or `TANDEM_REPO`) is in.
+ */
+async function openPanel(
+  invocation: TerminalInvocation,
+  environment: TerminalEnvironment,
+  dependencies: TerminalMainDependencies,
+  run: CommandRunner,
+  stdout: (text: string) => void,
+): Promise<void> {
+  const output = dependencies.output ?? process.stdout;
+  const keysSeen = join(environment.home, "panel-keys-seen");
+  await runPanel({
+    input: dependencies.input ?? process.stdin,
+    write: stdout,
+    columns: () => (output as { columns?: number }).columns,
+    color: streamIsTTY(output) && (environment.source.NO_COLOR ?? "").length === 0,
+    clock: () => new Date(),
+    readSnapshot: () => readBoardSnapshot(environment.home),
+    run,
+    sessionId: environment.sessionId,
+    cwd: environment.source.TANDEM_REPO ?? environment.cwd,
+    popup: invocation.popup,
+    helpUnseen: !(await Bun.file(keysSeen).exists()),
+    rememberHelpSeen: () => Bun.write(keysSeen, "").then(() => undefined),
+  });
+}
+
 /** Runs the shared-session terminal front door and returns a process-style result. */
 export async function runTerminal(
   argv: readonly string[] = process.argv.slice(2),
@@ -797,6 +830,10 @@ export async function runTerminal(
     }
     if (invocation.command === "memory") {
       return await handleMemory({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "panel") {
+      await openPanel(invocation, environment, dependencies, run, stdout);
+      return { exitCode: 0, status: "panel" };
     }
     if (invocation.command === "welcome") {
       await runWelcome({
