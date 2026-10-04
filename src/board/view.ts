@@ -56,7 +56,7 @@ export type BoardView = Readonly<{
   readonly needsYou: readonly BoardRow[];
   readonly running: readonly RunningBoardRow[];
   /** Watched pull requests that do not need the user. */
-  readonly pullRequests: readonly PrWatchViewRow[];
+  readonly pullRequests: readonly BoardPullRequest[];
   /** Completed, merged, and cancelled tasks, which the board leaves out. */
   readonly finished: number;
   /** Tasks completed or merged in the last day, newest first; `tandem status` only counts them. */
@@ -64,6 +64,9 @@ export type BoardView = Readonly<{
   /** The last 7 days; absent when no task finished in them. */
   readonly week?: WeekSummary;
 }>;
+
+/** A watched pull request and the project it belongs to, when one claims it. */
+export type BoardPullRequest = PrWatchViewRow & Readonly<{ readonly repoPath?: string }>;
 
 export type WeekSummary = Pick<
   TraceSummary,
@@ -128,7 +131,7 @@ export function isBoardView(value: unknown): value is BoardView {
     Array.isArray(view.running) &&
     view.running.every(isRunningBoardRow) &&
     Array.isArray(view.pullRequests) &&
-    view.pullRequests.every(isPrWatchViewRow) &&
+    view.pullRequests.every(isBoardPullRequest) &&
     isFiniteNumber(view.finished) &&
     Array.isArray(view.doneToday) &&
     view.doneToday.every(isBoardRow) &&
@@ -195,6 +198,11 @@ function isPrWatchViewRow(value: unknown): value is PrWatchViewRow {
     (row.link === undefined || typeof row.link === "string") &&
     (row.taskId === undefined || typeof row.taskId === "string")
   );
+}
+
+function isBoardPullRequest(value: unknown): value is BoardPullRequest {
+  const repoPath = recordOf(value)?.repoPath;
+  return isPrWatchViewRow(value) && (repoPath === undefined || typeof repoPath === "string");
 }
 
 function isCheckCounts(value: unknown): boolean {
@@ -291,7 +299,12 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
       .map((task) =>
         runningRow(task, now, state.progressAt.get(task.id), state.workerPanes.get(task.id)),
       ),
-    pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
+    pullRequests: pullRequests.rows
+      .filter((row) => row.color !== "red")
+      .map((row) => {
+        const { repoPath } = pullRequestOwner(row, state);
+        return repoPath === undefined ? row : { ...row, repoPath };
+      }),
     finished: state.tasks.length - live.length,
     doneToday: state.tasks
       .filter((task) => doneWithinDay(task, now))
@@ -559,10 +572,21 @@ function taskIdentity(
 }
 
 /** A red PR row: it belongs to its task's project, or the checkout it was watched from. */
-function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
+function pullRequestOwner(
+  row: PrWatchViewRow,
+  state: BoardState,
+): Readonly<{ task?: TaskRecord; repoPath?: string }> {
   const watch = state.watches.find((candidate) => sameRef(candidate.ref, row));
   const task = state.tasks.find((candidate) => candidate.id === watch?.taskId);
   const repoPath = task?.repoPath ?? watch?.repoPath;
+  return {
+    ...(task === undefined ? {} : { task }),
+    ...(repoPath === undefined ? {} : { repoPath }),
+  };
+}
+
+function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
+  const { task, repoPath } = pullRequestOwner(row, state);
   const note = row.link === undefined ? row.note : `${row.note} → ${row.link}`;
   return {
     key: `pr:${row.repo}#${row.number}`,

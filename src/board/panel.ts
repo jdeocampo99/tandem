@@ -1,0 +1,322 @@
+import { elapsed } from "../pr-watch/view.ts";
+import type { BoardSnapshot } from "./snapshot.ts";
+import type {
+  BoardPullRequest,
+  BoardRow,
+  BoardView,
+  RunningBoardRow,
+  RunningStage,
+} from "./view.ts";
+
+/** Yellow waits on the user or is being handled, red failed, blue works, magenta checks, green is done. */
+export type PanelColor = "yellow" | "red" | "blue" | "magenta" | "green";
+
+/** Where `Enter` on a row goes. */
+export type PanelTarget =
+  | Readonly<{ kind: "chat"; repoPath: string }>
+  | Readonly<{ kind: "pane"; workspaceId: string; paneId: string }>
+  | Readonly<{ kind: "url"; url: string }>
+  | Readonly<{ kind: "none" }>;
+
+export type PanelRow = Readonly<{
+  readonly key: string;
+  /** Changes whenever what the row says changes, so the panel can mark rows changed since it was seen. */
+  readonly signature: string;
+  readonly name: string;
+  readonly stage: string;
+  readonly color: PanelColor;
+  readonly glyph: string;
+  /** At most two short lines in plain words. */
+  readonly lines: readonly string[];
+  readonly target: PanelTarget;
+  readonly changed: boolean;
+}>;
+
+export type PanelSection = Readonly<{ readonly title: string; readonly rows: readonly PanelRow[] }>;
+
+export type PanelChip = Readonly<{
+  readonly number: number;
+  readonly name: string;
+  readonly repoPath: string;
+  readonly needsYou: number;
+  readonly current: boolean;
+  readonly offline: boolean;
+}>;
+
+export type PanelView = Readonly<{
+  readonly chips: readonly PanelChip[];
+  /** Like `2 need you · 4 running`. */
+  readonly summary: string;
+  /** Nothing needs the user and nothing runs in this project. */
+  readonly quiet: boolean;
+  /** The current project's sections, or each matching project's rows while searching. */
+  readonly sections: readonly PanelSection[];
+  readonly footer?: string;
+}>;
+
+export type PanelOptions = Readonly<{
+  /** The current project's checkout path. */
+  readonly project: string | undefined;
+  /** Search words; empty shows the current project. */
+  readonly query: string;
+  readonly now: string;
+  /** Row signatures the user has seen; undefined marks nothing changed. */
+  readonly seen?: ReadonlySet<string>;
+}>;
+
+export const PANEL_GLYPHS: Readonly<Record<PanelColor, string>> = {
+  yellow: "◆",
+  red: "✖",
+  blue: "●",
+  magenta: "◎",
+  green: "✓",
+};
+
+const STALE_MS = 10_000;
+const SECTION_ORDER = ["Needs you", "Running", "Pull requests", "Done today"] as const;
+type SectionTitle = (typeof SECTION_ORDER)[number];
+
+const NEEDS_YOU: Readonly<
+  Record<string, Readonly<{ stage: string; color: PanelColor; prefix?: string; words?: string }>>
+> = {
+  brief: { stage: "brief to approve", color: "yellow" },
+  question: { stage: "question", color: "yellow", prefix: "question: " },
+  "model-question": { stage: "model question", color: "yellow", prefix: "model question: " },
+  "awaiting-approval": { stage: "to approve", color: "yellow" },
+  ready: { stage: "ready", color: "yellow" },
+  blocked: { stage: "stopped", color: "red", prefix: "blocked: ", words: "stuck" },
+  "pull-request": { stage: "PR failing", color: "red", words: "pr" },
+};
+
+const RUNNING_COLORS: Readonly<Record<RunningStage, PanelColor>> = {
+  paused: "yellow",
+  queued: "yellow",
+  scouting: "blue",
+  implementing: "blue",
+  "awaiting-fixes": "blue",
+  validating: "magenta",
+  reviewing: "magenta",
+};
+
+const PR_COLORS: Readonly<Record<BoardPullRequest["color"], PanelColor>> = {
+  red: "red",
+  yellow: "yellow",
+  green: "green",
+  done: "green",
+  unwatched: "blue",
+};
+
+type Entry = Readonly<{
+  readonly section: SectionTitle;
+  readonly repoPath: string | undefined;
+  readonly taskId?: string;
+  /** What search matches by word prefix: the name, the stage, kind words, and the project. */
+  readonly words: readonly string[];
+  readonly row: Omit<PanelRow, "glyph" | "signature" | "changed">;
+}>;
+
+/** The project a checkout path belongs to: the longest project path containing it. */
+export function panelProject(projectPaths: readonly string[], path: string): string | undefined {
+  const containing = projectPaths.filter(
+    (project) => path === project || path.startsWith(`${project}/`),
+  );
+  return containing.toSorted((left, right) => right.length - left.length)[0] ?? projectPaths[0];
+}
+
+/** What the panel shows from the last snapshot it could read, if any. */
+export function panelView(snapshot: BoardSnapshot | undefined, options: PanelOptions): PanelView {
+  const footer = staleFooter(snapshot, options.now);
+  if (snapshot === undefined) {
+    return {
+      chips: [],
+      summary: "",
+      quiet: false,
+      sections: [],
+      ...(footer === undefined ? {} : { footer }),
+    };
+  }
+  const { board } = snapshot;
+  const entries = boardEntries(board);
+  const online = new Set(snapshot.coordinators.map((coordinator) => coordinator.repoPath));
+  const chips = board.projectPaths.map((repoPath, index) => ({
+    number: index + 1,
+    name: board.projects[index] ?? repoPath,
+    repoPath,
+    needsYou: entries.filter(
+      (entry) => entry.repoPath === repoPath && entry.section === "Needs you",
+    ).length,
+    current: repoPath === options.project,
+    offline: !online.has(repoPath),
+  }));
+  const mine = entries.filter((entry) => entry.repoPath === options.project);
+  const needs = mine.filter((entry) => entry.section === "Needs you").length;
+  const running = mine.filter(
+    (entry) => entry.section === "Running" && entry.row.stage !== "paused",
+  ).length;
+  const words = options.query.toLowerCase().split(/\s+/u).filter(Boolean);
+  const sections =
+    words.length === 0
+      ? SECTION_ORDER.map((title) => ({
+          title,
+          rows: mine
+            .filter((entry) => entry.section === title)
+            .map((entry) => panelRow(entry, options.seen)),
+        }))
+      : chips.map((chip) => ({
+          title: chip.name,
+          rows: entries
+            .filter((entry) => entry.repoPath === chip.repoPath)
+            .filter((entry) =>
+              words.every((word) => entry.words.some((each) => each.startsWith(word))),
+            )
+            .toSorted(
+              (left, right) =>
+                SECTION_ORDER.indexOf(left.section) - SECTION_ORDER.indexOf(right.section),
+            )
+            .map((entry) => panelRow(entry, options.seen)),
+        }));
+  return {
+    chips,
+    summary: `${needs} ${needs === 1 ? "needs" : "need"} you · ${running} running`,
+    quiet: needs === 0 && running === 0,
+    sections: sections.filter((section) => section.rows.length > 0),
+    ...(footer === undefined ? {} : { footer }),
+  };
+}
+
+function staleFooter(snapshot: BoardSnapshot | undefined, now: string): string | undefined {
+  if (snapshot === undefined) return "⚠ can't read state, retrying";
+  if (Date.parse(now) - Date.parse(snapshot.writtenAt) <= STALE_MS) return undefined;
+  return `⚠ updated ${elapsed(snapshot.writtenAt, now)} ago · can't read state, retrying`;
+}
+
+function panelRow(entry: Entry, seen: ReadonlySet<string> | undefined): PanelRow {
+  const signature = [entry.row.key, entry.row.stage, ...entry.row.lines].join("\n");
+  return {
+    ...entry.row,
+    signature,
+    glyph: PANEL_GLYPHS[entry.row.color],
+    changed: seen !== undefined && !seen.has(signature),
+  };
+}
+
+/** Every project's rows; a running task with a pull request shows only as that pull request. */
+function boardEntries(board: BoardView): Entry[] {
+  const withPullRequest = new Set([
+    ...board.pullRequests.flatMap((row) => row.taskId ?? []),
+    ...board.needsYou
+      .filter((row) => row.cause === "pull-request")
+      .flatMap((row) => row.taskId ?? []),
+  ]);
+  return [
+    ...board.needsYou.map(needsYouEntry),
+    ...board.running.filter((row) => !withPullRequest.has(row.taskId)).map(runningEntry),
+    ...board.pullRequests.map(pullRequestEntry),
+    ...board.doneToday.map(doneEntry),
+  ];
+}
+
+function needsYouEntry(row: BoardRow): Entry {
+  const kind = NEEDS_YOU[row.cause] ?? { stage: row.text, color: "yellow" as const };
+  const line =
+    kind.prefix !== undefined && row.text.startsWith(kind.prefix)
+      ? row.text.slice(kind.prefix.length)
+      : row.text;
+  const target: PanelTarget =
+    row.cause === "pull-request"
+      ? row.url === undefined
+        ? { kind: "none" }
+        : { kind: "url", url: row.url }
+      : row.repoPath === undefined
+        ? { kind: "none" }
+        : { kind: "chat", repoPath: row.repoPath };
+  return {
+    section: "Needs you",
+    repoPath: row.repoPath,
+    words: searchWords(row.name, kind.stage, `needs you ${kind.words ?? ""}`, row.project),
+    row: {
+      key: row.key,
+      name: row.name,
+      stage: kind.stage,
+      color: kind.color,
+      lines: [line],
+      target,
+    },
+  };
+}
+
+function runningEntry(row: RunningBoardRow): Entry {
+  const idle = row.since.startsWith("idle");
+  const lines =
+    row.cause === "paused"
+      ? ["paused by you"]
+      : row.cause === "queued"
+        ? ["waiting for a free worktree"]
+        : [idle ? row.since : `for ${row.since}`];
+  const review = row.cause === "reviewing" || row.cause === "awaiting-fixes" ? "review" : "";
+  return {
+    section: "Running",
+    repoPath: row.repoPath,
+    taskId: row.taskId,
+    words: searchWords(
+      row.name,
+      row.text,
+      `running ${row.cause} ${review} ${idle ? "stuck" : ""}`,
+      row.project,
+    ),
+    row: {
+      key: row.key,
+      name: row.name,
+      stage: row.text,
+      color: idle ? "yellow" : RUNNING_COLORS[row.cause],
+      lines,
+      target:
+        row.worker === undefined
+          ? { kind: "none" }
+          : { kind: "pane", workspaceId: row.worker.workspaceId, paneId: row.worker.paneId },
+    },
+  };
+}
+
+function pullRequestEntry(row: BoardPullRequest): Entry {
+  const stage = row.status.replace(/^\S+\s+/u, "");
+  const name = `#${row.number} ${row.branch}`.trimEnd();
+  return {
+    section: "Pull requests",
+    repoPath: row.repoPath,
+    words: searchWords(name, stage, "pr pull request", row.repo),
+    row: {
+      key: `pr:${row.repo}#${row.number}`,
+      name,
+      stage,
+      color: PR_COLORS[row.color],
+      lines: row.note.length === 0 ? [] : [row.note],
+      target: row.url.length === 0 ? { kind: "none" } : { kind: "url", url: row.url },
+    },
+  };
+}
+
+function doneEntry(row: BoardRow): Entry {
+  return {
+    section: "Done today",
+    repoPath: row.repoPath,
+    words: searchWords(row.name, "done", row.text, row.project),
+    row: {
+      key: row.key,
+      name: row.name,
+      stage: "done",
+      color: "green",
+      lines: [row.text],
+      target:
+        row.repoPath === undefined ? { kind: "none" } : { kind: "chat", repoPath: row.repoPath },
+    },
+  };
+}
+
+function searchWords(...parts: readonly string[]): string[] {
+  return parts
+    .join(" ")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}@]+/u)
+    .filter(Boolean);
+}
