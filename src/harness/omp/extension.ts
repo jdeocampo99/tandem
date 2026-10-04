@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@oh-my-pi/pi-coding-agent";
 import { processEnvironmentSnapshot } from "../../config/environment.ts";
 import type { CoordinatorSession } from "../../session/coordinator.ts";
-import type { CoordinatorMessage } from "../../session/onboarding-guide.ts";
+import type { CoordinatorMessage } from "../../session/coordinator-reply.ts";
 import { promptRoutingConfig } from "../../session/prompt-routing.ts";
 import { replyUsage } from "../../workers/terminal.ts";
 import {

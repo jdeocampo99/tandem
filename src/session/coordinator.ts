@@ -19,6 +19,7 @@ import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { WELCOME_TEXT } from "../terminal/welcome.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
 import { atCompactionBoundary, finishedTaskIds } from "./compaction.ts";
+import type { CoordinatorMessage } from "./coordinator-reply.ts";
 import type {
   Cancel,
   CoordinatorTurnAction,
@@ -34,7 +35,7 @@ import {
   deliverPrWatchNotices,
   type ResearchReportReader,
 } from "./notifications.ts";
-import { type CoordinatorMessage, OnboardingGuide } from "./onboarding-guide.ts";
+import { OnboardingGuide } from "./onboarding-guide.ts";
 import { buildDurableDigest } from "./summary.ts";
 
 export type CoordinatorDeps = SessionDeps &
