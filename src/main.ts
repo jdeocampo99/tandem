@@ -41,6 +41,7 @@ import {
   hasActiveHerdrContext,
   launchProjects,
   otherSessionReconciliationNotices,
+  panelFailureNotice,
   previousResourcesFromLaunch,
   previousResourcesNotice,
   renestWarningsFromLaunch,
@@ -766,6 +767,8 @@ async function runProjectFlow({
       resources === undefined ? undefined : previousResourcesNotice(repoPath, resources);
     if (resourceNotice !== undefined) stdout(resourceNotice);
     for (const notice of otherSessionReconciliationNotices(repoPath, launch)) stdout(notice);
+    const panelNotice = panelFailureNotice(repoPath, launch);
+    if (panelNotice !== undefined) stdout(panelNotice);
   }
   return {
     exitCode: 0,

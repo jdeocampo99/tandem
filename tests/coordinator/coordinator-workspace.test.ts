@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   CommandRequest,
   CommandResult,
@@ -9,6 +9,7 @@ import type {
   Endpoint,
   WorktreeLease,
 } from "../../src/contracts.ts";
+import { recordPath } from "../../src/coordinator/record.ts";
 import {
   coordinatorWorkspaceLabel,
   retireCoordinatorWorkspace,
@@ -35,6 +36,12 @@ type FakePane = {
   foregroundCwd: string;
   shellPid?: number;
   processes: readonly FakeProcess[];
+  label?: string;
+  plugin?: boolean;
+  /** `plugin pane close` fails with this error code. */
+  closeError?: string;
+  /** The snapshot still lists the pane right after it closed. */
+  lingers?: boolean;
 };
 
 type FakeRunner = Readonly<{
@@ -88,6 +95,19 @@ function fakeRunner(
       }
       throw new Error(`unexpected workspace action ${JSON.stringify(action)}`);
     }
+    if (resource === "plugin" && action === "pane" && request.argv[5] === "close") {
+      const pane = paneMap.get(request.argv[6] ?? "");
+      if (pane === undefined || !pane.present || pane.plugin !== true) {
+        return missingResult("plugin_pane_not_found");
+      }
+      if (pane.closeError !== undefined) return missingResult(pane.closeError);
+      pane.present = pane.lingers === true;
+      return {
+        code: 0,
+        stdout: JSON.stringify({ result: { type: "plugin_pane_closed" } }),
+        stderr: "",
+      };
+    }
     if (resource === "api" && action === "snapshot") {
       return {
         code: 0,
@@ -125,6 +145,7 @@ function fakeRunner(
                 tab_id: pane.tabId,
                 workspace_id: pane.workspaceId,
                 foreground_cwd: pane.foregroundCwd,
+                ...(pane.label === undefined ? {} : { label: pane.label }),
               },
             },
           }),
@@ -211,7 +232,7 @@ test("closes a stopped owned pane when no other pane shares its workspace", asyn
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, record);
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
 
     expect(result).toEqual({ outcome: "closed" });
     expect(runner.panes.get("pane-a")?.present).toBe(false);
@@ -248,7 +269,7 @@ test("closes its own pane but retains the workspace when an extra pane remains",
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, record);
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
 
     expect(result).toEqual({
       outcome: "retained",
@@ -258,6 +279,152 @@ test("closes its own pane but retains the workspace when an extra pane remains",
     expect(runner.panes.get("pane-a")?.present).toBe(false);
     expect(runner.panes.get("extra-pane")?.present).toBe(true);
     expect(runner.workspaceLabel.get("workspace-a")).toBe(`◇ repo (old)`);
+  } finally {
+    await cleanup(root);
+  }
+});
+
+/** Records a panel pane the way launch does: in a file beside the coordinator's record. */
+async function recordPanel(root: string, repoPath: string, paneId: string): Promise<void> {
+  const file = recordPath(join(root, "home"), "tandem", repoPath).replace(/\.json$/u, ".panel");
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify({ paneId }));
+}
+
+function panelPane(overrides: Partial<FakePane> = {}): FakePane {
+  return {
+    present: true,
+    workspaceId: "workspace-a",
+    tabId: "tab-a",
+    foregroundCwd: "/tandem/herdr-plugin",
+    processes: [{ pid: 300, name: "bun", argv: ["bun", "src/main.ts", "panel"] }],
+    label: "Tandem panel",
+    plugin: true,
+    ...overrides,
+  };
+}
+
+const ownedStoppedPane: FakePane = {
+  present: true,
+  workspaceId: "workspace-a",
+  tabId: "tab-a",
+  foregroundCwd: "",
+  shellPid: 100,
+  processes: stoppedShell,
+};
+
+test("closes the recorded panel before the coordinator, so the panel never keeps the workspace", async () => {
+  const { root, repoPath, worktree } = await fixture();
+  try {
+    const record = { repoPath, endpoint: endpoint(), worktree };
+    await recordPanel(root, repoPath, "panel-a");
+    const runner = fakeRunner(
+      {
+        "pane-a": { ...ownedStoppedPane, foregroundCwd: worktree.path },
+        "panel-a": panelPane(),
+      },
+      { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
+    );
+
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+
+    expect(result).toEqual({ outcome: "closed" });
+    expect(runner.panes.get("panel-a")?.present).toBe(false);
+    expect(runner.panes.get("pane-a")?.present).toBe(false);
+    const closes = runner.calls
+      .filter((call) => call.argv.includes("close"))
+      .map((call) => call.argv.at(-1));
+    expect(closes).toEqual(["panel-a", "pane-a"]);
+  } finally {
+    await cleanup(root);
+  }
+});
+
+test("closes a lone panel left after the coordinator's pane already closed", async () => {
+  const { root, repoPath, worktree } = await fixture();
+  try {
+    const record = { repoPath, endpoint: endpoint(), worktree };
+    await recordPanel(root, repoPath, "panel-a");
+    const runner = fakeRunner(
+      { "panel-a": panelPane() },
+      { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
+    );
+
+    expect(await retireCoordinatorWorkspace(runner.run, join(root, "home"), record)).toEqual({
+      outcome: "closed",
+    });
+    expect(runner.panes.get("panel-a")?.present).toBe(false);
+  } finally {
+    await cleanup(root);
+  }
+});
+
+test("a panel Herdr closed but still lists is not counted as a pane keeping the workspace", async () => {
+  const { root, repoPath, worktree } = await fixture();
+  try {
+    const record = { repoPath, endpoint: endpoint(), worktree };
+    await recordPanel(root, repoPath, "panel-a");
+    const runner = fakeRunner(
+      {
+        "pane-a": { ...ownedStoppedPane, foregroundCwd: worktree.path },
+        "panel-a": panelPane({ lingers: true }),
+      },
+      { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
+    );
+
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+
+    expect(result).toEqual({ outcome: "closed" });
+    expect(runner.workspaceLabel.get("workspace-a")).toBe(coordinatorWorkspaceLabel(repoPath));
+  } finally {
+    await cleanup(root);
+  }
+});
+
+test("a panel that cannot be closed retains the workspace instead of failing retirement", async () => {
+  const { root, repoPath, worktree } = await fixture();
+  try {
+    const record = { repoPath, endpoint: endpoint(), worktree };
+    await recordPanel(root, repoPath, "panel-a");
+    const runner = fakeRunner(
+      {
+        "pane-a": { ...ownedStoppedPane, foregroundCwd: worktree.path },
+        "panel-a": panelPane({ closeError: "server_busy" }),
+      },
+      { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
+    );
+
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+
+    expect(result).toEqual({
+      outcome: "retained",
+      reason: "panel could not be closed",
+      extraPaneIds: ["panel-a"],
+    });
+    expect(runner.panes.get("pane-a")?.present).toBe(false);
+    expect(runner.panes.get("panel-a")?.present).toBe(true);
+  } finally {
+    await cleanup(root);
+  }
+});
+
+test("a recorded panel id that now names another pane is left open and reported", async () => {
+  const { root, repoPath, worktree } = await fixture();
+  try {
+    const record = { repoPath, endpoint: endpoint(), worktree };
+    await recordPanel(root, repoPath, "panel-a");
+    const runner = fakeRunner(
+      {
+        "pane-a": { ...ownedStoppedPane, foregroundCwd: worktree.path },
+        "panel-a": panelPane({ label: "notes", plugin: false }),
+      },
+      { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
+    );
+
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+
+    expect(result).toMatchObject({ outcome: "retained", extraPaneIds: ["panel-a"] });
+    expect(runner.panes.get("panel-a")?.present).toBe(true);
   } finally {
     await cleanup(root);
   }
@@ -281,7 +448,7 @@ test("leaves a custom-labeled workspace and its pane completely untouched", asyn
       { "workspace-a": "My scratch terminal" },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, record);
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
 
     expect(result).toEqual({ outcome: "retained", reason: "workspace has a custom label" });
     expect(runner.panes.get("pane-a")?.present).toBe(true);
@@ -300,7 +467,7 @@ test("treats an already-gone workspace as already clear", async () => {
     const record = { repoPath, endpoint: endpoint(), worktree };
     const runner = fakeRunner({}, {});
 
-    const result = await retireCoordinatorWorkspace(runner.run, record);
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
 
     expect(result).toEqual({ outcome: "already-clear" });
     expect(runner.calls).toHaveLength(1);
@@ -336,7 +503,7 @@ test("quarantines a pane whose foreground working directory no longer matches it
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, record);
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
 
     expect(result.outcome).toBe("quarantined");
     expect(result.reason).toMatch(/no longer matches its recorded worktree/);
@@ -372,7 +539,7 @@ test("quarantines a pane occupied by a foreign active process instead of the rec
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, record);
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
 
     expect(result.outcome).toBe("quarantined");
     expect(runner.panes.get("pane-a")?.present).toBe(true);

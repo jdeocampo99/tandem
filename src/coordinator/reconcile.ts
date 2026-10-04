@@ -830,7 +830,7 @@ async function applyCoordinatorItem(
     return { item, outcome: "quarantined", reason: outcome.reason };
   }
   const settled = await withCoordinatorLaunchLock(input.home, item.found.sessionId, async () => {
-    const paneRetirement = await retireCoordinatorWorkspace(input.run, record);
+    const paneRetirement = await retireCoordinatorWorkspace(input.run, input.home, record);
     return applyCoordinatorReplacement({
       run: input.run,
       home: input.home,
