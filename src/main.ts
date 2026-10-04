@@ -2,6 +2,7 @@
 import { basename, join } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
+import type { HerdrFocus } from "./board/panel.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
 import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
@@ -47,7 +48,7 @@ import {
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
-import { runPanel } from "./terminal/panel.ts";
+import { type PanelAction, runPanel, runPanelAction } from "./terminal/panel.ts";
 import {
   createServiceFor,
   prepareProjects,
@@ -96,6 +97,8 @@ Usage:
   tandem config [PATH]     Open the project's settings file in $VISUAL/$EDITOR
   tandem panel             What every agent is doing, and one key to get to it
                            --popup closes on Esc or after going somewhere
+  tandem panel home|prev|next
+                           Go to this project's chat, or the previous or next project
   tandem welcome           Show the welcome message again
 
 Options:
@@ -773,6 +776,36 @@ async function runProjectFlow({
   };
 }
 
+function isPanelAction(value: string): value is PanelAction {
+  return value === "home" || value === "prev" || value === "next";
+}
+
+/**
+ * Where Herdr's focus is, from what Herdr hands a plugin pane, plugin action, or popup command.
+ * `TANDEM_PANEL_PROJECT` names the project a coordinator opened its panel for. `TANDEM_REPO` and
+ * `HERDR_WORKSPACE_ID` are not used: the Herdr server inherits the first coordinator's.
+ */
+function herdrFocus(environment: TerminalEnvironment): HerdrFocus {
+  const source = environment.source;
+  let context: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(source.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
+    if (typeof parsed === "object" && parsed !== null) context = parsed as Record<string, unknown>;
+  } catch {
+    // No context; the active-pane variables or the directory decide.
+  }
+  const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const workspaceId = source.HERDR_ACTIVE_WORKSPACE_ID ?? text(context.workspace_id);
+  return {
+    ...(workspaceId === undefined ? {} : { workspaceId }),
+    cwd:
+      source.TANDEM_PANEL_PROJECT ??
+      text(context.focused_pane_cwd) ??
+      source.HERDR_ACTIVE_PANE_CWD ??
+      environment.cwd,
+  };
+}
+
 /** Runs the shared-session terminal front door and returns a process-style result. */
 export async function runTerminal(
   argv: readonly string[] = process.argv.slice(2),
@@ -804,6 +837,21 @@ export async function runTerminal(
     }
     if (invocation.command === "panel") {
       // Panels read only the snapshot coordinators write, never the state, so they take no lock.
+      const [action] = invocation.paths;
+      if (action !== undefined) {
+        if (!isPanelAction(action)) {
+          throw new Error(`tandem panel takes home, prev, or next; received ${action}`);
+        }
+        const failure = await runPanelAction(action, {
+          readSnapshot: () => readBoardSnapshot(environment.home),
+          run,
+          sessionId: environment.sessionId,
+          focus: herdrFocus(environment),
+          cwd: environment.cwd,
+        });
+        if (failure !== undefined) stderr(`${failure}\n`);
+        return { exitCode: failure === undefined ? 0 : 1, status: "panel" };
+      }
       const output = dependencies.output ?? process.stdout;
       const keysSeen = join(environment.home, "panel-keys-seen");
       await runPanel({
@@ -815,7 +863,8 @@ export async function runTerminal(
         readSnapshot: () => readBoardSnapshot(environment.home),
         run,
         sessionId: environment.sessionId,
-        cwd: environment.source.TANDEM_REPO ?? environment.cwd,
+        cwd: environment.cwd,
+        focus: herdrFocus(environment),
         popup: invocation.popup,
         helpUnseen: !(await Bun.file(keysSeen).exists()),
         rememberHelpSeen: () => Bun.write(keysSeen, "").then(() => undefined),

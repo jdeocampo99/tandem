@@ -1,8 +1,9 @@
 import {
+  focusedProject,
+  type HerdrFocus,
   type PanelRow,
   type PanelTarget,
   type PanelView,
-  panelProject,
   panelView,
 } from "../board/panel.ts";
 import type { BoardSnapshot, PanelCoordinator } from "../board/snapshot.ts";
@@ -208,6 +209,69 @@ export function navigationSteps(
   return [];
 }
 
+/** What a Herdr key bound to one of the panel's plugin actions does, from anywhere. */
+export type PanelAction = "home" | "prev" | "next";
+
+/**
+ * The Herdr commands for a panel action key: home goes to the focused project's chat; prev and
+ * next go to the neighboring project with an open coordinator, wrapping around.
+ */
+export function panelActionSteps(
+  action: PanelAction,
+  snapshot: BoardSnapshot,
+  focus: HerdrFocus,
+  sessionId: string,
+): readonly HerdrStep[] {
+  const project = focusedProject(snapshot, focus);
+  if (project === undefined) return [];
+  if (action === "home") {
+    return navigationSteps(
+      { kind: "go", target: { kind: "chat", repoPath: project } },
+      sessionId,
+      snapshot.coordinators,
+    );
+  }
+  const online = snapshot.board.projectPaths.filter((path) =>
+    snapshot.coordinators.some((coordinator) => coordinator.repoPath === path),
+  );
+  const at = online.indexOf(project);
+  const by = action === "next" ? 1 : -1;
+  // From a project with no open coordinator, next starts at the first and prev at the last.
+  const neighbor =
+    at === -1
+      ? by === 1
+        ? online[0]
+        : online.at(-1)
+      : online[(at + by + online.length) % online.length];
+  return neighbor === undefined
+    ? []
+    : navigationSteps({ kind: "switch", repoPath: neighbor }, sessionId, snapshot.coordinators);
+}
+
+export type PanelActionDeps = Readonly<{
+  readonly readSnapshot: () => Promise<BoardSnapshot | undefined>;
+  readonly run: CommandRunner;
+  readonly sessionId: string;
+  readonly focus: HerdrFocus;
+  readonly cwd: string;
+}>;
+
+/** Runs a panel action key; the reason it went nowhere, or undefined when it went. */
+export async function runPanelAction(
+  action: PanelAction,
+  deps: PanelActionDeps,
+): Promise<string | undefined> {
+  const snapshot = await deps.readSnapshot();
+  const steps =
+    snapshot === undefined ? [] : panelActionSteps(action, snapshot, deps.focus, deps.sessionId);
+  if (steps.length === 0) return "no open coordinator to go to";
+  for (const step of steps) {
+    const result = await deps.run({ argv: step.argv, cwd: deps.cwd });
+    if (result.code !== 0 && step.failure !== undefined) return step.failure;
+  }
+  return undefined;
+}
+
 /**
  * The panel as terminal lines, plus where each chip and row sits for mouse clicks. Taller than
  * `height`, the rows scroll to keep the selection in sight while the top and footer stay put.
@@ -321,7 +385,8 @@ export type PanelDeps = Readonly<{
   readonly readSnapshot: () => Promise<BoardSnapshot | undefined>;
   readonly run: CommandRunner;
   readonly sessionId: string;
-  /** The directory the panel opened in; its project is the one shown first. */
+  /** Where Herdr's focus was when the panel opened; its project is the one shown first. */
+  readonly focus: HerdrFocus;
   readonly cwd: string;
   readonly popup: boolean;
   /** Whether the first-run key help still shows, and how to remember that it was used. */
@@ -358,7 +423,7 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
       readFailed = true;
     }
     if (state.project === undefined && snapshot !== undefined) {
-      state = { ...state, project: panelProject(snapshot.board.projectPaths, deps.cwd) };
+      state = { ...state, project: focusedProject(snapshot, deps.focus) };
     }
   };
   const view = () =>

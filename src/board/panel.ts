@@ -126,6 +126,24 @@ export function panelProject(projectPaths: readonly string[], path: string): str
   return containing.toSorted((left, right) => right.length - left.length)[0] ?? projectPaths[0];
 }
 
+/** Where Herdr's focus is: the focused pane's workspace, when known, and a directory. */
+export type HerdrFocus = Readonly<{ readonly workspaceId?: string; readonly cwd: string }>;
+
+/**
+ * The project Herdr's focus is in: the one whose coordinator or worker runs in the focused
+ * workspace, or else the one the directory is in. Worker worktrees sit outside every project, so
+ * the workspace comes first.
+ */
+export function focusedProject(snapshot: BoardSnapshot, focus: HerdrFocus): string | undefined {
+  const { workspaceId } = focus;
+  const owner =
+    workspaceId === undefined
+      ? undefined
+      : (snapshot.coordinators.find((each) => each.workspaceId === workspaceId)?.repoPath ??
+        snapshot.board.running.find((row) => row.worker?.workspaceId === workspaceId)?.repoPath);
+  return owner ?? panelProject(snapshot.board.projectPaths, focus.cwd);
+}
+
 /** What the panel shows from the last snapshot it could read, if any. */
 export function panelView(snapshot: BoardSnapshot | undefined, options: PanelOptions): PanelView {
   const footer = staleFooter(snapshot, options);

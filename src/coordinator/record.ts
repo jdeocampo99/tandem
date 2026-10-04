@@ -28,6 +28,8 @@ export type CoordinatorRecord = Readonly<{
   readonly harness: HarnessName;
   readonly command: readonly string[];
   readonly pendingSourceRefresh?: PendingSourceRefresh;
+  /** The Tandem panel Herdr opened beside the coordinator, closed with it. */
+  readonly panelPaneId?: string;
 }>;
 export function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -103,7 +105,7 @@ function ensureExactKeys(value: JsonRecord, keys: readonly string[], field: stri
 }
 function ensureCoordinatorRecordKeys(value: JsonRecord, field: string): void {
   const required = ["schemaVersion", "repoPath", "endpoint", "worktree", "command"];
-  const allowed = new Set([...required, "harness", "pendingSourceRefresh"]);
+  const allowed = new Set([...required, "harness", "pendingSourceRefresh", "panelPaneId"]);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
       throw new TypeError(`${field} contains unknown key ${JSON.stringify(key)}`);
@@ -170,6 +172,13 @@ function parsePendingSourceRefresh(value: unknown, field: string): PendingSource
   };
 }
 
+function optionalPanelPane(
+  value: unknown,
+  field: string,
+): Readonly<{ panelPaneId?: string }> {
+  return value === undefined ? {} : { panelPaneId: text(value, field) };
+}
+
 function parseRecordedHarness(value: unknown, field: string): HarnessName {
   return value === undefined ? DEFAULT_HARNESS : parseHarnessName(value, field);
 }
@@ -219,6 +228,7 @@ export async function canonicalizeRecord(record: CoordinatorRecord): Promise<Coo
     harness,
     command: parseCommand(record.command, "record.command", harness),
     ...(pendingSourceRefresh === undefined ? {} : { pendingSourceRefresh }),
+    ...optionalPanelPane(record.panelPaneId, "record.panelPaneId"),
   };
 }
 
@@ -247,6 +257,7 @@ export function parseStoredRecord(value: unknown, source: string): CoordinatorRe
     harness,
     command: parseCommand(value.command, `${source}.command`, harness),
     ...(pendingSourceRefresh === undefined ? {} : { pendingSourceRefresh }),
+    ...optionalPanelPane(value.panelPaneId, `${source}.panelPaneId`),
   };
 }
 
