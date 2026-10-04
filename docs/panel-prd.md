@@ -24,8 +24,8 @@ conversation, and the chat sits beside the panel.
 
 - The panel is a Herdr plugin pane, about 46 columns, split to the right of each coordinator's chat.
 - One panel per project, showing only that project. Coordinators stay one per project.
-- Herdr's sidebar is collapsed. It cannot hide single workspaces, so workers still show as dots;
-  the panel is how you reach them.
+- Herdr's sidebar starts hidden, so the panel is how you reach projects and workers. `prefix b`
+  (Herdr's own toggle) shows it again.
 - In a worker, the agent gets the full width. `prefix t` opens the same panel as a popup.
 - The tab bar line is trimmed to the count across all projects: `● 2 need you` or
   `✓ nothing needs you`.
@@ -110,8 +110,11 @@ anywhere, including inside a worker, where plain keys go to the agent.
 
 - `tandem.ui` gains a `split` pane for the panel, a `popup` pane for `prefix t`, and keybindings for
   `prefix h`, `prefix 1`-`9`, and `prefix [` `]`.
-- `setup.sh` collapses the sidebar only if the user agrees, and opens the panel in each coordinator
-  workspace.
+- `setup.sh` adds `sidebar_start_collapsed = true` and `sidebar_collapsed_mode = "hidden"` under
+  `[ui]` in Herdr's config through src/terminal/herdr-setup.ts, the same way it adds the tab bar and
+  popup: it asks first and leaves any existing value alone. The start setting applies on Herdr's
+  next launch, so a running session keeps its sidebar until Herdr restarts.
+- Tandem opens the panel in each coordinator workspace.
 - Closing the panel loses nothing. `prefix t` and running `tandem` bring it back. It never respawns
   on its own.
 - Retiring a coordinator closes its panel too, or the panel would keep the workspace alive.
@@ -130,7 +133,7 @@ anywhere, including inside a worker, where plain keys go to the agent.
 
 - Approving, answering, or steering from the panel.
 - A panel in every worker workspace.
-- Moving workers into tabs of the coordinator workspace.
+- Moving workers into tabs of the coordinator workspace. The hidden sidebar makes this unnecessary.
 - A web or desktop UI.
 
 ## Open questions
@@ -138,7 +141,6 @@ anywhere, including inside a worker, where plain keys go to the agent.
 - Can a plugin `split` pane be opened in a chosen workspace, and can a plugin focus another
   workspace's pane? The design depends on both.
 - Does Herdr have a "previous workspace" command, or does `prefix h` need its own lookup?
-- Ask Herdr upstream for hiding or grouping workspaces, so worker dots leave the collapsed sidebar.
 
 ## Automated checks
 
