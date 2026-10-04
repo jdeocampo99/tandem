@@ -36,6 +36,7 @@ import {
   type ResearchReportReader,
 } from "./notifications.ts";
 import { OnboardingGuide } from "./onboarding-guide.ts";
+import { ReviewPageListeners } from "./review-page.ts";
 import { buildDurableDigest } from "./summary.ts";
 
 export type CoordinatorDeps = SessionDeps &
@@ -281,6 +282,7 @@ export class CoordinatorSession {
   private createdService: TandemService | undefined;
   private isTandemCheckout: Promise<boolean> | undefined;
   private onboardingGuide: OnboardingGuide | undefined;
+  private readonly reviewPages: ReviewPageListeners;
   private cancelTick: Cancel | undefined;
   private reconcileInFlight: Promise<void> | undefined;
   /** This project's "Needs you" rows at the last reconcile; unset until the first one. */
@@ -290,6 +292,11 @@ export class CoordinatorSession {
   constructor(private readonly deps: CoordinatorDeps) {
     this.status = new CoordinatorStatus(deps.status);
     this.compaction = new EarlyCompaction(deps.compactTokens, deps.host, deps.logError);
+    this.reviewPages = new ReviewPageListeners({
+      host: deps.host,
+      service: () => this.service(),
+      logError: (message, error) => deps.logError(message, error),
+    });
   }
 
   service(): TandemService {
@@ -475,6 +482,7 @@ export class CoordinatorSession {
     this.status.agentActive = willContinue;
     this.status.report();
     this.onboardingGuide?.agentEnd({ willContinue, messages });
+    this.reviewPages.agentEnd({ willContinue, messages });
     if (!willContinue) {
       const traceOnly = this.turnAction === "trace";
       this.turnAction = undefined;
@@ -511,6 +519,7 @@ export class CoordinatorSession {
     const inFlight = this.reconcileInFlight;
     this.shuttingDown = true;
     this.onboardingGuide?.stop();
+    this.reviewPages.stop();
     this.cancelTick?.();
     this.cancelTick = undefined;
     try {
@@ -574,6 +583,8 @@ export class CoordinatorSession {
       await deliverInvestigationQuestions({ host: this.deps.host, service });
       // Setup moves on after the user's actions, not on the timer.
       if (!runTick && (await this.tandemCheckout())) await this.onboarding().afterAction();
+      // A review page opens during an action (review-show), so its listener starts after one.
+      if (!runTick) this.reviewPages.afterAction();
       const idle =
         !this.status.agentActive &&
         !this.status.waitingForInput &&
