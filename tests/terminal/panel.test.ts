@@ -53,6 +53,7 @@ const START: PanelState = {
   selected: undefined,
   seen: undefined,
   help: false,
+  expanded: new Set(),
 };
 
 function frame(view: PanelView = VIEW, popup = false): PanelFrame {
@@ -425,4 +426,60 @@ test("a go that Herdr cannot carry out says so in the footer", async () => {
   terminal.stop();
   await running;
   expect(terminal.written.join("")).toContain("⚠ Herdr couldn't focus it");
+});
+
+const WORKING = panelView(
+  {
+    ...SNAPSHOT,
+    board: boardView(
+      state({
+        tasks: [
+          task({ id: "task-impl", repoPath: APP, stage: "implementing", objective: "Working" }),
+          task({ id: "task-queued", repoPath: APP, stage: "queued", objective: "Queued" }),
+        ],
+        activities: new Map([
+          [
+            "task-impl",
+            {
+              tool: "edit",
+              toolTarget: "src/very/deeply/nested/module/directory/session-handler.ts",
+              toolStartedAt: "2030-01-01T11:59:56.000Z",
+              todos: [
+                { content: "Read the brief", status: "completed" },
+                { content: "Write the test", status: "in_progress" },
+                { content: "Make it pass", status: "pending" },
+              ],
+            },
+          ],
+        ]),
+      }),
+      NOW,
+    ),
+  },
+  { project: APP, query: "", now: NOW, readFailed: false },
+);
+
+test("Space shows and hides the selected running row's steps; rows without steps ignore it", () => {
+  const working = { ...frame(WORKING), view: WORKING };
+  const draw = (from: PanelState) =>
+    renderPanel(WORKING, from, { width: 46, color: false }).lines.join("\n");
+  const shown = panelStep(START, { kind: "char", char: " " }, working).state;
+  expect(draw(shown)).toContain(
+    ["      ☑ Read the brief", "      ▸ Write the test", "      ☐ Make it pass"].join("\n"),
+  );
+  const hidden = panelStep(shown, { kind: "char", char: " " }, working).state;
+  expect(draw(hidden)).not.toContain("☑");
+  const queued = WORKING.sections.flatMap((section) => section.rows)[1]?.key;
+  const onQueued = panelStep({ ...START, selected: queued }, { kind: "char", char: " " }, working);
+  expect(onQueued.state.expanded.size).toBe(0);
+  const searching = panelStep({ ...START, query: "" }, { kind: "char", char: " " }, working);
+  expect(searching.state).toMatchObject({ query: " ", expanded: new Set() });
+});
+
+test("the tool line cuts its target from the left, keeping the file name, to fit the width", () => {
+  const { lines } = renderPanel(WORKING, START, { width: 46, color: false });
+  const at = lines.findIndex((line) => line.includes("▸ edit"));
+  expect(lines[at]).toBe("    ▸ edit …/directory/session-handler.ts · 4s");
+  expect(Bun.stringWidth(lines[at] ?? "")).toBe(46);
+  expect(lines[at - 1]).toBe("    Write the test");
 });

@@ -514,3 +514,17 @@ export function fit(line: Line, columns: number): Line {
   }
   return fitted;
 }
+
+/** Cuts text from the start, beginning it with "…", so its end (like a file name) stays. */
+export function fitStart(text: string, columns: number): string {
+  if (textWidth(text) <= columns) return text;
+  let kept = "";
+  let room = columns - 1;
+  for (const { segment } of [...graphemes.segment(text)].reverse()) {
+    const width = textWidth(segment);
+    if (width > room) break;
+    kept = segment + kept;
+    room -= width;
+  }
+  return `…${kept}`;
+}
