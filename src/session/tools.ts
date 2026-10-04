@@ -289,7 +289,6 @@ export const tandemRequestSchema = z.strictObject({
       taskId: z.string(),
       page: z.boolean().optional(),
     }),
-    z.strictObject({ action: z.literal("review-notes"), taskId: z.string() }),
     z.strictObject({
       action: z.literal("review-edit"),
       taskId: z.string(),
@@ -303,6 +302,16 @@ export const tandemRequestSchema = z.strictObject({
           }),
         )
         .optional(),
+      add: z
+        .array(
+          z.strictObject({
+            file: z.string(),
+            line: z.number().int().positive().describe("A new-file line inside the diff."),
+            body: z.string(),
+          }),
+        )
+        .optional()
+        .describe("The user's own comments to add."),
       summaryComment: z.string().optional(),
     }),
     z.strictObject({

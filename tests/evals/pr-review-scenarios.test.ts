@@ -196,8 +196,17 @@ function review(head: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify({
     head,
     intent: "Retries failed uploads and logs each attempt.",
-    diagram: "flowchart TD\n  upload --> retry:::changed --> send",
-    readingOrder: [{ file: "src/upload.ts", why: "the whole change" }],
+    verdict: "Safe to merge once the retries are capped.",
+    tour: [
+      {
+        title: "Retrying",
+        why: "How an upload is retried",
+        stops: [
+          { file: "src/upload.ts", from: 1, to: 2, title: "The retry", body: "Wraps send." },
+          { file: "src/other.ts", from: 1, to: 3, title: "Elsewhere", body: "Not in the diff." },
+        ],
+      },
+    ],
     concerns: [
       { title: "Unbounded retries", detail: "Nothing caps the retries.", severity: "blocking" },
     ],
@@ -275,18 +284,32 @@ test("a PR review runs end to end: start, review, edit, post, re-review, questio
     expect(reviewed.cleanup?.status).toBe("retained");
     expect((await stat(first.spec.cwd)).isDirectory()).toBe(true);
 
-    const shown = await service.reviewShow(taskId);
-    expect(shown.pageUrl).toBe("http://127.0.0.1:4387/session/review");
-    expect(shown.text).toContain("Retries failed uploads and logs each attempt.");
-    expect(shown.text).toContain("On `src/other.ts:9`: Is this still used?");
-    const page = await readFile(join(world.home, "pr-review", taskId, "review-0.html"), "utf8");
-    expect(page).toContain('class="mermaid"');
+    expect(reviewed.prReview?.rounds[0]?.review.tour).toEqual([
+      {
+        title: "Retrying",
+        why: "How an upload is retried",
+        stops: [{ file: "src/upload.ts", from: 1, to: 2, title: "The retry", body: "Wraps send." }],
+      },
+    ]);
 
+    // The page itself is built by src/pr-review/page.ts; this checks the chat text.
+    const shown = await service.reviewShow(taskId, { page: false });
+    expect(shown.pageUrl).toBeUndefined();
+    expect(shown.text).toContain("Retries failed uploads and logs each attempt.");
+    expect(shown.text).toContain("Verdict: Safe to merge once the retries are capped.");
+    expect(shown.text).toContain("   - src/upload.ts:1-2 The retry: Wraps send.");
+    expect(shown.text).toContain("On `src/other.ts:9`: Is this still used?");
+    expect(shown.text).toContain("1 tour stop pointed outside the diff");
+
+    await expect(
+      service.reviewEdit(taskId, { add: [{ file: "src/upload.ts", line: 9, body: "Mine" }] }),
+    ).rejects.toThrow("Line 9 of src/upload.ts can't take a comment; lines that can: 1-2.");
     await service.reviewEdit(taskId, {
       comments: [
         { id: "c2", drop: true },
         { id: "c1", body: "Could we cap retries at 3?" },
       ],
+      add: [{ file: "src/upload.ts", line: 2, body: "Could this log the attempt number?" }],
     });
     await expect(
       service.reviewPost(taskId, { verdict: "comment", approved: false }),
@@ -297,13 +320,19 @@ test("a PR review runs end to end: start, review, edit, post, re-review, questio
     });
     expect(postedResult).toMatchObject({
       posted: true,
-      message: expect.stringContaining("Posted 1 comment"),
+      message: expect.stringContaining("Posted 2 comments"),
     });
     expect(fake.posted).toHaveLength(1);
     const sent = JSON.parse(fake.posted[0]?.stdin ?? "{}");
     expect(sent).toMatchObject({ commit_id: firstHead, event: "REQUEST_CHANGES" });
     expect(sent.comments).toEqual([
       { path: "src/upload.ts", line: 1, side: "RIGHT", body: "Could we cap retries at 3?" },
+      {
+        path: "src/upload.ts",
+        line: 2,
+        side: "RIGHT",
+        body: "Could this log the attempt number?",
+      },
     ]);
     expect(await service.reviewPost(taskId, { verdict: "comment", approved: true })).toMatchObject({
       message: expect.stringContaining("Already posted"),
@@ -333,7 +362,20 @@ test("a PR review runs end to end: start, review, edit, post, re-review, questio
     );
     expect(rereviewed.prReview?.rounds).toHaveLength(2);
     expect(rereviewed.prReview?.rounds[1]?.from).toBe(firstHead);
-    await service.reviewPost(taskId, { verdict: "approve", approved: true });
+    // A Submit from the review page posts without a second approval.
+    const submitted = await service.reviewSubmit(taskId, {
+      tandemPrReview: 1,
+      verdict: "approve",
+      summary: "Thanks, this looks good now.",
+      drafts: [],
+      yours: [],
+    });
+    expect(submitted).toMatchObject({ posted: true });
+    expect(JSON.parse(fake.posted[1]?.stdin ?? "{}")).toMatchObject({
+      commit_id: pushed,
+      event: "APPROVE",
+      body: expect.stringContaining("Thanks, this looks good now."),
+    });
     expect(fake.replies).toHaveLength(1);
 
     await service.steer({ taskId, text: "Why does retry take the file handle?" });

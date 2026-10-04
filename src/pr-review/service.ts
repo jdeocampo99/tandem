@@ -1,9 +1,14 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { openPresentation, pollPresentation } from "../adapters/lavish.ts";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { listenPresentation, openPresentation } from "../adapters/lavish.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
 import { checkoutQuestion, findCheckout, type RepoLocation } from "../repos/locate.ts";
+import { commentableLines } from "./diff.ts";
+import { applyEdits, type PrReviewEdits, submissionEdits } from "./edits.ts";
+import { buildReviewPage, parseReviewSubmission, type ReviewSubmission } from "./page.ts";
+import { readPageComment, readSubmissionText } from "./page-feedback.ts";
+import { readPageSources, reviewPageInput } from "./page-input.ts";
 import { postReview, type ReviewVerdict, replyToComment, reviewMarker } from "./post.ts";
 import {
   acknowledgement,
@@ -12,14 +17,15 @@ import {
   type PullRequestFacts,
   readPullRequest,
 } from "./pull-request.ts";
-import { renderReviewHtml, renderReviewText, wantsPage } from "./render.ts";
-import type { CommentSeverity, ReviewLens } from "./review.ts";
+import { renderReviewText, wantsPage } from "./render.ts";
+import type { ReviewLens } from "./review.ts";
 import {
   latestRound,
   lensLabel,
   type PrReviewMode,
   type PrReviewRound,
   type PrReviewState,
+  prReviewRunDiffPath,
 } from "./state.ts";
 
 export type StartPrReviewInput = Readonly<{
@@ -54,17 +60,15 @@ export type ShowPrReviewResult = Readonly<{
   pageUrl?: string;
 }>;
 
-export type CommentEdit = Readonly<{
-  id: string;
-  body?: string | undefined;
-  severity?: CommentSeverity | undefined;
-  drop?: boolean | undefined;
-}>;
-
-export type PrReviewEdits = Readonly<{
-  comments?: readonly CommentEdit[];
-  summaryComment?: string;
-}>;
+/** What one wait on an open review page ended with. */
+export type ReviewPageEvent =
+  | Readonly<{ kind: "submission"; submission: ReviewSubmission; ended: boolean }>
+  | Readonly<{ kind: "invalid"; problems: readonly string[]; ended: boolean }>
+  | Readonly<{ kind: "comment"; text: string; ended: boolean }>
+  | Readonly<{ kind: "other"; ended: boolean }>
+  | Readonly<{ kind: "closed" }>
+  | Readonly<{ kind: "failed"; message: string }>
+  | Readonly<{ kind: "stopped" }>;
 
 export type PostPrReviewResult = Readonly<{
   taskId: string;
@@ -93,6 +97,9 @@ export type PrReviewDependencies = Readonly<{
 }>;
 
 export function createPrReviewWorkflow(deps: PrReviewDependencies) {
+  /** Tasks whose review page this process opened and has not seen close. */
+  const openPages = new Set<string>();
+
   async function start(input: StartPrReviewInput): Promise<StartPrReviewResult> {
     const ref = findPullRequestRef(input.pullRequest);
     if (ref === undefined) {
@@ -150,10 +157,19 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     if (options.page !== true && !(options.page === undefined && wantsPage(round))) {
       return { taskId: task.id, text };
     }
+    const patch = await readFile(prReviewRunDiffPath(deps.home, task.id, round.generation), "utf8");
+    const sources = await readPageSources(deps.run, state.checkout, round, patch);
     const path = pagePath(task.id, round);
-    await mkdir(join(deps.home, "pr-review", task.id), { recursive: true, mode: 0o700 });
-    await writeFile(path, renderReviewHtml(state, round), { mode: 0o600 });
-    const opened = await openPresentation(deps.run, path, join(deps.home, "pr-review", task.id));
+    const filesPath = path.replace(/\.html$/u, ".files.json");
+    const built = await buildReviewPage(
+      reviewPageInput(state, round, patch, sources),
+      basename(filesPath),
+    );
+    await mkdir(pageDirectory(task.id), { recursive: true, mode: 0o700 });
+    await writeFile(filesPath, built.files, { mode: 0o600 });
+    await writeFile(path, built.html, { mode: 0o600 });
+    const opened = await openPresentation(deps.run, path, pageDirectory(task.id));
+    openPages.add(task.id);
     return {
       taskId: task.id,
       text,
@@ -161,15 +177,57 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     };
   }
 
-  /** Notes the user left on the review page, raw, for the coordinator to turn into edits. */
-  async function notes(taskId: string): Promise<Readonly<{ taskId: string; feedback: string }>> {
+  /**
+   * Waits for the open page's next feedback; `reply` is shown in the page first. Only the tagged
+   * Submit control's prompt row counts as a submission; anything else typed there is a comment.
+   */
+  async function listen(
+    taskId: string,
+    signal: AbortSignal,
+    reply?: string,
+  ): Promise<ReviewPageEvent> {
+    if (!openPages.has(taskId)) return { kind: "closed" };
     const { task, round } = await reviewed(taskId);
-    const observed = await pollPresentation(
-      deps.run,
-      pagePath(task.id, round),
-      join(deps.home, "pr-review", task.id),
-    );
-    return { taskId: task.id, feedback: observed.rawFeedback };
+    let observation: Awaited<ReturnType<typeof listenPresentation>>;
+    try {
+      observation = await listenPresentation(
+        async (request) => {
+          if (signal.aborted) throw new Error("review page listener stopped");
+          return deps.run({ ...request, signal });
+        },
+        pagePath(task.id, round),
+        pageDirectory(task.id),
+        { agentReply: reply },
+      );
+    } catch (error) {
+      if (signal.aborted) return { kind: "stopped" };
+      openPages.delete(task.id);
+      return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+    const ended = observation.terminal;
+    if (ended) openPages.delete(task.id);
+    if (observation.status !== "feedback") {
+      if (
+        !ended &&
+        observation.status !== "browser_disconnected" &&
+        observation.status !== "error"
+      ) {
+        return { kind: "other", ended: false };
+      }
+      openPages.delete(task.id);
+      return { kind: "closed" };
+    }
+    const submitted = readSubmissionText(observation.rawFeedback);
+    if (submitted !== undefined) {
+      const parsed = parseReviewSubmission(submitted);
+      return parsed.ok
+        ? { kind: "submission", submission: parsed.submission, ended }
+        : { kind: "invalid", problems: parsed.problems, ended };
+    }
+    const comment = readPageComment(observation.rawFeedback);
+    return comment === undefined
+      ? { kind: "other", ended }
+      : { kind: "comment", text: comment, ended };
   }
 
   async function edit(taskId: string, edits: PrReviewEdits): Promise<ShowPrReviewResult> {
@@ -179,36 +237,31 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         `This review was already posted at ${round.posted.url}; ask for a re-review instead.`,
       );
     }
-    const byId = new Map((edits.comments ?? []).map((change) => [change.id, change]));
-    const unknown = [...byId.keys()].filter(
-      (id) => !round.review.comments.some((comment) => comment.id === id),
-    );
-    if (unknown.length > 0) throw new Error(`No draft comment with id ${unknown.join(", ")}`);
-    const comments = round.review.comments.flatMap((comment) => {
-      const change = byId.get(comment.id);
-      if (change === undefined) return [comment];
-      if (change.drop === true) return [];
-      return [
-        {
-          ...comment,
-          ...(change.body === undefined ? {} : { body: nonEmpty(change.body, "comment body") }),
-          ...(change.severity === undefined ? {} : { severity: change.severity }),
-        },
-      ];
-    });
     const edited: PrReviewRound = {
       ...round,
-      review: {
-        ...round.review,
-        comments,
-        ...(edits.summaryComment === undefined
-          ? {}
-          : { summaryComment: edits.summaryComment.trim() }),
-      },
+      review: applyEdits(round.review, edits, await commentable(task.id, round)),
     };
     const next = replaceLatestRound(state, edited);
     await deps.updatePrReview(task, next);
     return { taskId: task.id, text: renderReviewText(next, edited) };
+  }
+
+  /**
+   * Posts what the user chose on the page. The click on Submit is the user's approval, so this
+   * posts without asking again; it still pins to the reviewed commit and refuses if the PR moved.
+   * Nothing is saved unless the post lands, so a refused submission can be sent again.
+   */
+  async function submit(taskId: string, submission: ReviewSubmission): Promise<PostPrReviewResult> {
+    const { task, state, round } = await reviewed(taskId);
+    if (round.posted !== undefined) {
+      throw new Error(`This review was already posted at ${round.posted.url}.`);
+    }
+    const review = applyEdits(
+      round.review,
+      submissionEdits(round.review, submission),
+      await commentable(task.id, round),
+    );
+    return publish(task, state, { ...round, review }, submission.verdict);
   }
 
   async function post(
@@ -226,6 +279,16 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         message: `Already posted: ${round.posted.url}`,
       };
     }
+    return publish(task, state, round, verdict);
+  }
+
+  /** Posts the round as given and, once GitHub has it, saves the round as posted. */
+  async function publish(
+    task: TaskRecord,
+    state: PrReviewState,
+    round: PrReviewRound,
+    verdict: ReviewVerdict,
+  ): Promise<PostPrReviewResult> {
     const outcome = await postReview(deps.run, {
       ref: state.ref,
       review: round.review,
@@ -325,11 +388,36 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     return { task, state, round };
   }
 
-  function pagePath(taskId: string, round: PrReviewRound): string {
-    return join(deps.home, "pr-review", taskId, `review-${round.generation}.html`);
+  /** New-side lines the round's diff can anchor a comment on. */
+  async function commentable(
+    taskId: string,
+    round: PrReviewRound,
+  ): Promise<ReadonlyMap<string, ReadonlySet<number>>> {
+    return commentableLines(
+      await readFile(prReviewRunDiffPath(deps.home, taskId, round.generation), "utf8"),
+    );
   }
 
-  return { start, show, notes, edit, post, again, ask, close };
+  function pageDirectory(taskId: string): string {
+    return join(deps.home, "pr-review", taskId);
+  }
+
+  function pagePath(taskId: string, round: PrReviewRound): string {
+    return join(pageDirectory(taskId), `review-${round.generation}.html`);
+  }
+
+  return {
+    start,
+    show,
+    listen,
+    openPages: (): readonly string[] => [...openPages],
+    edit,
+    submit,
+    post,
+    again,
+    ask,
+    close,
+  };
 }
 
 export type PrReviewWorkflow = ReturnType<typeof createPrReviewWorkflow>;
@@ -360,10 +448,4 @@ function replaceLatestRound(state: PrReviewState, round: PrReviewRound): PrRevie
 function requireState(task: TaskRecord): PrReviewState {
   if (task.prReview === undefined) throw new Error(`Task ${task.id} is not a PR review.`);
   return task.prReview;
-}
-
-function nonEmpty(value: string, field: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) throw new Error(`${field} must not be empty`);
-  return trimmed;
 }
