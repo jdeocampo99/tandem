@@ -22,13 +22,13 @@ const omp: readonly ModelRecord[] = [
 const byId = (presets: readonly ModelPreset[]) =>
   Object.fromEntries(presets.map((preset) => [preset.id, preset]));
 
-test("Claude coordinates and Codex researches and reviews on the priciest Codex model", () => {
+test("Claude coordinates, Codex researches on the Balanced pick and reviews on the priciest", () => {
   const preset = byId(modelPresets({ ompCatalogue: omp, claudeCode: "ready" }))["claude-codex"];
   expect(preset).toMatchObject({
     status: "ready",
     models: {
       coordinator: { model: "claude-code/opus", thinking: "high" },
-      scout: { model: "openai-codex/gpt-6-astra", thinking: "medium" },
+      scout: { model: "openai-codex/gpt-6-luna", thinking: "medium" },
       implementer: { model: "claude-code/opus", thinking: "max" },
       reviewer: { model: "openai-codex/gpt-6-astra", thinking: "max" },
       presentation: { model: "claude-code/sonnet", thinking: "low" },

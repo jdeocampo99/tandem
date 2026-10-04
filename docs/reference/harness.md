@@ -91,7 +91,7 @@ Code: src/config/model-presets.ts (pure), src/harness/claude-code/availability.t
 
 | Preset | Planning | Research | Coding | Review | Mockups |
 | --- | --- | --- | --- | --- | --- |
-| Claude coordinates, Codex researches and reviews | `claude-code/opus` | top Codex | `claude-code/opus` | top Codex | `claude-code/sonnet` |
+| Claude coordinates, Codex researches and reviews | `claude-code/opus` | Balanced Codex | `claude-code/opus` | top Codex | `claude-code/sonnet` |
 | All Claude Code | `claude-code/opus` | `claude-code/sonnet` | `claude-code/opus` | `claude-code/fable` | `claude-code/sonnet` |
 | All OMP | Balanced | Balanced | Balanced | Balanced | Balanced |
 
@@ -100,6 +100,8 @@ Code: src/config/model-presets.ts (pure), src/harness/claude-code/availability.t
   approves the providers the recap names.
 - Top Codex is the reasoning model with the highest published output price, then input price,
   from OMP's `openai-codex` provider, else from `openai`. Names always come from the live listing.
+- Balanced Codex is the Balanced profile's research pick over that same provider alone, so research
+  gets a mid-tier model rather than the flagship review uses.
 - A preset is disabled, with its reason, when a role has no model: Claude Code is not installed
   (`claude --version` fails), a settings file a launch reads switches mods off (below), OMP lists
   no Codex or OpenAI model, or Balanced finds no model for a role.
