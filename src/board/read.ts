@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { Clock, IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { withPrWatches } from "../pr-watch/store.ts";
+import { recoveryCounters, restartsUsedThisGeneration } from "../recovery/central-reentry.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
 import {
   activeRuntimeJob,
@@ -52,6 +53,7 @@ export async function readBoard(home: string, clock: Clock): Promise<BoardView> 
       progressAt: await progressTimes(saved, runtime),
       workerPanes: workerPanes(saved, runtime),
       activities: await workerActivities(saved, runtime),
+      restarts: restartsSpent(saved, runtime),
     };
   });
   return boardView(state, now);
@@ -105,6 +107,23 @@ function workerPanes(
     panes.set(task.id, { workspaceId: endpoint.workspaceId, paneId: endpoint.paneId });
   }
   return panes;
+}
+
+/** The automatic restarts recovery spent on each blocked task's current generation. */
+function restartsSpent(
+  tasks: readonly TaskRecord[],
+  runtime: RuntimeState,
+): ReadonlyMap<string, number> {
+  const restarts = new Map<string, number>();
+  for (const task of tasks) {
+    if (task.stage !== "blocked") continue;
+    const used = restartsUsedThisGeneration(
+      recoveryCounters(taskRuntime(runtime, task.id)),
+      task.generation,
+    );
+    if (used > 0) restarts.set(task.id, used);
+  }
+  return restarts;
 }
 
 /** Rollups, with cost, of the tasks whose timeline says they finished in the last 7 days. */
