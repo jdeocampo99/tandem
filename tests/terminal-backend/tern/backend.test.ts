@@ -13,6 +13,7 @@ import {
 import {
   Created,
   decode,
+  Listing,
   TernOutcomeUnknownError,
   TernUnsupportedOperationError,
 } from "../../../src/terminal-backend/tern/protocol.ts";
@@ -494,8 +495,16 @@ test("close waits for its exact session to disappear without retrying an acknowl
           kills++;
           return { code: 0, stdout: JSON.stringify({ session: request.argv[3] }), stderr: "" };
         }
-        if (pendingKill !== undefined && request.argv[1] === "ls") polls.push(request);
-        return world.run(request);
+        const result = await world.run(request);
+        if (pendingKill !== undefined && request.argv[1] === "ls") {
+          polls.push(request);
+          const listing = decode(result.stdout, Listing, "delayed cleanup");
+          const retained = listing.sessions.find((session) => session.id === pendingKill?.argv[3]);
+          if (retained !== undefined)
+            retained.tabs.push({ id: "80000000", name: null, blocks: [] });
+          return { ...result, stdout: JSON.stringify(listing) };
+        }
+        return result;
       },
       {
         windowKey: "owned-window",
@@ -515,7 +524,7 @@ test("close waits for its exact session to disappear without retrying an acknowl
   });
 });
 
-test("a retained killed session times out, keeps durable resources and quarantines another close", async () => {
+test("a killed session with an unconfirmed tab times out, keeps durable resources and quarantines another close", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "45", cwd: world.repoPath });
     const lease = await world.grantLease({ name: "tern-retained-session", holder: "holder" });
@@ -535,13 +544,23 @@ test("a retained killed session times out, keeps durable resources and quarantin
     );
     let now = 0;
     let kills = 0;
+    let killedSession: string | undefined;
     const terminal = ternBackend(
       async (request) => {
         if (request.argv[1] === "kill") {
           kills++;
+          killedSession = request.argv[3];
           return { code: 0, stdout: JSON.stringify({ session: request.argv[3] }), stderr: "" };
         }
-        return world.run(request);
+        const result = await world.run(request);
+        if (killedSession !== undefined && request.argv[1] === "ls") {
+          const listing = decode(result.stdout, Listing, "unconfirmed cleanup");
+          const retained = listing.sessions.find((session) => session.id === killedSession);
+          if (retained !== undefined)
+            retained.tabs.push({ id: "80000000", name: null, blocks: [] });
+          return { ...result, stdout: JSON.stringify(listing) };
+        }
+        return result;
       },
       {
         clock: () => now,
