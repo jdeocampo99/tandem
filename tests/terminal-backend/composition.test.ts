@@ -183,3 +183,22 @@ test("a worker launch gets its own Tern workspace even when the parent context i
     );
   });
 });
+
+test("the explicit factory choice builds Tern with an isolated home whose saved choice is Herdr", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "herdr"\n');
+    const terminal = terminalBackend(world.run, { terminal: "tern", home: world.home });
+    const created = await terminal.createWorkspace({
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      label: "worker",
+      role: "implementer",
+      generation: 1,
+    });
+    expect(created.endpoint.terminal).toBe("tern");
+    expect(
+      (await terminal.inspect({ endpoint: created.endpoint, cwd: world.repoPath })).pane.paneId,
+    ).toBe(created.endpoint.paneId);
+    expect(terminal.name).toBe("tern");
+  });
+});

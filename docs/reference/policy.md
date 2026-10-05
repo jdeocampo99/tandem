@@ -291,6 +291,8 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 The home setting `terminal = "herdr"` or `terminal = "tern"` applies across projects. An absent
 setting keeps Herdr. Only `src/terminal-backend/compose.ts` selects an implementation from it;
 composition reads the setting again before terminal operations, including after onboarding saves.
+`terminalBackend(run, { terminal, home, ... })` also accepts an explicit fixed choice for composed
+callers and scenario boundaries; that choice retains the same endpoint identity guards.
 
 The setup page, chat, and direct interactive onboarding offer Tern only when `probeTern` reports
 `ready`. Its other outcomes are `missing`, `signedOut`, or `unknown` with a reason; each shows a
@@ -298,6 +300,13 @@ one-line explanation and selects Herdr. Page discovery keeps the probe result fo
 and probes again when reopened. The `terminal-setting` action rechecks availability before saving
 Tern. The probe reads the executable and account gate in a temporary, isolated daemon and window,
 closes its own resources, and changes no settings in the user's Tern configuration.
+
+After a ready Tern choice is saved, onboarding runs the injected plugin installer outside the state
+lock. Its separate consent prompt approves linking Tandem's views and adding its shortcuts; declining
+leaves them unchanged. Composition calls `ensureTernPlugin` only for ready Tern, while Herdr and
+unconfirmed availability never reach plugin commands. A saved Tern choice outside that onboarding
+flow is probed again before plugin installation. `tandem update` reloads an existing selected Tern
+plugin and never installs one without consent.
 
 Switching is refused under the state lock while tasks are queued or running, jobs are active, or
 reservations or launch outcomes retain uncertain ownership, including presentations. Availability

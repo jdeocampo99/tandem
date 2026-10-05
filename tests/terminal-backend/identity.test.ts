@@ -10,8 +10,13 @@ import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { storedEndpointTerminal } from "../../src/terminal-backend/identity.ts";
 import { withScenario } from "../evals/scenario.ts";
 
-for (const chosen of ["herdr", "tern"] as const) {
-  test(`${chosen} quarantines the other terminal's identical ids without contacting it`, async () => {
+for (const [chosen, selection] of [
+  ["herdr", "saved"],
+  ["herdr", "explicit"],
+  ["tern", "saved"],
+  ["tern", "explicit"],
+] as const) {
+  test(`${selection} ${chosen} quarantines the other terminal's identical ids without contacting it`, async () => {
     const home = await mkdtemp(join(tmpdir(), "tandem-terminal-"));
     const calls: unknown[] = [];
     const forbidden: CommandRunner = async (request) => {
@@ -38,8 +43,10 @@ for (const chosen of ["herdr", "tern"] as const) {
       leasedAt: "2026-10-06T00:00:00.000Z",
     };
     try {
-      await writeFile(join(home, "settings.toml"), `terminal = "${chosen}"\n`);
+      const saved = selection === "saved" ? chosen : endpoint.terminal;
+      await writeFile(join(home, "settings.toml"), `terminal = "${saved}"\n`);
       const terminal = terminalBackend(forbidden, {
+        ...(selection === "explicit" ? { terminal: chosen } : {}),
         home,
       });
       const result = await retireCoordinatorWorkspace(terminal, home, {

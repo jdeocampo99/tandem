@@ -2,13 +2,19 @@ import { AdapterError } from "../adapters/primitives.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { type HomeSettings, readHomeSettingsSync } from "../config/home-settings.ts";
 import type { CommandRunner, TerminalName } from "../contracts.ts";
-import type { SessionTarget, TerminalBackend, TerminalContext } from "./contract.ts";
+import type {
+  SessionTarget,
+  TerminalAvailability,
+  TerminalBackend,
+  TerminalContext,
+} from "./contract.ts";
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
 import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
 import { probeTern } from "./tern/availability.ts";
 import { type TernBackendOptions, ternBackend, ternNotificationEndpoint } from "./tern/backend.ts";
 import { TERN_CONTEXT } from "./tern/context.ts";
+import { ensureTernPlugin, reloadTernPlugin, type TernPluginDependencies } from "./tern/plugin.ts";
 
 export type TerminalComposition = Readonly<{
   /** Overrides saved settings; without either choice, Herdr is the default. */
@@ -165,3 +171,27 @@ export const terminalContext: TerminalContext = {
 
 /** Onboarding checks availability through the same terminal composition boundary. */
 export const ternAvailability = probeTern;
+
+/** Onboarding uses the same composition boundary as backend selection. */
+export async function installTerminalPlugin(
+  home: string,
+  dependencies: TernPluginDependencies,
+  readiness?: TerminalAvailability,
+): Promise<boolean> {
+  if (savedTerminalPreference(readHomeSettingsSync(home)).terminal !== "tern") return true;
+  const available = readiness ?? (await ternAvailability(dependencies.run));
+  if (available.status !== "ready") {
+    return false;
+  }
+  return ensureTernPlugin(dependencies);
+}
+
+/** Refresh window bindings only for the selected terminal, after a successful update. */
+export async function reloadTerminalPlugin(
+  home: string,
+  dependencies: TernPluginDependencies,
+): Promise<boolean> {
+  return savedTerminalPreference(readHomeSettingsSync(home)).terminal === "tern"
+    ? reloadTernPlugin(dependencies)
+    : false;
+}
