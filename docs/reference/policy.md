@@ -299,7 +299,12 @@ The setup page, chat, and direct interactive onboarding offer Tern only when `pr
 one-line explanation and selects Herdr. Page discovery keeps the probe result for that open page
 and probes again when reopened. The `terminal-setting` action rechecks availability before saving
 Tern. The probe reads the executable and account gate in a temporary, isolated daemon and window,
-closes its own resources, and changes no settings in the user's Tern configuration.
+closes its own resources, and changes no settings in the user's Tern configuration. The entire probe
+has an eight-second budget; shutdown gets one second for the owned control endpoint before both
+owned process groups are aborted and awaited, then temporary files are removed. Timeouts return
+`unknown`. Tern v0.4.5 needs a native window to prove the real account gate: its headless mode uses
+synthetic accounts. The isolated control window may briefly appear in front during onboarding; it
+is closed before the probe returns. Tandem never hides the Tern app or alters other windows.
 
 After a ready Tern choice is saved, onboarding runs the injected plugin installer outside the state
 lock. Its separate consent prompt approves linking Tandem's views and adding its shortcuts; declining
