@@ -1,3 +1,4 @@
+import type { BlockCauseKind } from "../contracts.ts";
 import type { TodoItem } from "../playbooks/progress.ts";
 import { elapsed } from "../pr-watch/view.ts";
 import type { BoardSnapshot } from "./snapshot.ts";
@@ -90,6 +91,8 @@ export const PANEL_GLYPHS: Readonly<Record<PanelColor, string>> = {
 };
 
 const STALE_MS = 10_000;
+/** How src/board/view.ts starts a running row's `since` when its worker has gone quiet. */
+const IDLE_PREFIX = "idle ";
 const SECTION_ORDER = ["Needs you", "Running", "Pull requests", "Done today"] as const;
 type SectionTitle = (typeof SECTION_ORDER)[number];
 
@@ -100,9 +103,31 @@ const NEEDS_YOU: Readonly<
   question: { stage: "question", color: "yellow", prefix: "question: " },
   "model-question": { stage: "model question", color: "yellow", prefix: "model question: " },
   "awaiting-approval": { stage: "to approve", color: "yellow" },
-  ready: { stage: "ready", color: "yellow" },
+  ready: { stage: "ready to publish", color: "yellow" },
   blocked: { stage: "stopped", color: "red", prefix: "blocked: ", words: "stuck" },
   "pull-request": { stage: "PR failing", color: "red", words: "pr" },
+};
+
+/**
+ * Short words for block causes whose kind alone says what happened. Kinds that cover several
+ * situations, like `prerequisite-not-met`, show the reason the blocking site wrote instead.
+ */
+const STOP_CAUSES: Readonly<Partial<Record<BlockCauseKind, string>>> = {
+  "worker-failed": "the worker failed",
+  "review-lens-failed": "a review failed",
+  "resource-lost": "its terminal was lost",
+  "allocation-failed": "couldn't set up a worker",
+  "stale-review-state": "the review went out of date",
+  "fix-rounds-exhausted": "out of fix rounds",
+  "validation-config-refused": "check commands aren't set up",
+  "ownership-unprovable": "couldn't confirm the worker stopped",
+  "quarantined-unknown-outcome": "an action's result is unknown",
+};
+
+const REVIEW_WORDS: Readonly<Record<NonNullable<BoardRow["reviewLevel"]>, string>> = {
+  none: "no review",
+  light: "light review",
+  standard: "standard review",
 };
 
 const RUNNING_COLORS: Readonly<Record<RunningStage, PanelColor>> = {
@@ -295,10 +320,11 @@ function boardEntries(board: BoardView): Entry[] {
 
 function needsYouEntry(row: BoardRow): Entry {
   const kind = NEEDS_YOU[row.cause] ?? { stage: row.text, color: "yellow" as const };
-  const line =
+  const text =
     kind.prefix !== undefined && row.text.startsWith(kind.prefix)
       ? row.text.slice(kind.prefix.length)
       : row.text;
+  const line = needsYouLine(row, text);
   const target: PanelTarget =
     row.cause === "pull-request"
       ? row.url === undefined
@@ -323,15 +349,42 @@ function needsYouEntry(row: BoardRow): Entry {
   };
 }
 
+/** A needs-you row's second line, from its facts when the board has them, else its text. */
+function needsYouLine(row: BoardRow, text: string): string {
+  if (row.cause === "brief" && row.briefSize !== undefined) {
+    const review = row.reviewLevel === undefined ? [] : [REVIEW_WORDS[row.reviewLevel]];
+    return [`brief: ${row.briefSize} change`, ...review].join(" · ");
+  }
+  if (row.cause === "ready" && row.pullRequest !== undefined) {
+    return `${row.pullRequest.draft ? "draft PR" : "PR"} #${row.pullRequest.number}`;
+  }
+  if (row.cause === "blocked") {
+    const cause =
+      (row.blockKind === undefined ? undefined : STOP_CAUSES[row.blockKind]) ??
+      text.replace(/\.$/u, "");
+    return row.restarts === undefined
+      ? cause
+      : `stopped after ${count(row.restarts, "restart")}: ${cause}`;
+  }
+  return text;
+}
+
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 function runningEntry(row: RunningBoardRow, now: string): Entry {
-  const idle = row.since.startsWith("idle");
+  const idleFor = row.since.startsWith(IDLE_PREFIX)
+    ? row.since.slice(IDLE_PREFIX.length)
+    : undefined;
+  const idle = idleFor !== undefined;
   const activity =
     row.cause === "paused" || row.cause === "queued" ? undefined : toolActivity(row, now);
   const steps = row.activity?.todos?.map((item) => ({
     text: item.content,
     status: STEP_STATUSES[item.status] ?? "todo",
   }));
-  const lines = runningLines(row, idle, activity);
+  const lines = runningLines(row, idleFor, activity);
   const review = row.cause === "reviewing" || row.cause === "awaiting-fixes" ? "review" : "";
   return {
     section: "Running",
@@ -342,7 +395,12 @@ function runningEntry(row: RunningBoardRow, now: string): Entry {
       `running ${row.cause} ${review} ${idle ? "stuck" : ""}`,
       row.project,
     ),
-    signature: signature(rowKey(row), row.text, idle ? "idle" : ""),
+    signature: signature(
+      rowKey(row),
+      row.text,
+      idle ? "idle" : "",
+      row.openFindings === undefined ? "" : `${row.openFindings}`,
+    ),
     row: {
       key: rowKey(row),
       name: row.name,
@@ -359,17 +417,26 @@ function runningEntry(row: RunningBoardRow, now: string): Entry {
   };
 }
 
-/** The lines above the tool line: an implementer's step comes first, idling replaces it. */
+/**
+ * The lines above the tool line: an implementer's step or a fixer's findings come first, idling
+ * replaces them. Idling never claims Tandem is restarting the worker: nothing records that recovery
+ * has noticed a quiet worker that is still alive.
+ */
 function runningLines(
   row: RunningBoardRow,
-  idle: boolean,
+  idleFor: string | undefined,
   activity: PanelActivity | undefined,
 ): string[] {
   if (row.cause === "paused") return ["paused by you"];
   if (row.cause === "queued") return ["waiting for a free worktree"];
-  if (idle) return [row.since];
-  const step = row.cause === "implementing" ? currentStep(row.activity?.todos) : undefined;
-  if (step !== undefined) return [step];
+  if (idleFor !== undefined) return [`no progress for ${idleFor}`];
+  const lead =
+    row.cause === "implementing"
+      ? currentStep(row.activity?.todos)
+      : row.openFindings === undefined
+        ? undefined
+        : `review found ${count(row.openFindings, "issue")} · fixing them`;
+  if (lead !== undefined) return [lead];
   return activity === undefined ? [`for ${row.since}`] : [];
 }
 
