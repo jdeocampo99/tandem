@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandRequest, CommandRunner } from "../../src/contracts.ts";
+import { openProject } from "../../src/coordinator/open-project.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
@@ -64,6 +65,14 @@ test("Tern alerts use the durable coordinator and refuse missing or foreign reco
     });
     const before = calls.length;
     await expect(alert()).rejects.toThrow("quarantined herdr endpoint under tern");
+    await expect(
+      openProject(async () => ({ code: 0, stdout: "", stderr: "" }), terminal, {
+        repoPath: world.repoPath,
+        home: world.home,
+        sessionId: world.sessionId,
+        poolRoot: world.poolRoot,
+      }),
+    ).rejects.toThrow("quarantined herdr endpoint under tern");
     expect(calls).toHaveLength(before);
     expect(writes).toHaveLength(1);
     const path = recordPath(world.home, world.sessionId, world.repoPath);

@@ -2,8 +2,6 @@ import { AdapterError } from "../adapters/primitives.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { type HomeSettings, readHomeSettingsSync } from "../config/home-settings.ts";
 import type { CommandRunner, TerminalName } from "../contracts.ts";
-import { canonicalPath } from "../coordinator/record.ts";
-import { listCoordinatorRecords } from "../coordinator/registry.ts";
 import type { SessionTarget, TerminalBackend, TerminalContext } from "./contract.ts";
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
@@ -23,6 +21,11 @@ export type TerminalComposition = Readonly<{
 
 /** A notification may only target the one recorded coordinator for this exact repository. */
 async function notificationEndpoint(home: string, target: SessionTarget) {
+  // Validation and worker startup must not load coordinator harnesses just to compose a port.
+  const [{ canonicalPath }, { listCoordinatorRecords }] = await Promise.all([
+    import("../coordinator/record.ts"),
+    import("../coordinator/registry.ts"),
+  ]);
   const cwd = await canonicalPath(target.cwd, "notification cwd");
   const records = (await listCoordinatorRecords(home, target.sessionId)).filter(
     (record) => record.repoPath === cwd || record.worktree.path === cwd,
