@@ -179,7 +179,7 @@ export type TerminalBackend = Readonly<{
       }>,
   ): Promise<Readonly<{ endpoint: Endpoint; warnings: readonly string[] }>>;
   /**
-   * Opens a pane right of an anchor, without focus, proven to share its workspace and tab. An
+   * Opens a pane beside an anchor, without focus, proven to share its workspace and tab. An
    * anchor known only by pane id is read first; nothing is ever written to the anchor.
    */
   splitBeside(
@@ -309,7 +309,7 @@ export type TerminalContext = Readonly<{
   focus(environment: TandemEnvironmentSource): TerminalFocus;
   /** The panel's own pane, when this process is the panel the terminal opened beside a coordinator. */
   panelPaneId(environment: TandemEnvironmentSource): string | undefined;
-  /** The pane the welcome popup prompts, when this process is that popup. */
+  /** The agent pane targeted by the welcome view, when this process hosts that view. */
   welcomePaneId(environment: TandemEnvironmentSource): string | undefined;
 }>;
 
