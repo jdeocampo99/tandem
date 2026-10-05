@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import type { z } from "zod";
-import { quoteShellCommand } from "../../adapters/commands.ts";
 import {
   AdapterError,
   EndpointBusyError,
@@ -9,7 +8,15 @@ import {
 } from "../../adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../contracts.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
-import { close, exactPane, inspect, missing, paneMutation, runCommand } from "./endpoints.ts";
+import {
+  close,
+  exactPane,
+  initializeShell,
+  inspect,
+  missing,
+  paneMutation,
+  runCommand,
+} from "./endpoints.ts";
 import {
   blocks,
   Created,
@@ -233,19 +240,11 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           throw new TernOutcomeUnknownError("tern new verification", cause);
         }
         await rename({ ...target, workspaceId: endpoint.workspaceId });
-        if (target.env !== undefined && Object.keys(target.env).length > 0) {
-          // Environment belongs to the shell running the eventual command, not the CLI client.
-          const exports = Object.entries(target.env).map(([key, value]) => {
-            if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key))
-              throw new TypeError(`invalid environment key ${key}`);
-            return `${key}=${value}`;
-          });
-          await paneMutation(commands, { endpoint, cwd: target.cwd }, [
-            "run",
-            endpoint.paneId,
-            quoteShellCommand(["export", ...exports]),
-          ]);
-        }
+        await initializeShell(commands, {
+          endpoint,
+          cwd: target.cwd,
+          ...(target.env === undefined ? {} : { env: target.env }),
+        });
         return {
           endpoint,
           warnings:
@@ -284,6 +283,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         } catch (cause) {
           throw new TernOutcomeUnknownError("tern split verification", cause);
         }
+        await initializeShell(commands, { endpoint, cwd: input.cwd });
         return endpoint;
       }),
     listWorkspaces: async (target) =>

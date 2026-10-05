@@ -94,8 +94,11 @@ assigned to new work.
 
 Tern's daemon maps to a Tandem terminal session; a Tern tab supplies both workspace and tab ids.
 A project gets a uniquely named `tandem-<project>` Tern session and workers get background tabs in
-that same session. Names and titles are display state and never prove ownership. The adapter keeps
-u64 ids as strings, rechecks exact ids in the same scoped `tern ls --json` before mutations,
+that same session. Names and titles are display state and never prove ownership. The adapter binds
+the created shell's `TANDEM_SESSION`, `TANDEM_TERN_WORKSPACE_ID` and `TERN_PANE` to its
+acknowledged endpoint. Tern has no creation-time env flag, so a guarded shell export initializes
+them after creation; launching a command also overrides inherited stale values from the endpoint.
+It keeps u64 ids as strings, rechecks exact ids in the same scoped `tern ls --json` before mutations,
 compares acknowledgements, reads exact foreground-group argv from macOS without returning process
 environments, and refuses busy closes unless the caller explicitly authorizes force.
 Unknown outcomes keep resources and quarantine the effect rather than retrying it.

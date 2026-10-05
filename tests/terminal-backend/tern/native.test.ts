@@ -1,9 +1,16 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { quoteShellCommand } from "../../../src/adapters/commands.ts";
 import { EndpointBusyError } from "../../../src/adapters/primitives.ts";
-import type { CommandRunner } from "../../../src/contracts.ts";
+import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { decode, Listing, TERN_BINARY } from "../../../src/terminal-backend/tern/protocol.ts";
+import { paneMutation } from "../../../src/terminal-backend/tern/endpoints.ts";
+import {
+  decode,
+  Listing,
+  TERN_BINARY,
+  ternCommands,
+} from "../../../src/terminal-backend/tern/protocol.ts";
 
 const nativeTest = process.env.TANDEM_TERN_NATIVE === "1" ? test : test.skip;
 
@@ -61,12 +68,42 @@ nativeTest(
         await Bun.sleep(50);
       }
       const terminal = ternBackend(run, { binary: TERN_BINARY });
+      const commands = ternCommands(run, { binary: TERN_BINARY });
+      const assertCreatedContext = async (endpoint: Endpoint) => {
+        const contextTarget = { endpoint, cwd: root };
+        // Let the created shell expand only these synthetic identity variables into exact argv.
+        // This bypasses runCommand's env injection and writes no environments to fixtures.
+        const command = `${quoteShellCommand(["/bin/sh", "-c", "read -r x"])} "$TANDEM_SESSION" "$TANDEM_TERN_WORKSPACE_ID" "$TERN_PANE"`;
+        await paneMutation(commands, contextTarget, ["run", endpoint.paneId, command]);
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const process = (
+            await terminal.inspect(contextTarget)
+          ).processInfo.foregroundProcesses.find((entry) => entry.argv.includes("read -r x"));
+          if (process !== undefined) {
+            expect(process.argv.slice(-3)).toEqual([
+              endpoint.sessionId,
+              endpoint.workspaceId,
+              endpoint.paneId,
+            ]);
+            break;
+          }
+          if (Date.now() >= deadline) throw new Error("created-shell context proof did not start");
+          await Bun.sleep(50);
+        }
+        await terminal.interrupt(contextTarget);
+      };
       const session = { sessionId: "native-check", cwd: root };
       const created = await terminal.createWorkspace({
         ...session,
         label: "coordinator",
         role: "coordinator",
         generation: 0,
+        env: {
+          TANDEM_SESSION: "stale-daemon",
+          TANDEM_TERN_WORKSPACE_ID: "stale-tab",
+          TERN_PANE: "stale-pane",
+        },
       });
       const target = { endpoint: created.endpoint, cwd: root };
       const shellDeadline = Date.now() + 5_000;
@@ -79,6 +116,7 @@ nativeTest(
           await Bun.sleep(50);
         }
       }
+      await assertCreatedContext(created.endpoint);
       const split = await terminal.splitBeside({
         anchor: created.endpoint,
         cwd: root,
@@ -86,6 +124,7 @@ nativeTest(
         generation: 0,
       });
       const splitTarget = { endpoint: split, cwd: root };
+      await assertCreatedContext(split);
       await terminal.runCommand({ ...splitTarget, command: ["sh", "-c", "sleep 30; read -r x"] });
       const busyDeadline = Date.now() + 5_000;
       while (!(await terminal.inspect(splitTarget)).activeWorker) {
@@ -110,6 +149,7 @@ nativeTest(
       const listed = await run({ argv: [TERN_BINARY, "ls", "--json"], cwd: root });
       const shown = JSON.parse(listed.stdout) as { sessions: { tabs: { shown: boolean }[] }[] };
       expect(shown.sessions[0]?.tabs.map((tab) => tab.shown)).toEqual([true, false]);
+      await assertCreatedContext(worker.endpoint);
       await terminal.close({ endpoint: worker.endpoint, cwd: root });
       await ternBackend(run, {
         binary: TERN_BINARY,

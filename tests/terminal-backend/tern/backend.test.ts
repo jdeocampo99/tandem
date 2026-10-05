@@ -33,6 +33,11 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
       label: "coordinator",
       role: "coordinator",
       generation: 2,
+      env: {
+        TANDEM_SESSION: "stale-daemon",
+        TANDEM_TERN_WORKSPACE_ID: "stale-tab",
+        TERN_PANE: "stale-pane",
+      },
     });
     const target = { endpoint: root.endpoint, cwd: world.repoPath };
     expect(root.endpoint.role).toBe("coordinator");
@@ -84,6 +89,18 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
     ).toHaveLength(1);
     expect(await terminal.snapshot(session)).toHaveLength(3);
     expect(await terminal.listWorkspaces({ ...session, complete: true })).toHaveLength(2);
+    for (const endpoint of [root.endpoint, split, worker.endpoint]) {
+      const initialization = calls.find(
+        (request) =>
+          request.argv[1] === "run" &&
+          request.argv[2] === endpoint.paneId &&
+          request.argv[3]?.startsWith("'export'"),
+      )?.argv[3];
+      expect(initialization).toContain(`TANDEM_SESSION=${endpoint.sessionId}`);
+      expect(initialization).toContain(`TANDEM_TERN_WORKSPACE_ID=${endpoint.workspaceId}`);
+      expect(initialization).toContain(`TERN_PANE=${endpoint.paneId}`);
+      expect(initialization).not.toContain("stale-");
+    }
     expect(
       (
         await terminal.fitPanel({
