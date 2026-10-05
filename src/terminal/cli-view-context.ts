@@ -5,8 +5,8 @@ import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import type { PaneListing, TerminalBackend, ViewOrigin } from "../terminal-backend/contract.ts";
 import { type CliInvocation, CliUsageError } from "./cli-arguments.ts";
 
-/** Native plugin opens require the exact pane and cwd, never inherited process context. */
-export function validateNativeOpenContext(invocation: CliInvocation): void {
+/** Native plugin actions require the exact pane and cwd, never inherited process context. */
+export function validateNativeContext(invocation: CliInvocation): void {
   if (invocation.options.help) return;
   const { viewPaneId, viewCwd } = invocation.options;
   if (
@@ -14,10 +14,14 @@ export function validateNativeOpenContext(invocation: CliInvocation): void {
     !/^(?:0|[1-9][0-9]*)$/u.test(viewPaneId) ||
     !Number.isSafeInteger(Number(viewPaneId))
   ) {
-    throw new CliUsageError("native open requires --pane with an exact decimal integer pane ID");
+    throw new CliUsageError(
+      `native ${invocation.command} requires --pane with an exact decimal integer pane ID`,
+    );
   }
   if (viewCwd === undefined || !isAbsolute(viewCwd)) {
-    throw new CliUsageError("native open requires --cwd with the absolute originating pane cwd");
+    throw new CliUsageError(
+      `native ${invocation.command} requires --cwd with the absolute originating pane cwd`,
+    );
   }
 }
 

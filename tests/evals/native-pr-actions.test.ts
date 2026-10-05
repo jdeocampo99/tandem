@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { runTerminal } from "../../src/main.ts";
+import { runCli } from "../../src/cli.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import {
@@ -12,7 +12,7 @@ import {
 } from "./scenario.ts";
 
 for (const state of ["draft", "open"] as const) {
-  test(`a native comment on a ready ${state} PR starts a fix generation after its worker finished`, async () => {
+  test(`a PR comment on a ready ${state} PR starts a fix generation after its worker finished`, async () => {
     await withScenario({}, async (world) => {
       const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
       await seedScenarioTask(world, {
@@ -43,8 +43,8 @@ for (const state of ["draft", "open"] as const) {
         workerTimeoutMs: 1500,
       });
       try {
-        const result = await runTerminal(
-          ["native", "pr-comment", SCENARIO_TASK_ID, "--text", "Fix src/view.ts:12"],
+        const result = await runCli(
+          ["pr-comment", SCENARIO_TASK_ID, "--text", "Fix src/view.ts:12"],
           {
             cwd: world.repoPath,
             processEnvironment: { TANDEM_HOME: world.home, TANDEM_SESSION: world.sessionId },
@@ -96,17 +96,14 @@ test("a ready PR whose fix cannot start reports the saved feedback and blocker",
       idFactory: world.idFactory,
     });
     try {
-      const result = await runTerminal(
-        ["native", "pr-comment", SCENARIO_TASK_ID, "--text", "Fix this"],
-        {
-          cwd: world.repoPath,
-          processEnvironment: { TANDEM_HOME: world.home, TANDEM_SESSION: world.sessionId },
-          run: world.run,
-          service,
-          stdout: () => {},
-          stderr: () => {},
-        },
-      );
+      const result = await runCli(["pr-comment", SCENARIO_TASK_ID, "--text", "Fix this"], {
+        cwd: world.repoPath,
+        processEnvironment: { TANDEM_HOME: world.home, TANDEM_SESSION: world.sessionId },
+        run: world.run,
+        service,
+        stdout: () => {},
+        stderr: () => {},
+      });
       expect(result.exitCode).not.toBe(0);
       expect(result.error?.message).toContain(
         "PR feedback was saved, but the worker could not start fixing",

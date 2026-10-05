@@ -158,7 +158,18 @@ test("native Approve click records the displayed revision and both digests witho
   try {
     await f.write(f.seen);
     const result = await runTerminal(
-      ["native", "brief-approve", f.record.id, "--input", f.input, "--json"],
+      [
+        "native",
+        "brief-approve",
+        f.record.id,
+        "--input",
+        f.input,
+        "--json",
+        "--pane",
+        "101",
+        "--cwd",
+        f.clean,
+      ],
       f.deps,
     );
     expect(result.exitCode).toBe(0);
@@ -325,7 +336,17 @@ test("Tandem PR comments become durable worker fix requests without any GitHub c
   try {
     const task = await createPrTask(f);
     const result = await runTerminal(
-      ["native", "pr-comment", task.id, "--text", "Fix src/view.ts:12"],
+      [
+        "native",
+        "pr-comment",
+        task.id,
+        "--text",
+        "Fix src/view.ts:12",
+        "--pane",
+        "101",
+        "--cwd",
+        f.clean,
+      ],
       f.deps,
     );
     expect(result.exitCode).toBe(0);
@@ -694,6 +715,38 @@ test("native open refuses missing or invalid origin context before reading panes
   }
 });
 
+test("every native action refuses missing pane/cwd before reading input or mutating state", async () => {
+  const f = await fixture();
+  try {
+    const actions = [
+      ["brief-comment", f.record.id, "--input", f.input],
+      ["brief-request-changes", f.record.id, "--input", f.input],
+      ["brief-approve", f.record.id, "--input", f.input],
+      ["pr-comment", "task-example", "--text", "Fix this"],
+      ["review-submit", "task-example", "--input", f.input],
+      ["restart", "task-example"],
+      ["steer", "--task", "task-example", "--text", "Fix this"],
+    ];
+    for (const action of actions) {
+      for (const flags of [[], ["--pane", "101"]]) {
+        const errors: string[] = [];
+        const result = await runTerminal(["native", ...action, ...flags], {
+          ...f.deps,
+          stderr: (message) => errors.push(message),
+        });
+        expect(result.exitCode).not.toBe(0);
+        expect(result.error?.message).toContain(`native ${action[0]} requires`);
+        expect(errors.join("")).toContain(result.error?.message ?? "missing error");
+      }
+    }
+    expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
+    expect(f.prompts).toEqual([]);
+    expect(f.opened).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
 for (const outcome of ["refusal", "failure"] as const) {
   test(`native open reports backend ${outcome} on stderr and never retries`, async () => {
     const f = await fixture();
@@ -769,7 +822,7 @@ test("native PR comment explicitly refuses a completed implementation worker", a
       stage: "completed",
     }));
     const result = await runTerminal(
-      ["native", "pr-comment", task.id, "--text", "Fix this"],
+      ["native", "pr-comment", task.id, "--text", "Fix this", "--pane", "101", "--cwd", f.clean],
       f.deps,
     );
     expect(result.exitCode).not.toBe(0);

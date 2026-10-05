@@ -137,6 +137,9 @@ lives in `approvalPrompt` in src/session/actions.ts.
 
 Every native click invokes `tandem native COMMAND`. The view never edits durable state. The same
 commands are also available in the advanced action CLI (`bun src/cli.ts`).
+Every native command requires exact decimal `--pane` and absolute originating-pane `--cwd`;
+missing or invalid context is refused before handler effects. Shared non-native callers retain
+optional origin fields. `--window` is an optional opaque control window key.
 
 - `open task|brief|pr ID` validates the durable task or request, proves its running coordinator,
   and asks `TerminalBackend.openView` to replace the main area (task) or open a split (brief/PR).
