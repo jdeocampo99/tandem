@@ -101,6 +101,12 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   };
   return {
     name: "tern",
+    openView: async ({ view }) => ({
+      opened: false,
+      warnings: [
+        `Tern ${view.kind} view is unavailable until Tandem's native views are installed.`,
+      ],
+    }),
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>

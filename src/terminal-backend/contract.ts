@@ -65,6 +65,21 @@ export type FocusResult =
   | Readonly<{ focused: true }>
   | Readonly<{ focused: false; code: number; detail: string }>;
 
+/** A durable identity to show. The CLI validates it before asking a backend to present it. */
+export type TerminalView =
+  | Readonly<{ kind: "task"; taskId: string }>
+  | Readonly<{ kind: "brief"; requestId: string }>
+  | Readonly<{ kind: "pr"; taskId: string }>;
+
+/** Presentation context from the initiating view; it grants no pane ownership. */
+export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
+
+export type OpenViewResult = Readonly<{
+  opened: boolean;
+  warnings: readonly string[];
+  fallback?: "brief-review";
+}>;
+
 /** The last proven window width, and any limitation that prevented fitting the panel. */
 export type PanelFitResult = Readonly<{
   fittedWidth: number | undefined;
@@ -206,6 +221,20 @@ export type TerminalBackend = Readonly<{
   ): Promise<FocusResult>;
   /** Focuses the exact pane; false when the terminal would not, which callers may ignore. */
   focusAgent(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
+
+  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
+   * Supplied origin window/pane context must be honored or refused; never target another window.
+   * Unsupported presentations return an explicit warning and never type into the conversation.
+   */
+  openView(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      view: TerminalView;
+      origin?: ViewOrigin;
+    }>,
+  ): Promise<OpenViewResult>;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;

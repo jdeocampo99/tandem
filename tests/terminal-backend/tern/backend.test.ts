@@ -5,6 +5,7 @@ import { assertStoppedCoordinatorShell } from "../../../src/coordinator/ownershi
 import { recordPath } from "../../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import type { TerminalView } from "../../../src/terminal-backend/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import {
   Created,
@@ -227,6 +228,30 @@ test("notifications require the injected durable endpoint even after a backend c
       ternBackend(world.run, { notificationEndpoint: async () => created.endpoint }).notify(alert),
     ).rejects.toBeInstanceOf(EndpointOwnershipError);
     expect(world.trace().some((event) => event.action === "tern close")).toBe(false);
+  });
+});
+
+test("native views report unavailable without opening anything or typing into a pane", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const coordinator = world.openPane({ paneId: "46", cwd: world.repoPath });
+    const terminal = ternBackend(world.run);
+    const views: readonly TerminalView[] = [
+      { kind: "task", taskId: "task-1" },
+      { kind: "brief", requestId: "request-1" },
+      { kind: "pr", taskId: "task-1" },
+    ];
+    for (const view of views) {
+      const result = await terminal.openView({
+        coordinator,
+        cwd: world.repoPath,
+        home: world.home,
+        view,
+      });
+      expect(result.opened).toBe(false);
+      expect(result.warnings.length).toBeGreaterThan(0);
+    }
+    expect(world.trace()).toEqual([]);
+    expect(world.paneIsPresent(coordinator.paneId)).toBe(true);
   });
 });
 
