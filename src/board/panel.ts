@@ -1,6 +1,8 @@
-import type { BlockCauseKind } from "../contracts.ts";
+import type { BlockCauseKind, TaskStage } from "../contracts.ts";
 import type { TodoItem } from "../playbooks/progress.ts";
 import { elapsed } from "../pr-watch/view.ts";
+import type { LimitMeter } from "../runtime/usage-view.ts";
+import type { WorkerActivity } from "../workers/worker-activity.ts";
 import type { BoardSnapshot } from "./snapshot.ts";
 import type {
   BoardPullRequest,
@@ -464,7 +466,15 @@ function currentStep(todos: readonly TodoItem[] | undefined): string | undefined
 }
 
 function toolActivity(row: RunningBoardRow, now: string): PanelActivity | undefined {
-  const { tool, toolTarget, toolStartedAt } = row.activity ?? {};
+  return displayActivity(row.activity, now);
+}
+
+/** Both native screens and the text panel use one vocabulary for tools from either harness. */
+export function displayActivity(
+  activity: WorkerActivity | undefined,
+  now: string,
+): PanelActivity | undefined {
+  const { tool, toolTarget, toolStartedAt } = activity ?? {};
   if (tool === undefined) return undefined;
   const name = tool.toLowerCase().replace(/^mcp__.+?__/u, "");
   const verb = TOOL_VERBS.has(name) ? TOOL_VERBS.get(name) : name;
@@ -520,4 +530,204 @@ function searchWords(...parts: readonly string[]): string[] {
     .toLowerCase()
     .split(/[^\p{L}\p{N}@]+/u)
     .filter(Boolean);
+}
+
+/** Native rows carry navigation identities; the text panel continues to use PanelTarget above. */
+export type NativePanelTarget =
+  | Readonly<{ kind: "task"; taskId: string }>
+  | Readonly<{ kind: "brief"; requestId: string }>
+  | Readonly<{ kind: "pr"; repo: string; number: number }>
+  | Readonly<{ kind: "none" }>;
+export type NativeTaskSummary = Readonly<{
+  taskId: string;
+  title: string;
+  stage: TaskStage;
+  createdAt: string;
+  updatedAt: string;
+  previousStage?: TaskStage;
+  model?: string;
+  harness?: string;
+  branch?: string;
+  costMicros?: number;
+  unpricedSamples: number;
+  pullRequest?: Readonly<{ repo: string; number: number; url: string; draft: boolean }>;
+}>;
+export type NativeProjectRow = Readonly<{
+  repoPath: string;
+  name: string;
+  current: boolean;
+  offline: boolean;
+  running: number;
+  needsYou: number;
+  status: string;
+  shortcut?: string;
+  sessionId?: string;
+}>;
+export type NativePanelRow = Readonly<{
+  key: string;
+  title: string;
+  state: PanelColor;
+  stage: string;
+  time?: string;
+  model?: string;
+  detail: string;
+  secondary: string;
+  target: NativePanelTarget;
+  pullRequest?: NativeTaskSummary["pullRequest"];
+}>;
+export type NativePanelView = Readonly<{
+  header: Readonly<{
+    title: string;
+    project: string;
+    projects: readonly NativeProjectRow[];
+    otherProjectsNeedYou: number;
+    fiveHour?: LimitMeter;
+    bellCount: number;
+  }>;
+  sections: readonly Readonly<{
+    title: "Needs you" | "Running" | "Ready" | "Recently done";
+    count: number;
+    rows: readonly NativePanelRow[];
+  }>[];
+  footer?: string;
+}>;
+
+export function nativeProjectSwitcher(
+  snapshot: BoardSnapshot,
+  project: string,
+  sessions: ReadonlyMap<string, string> = new Map(),
+): readonly NativeProjectRow[] {
+  return snapshot.board.projectPaths.map((repoPath, index) => {
+    const needsYou = snapshot.board.needsYou.filter((row) => row.repoPath === repoPath).length;
+    const running = snapshot.board.running.filter((row) => row.repoPath === repoPath).length;
+    const offline = !snapshot.coordinators.some((coordinator) => coordinator.repoPath === repoPath);
+    const sessionId = sessions.get(repoPath);
+    return {
+      repoPath,
+      name: snapshot.board.projects[index] ?? repoPath,
+      current: repoPath === project,
+      offline,
+      running,
+      needsYou,
+      status: offline
+        ? "offline"
+        : running === 0 && needsYou === 0
+          ? "all quiet"
+          : `${running} running · ${needsYou} needs you`,
+      ...(index >= 9 ? {} : { shortcut: `⌘${index + 1}` }),
+      ...(sessionId === undefined ? {} : { sessionId }),
+    };
+  });
+}
+
+export function nativePanelView(
+  input: Readonly<{
+    snapshot: BoardSnapshot;
+    project: string;
+    now: string;
+    tasks: readonly NativeTaskSummary[];
+    projects?: readonly NativeProjectRow[];
+    fiveHour?: LimitMeter;
+    bellCount: number;
+  }>,
+): NativePanelView {
+  const { snapshot, project } = input;
+  const projects = input.projects ?? nativeProjectSwitcher(snapshot, project);
+  const board = snapshot.board;
+  const done = new Set(board.doneToday.flatMap((row) => row.taskId ?? []));
+  const active = new Set([...board.running, ...board.needsYou].flatMap((row) => row.taskId ?? []));
+  const entries = [
+    ...board.needsYou
+      .filter((row) => row.taskId === undefined || !done.has(row.taskId))
+      .map(needsYouEntry),
+    ...board.running
+      .filter((row) => !done.has(row.taskId))
+      .map((row) => runningEntry(row, input.now)),
+    ...board.pullRequests
+      .filter(
+        (row) => row.taskId === undefined || (!active.has(row.taskId) && !done.has(row.taskId)),
+      )
+      .map(pullRequestEntry),
+    ...board.doneToday.map(doneEntry),
+  ].filter((entry) => entry.repoPath === project);
+  const rows = entries.map((entry) => {
+    const taskId = entry.row.key.startsWith("task:")
+      ? entry.row.key.slice(5)
+      : snapshot.board.pullRequests.find((pr) => `pr:${pr.repo}#${pr.number}` === entry.row.key)
+          ?.taskId;
+    const task = input.tasks.find((task) => task.taskId === taskId);
+    const pr = task?.pullRequest;
+    const running = snapshot.board.running.find((row) => row.taskId === taskId);
+    const detail =
+      task?.stage === "ready"
+        ? pr?.draft === true
+          ? "waiting on you to publish"
+          : "waiting for PR watch"
+        : running?.since.startsWith(IDLE_PREFIX) === true || entry.row.color === "red"
+          ? (entry.row.lines[0] ?? "")
+          : entry.row.activity === undefined
+            ? (entry.row.lines[0] ?? "")
+            : [entry.row.activity.verb, entry.row.activity.target].filter(Boolean).join(" ");
+    const watched = snapshot.board.pullRequests.find(
+      (pr) => `pr:${pr.repo}#${pr.number}` === entry.row.key,
+    );
+    const target: NativePanelTarget = entry.row.key.startsWith("brief:")
+      ? { kind: "brief", requestId: entry.row.key.slice(6) }
+      : watched !== undefined
+        ? { kind: "pr", repo: watched.repo, number: watched.number }
+        : taskId !== undefined
+          ? { kind: "task", taskId }
+          : { kind: "none" };
+    const row: NativePanelRow = {
+      key: entry.row.key,
+      title: task?.title ?? entry.row.name,
+      state: task?.stage === "ready" ? "green" : entry.row.color,
+      stage:
+        task === undefined
+          ? entry.row.stage
+          : task.stage === "blocked"
+            ? "stuck"
+            : task.stage === "ready"
+              ? "ready"
+              : entry.row.stage,
+      ...(task === undefined ? {} : { time: elapsed(task.createdAt, input.now) }),
+      ...(task?.model === undefined ? {} : { model: task.model }),
+      detail,
+      secondary: [
+        task?.model,
+        detail,
+        pr === undefined ? undefined : `#${pr.number}${pr.draft ? " draft" : ""}`,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+      target,
+      ...(pr === undefined ? {} : { pullRequest: pr }),
+    };
+    const section =
+      entry.section === "Done today"
+        ? "Recently done"
+        : entry.section === "Pull requests" || task?.stage === "ready"
+          ? "Ready"
+          : entry.section;
+    return { section, row };
+  });
+  const footer = staleFooter(snapshot, { project, query: "", now: input.now, readFailed: false });
+  return {
+    header: {
+      title: "tandem ▾",
+      project,
+      projects,
+      otherProjectsNeedYou: projects
+        .filter((row) => !row.current)
+        .reduce((sum, row) => sum + row.needsYou, 0),
+      bellCount: input.bellCount,
+      ...(input.fiveHour === undefined ? {} : { fiveHour: input.fiveHour }),
+    },
+    sections: (["Needs you", "Running", "Ready", "Recently done"] as const).map((title) => ({
+      title,
+      count: rows.filter((row) => row.section === title).length,
+      rows: rows.filter((row) => row.section === title).map((row) => row.row),
+    })),
+    ...(footer === undefined ? {} : { footer }),
+  };
 }
