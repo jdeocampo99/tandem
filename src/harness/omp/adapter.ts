@@ -121,6 +121,8 @@ function parseThinkingLevels(
   operation: string,
   response: string,
 ): readonly ThinkingLevel[] {
+  // OMP 18.2 reports null for models that cannot think.
+  if (value === null) return ["off"];
   const values: readonly unknown[] =
     typeof value === "string" ? [value] : Array.isArray(value) ? value : [];
   if (values.length === 0 || values.some((entry) => typeof entry !== "string")) {
