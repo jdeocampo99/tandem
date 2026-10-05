@@ -92,11 +92,12 @@ assigned to new work.
 
 ## Tern terminal backend
 
-Onboarding uses `probeTern`'s `missing`, `signedOut`, `ready` or `unknown` result. Executable
+The backend's read-only `probeTern` returns `missing`, `signedOut`, `ready` or `unknown`. Executable
 resolution prefers PATH, then the app bundle. An explicit control socket proves sign-in through
 `gate.signed_in`; without one, a harmless scoped `tern ls --json` checks daemon readiness.
 Failed or malformed evidence stays unknown with a reason. A version string alone never proves
-readiness, and the probe never starts a daemon or changes a window.
+readiness, and this probe never starts a daemon or changes a window. Onboarding's separate isolated
+sign-in check is described in [policy.md](policy.md).
 
 Tern's daemon maps to a Tandem terminal session; a Tern tab supplies both workspace and tab ids.
 A project gets a uniquely named `tandem-<project>` Tern session and workers get background tabs in
@@ -110,8 +111,9 @@ environments, and refuses busy closes unless the caller explicitly authorizes fo
 Unknown outcomes keep resources and quarantine the effect rather than retrying it.
 
 Closing the last pane also sends `tern kill session` for its exact empty session. Tern 0.4.5 keeps
-its sole empty session after acknowledging that kill; Tandem preserves it and verifies no panes
-remain. The durable endpoint retains the native project session id. A coordinator relaunch reuses
+its sole empty session after acknowledging that kill; Tandem polls for exact disappearance for
+at most five seconds. A timeout is an unknown outcome: keep resources, quarantine the close and
+never retry the kill. The durable endpoint retains the native project session id. A coordinator relaunch reuses
 that exact session after checking its id, including an empty session retained by Tern. It creates
 a new session only when the stored id is absent; matching names never authorize reuse. Tern
 cannot reorder tabs or resize panes, so those operations return warnings. Native welcome and

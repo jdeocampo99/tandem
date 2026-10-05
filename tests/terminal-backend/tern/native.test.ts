@@ -13,6 +13,7 @@ import {
   decode,
   Listing,
   TERN_BINARY,
+  TernOutcomeUnknownError,
   ternCommands,
 } from "../../../src/terminal-backend/tern/protocol.ts";
 
@@ -160,7 +161,8 @@ nativeTest(
         binary: TERN_BINARY,
         notificationEndpoint: async () => ternNotificationEndpoint(created.endpoint),
       }).notify({ ...session, title: "Done", body: "Tandem isolated native check" });
-      await terminal.close(target);
+      await expect(terminal.close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+      await expect(terminal.close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
       expect(await terminal.listPanes(session)).toEqual([]);
       expect(await terminal.listWorkspaces(session)).toEqual([]);
       const relaunched = await ternBackend(run, { binary: TERN_BINARY }).createWorkspace({
@@ -171,7 +173,9 @@ nativeTest(
         previousEndpoint: created.endpoint,
       });
       expect(relaunched.endpoint.terminalSessionId).toBe(created.endpoint.terminalSessionId);
-      await terminal.close({ endpoint: relaunched.endpoint, cwd: root });
+      await expect(
+        terminal.close({ endpoint: relaunched.endpoint, cwd: root }),
+      ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     } finally {
       daemon.kill("SIGTERM");
       await daemon.exited;

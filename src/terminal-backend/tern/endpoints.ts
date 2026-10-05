@@ -175,6 +175,10 @@ export async function close(
   commands: TernCommands,
   target: EndpointTarget & Readonly<{ force?: boolean }>,
   owned = false,
+  timing: Readonly<{ clock: () => number; wait: (milliseconds: number) => Promise<void> }> = {
+    clock: Date.now,
+    wait: Bun.sleep,
+  },
 ): Promise<void> {
   let initial: EndpointInspection;
   try {
@@ -204,13 +208,19 @@ export async function close(
     if (rechecked.tabs.some((tab) => tab.blocks.length > 0)) return;
     const killed = await commands.mutate(target.cwd, ["kill", "session", rechecked.id], SessionAck);
     if (killed.session !== rechecked.id) throw new Error("kill acknowledged another session");
-    // Tern 0.4.5 preserves its sole empty session after an acknowledged kill. The exact
-    // pane and tab must still be gone; retain that known-empty session without retrying.
-    const retained = (await commands.ls(target.cwd)).sessions.find(
-      (entry) => entry.id === rechecked.id,
-    );
-    if (retained?.tabs.some((tab) => tab.blocks.length > 0))
-      throw new Error("killed session acquired panes");
+    const deadline = timing.clock() + 5_000;
+    for (;;) {
+      const remaining = deadline - timing.clock();
+      if (remaining <= 0) throw new Error("killed session did not disappear before timeout");
+      const listing = await commands.ls(target.cwd, remaining);
+      if (listing.detached.length > 0)
+        throw new Error("detached blocks prevent exact session absence proof");
+      const retained = listing.sessions.find((entry) => entry.id === rechecked.id);
+      if (retained === undefined) return;
+      if (retained.tabs.some((tab) => tab.blocks.length > 0))
+        throw new Error("killed session acquired panes");
+      await timing.wait(Math.min(100, Math.max(0, deadline - timing.clock())));
+    }
   } catch (cause) {
     throw new TernOutcomeUnknownError("tern close verification", cause);
   }

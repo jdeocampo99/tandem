@@ -253,14 +253,19 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           }
         }
       }
-      await close(commands, target, strict);
+      await close(commands, target, strict, { clock, wait });
       if (helper !== undefined)
         await guard(helper.paneId, () =>
-          close(commands, {
-            endpoint: helper,
-            cwd: target.cwd,
-            ...(target.force === undefined ? {} : { force: target.force }),
-          }),
+          close(
+            commands,
+            {
+              endpoint: helper,
+              cwd: target.cwd,
+              ...(target.force === undefined ? {} : { force: target.force }),
+            },
+            false,
+            { clock, wait },
+          ),
         );
     });
   return {
