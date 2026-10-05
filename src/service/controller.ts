@@ -1128,7 +1128,6 @@ class TandemController {
       return { requested, terminal, ...(available.available ? {} : { reason: available.reason }) };
     });
     if (
-      selected.terminal === "tern" &&
       this.#deps.installTerminalPlugin !== undefined &&
       !(await this.#deps.installTerminalPlugin())
     ) {

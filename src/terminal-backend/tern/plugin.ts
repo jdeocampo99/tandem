@@ -2,7 +2,8 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { AdapterCommandError, AdapterProtocolError } from "../../adapters/primitives.ts";
 import type { CommandRunner } from "../../contracts.ts";
-import { configureTernPluginKeys } from "./plugin-keys.ts";
+import { describeTernPluginKeys } from "./plugin-keys.ts";
+import { configureTernPluginSettings, restoreTernPluginSettings } from "./plugin-settings.ts";
 
 export const TANDEM_TERN_PLUGIN = "tandem";
 export const TERN_PLUGIN_DIRECTORY = fileURLToPath(
@@ -48,16 +49,14 @@ async function catalog(deps: TernPluginDependencies) {
   }
 }
 
-/** Onboarding consent links the package and adds shortcuts; existing custom keys are retained. */
+/** Selecting Tern links its view package; one separate consent controls global preferences. */
 export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<boolean> {
   const before = await catalog(deps);
   const existing = before.plugins.find((plugin) => plugin.id === TANDEM_TERN_PLUGIN);
   if (existing !== undefined) {
     if (existing.status !== "ready" || !existing.host || !existing.window) return false;
-    return configureKeys(deps);
-  }
-  if (deps.confirm === undefined || !(await deps.confirm("Add Tandem's views and keys to Tern?"))) {
-    return false;
+    await configureSettings(deps);
+    return true;
   }
   await command(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
   const after = await catalog(deps);
@@ -65,12 +64,12 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
     (plugin) =>
       plugin.id === TANDEM_TERN_PLUGIN && plugin.status === "ready" && plugin.host && plugin.window,
   );
-  return ready && configureKeys(deps, true);
+  if (ready) await configureSettings(deps);
+  return ready;
 }
 
-async function configureKeys(deps: TernPluginDependencies, approved = false): Promise<boolean> {
-  const result = await configureTernPluginKeys({
-    approved,
+async function configureSettings(deps: TernPluginDependencies): Promise<void> {
+  const result = await configureTernPluginSettings({
     ...(deps.settingsPath === undefined ? {} : { path: deps.settingsPath }),
     ...(deps.env?.TERN_CONFIG_DIR === undefined
       ? {}
@@ -78,8 +77,27 @@ async function configureKeys(deps: TernPluginDependencies, approved = false): Pr
     ...(deps.confirm === undefined ? {} : { confirm: deps.confirm }),
   });
   if (result.skipped.length > 0)
-    deps.print?.(`Tandem kept your custom Tern shortcuts: ${result.skipped.join(", ")}\n`);
-  return result.configured;
+    deps.print?.(
+      `Tandem kept your custom Tern shortcuts: ${describeTernPluginKeys(result.skipped)}.\n`,
+    );
+  if (!result.configured)
+    deps.print?.(
+      "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons.\n",
+    );
+}
+
+/** Leaving Tern removes only recorded settings that still have Tandem's installed values. */
+export async function restoreTernPluginPreferences(deps: TernPluginDependencies): Promise<void> {
+  const result = await restoreTernPluginSettings({
+    ...(deps.settingsPath === undefined ? {} : { path: deps.settingsPath }),
+    ...(deps.env?.TERN_CONFIG_DIR === undefined
+      ? {}
+      : { configDirectory: deps.env.TERN_CONFIG_DIR }),
+  });
+  if (result.restored.length > 0)
+    deps.print?.("Restored Tern's previous sidebar and Tandem shortcuts.\n");
+  if (result.preserved.length > 0)
+    deps.print?.("Kept Tern settings you changed after Tandem setup.\n");
 }
 
 /** Update reloads an already installed integration. It never installs one without consent. */

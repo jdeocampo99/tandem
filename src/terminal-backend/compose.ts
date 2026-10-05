@@ -5,7 +5,12 @@ import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
 import { guardTerminalIdentity } from "./identity.ts";
 import { probeTern } from "./tern/availability.ts";
-import { ensureTernPlugin, reloadTernPlugin, type TernPluginDependencies } from "./tern/plugin.ts";
+import {
+  ensureTernPlugin,
+  reloadTernPlugin,
+  restoreTernPluginPreferences,
+  type TernPluginDependencies,
+} from "./tern/plugin.ts";
 
 export type TerminalComposition = Readonly<{
   /** Explicit Tandem home; omitted for isolated tests, which keep Herdr. */
@@ -92,7 +97,10 @@ export async function installTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
 ): Promise<boolean> {
-  return readHomeSettingsSync(home).terminal === "tern" ? ensureTernPlugin(dependencies) : true;
+  const selected = readHomeSettingsSync(home).terminal;
+  if (selected === "tern") return ensureTernPlugin(dependencies);
+  if (selected === "herdr") await restoreTernPluginPreferences(dependencies);
+  return true;
 }
 
 /** Refresh window bindings only for the selected terminal, after a successful update. */
@@ -100,5 +108,8 @@ export async function reloadTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
 ): Promise<boolean> {
-  return readHomeSettingsSync(home).terminal === "tern" ? reloadTernPlugin(dependencies) : false;
+  const selected = readHomeSettingsSync(home).terminal;
+  if (selected === "tern") return reloadTernPlugin(dependencies);
+  if (selected === "herdr") await restoreTernPluginPreferences(dependencies);
+  return false;
 }
