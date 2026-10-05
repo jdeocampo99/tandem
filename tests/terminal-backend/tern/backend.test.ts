@@ -255,6 +255,70 @@ test("native views report unavailable without opening anything or typing into a 
   });
 });
 
+test("project switching focuses exact blocks across native sessions with a final id recheck", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const calls: CommandRequest[] = [];
+    const terminal = ternBackend(async (request) => {
+      calls.push(request);
+      return world.run(request);
+    });
+    const session = {
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      role: "coordinator" as const,
+      generation: 0,
+    };
+    const a = await terminal.createWorkspace({ ...session, label: "Project A" });
+    const worktree = await world.grantLease({ name: "project-b", holder: "coordinator" });
+    const b = await terminal.createWorkspace({
+      ...session,
+      cwd: worktree.path,
+      label: "Project B",
+    });
+    expect(a.endpoint.terminalSessionId).not.toBe(b.endpoint.terminalSessionId);
+    for (const endpoint of [a.endpoint, b.endpoint, a.endpoint]) {
+      expect(
+        await terminal.focusWorkspace({ ...session, workspaceId: endpoint.workspaceId }),
+      ).toEqual({ focused: true });
+    }
+    expect(
+      calls
+        .filter((request) => request.argv[1] === "focus")
+        .map((request) => request.argv.slice(1)),
+    ).toEqual([
+      ["focus", a.endpoint.paneId, "--json"],
+      ["focus", b.endpoint.paneId, "--json"],
+      ["focus", a.endpoint.paneId, "--json"],
+    ]);
+    for (let index = 0; index < calls.length; index += 1)
+      if (calls[index]?.argv[1] === "focus") expect(calls[index - 1]?.argv[1]).toBe("ls");
+  });
+});
+
+test("workspace focus refuses a native session change between selection and the final id check", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const endpoint = world.openPane({ paneId: "47", cwd: world.repoPath });
+    let listings = 0;
+    const terminal = ternBackend(async (request) => {
+      const result = await world.run(request);
+      if (request.argv[1] === "ls") {
+        listings += 1;
+        if (listings === 2)
+          return { ...result, stdout: result.stdout.replace('"id":"100"', '"id":"101"') };
+      }
+      return result;
+    });
+    const result = await terminal.focusWorkspace({
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      workspaceId: endpoint.workspaceId,
+    });
+    expect(result.focused).toBe(false);
+    expect(world.trace().some((event) => event.action === "tern focus")).toBe(false);
+    expect(world.paneIsPresent(endpoint.paneId)).toBe(true);
+  });
+});
+
 test("wrong block acknowledgement quarantines resources and prevents blind retries", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "90071992547409933", cwd: world.repoPath });

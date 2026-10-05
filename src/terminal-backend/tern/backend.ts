@@ -88,12 +88,9 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       throw new TernOutcomeUnknownError("tern rename verification", cause);
     }
   };
-  const focus = async (target: SessionTarget, paneId: string) => {
+  const focus = async (target: EndpointTarget) => {
     try {
-      await paneEffect({ endpoint: await byId(target, paneId), cwd: target.cwd }, [
-        "focus",
-        paneId,
-      ]);
+      await paneEffect(target, ["focus", target.endpoint.paneId]);
       return { focused: true as const };
     } catch (error) {
       return { focused: false as const, code: 1, detail: String(error) };
@@ -332,9 +329,16 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       );
       return entry === undefined
         ? { focused: false, code: 1, detail: "exact Tern tab is absent" }
-        : focus(target, entry.block.id);
+        : focus({ endpoint: endpointFor(target, entry), cwd: target.cwd });
     },
-    focusAgent: async (target) => (await focus(target, target.paneId)).focused,
+    focusAgent: async (target) => {
+      try {
+        return (await focus({ endpoint: await byId(target, target.paneId), cwd: target.cwd }))
+          .focused;
+      } catch {
+        return false;
+      }
+    },
     sessionRunning: async (target) => {
       try {
         await commands.ls(target.cwd);
