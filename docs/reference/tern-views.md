@@ -61,6 +61,11 @@ There is one writer per destination. `nativeViewPath(home, kind, key)` returns
 { version: 1, kind: "brief", revision: "opaque-view-revision", model: briefView }
 ```
 
+The views-data publisher uses `kind = "panel"` with the root `NativeViews` bundle, and
+`task`/`brief`/`pr` with direct domain models for detail files. Its revision is the canonical
+model content hash. A board or usage block reading that root file still expects envelope kind
+`panel` and extracts its model from the bundle; the native block id is separate from the file kind.
+
 `revision` is an opaque presentation revision. Actions that approve or submit must also carry the
 authority's request revision, content/agreement digests or reviewed HEAD from their view model.
 This file never authorizes an action by itself.
