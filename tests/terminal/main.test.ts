@@ -16,6 +16,7 @@ import { parseReportSince, parseTerminalArgs } from "../../src/terminal/argument
 import type { CliApplication } from "../../src/terminal/cli-application.ts";
 import type { CliInvocation } from "../../src/terminal/cli-arguments.ts";
 import { readRegisteredProjects } from "../../src/terminal/projects.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { fakeSidebar, saveCoordinator, seedTasks } from "../coordinator/fake-workspace-order.ts";
 
 const roles = ["coordinator", "scout", "implementer", "reviewer", "presentation"] as const;
@@ -1849,7 +1850,7 @@ test("update puts task workspaces back under the replacement coordinator", async
     tandemCheckout: repo,
     processEnvironment: {},
     run: (request) => (request.argv[0] === "herdr" ? sidebar.run(request) : runCommand(request)),
-    moveWorkspace: sidebar.moveWorkspace,
+    terminal: terminalBackend(sidebar.run, { herdr: { moveWorkspace: sidebar.moveWorkspace } }),
     service: fake.service,
     application,
     isTTY: false,
@@ -1896,7 +1897,11 @@ test("update re-nests before attaching to Herdr and prints every re-nest warning
         : request.argv.includes("focus")
           ? Promise.resolve({ code: 0, stdout: "", stderr: "" })
           : sidebar.run(request),
-    moveWorkspace: sidebar.moveWorkspace,
+    terminal: terminalBackend(
+      async (request) =>
+        request.argv.includes("focus") ? { code: 0, stdout: "", stderr: "" } : sidebar.run(request),
+      { herdr: { moveWorkspace: sidebar.moveWorkspace } },
+    ),
     service: fake.service,
     application,
     isTTY: true,
@@ -1935,7 +1940,7 @@ test("fix re-nests task workspaces without asking, and says so in text and JSON"
       processEnvironment: {},
       isTTY: false,
       run: run(sidebar),
-      moveWorkspace: sidebar.moveWorkspace,
+      terminal: terminalBackend(run(sidebar), { herdr: { moveWorkspace: sidebar.moveWorkspace } }),
       stdout: (text) => output.push(text),
       stderr: (text) => output.push(text),
     });

@@ -33,10 +33,9 @@ import {
   type ProcessInfo,
   type SplitAnchor,
   type TerminalBackend,
-  type WorkspaceMover,
 } from "../contract.ts";
 import { errorCode, herdrRequest, isPaneMissing, isPaneNotFound, parseAnswer } from "./protocol.ts";
-import { orderWorkspaceAfter } from "./workspaces.ts";
+import { orderWorkspaceAfter, type WorkspaceMover } from "./workspaces.ts";
 
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 5_000;
 const DEFAULT_INTERRUPT_POLL_MS = 100;
