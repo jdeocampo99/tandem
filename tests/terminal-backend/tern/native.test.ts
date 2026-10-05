@@ -60,7 +60,7 @@ nativeTest(
         if (Date.now() >= deadline) throw new Error("isolated Tern daemon did not start");
         await Bun.sleep(50);
       }
-      const terminal = ternBackend(run);
+      const terminal = ternBackend(run, { binary: TERN_BINARY });
       const session = { sessionId: "native-check", cwd: root };
       const created = await terminal.createWorkspace({
         ...session,

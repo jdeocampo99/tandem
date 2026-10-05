@@ -69,7 +69,10 @@ export type TernOptions = Readonly<{
 }>;
 
 export function ternCommands(run: CommandRunner, options: TernOptions) {
-  const binary = options.binary ?? TERN_BINARY;
+  const binary =
+    options.binary ??
+    Bun.which("tern", { PATH: options.environment?.PATH ?? process.env.PATH ?? "" }) ??
+    TERN_BINARY;
   const request = (cwd: string, args: readonly string[]) => ({
     argv: [
       binary,
