@@ -181,7 +181,7 @@ This model is the `data` inside the brief detail envelope.
 ```ts
 {
   requestId:string, title:string, revision:number, changes:number,
-  approval:{requestId:string,briefRevision:number,contentDigest:string,agreementDigest:string},
+  approval:{briefRevision:number,contentDigest:string,agreementDigest:string},
   approvalState:"unapproved"|"current"|"superseded", abandoned:boolean,
   lines:{id:string,number:number,section:string,kind:"heading"|"text"|"item",
          text:string,isNew:boolean,comments:BriefComment[]}[],
@@ -196,6 +196,10 @@ the larger of added/removed line counts, so deletions count too; first drafts ha
 changes. Comments must match request, revision, content digest and line id. Old comments never
 reattach to a different revision. The approval payload identifies exactly the visible draft;
 the action handler must still recheck the authoritative revision and both digests.
+`detail.data.approval` is exactly the JSON input for
+`tandem native brief-approve REQUEST_ID --input FILE`. Write those three values to the input
+file untouched; use `detail.data.requestId` as the positional request id. All three values come
+from the same draft used to produce the visible lines, including its agreement digest.
 The builder accepts comments and a browser URL; their collection and CLI actions belong to the
 annotation/action integration, which can supply them when opening the pane.
 

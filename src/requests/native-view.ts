@@ -25,8 +25,8 @@ export type BriefView = Readonly<{
   title: string;
   revision: number;
   changes: number;
+  /** Exact native brief-approve --input payload. The request id is the positional argument. */
   approval: Readonly<{
-    requestId: string;
     briefRevision: number;
     contentDigest: string;
     agreementDigest: string;
@@ -70,7 +70,6 @@ export function briefView(
         ? 0
         : Math.max(current.length - unchanged.size, old.length - unchanged.size),
     approval: {
-      requestId: record.id,
       briefRevision: record.draft.revision,
       contentDigest: record.draft.contentDigest,
       agreementDigest: record.draft.agreementDigest,

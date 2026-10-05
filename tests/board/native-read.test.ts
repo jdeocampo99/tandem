@@ -1,13 +1,81 @@
 import { expect, test } from "bun:test";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
 import { nativeDetailPath, nativeViewsPath, writeNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import { repositoryKey } from "../../src/config/repositories.ts";
+import { reviseRequestBriefRecord } from "../../src/requests/brief.ts";
+import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { seedScenarioTask, withScenario } from "../evals/scenario.ts";
-import { state } from "./fixtures.ts";
+import { content, state } from "./fixtures.ts";
+
+test("serialized brief detail exposes the exact native approval input for its displayed revision", async () => {
+  await withScenario({}, async (world) => {
+    const store = createRequestBriefStore({
+      home: world.home,
+      clock: world.clock,
+      idFactory: world.idFactory,
+    });
+    const first = await store.create({ repoPath: world.repoPath, content: content("Old scope") });
+    const revised = await store.update(first.id, first.revision, (current) =>
+      reviseRequestBriefRecord(current, content("Approve the revised scope"), world.clock()),
+    );
+    const reader = new NativeViewsReader({
+      home: world.home,
+      clock: world.clock,
+      run: world.run,
+      terminal: terminalBackend(world.run),
+    });
+    const publication = await reader.read(
+      {
+        version: 1,
+        writtenAt: world.clock(),
+        board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+        coordinators: [],
+      },
+      world.repoPath,
+    );
+    await writeNativeViews(world.home, publication);
+    const entry = publication.bundle.briefs[first.id];
+    if (entry === undefined) throw new Error("Expected brief index");
+    const detail = z
+      .object({
+        kind: z.literal("brief"),
+        data: z.object({
+          requestId: z.string(),
+          revision: z.number(),
+          lines: z.array(z.object({ text: z.string() })),
+          approval: z
+            .object({
+              briefRevision: z.number(),
+              contentDigest: z.string(),
+              agreementDigest: z.string(),
+            })
+            .strict(),
+        }),
+      })
+      .parse(
+        JSON.parse(
+          await readFile(nativeDetailPath(world.home, world.repoPath, entry.detailFile), "utf8"),
+        ),
+      );
+    expect(detail.kind).toBe("brief");
+    expect(detail.data.requestId).toBe(first.id);
+    expect(detail.data.revision).toBe(2);
+    expect(detail.data.lines.some((line) => line.text === "Approve the revised scope")).toBe(true);
+    expect(detail.data.approval).toEqual({
+      briefRevision: revised.draft.revision,
+      contentDigest: revised.draft.contentDigest,
+      agreementDigest: revised.draft.agreementDigest,
+    });
+    expect(detail.data.approval.contentDigest).not.toBe(first.draft.contentDigest);
+    expect(detail.data.approval.agreementDigest).not.toBe(first.draft.agreementDigest);
+    await reader.settle();
+  });
+});
 
 test("native bundle reads saved task inspection/timeline and writes an atomic private project-scoped file", async () => {
   await withScenario({}, async (world) => {

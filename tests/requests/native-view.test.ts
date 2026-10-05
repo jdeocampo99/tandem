@@ -21,7 +21,6 @@ test("brief NEW markers detect changed lines without marking unchanged lines shi
   expect(view.lines.filter((line) => line.isNew).map((line) => line.text)).toEqual(["Focus tabs"]);
   expect(view.changes).toBe(1);
   expect(view.approval).toEqual({
-    requestId: first.id,
     briefRevision: 2,
     contentDigest: second.draft.contentDigest,
     agreementDigest: second.draft.agreementDigest,
