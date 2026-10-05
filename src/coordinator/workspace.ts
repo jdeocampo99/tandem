@@ -9,6 +9,7 @@ import {
   parseJson,
   readSessionSnapshot,
 } from "./ownership.ts";
+import { closeCoordinatorPanel } from "./panel.ts";
 import { type CoordinatorRecord, canonicalPath, isRecord } from "./record.ts";
 
 export type CoordinatorWorkspaceOutcome = "closed" | "already-clear" | "retained" | "quarantined";
@@ -167,8 +168,8 @@ async function proveCoordinatorStopped(
  * Retires a superseded or stopped coordinator's Herdr workspace after a launch, restart, or
  * stop has already proven it is safe to replace.
  *
- * Closes the coordinator's own pane by default, which removes the workspace once it was the
- * last pane. A workspace is retained instead (its generated label renamed to "◇ <repo>
+ * Closes the coordinator's recorded panel, then its own pane, which removes the workspace once
+ * it was the last pane. A workspace is retained instead (its generated label renamed to "◇ <repo>
  * (old)") only when another pane still shares the workspace and keeps it alive.
  * A custom label, or ownership that cannot be proven exactly and as stopped, is left entirely
  * untouched and reported rather than closed or renamed.
@@ -179,25 +180,33 @@ async function proveCoordinatorStopped(
  */
 export async function retireCoordinatorWorkspace(
   run: CommandRunner,
+  home: string,
   record: RetiredRecord,
 ): Promise<CoordinatorWorkspaceRetirement> {
   const label = await currentWorkspaceLabel(run, record);
   if (label === undefined) return { outcome: "already-clear" };
 
-  const extraPaneIds = await siblingPaneIds(run, record);
   const withExtras = (
     retirement: CoordinatorWorkspaceRetirement,
+    extraPaneIds: readonly string[],
   ): CoordinatorWorkspaceRetirement =>
     extraPaneIds.length === 0 ? retirement : { ...retirement, extraPaneIds };
 
   if (!isCoordinatorWorkspaceLabel(label, record.repoPath)) {
-    return withExtras({ outcome: "retained", reason: "workspace has a custom label" });
+    return withExtras(
+      { outcome: "retained", reason: "workspace has a custom label" },
+      await siblingPaneIds(run, record),
+    );
   }
 
   const proof = await proveCoordinatorStopped(run, record);
   if (proof.status === "quarantine") {
     return { outcome: "quarantined", reason: proof.reason };
   }
+  const panel = await closeCoordinatorPanel(run, home, record);
+  const extraPaneIds = (await siblingPaneIds(run, record)).filter(
+    (paneId) => panel.outcome !== "closed" || paneId !== panel.paneId,
+  );
   if (proof.status === "owned-and-stopped") {
     try {
       await closeEndpoint(run, { endpoint: record.endpoint, cwd: record.worktree.path });
@@ -209,7 +218,11 @@ export async function retireCoordinatorWorkspace(
 
   if (extraPaneIds.length > 0) {
     await renameToRetained(run, record);
-    return withExtras({ outcome: "retained", reason: "extra panes still share this workspace" });
+    const reason =
+      panel.outcome === "failed"
+        ? "panel could not be closed"
+        : "extra panes still share this workspace";
+    return withExtras({ outcome: "retained", reason }, extraPaneIds);
   }
   return { outcome: "closed" };
 }

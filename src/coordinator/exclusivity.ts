@@ -195,7 +195,7 @@ async function reconcileSessionCoordinator(
 ): Promise<CoordinatorSessionReconciliation> {
   const sourceHead = await input.requestedSourceHead();
   return withCoordinatorLaunchLock(location.home, found.sessionId, async () => {
-    const workspace = await retireCoordinatorWorkspace(input.run, found.record);
+    const workspace = await retireCoordinatorWorkspace(input.run, location.home, found.record);
     const decision = decideCoordinatorReplacement({
       previous: found.record,
       paneRetirement: workspace,

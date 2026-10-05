@@ -609,7 +609,7 @@ export async function rollbackCoordinatorAllocation(
   if (input.endpoint !== undefined) {
     let retirement: CoordinatorWorkspaceRetirement;
     try {
-      retirement = await retireCoordinatorWorkspace(input.run, {
+      retirement = await retireCoordinatorWorkspace(input.run, input.home, {
         repoPath: input.repoPath,
         endpoint: input.endpoint,
         worktree: input.lease,

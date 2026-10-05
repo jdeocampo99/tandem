@@ -496,7 +496,7 @@ test("a task counts for the week when its timeline last finished it within 7 day
   expect(finishedWithinWeek([], NOW)).toBe(false);
 });
 
-test("the one-line status leads with what needs you, then running work and pull request dots", () => {
+test("the one-line status counts only what needs you, across every project", () => {
   const busy = boardView(
     state({
       briefs: [
@@ -519,16 +519,16 @@ test("the one-line status leads with what needs you, then running work and pull 
     }),
     NOW,
   );
-  expect(renderStatusLine(busy)).toBe("🙋 2 need you · 🔨 2 running · 🔴 1 🟡 1 🟢 2");
+  expect(renderStatusLine(busy)).toBe("● 2 need you");
 
   const one = boardView(state({ tasks: [task({ id: "t1", stage: "ready" })] }), NOW);
-  expect(renderStatusLine(one)).toBe("🙋 1 needs you");
+  expect(renderStatusLine(one)).toBe("● 1 needs you");
 
   const calm = boardView(state({ tasks: [task({ id: "t1", stage: "implementing" })] }), NOW);
-  expect(renderStatusLine(calm)).toBe("✓ nothing needs you · 🔨 1 running");
+  expect(renderStatusLine(calm)).toBe("✓ nothing needs you");
 
   const paused = boardView(state({ tasks: [task({ id: "t1", stage: "paused" })] }), NOW);
-  expect(renderStatusLine(paused)).toBe("✓ all quiet");
+  expect(renderStatusLine(paused)).toBe("✓ nothing needs you");
 });
 
 function routingPause(

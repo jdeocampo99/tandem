@@ -145,7 +145,7 @@ const ALLOWED: Readonly<
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
   memory: { flags: ["json"], maxPaths: 1 },
-  panel: { flags: ["popup"], maxPaths: 0 },
+  panel: { flags: ["popup"], maxPaths: 1 },
   welcome: { flags: [], maxPaths: 0 },
 };
 

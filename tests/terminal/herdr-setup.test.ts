@@ -29,7 +29,13 @@ type KeyCommand = {
   height?: string;
 };
 type HerdrConfig = {
-  ui?: { tab_bar_right?: TabBarEntry[]; sidebar_width?: number; toast?: { delivery?: string } };
+  ui?: {
+    tab_bar_right?: TabBarEntry[];
+    sidebar_width?: number;
+    sidebar_start_collapsed?: boolean;
+    sidebar_collapsed_mode?: string;
+    toast?: { delivery?: string };
+  };
   keys?: { command?: KeyCommand[] };
 };
 
@@ -50,7 +56,8 @@ test("reads Herdr's version and compares it number by number", () => {
 test("the status commands use absolute paths, because Herdr's login shell may not find bun", () => {
   expect(COMMANDS).toEqual({
     line: "'/Users/me/.bun/bin/bun' '/Users/me/tandem/src/main.ts' status --line",
-    popup: "'/Users/me/.bun/bin/bun' '/Users/me/tandem/src/main.ts' status --watch",
+    popup: "'/Users/me/.bun/bin/bun' '/Users/me/tandem/src/main.ts' panel --popup",
+    earlierPopupEnd: " '/Users/me/tandem/src/main.ts' status --watch",
   });
   expect(herdrConfigPath({ HOME: "/Users/me" })).toBe("/Users/me/.config/herdr/config.toml");
   expect(herdrConfigPath({ HOME: "/Users/me", XDG_CONFIG_HOME: "/cfg" })).toBe(
@@ -58,23 +65,54 @@ test("the status commands use absolute paths, because Herdr's login shell may no
   );
 });
 
-test("an empty config gets the tab-bar entry and the prefix+t popup, as valid TOML", () => {
+const PANEL_ACTIONS: KeyCommand[] = [
+  {
+    key: "prefix+0",
+    type: "plugin_action",
+    command: "tandem.ui.home",
+    description: "Tandem: this project's chat",
+  },
+  {
+    key: "prefix+comma",
+    type: "plugin_action",
+    command: "tandem.ui.project-prev",
+    description: "Tandem: previous project",
+  },
+  {
+    key: "prefix+period",
+    type: "plugin_action",
+    command: "tandem.ui.project-next",
+    description: "Tandem: next project",
+  },
+];
+
+test("an empty config gets the tab bar, a hidden sidebar, the panel popup, and its keys, as valid TOML", () => {
   const plan = planHerdrConfig("", COMMANDS);
   const config = parsed(plan.text);
   expect(config.ui?.tab_bar_right).toEqual([
     { type: "command", command: COMMANDS.line, interval_seconds: 5, timeout_seconds: 10 },
   ] satisfies TabBarEntry[]);
+  expect(config.ui?.sidebar_start_collapsed).toBe(true);
+  expect(config.ui?.sidebar_collapsed_mode).toBe("hidden");
   expect(config.ui?.toast?.delivery).toBe("herdr");
   expect(config.keys?.command).toEqual([
     {
       key: "prefix+t",
       type: "popup",
       command: COMMANDS.popup,
-      description: "Tandem status",
+      description: "Tandem panel",
       width: "90%",
       height: "90%",
     },
+    ...PANEL_ACTIONS,
   ] satisfies KeyCommand[]);
+  expect(plan.features).toEqual([
+    "tab bar",
+    "hidden sidebar",
+    "notifications",
+    "prefix+t panel",
+    "prefix+0 prefix+comma prefix+period keys",
+  ]);
   expect(plan.skipped).toEqual([]);
   // Running it again adds nothing.
   const again = planHerdrConfig(plan.text, COMMANDS);
@@ -97,32 +135,96 @@ test("an existing [ui] table gets the entry inside it, and the user's settings s
   const config = parsed(plan.text);
   expect(config.ui?.sidebar_width).toBe(30);
   expect(config.ui?.tab_bar_right?.[0]?.command).toBe(COMMANDS.line);
-  expect(config.keys?.command?.map((binding) => binding.key)).toEqual(["prefix+alt+g", "prefix+t"]);
+  expect(config.ui?.sidebar_collapsed_mode).toBe("hidden");
+  expect(config.keys?.command?.map((binding) => binding.key)).toEqual([
+    "prefix+alt+g",
+    "prefix+t",
+    "prefix+0",
+    "prefix+comma",
+    "prefix+period",
+  ]);
   expect(plan.text.startsWith(text.split("\n")[0] ?? "")).toBe(true);
 });
 
-test("an existing tab_bar_right or prefix+t binding is left alone, with the line to add by hand", () => {
+test("the user's tab bar, sidebar choice, and keys are left alone, with the lines to add by hand", () => {
   const text = [
     "[ui]",
     'tab_bar_right = [{ type = "hostname" }]',
+    "sidebar_start_collapsed = false",
     "",
     "[ui.toast]",
     'delivery = "off"',
     "",
-    "[[keys.command]]",
-    'key = "prefix+t"',
-    'type = "popup"',
-    'command = "exec $SHELL"',
-    "",
+    ...["prefix+t", "prefix+0", "prefix+comma", "prefix+period"].flatMap((key) => [
+      "[[keys.command]]",
+      `key = "${key}"`,
+      'type = "popup"',
+      'command = "exec $SHELL"',
+      "",
+    ]),
   ].join("\n");
   const plan = planHerdrConfig(text, COMMANDS);
   expect(plan.text).toBe(text);
   expect(plan.added).toEqual([]);
-  // The user's toast choice needs nothing; the other two are theirs to add by hand.
+  // The user's toast and sidebar choices need nothing; the rest are theirs to add by hand.
   expect(plan.skipped).toEqual([
     expect.stringContaining(`Add to your ui.tab_bar_right: { type = "command"`),
     `prefix+t is taken; bind another key to: ${COMMANDS.popup}`,
+    "prefix+0 is taken; bind another key to the plugin action tandem.ui.home",
+    "prefix+comma is taken; bind another key to the plugin action tandem.ui.project-prev",
+    "prefix+period is taken; bind another key to the plugin action tandem.ui.project-next",
   ]);
+});
+
+function statusPopupBlock(key: string, command: string, description = "Tandem status"): string {
+  return [
+    "[[keys.command]]",
+    `key = "${key}"`,
+    'type = "popup"',
+    `command = ${JSON.stringify(command)}`,
+    `description = "${description}"`,
+    'width = "90%"',
+    'height = "90%"',
+    "",
+  ].join("\n");
+}
+
+test("the status popup an earlier Tandem wrote becomes the panel popup, in place", () => {
+  const now = herdrStatusCommands("/new/bun", "/tandem/src/main.ts");
+  // Bun moved since, and a user binding with the same description sits before it.
+  const earlier = [
+    statusPopupBlock("prefix+alt+s", "my-status", "Tandem status"),
+    "# Tandem's live status; Esc or q closes it",
+    statusPopupBlock("prefix+t", "'/old/bun' '/tandem/src/main.ts' status --watch"),
+  ].join("\n");
+  const plan = planHerdrConfig(earlier, now);
+  const [mine, popup] = parsed(plan.text).keys?.command ?? [];
+  expect(mine).toMatchObject({ command: "my-status", description: "Tandem status" });
+  expect(popup).toEqual({
+    key: "prefix+t",
+    type: "popup",
+    command: now.popup,
+    description: "Tandem panel",
+    width: "90%",
+    height: "90%",
+  });
+  expect(plan.text).not.toContain("status --watch");
+  expect(plan.features).toContain("prefix+t panel");
+  expect(plan.skipped).toEqual([]);
+});
+
+test("a status --watch popup Tandem did not write for this checkout stays the user's", () => {
+  const now = herdrStatusCommands("/bun", "/tandem/src/main.ts");
+  for (const command of [
+    "'/bun' '/elsewhere/src/main.ts' status --watch",
+    "tandem status --watch",
+    "'/bun' '/tandem/src/main.ts' status --watch | less",
+  ]) {
+    const text = statusPopupBlock("prefix+t", command);
+    const plan = planHerdrConfig(text, now);
+    expect(parsed(plan.text).keys?.command?.[0]?.command).toBe(command);
+    expect(plan.skipped).toContain(`prefix+t is taken; bind another key to: ${now.popup}`);
+  }
 });
 
 const RUNNING = (version: string) => `status: running\nversion: ${version}\nsocket: /s\n`;
@@ -183,6 +285,23 @@ function setup(
   return { deps, ran, printed, writes };
 }
 
+test("a config missing only the hidden sidebar asks about it by name, and a no writes nothing", async () => {
+  const config = planHerdrConfig("", COMMANDS)
+    .text.replace("sidebar_start_collapsed = true\n", "")
+    .replace('sidebar_collapsed_mode = "hidden"\n', "");
+  const questions: string[] = [];
+  const declined = setup({
+    config,
+    confirm: async (question) => {
+      questions.push(question);
+      return false;
+    },
+  });
+  await setUpHerdrStatus(declined.deps);
+  expect(questions[0]).toBe("Add Tandem's hidden sidebar to Herdr?");
+  expect(declined.writes).toEqual([]);
+});
+
 test("Herdr is updated the way it was installed, and a running server's version is read", () => {
   expect(herdrUpdateCommand("/opt/homebrew/Cellar/herdr/0.8.0/bin/herdr")).toEqual([
     "brew",
@@ -220,7 +339,7 @@ test("setup updates an old Herdr, asks, writes the config, and reloads Tandem's 
       "→ updating Herdr 0.7.5",
       "✓ Herdr 0.9.1",
       "✓ Herdr config updated (backup: config.toml.before-tandem)",
-      "✓ Herdr reloaded; prefix+t shows Tandem's status",
+      "✓ Herdr reloaded; prefix+t opens Tandem's panel",
       "",
     ].join("\n"),
   );
@@ -301,7 +420,7 @@ test("setup links Tandem's welcome popup plugin once, after asking", async () =>
   const linked = setup({ plugins: "No plugins installed.\n" });
   expect(await setUpHerdrStatus(linked.deps)).toBe(true);
   expect(linked.ran).toContain("herdr --session tandem plugin link /tandem/herdr-plugin");
-  expect(linked.printed.join("")).toContain("✓ Tandem's welcome popup added to Herdr");
+  expect(linked.printed.join("")).toContain("✓ Tandem's welcome popup and panel added to Herdr");
 
   const already = setup();
   expect(await setUpHerdrStatus(already.deps)).toBe(true);

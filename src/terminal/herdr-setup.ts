@@ -13,14 +13,41 @@ import { DEFAULT_TERMINAL_SESSION_ID } from "./environment.ts";
 /** The oldest Herdr with both popup keybindings (0.7.4) and command entries in the tab bar (0.8.2). */
 export const MIN_HERDR_VERSION = "0.8.2";
 
-/** The key that opens the live status in a Herdr popup. */
+/** The key that opens the Tandem panel in a Herdr popup. */
 export const STATUS_POPUP_KEY = "prefix+t";
+
+/**
+ * Keys for the panel's plugin actions. `prefix+h`, `prefix+1`-`9`, and `prefix+[` are Herdr's own
+ * (focus left, switch tab, copy mode), so projects move with `prefix+,` and `prefix+.`.
+ */
+const PANEL_KEYS = [
+  {
+    key: "prefix+0",
+    action: `${TANDEM_HERDR_PLUGIN}.home`,
+    description: "Tandem: this project's chat",
+  },
+  {
+    key: "prefix+comma",
+    action: `${TANDEM_HERDR_PLUGIN}.project-prev`,
+    description: "Tandem: previous project",
+  },
+  {
+    key: "prefix+period",
+    action: `${TANDEM_HERDR_PLUGIN}.project-next`,
+    description: "Tandem: next project",
+  },
+] as const;
 
 export type HerdrStatusCommands = Readonly<{
   /** Prints the one-line summary for the tab bar. */
   readonly line: string;
-  /** Draws the live status until Esc or q. */
+  /** Draws the panel until Esc. */
   readonly popup: string;
+  /**
+   * How the `status --watch` popup an earlier Tandem wrote for this checkout ends; Bun's path
+   * before it may have changed since.
+   */
+  readonly earlierPopupEnd: string;
 }>;
 
 export type HerdrConfigPlan = Readonly<{
@@ -56,7 +83,41 @@ export function versionAtLeast(version: string, minimum: string): boolean {
  */
 export function herdrStatusCommands(bun: string, main: string): HerdrStatusCommands {
   const tandem = `${quoteShellArgument(bun)} ${quoteShellArgument(main)}`;
-  return { line: `${tandem} status --line`, popup: `${tandem} status --watch` };
+  return {
+    line: `${tandem} status --line`,
+    popup: `${tandem} panel --popup`,
+    earlierPopupEnd: ` ${quoteShellArgument(main)} status --watch`,
+  };
+}
+
+/**
+ * Where the earlier Tandem popup block sits: a `[[keys.command]]` table on `prefix+t` whose
+ * command is exactly a quoted Bun followed by this checkout's `status --watch`. Anything else on
+ * the key is the user's.
+ */
+function earlierPopupBlock(
+  text: string,
+  commands: HerdrStatusCommands,
+): Readonly<{ start: number; end: number }> | undefined {
+  const blocks = /^[ \t]*\[\[keys\.command\]\][ \t]*\n((?:(?![ \t]*\[).*(?:\n|$))*)/gmu;
+  for (const block of text.matchAll(blocks)) {
+    let fields: Record<string, unknown>;
+    try {
+      fields = Bun.TOML.parse(block[1] ?? "") as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const command = fields.command;
+    if (
+      fields.key === STATUS_POPUP_KEY &&
+      typeof command === "string" &&
+      command.endsWith(commands.earlierPopupEnd) &&
+      /^'[^']*'$/u.test(command.slice(0, -commands.earlierPopupEnd.length))
+    ) {
+      return { start: block.index, end: block.index + block[0].length };
+    }
+  }
+  return undefined;
 }
 
 /** Where Herdr reads its config, as Herdr resolves it on macOS and Linux. */
@@ -66,36 +127,51 @@ export function herdrConfigPath(environment: Readonly<Record<string, string | un
 }
 
 /**
- * Adds the tab-bar summary, in-app notifications (off in Herdr by default), and the status popup
- * to a Herdr config, leaving everything the user wrote untouched. Anything Tandem cannot add without editing the user's own settings, such as an
- * existing `tab_bar_right` list or another binding on the popup key, is skipped with the line to
- * add by hand.
+ * Adds the tab-bar summary, in-app notifications (off in Herdr by default), the panel popup and
+ * keys, and a hidden sidebar to a Herdr config, leaving everything the user wrote untouched.
+ * Anything Tandem cannot add without editing the user's own settings, such as an existing
+ * `tab_bar_right` list or another binding on one of its keys, is skipped with the line to add by
+ * hand. The `status --watch` popup an earlier Tandem wrote becomes the panel popup.
  */
 export function planHerdrConfig(text: string, commands: HerdrStatusCommands): HerdrConfigPlan {
   const added: string[] = [];
   const features: string[] = [];
   const skipped: string[] = [];
   let next = text;
+  const dottedUi = /^\s*ui\s*[.=]/mu.test(text);
+  const addUnderUi = (lines: readonly string[]) => {
+    const table = /^[ \t]*\[ui\][ \t]*(#.*)?$/mu.exec(next);
+    if (table === null) {
+      next = `${withBlankLine(next)}[ui]\n${lines.join("\n")}\n`;
+      added.push("[ui]", ...lines);
+    } else {
+      const end = table.index + table[0].length;
+      next = `${next.slice(0, end)}\n${lines.join("\n")}${next.slice(end)}`;
+      added.push(...lines);
+    }
+  };
 
   const entry = `{ type = "command", command = ${tomlString(commands.line)}, interval_seconds = 5, timeout_seconds = 10 }`;
   if (text.includes("status --line")) {
     // Already there.
   } else if (/^\s*tab_bar_right\s*=/mu.test(text)) {
     skipped.push(`Add to your ui.tab_bar_right: ${entry}`);
-  } else if (/^\s*ui\s*[.=]/mu.test(text)) {
+  } else if (dottedUi) {
     skipped.push(`Add under ui: tab_bar_right = [${entry}]`);
   } else {
-    const line = `tab_bar_right = [${entry}]`;
-    const table = /^[ \t]*\[ui\][ \t]*(#.*)?$/mu.exec(next);
-    if (table === null) {
-      next = `${withBlankLine(next)}[ui]\n${line}\n`;
-      added.push("[ui]", line);
-    } else {
-      const end = table.index + table[0].length;
-      next = `${next.slice(0, end)}\n${line}${next.slice(end)}`;
-      added.push(line);
-    }
+    addUnderUi([`tab_bar_right = [${entry}]`]);
     features.push("tab bar");
+  }
+
+  // The panel replaces the sidebar; prefix+b still shows it.
+  const sidebar = ["sidebar_start_collapsed = true", 'sidebar_collapsed_mode = "hidden"'];
+  if (/^\s*sidebar_(start_collapsed|collapsed_mode)\s*=/mu.test(text)) {
+    // The user chose how the sidebar starts.
+  } else if (dottedUi) {
+    skipped.push(`To hide the sidebar, add under ui: ${sidebar.join(", ")}`);
+  } else {
+    addUnderUi(sidebar);
+    features.push("hidden sidebar");
   }
 
   // Herdr's toasts are off by default; Tandem's "needs you" notifications use them.
@@ -114,25 +190,58 @@ export function planHerdrConfig(text: string, commands: HerdrStatusCommands): He
     features.push("notifications");
   }
 
+  const popupCommand = `command = ${tomlString(commands.popup)}`;
   const binding = [
-    "# Tandem's live status; Esc or q closes it",
+    "# Tandem's panel; Esc closes it",
     "[[keys.command]]",
     `key = "${STATUS_POPUP_KEY}"`,
     'type = "popup"',
-    `command = ${tomlString(commands.popup)}`,
-    'description = "Tandem status"',
+    popupCommand,
+    'description = "Tandem panel"',
     'width = "90%"',
     'height = "90%"',
   ];
-  if (text.includes("status --watch")) {
+  const earlier = earlierPopupBlock(next, commands);
+  if (text.includes("panel --popup")) {
     // Already there.
+  } else if (earlier !== undefined) {
+    const block = next
+      .slice(earlier.start, earlier.end)
+      .replace(/^[ \t]*command[ \t]*=.*$/mu, popupCommand)
+      .replace(
+        /^[ \t]*description[ \t]*=[ \t]*"Tandem status"[ \t]*$/mu,
+        'description = "Tandem panel"',
+      );
+    next = `${next.slice(0, earlier.start)}${block}${next.slice(earlier.end)}`;
+    added.push(popupCommand);
+    features.push(`${STATUS_POPUP_KEY} panel`);
   } else if (text.includes(`"${STATUS_POPUP_KEY}"`)) {
     skipped.push(`${STATUS_POPUP_KEY} is taken; bind another key to: ${commands.popup}`);
   } else {
     next = `${withBlankLine(next)}${binding.join("\n")}\n`;
     added.push(...binding);
-    features.push(`${STATUS_POPUP_KEY} popup`);
+    features.push(`${STATUS_POPUP_KEY} panel`);
   }
+
+  const keys: string[] = [];
+  for (const { key, action, description } of PANEL_KEYS) {
+    if (text.includes(`"${action}"`)) continue;
+    if (text.includes(`"${key}"`)) {
+      skipped.push(`${key} is taken; bind another key to the plugin action ${action}`);
+      continue;
+    }
+    const lines = [
+      "[[keys.command]]",
+      `key = "${key}"`,
+      'type = "plugin_action"',
+      `command = "${action}"`,
+      `description = "${description}"`,
+    ];
+    next = `${withBlankLine(next)}${lines.join("\n")}\n`;
+    added.push(...lines);
+    keys.push(key);
+  }
+  if (keys.length > 0) features.push(`${keys.join(" ")} keys`);
   return { text: next, added, features, skipped };
 }
 
@@ -167,7 +276,7 @@ export type HerdrSetupDependencies = Readonly<{
   readonly run: CommandRunner;
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly commands: HerdrStatusCommands;
-  /** Tandem's Herdr plugin (`herdr-plugin/`), which holds the welcome popup. */
+  /** Tandem's Herdr plugin (`herdr-plugin/`), which holds the welcome popup, the panel, and its key actions. */
   readonly pluginDirectory: string;
   /** The Herdr session Tandem's panes run in; its server is the one to reload or restart. */
   readonly sessionId: string;
@@ -230,21 +339,21 @@ export async function setUpHerdrStatus(deps: HerdrSetupDependencies): Promise<bo
   return configured && linked;
 }
 
-/** Links Tandem's Herdr plugin after asking, so the Tandem coordinator can open its welcome popup. */
+/** Links Tandem's Herdr plugin after asking, so the Tandem coordinator can open its welcome popup and panel. */
 async function linkTandemPlugin(deps: HerdrSetupDependencies, herdr: Herdr): Promise<boolean> {
   const plugins = await herdr(["plugin", "list"]);
   if (plugins?.stdout.includes(`- ${TANDEM_HERDR_PLUGIN} (`) === true) return true;
   if (deps.confirm === undefined) {
-    deps.print("! Skipped Tandem's welcome popup: no terminal to ask in\n");
+    deps.print("! Skipped Tandem's welcome popup and panel: no terminal to ask in\n");
     return false;
   }
-  if (!(await deps.confirm("Add Tandem's welcome popup to Herdr?"))) {
-    deps.print("Skipped Tandem's welcome popup\n");
+  if (!(await deps.confirm("Add Tandem's welcome popup and panel to Herdr?"))) {
+    deps.print("Skipped Tandem's welcome popup and panel\n");
     return false;
   }
   const linked = await herdr(["--session", deps.sessionId, "plugin", "link", deps.pluginDirectory]);
   if (linked?.code === 0) {
-    deps.print("✓ Tandem's welcome popup added to Herdr\n");
+    deps.print("✓ Tandem's welcome popup and panel added to Herdr\n");
     return true;
   }
   deps.print(`! Add it by hand: herdr plugin link ${deps.pluginDirectory}\n`);
@@ -309,7 +418,7 @@ async function applyToSession(deps: HerdrSetupDependencies, herdr: Herdr): Promi
     const reloaded = (await herdr(["--session", session, "server", "reload-config"]))?.code === 0;
     deps.print(
       reloaded
-        ? `✓ Herdr reloaded; ${STATUS_POPUP_KEY} shows Tandem's status\n`
+        ? `✓ Herdr reloaded; ${STATUS_POPUP_KEY} opens Tandem's panel\n`
         : `! Reload Herdr: herdr --session ${session} server reload-config\n`,
     );
     return reloaded;

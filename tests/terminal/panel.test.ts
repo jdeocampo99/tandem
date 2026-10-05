@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { type PanelView, panelView } from "../../src/board/panel.ts";
+import { focusedProject, type PanelView, panelView } from "../../src/board/panel.ts";
 import { type BoardSnapshot, writeBoardSnapshot } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import { runTerminal } from "../../src/main.ts";
@@ -14,6 +14,7 @@ import {
   type PanelFrame,
   type PanelInput,
   type PanelState,
+  panelActionSteps,
   panelStep,
   parsePanelInput,
   renderPanel,
@@ -251,6 +252,79 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
   );
 });
 
+test("Herdr's focus names the project: its coordinator's or worker's workspace, else its directory", () => {
+  expect(focusedProject(SNAPSHOT, { workspaceId: "w2", cwd: "/pool/wt-1" })).toBe(APP);
+  expect(focusedProject(SNAPSHOT, { workspaceId: "w3", cwd: "/pool/wt-2" })).toBe(APP);
+  expect(focusedProject(SNAPSHOT, { workspaceId: "w9", cwd: `${TANDEM}/src` })).toBe(TANDEM);
+  expect(focusedProject(SNAPSHOT, { cwd: `${APP}/docs` })).toBe(APP);
+});
+
+test("the home key goes to the focused project's chat; prev and next wrap around open projects", () => {
+  const herdr = (...args: string[]) => ["herdr", "--session", "tandem", ...args];
+  const focusFailure = "⚠ Herdr couldn't focus it";
+  const inWorker = { workspaceId: "w3", cwd: "/pool/wt-2" };
+  expect(panelActionSteps("home", SNAPSHOT, inWorker, "tandem")).toEqual([
+    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
+    { argv: herdr("agent", "focus", "w2:p1") },
+  ]);
+  expect(panelActionSteps("next", SNAPSHOT, inWorker, "tandem")).toEqual([
+    { argv: herdr("workspace", "focus", "w1"), failure: focusFailure },
+  ]);
+  expect(panelActionSteps("prev", SNAPSHOT, { workspaceId: "w1", cwd: "/" }, "tandem")).toEqual([
+    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
+  ]);
+  const alone = { ...SNAPSHOT, coordinators: COORDINATORS.slice(0, 1) };
+  expect(panelActionSteps("next", alone, inWorker, "tandem")).toEqual([
+    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
+  ]);
+  const OTHER = "/work/other";
+  const offlineHere = {
+    ...SNAPSHOT,
+    board: { ...SNAPSHOT.board, projectPaths: [TANDEM, APP, OTHER] },
+    coordinators: [
+      ...COORDINATORS.slice(0, 1),
+      { repoPath: OTHER, project: "other", workspaceId: "w5", paneId: "w5:p1" },
+    ],
+  };
+  const inTandem = { cwd: `${TANDEM}/src` };
+  expect(panelActionSteps("next", offlineHere, inTandem, "tandem")).toEqual([
+    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
+  ]);
+  expect(panelActionSteps("prev", offlineHere, inTandem, "tandem")).toEqual([
+    { argv: herdr("workspace", "focus", "w5"), failure: focusFailure },
+  ]);
+});
+
+test("tandem panel home finds the project from Herdr's plugin context, not the inherited workspace", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-panel-action-"));
+  try {
+    await writeBoardSnapshot(home, SNAPSHOT);
+    const ran: (readonly string[])[] = [];
+    const result = await runTerminal(["panel", "home", "--home", home], {
+      cwd: "/plugin",
+      processEnvironment: {
+        HERDR_SESSION: "tandem",
+        HERDR_WORKSPACE_ID: "w1",
+        HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({
+          workspace_id: "w3",
+          focused_pane_cwd: "/pool/wt-2",
+        }),
+      },
+      run: async (request) => {
+        ran.push(request.argv);
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    });
+    expect(result).toEqual({ exitCode: 0, status: "panel" });
+    expect(ran).toEqual([
+      ["herdr", "--session", "tandem", "workspace", "focus", "w2"],
+      ["herdr", "--session", "tandem", "agent", "focus", "w2:p1"],
+    ]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("tandem panel draws from the snapshot file alone, never opening the state store", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-panel-"));
   try {
@@ -296,6 +370,7 @@ function fakeTerminal() {
       run: async () => ({ code: 0, stdout: "", stderr: "" }),
       sessionId: "tandem",
       cwd: APP,
+      focus: { cwd: APP },
       popup: false,
       helpUnseen: false,
       rememberHelpSeen: async () => {},

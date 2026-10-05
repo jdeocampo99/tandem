@@ -1221,7 +1221,7 @@ test("tandem status --line prints one line from saved state, for Herdr's tab bar
       stdout: (text) => output.push(text),
     });
     expect(shown.exitCode).toBe(0);
-    expect(output.join("")).toBe("✓ all quiet\n");
+    expect(output.join("")).toBe("✓ nothing needs you\n");
   } finally {
     await rm(home, { recursive: true, force: true });
   }

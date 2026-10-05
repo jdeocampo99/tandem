@@ -42,6 +42,12 @@ function workspaceIdFromLaunch(value: unknown): string | undefined {
     : undefined;
 }
 
+/** A notice when the Tandem panel could not open beside a coordinator; it never stops a launch. */
+export function panelFailureNotice(repoPath: string, launch: unknown): string | undefined {
+  if (!isRecord(launch) || typeof launch.panelFailure !== "string") return undefined;
+  return `Tandem's panel did not open beside ${repoPath} (${launch.panelFailure}); tandem panel --popup shows it anywhere.\n`;
+}
+
 /** Reads a coordinator launch result's workspace retirement report, if it carried one. */
 export function workspaceRetirementFromLaunch(
   value: unknown,
