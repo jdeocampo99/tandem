@@ -17,8 +17,6 @@ export type TerminalComposition = Readonly<{
   home?: string;
   herdr?: HerdrBackendOptions;
   tern?: TernBackendOptions;
-  /** Tests can replace the adapter factory while retaining selection and identity guards. */
-  createTern?: typeof ternBackend;
 }>;
 
 /** Resolve the dedicated helper from the one durable project owner, never a substitute pane. */
@@ -69,7 +67,7 @@ export function terminalBackend(
     const backend =
       chosen === "herdr"
         ? herdrBackend(run, options.herdr)
-        : (options.createTern ?? ternBackend)(run, {
+        : ternBackend(run, {
             ...options.tern,
             ...(notificationEndpoint === undefined
               ? {}

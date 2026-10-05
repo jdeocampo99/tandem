@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { probeTern, ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { TERN_BINARY } from "../../../src/terminal-backend/tern/protocol.ts";
 
 test("Tern uses the PATH installation, app fallback, or explicitly injected binary", async () => {
@@ -13,29 +13,12 @@ test("Tern uses the PATH installation, app fallback, or explicitly injected bina
     expect(ternBackend(run, { environment: { PATH: directory } }).clientCommand(target)).toEqual([
       TERN_BINARY,
     ]);
-    const binaries: string[] = [];
-    const daemon = async (request: { argv: readonly string[] }) => {
-      binaries.push(request.argv[0] ?? "");
-      return { code: 0, stdout: '{"sessions":[],"detached":[]}', stderr: "" };
-    };
-    const fallback = await probeTern(daemon, { cwd: directory, environment: { PATH: directory } });
-    if (Bun.which(TERN_BINARY) === null) {
-      expect(fallback.status).toBe("missing");
-      expect(binaries).toEqual([]);
-    } else {
-      expect(fallback.status).toBe("ready");
-      expect(binaries).toEqual([TERN_BINARY]);
-    }
     const executable = join(directory, "tern");
     await writeFile(executable, "#!/bin/sh\nexit 0\n");
     await chmod(executable, 0o700);
     const terminal = ternBackend(run, { environment: { PATH: directory } });
     expect(terminal.clientCommand(target)).toEqual([executable]);
     expect(terminal.serverCommand(target)).toEqual([executable, "daemon"]);
-    expect(await probeTern(daemon, { cwd: directory, environment: { PATH: directory } })).toEqual({
-      status: "ready",
-    });
-    expect(binaries.at(-1)).toBe(executable);
     expect(
       ternBackend(run, { binary: "fake-tern", environment: { PATH: directory } }).clientCommand(
         target,

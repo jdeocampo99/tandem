@@ -27,7 +27,6 @@ export const Processes = z.object({
 export const Created = z.object({ session: Id, tab: Id, block: Id });
 export const BlockAck = z.object({ block: Id });
 export const SessionAck = z.object({ session: Id });
-export const GateState = z.object({ gate: z.object({ signed_in: z.boolean() }) });
 export type TernListing = z.infer<typeof Listing>;
 export type LocatedBlock = Readonly<{
   session: z.infer<typeof Session>;

@@ -92,12 +92,11 @@ assigned to new work.
 
 ## Tern terminal backend
 
-The backend's read-only `probeTern` returns `missing`, `signedOut`, `ready` or `unknown`. Executable
-resolution prefers PATH, then the app bundle. An explicit control socket proves sign-in through
-`gate.signed_in`; without one, a harmless scoped `tern ls --json` checks daemon readiness.
-Failed or malformed evidence stays unknown with a reason. A version string alone never proves
-readiness, and this probe never starts a daemon or changes a window. Onboarding's separate isolated
-sign-in check is described in [policy.md](policy.md).
+Onboarding and the backend's installation check share `availability.ts`'s `probeTern`, returning
+`missing`, `signedOut`, `ready` or `unknown`. It checks the account gate in a private daemon/window
+and cleans them up afterward. A version string alone never proves readiness. The isolated sign-in
+check is described in [policy.md](policy.md). Backend commands resolve Tern from PATH, then the
+app bundle, with an explicit binary override for injected runners.
 
 Tern's daemon maps to a Tandem terminal session; a Tern tab supplies both workspace and tab ids.
 A project gets a uniquely named `tandem-<project>` Tern session and workers get background tabs in

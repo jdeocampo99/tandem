@@ -8,6 +8,7 @@ import { retireCoordinatorWorkspace } from "../../src/coordinator/workspace.ts";
 import { recoverEndpointFromLaunch } from "../../src/tasks/endpoint-launch.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { storedEndpointTerminal } from "../../src/terminal-backend/identity.ts";
+import { withScenario } from "../evals/scenario.ts";
 
 for (const chosen of ["herdr", "tern"] as const) {
   test(`${chosen} quarantines the other terminal's identical ids without contacting it`, async () => {
@@ -40,7 +41,6 @@ for (const chosen of ["herdr", "tern"] as const) {
       await writeFile(join(home, "settings.toml"), `terminal = "${chosen}"\n`);
       const terminal = terminalBackend(forbidden, {
         home,
-        createTern: () => ({ ...terminalBackend(forbidden), name: "tern" }),
       });
       const result = await retireCoordinatorWorkspace(terminal, home, {
         repoPath: home,
@@ -98,47 +98,19 @@ test("old records remain Herdr and unknown terminal names fail closed", () => {
 });
 
 test("an uncertain adapter effect remains quarantined after later calls and terminal selection", async () => {
-  const home = await mkdtemp(join(tmpdir(), "tandem-terminal-"));
-  const endpoint: Endpoint = {
-    terminal: "tern",
-    sessionId: "session",
-    workspaceId: "workspace",
-    tabId: "tab",
-    paneId: "pane",
-    role: "implementer",
-    generation: 0,
-  };
-  let effects = 0;
-  const forbidden: CommandRunner = async () => {
-    throw new Error("unexpected external command");
-  };
-  try {
-    await writeFile(join(home, "settings.toml"), 'terminal = "tern"\n');
-    const terminal = terminalBackend(forbidden, {
-      home,
-      createTern: () => {
-        let quarantined = false;
-        return {
-          ...terminalBackend(forbidden),
-          name: "tern",
-          runCommand: async () => {
-            if (quarantined) throw new Error("effect is quarantined");
-            effects += 1;
-            quarantined = true;
-            throw new Error("effect outcome is unknown");
-          },
-        };
-      },
-    });
-    const launch = () => terminal.runCommand({ endpoint, cwd: home, command: ["agent"] });
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const endpoint = world.openPane({ paneId: "42", cwd: world.repoPath });
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    world.failAt({ boundary: "tern", action: "tern run" });
+    const terminal = terminalBackend(world.run, { home: world.home });
+    const launch = () => terminal.runCommand({ endpoint, cwd: world.repoPath, command: ["agent"] });
     await expect(launch()).rejects.toThrow("outcome is unknown");
-    await expect(launch()).rejects.toThrow("quarantined");
-    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n');
+    await expect(launch()).rejects.toThrow("outcome is unknown");
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "herdr"\n');
     expect(terminal.name).toBe("herdr");
-    await writeFile(join(home, "settings.toml"), 'terminal = "tern"\n');
-    await expect(launch()).rejects.toThrow("quarantined");
-    expect(effects).toBe(1);
-  } finally {
-    await rm(home, { recursive: true, force: true });
-  }
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    await expect(launch()).rejects.toThrow("outcome is unknown");
+    expect(world.trace().filter((event) => event.action === "tern run")).toHaveLength(1);
+    expect(world.paneIsPresent(endpoint.paneId)).toBe(true);
+  });
 });
