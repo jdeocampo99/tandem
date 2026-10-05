@@ -17,7 +17,9 @@ import { TERN_CONTEXT } from "./tern/context.ts";
 import { ensureTernPlugin, reloadTernPlugin, type TernPluginDependencies } from "./tern/plugin.ts";
 
 export type TerminalComposition = Readonly<{
-  /** Explicit Tandem home; omitted for isolated tests, which keep Herdr. */
+  /** A fixed selection supplied by the caller; otherwise read the saved home preference. */
+  terminal?: TerminalName;
+  /** Explicit Tandem home; without a home or fixed selection, use Herdr. */
   home?: string;
   herdr?: HerdrBackendOptions;
   tern?: TernBackendOptions;
@@ -58,9 +60,10 @@ export function terminalBackend(
   const backends = new Map<TerminalName, TerminalBackend>();
   const select = (): TerminalBackend => {
     const chosen =
-      options.home === undefined
+      options.terminal ??
+      (options.home === undefined
         ? "herdr"
-        : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal;
+        : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal);
     const cached = backends.get(chosen);
     if (cached !== undefined) return cached;
     const home = options.home;

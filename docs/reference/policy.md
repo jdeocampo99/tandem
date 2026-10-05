@@ -291,6 +291,8 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 The home setting `terminal = "herdr"` or `terminal = "tern"` applies across projects. An absent
 setting keeps Herdr. Only `src/terminal-backend/compose.ts` selects an implementation from it;
 composition reads the setting again before terminal operations, including after onboarding saves.
+`terminalBackend(run, { terminal, home, ... })` also accepts an explicit fixed choice for composed
+callers and scenario boundaries; that choice retains the same endpoint identity guards.
 
 The setup page, chat, and direct interactive onboarding offer Tern only when `probeTern` reports
 `ready`. Its other outcomes are `missing`, `signedOut`, or `unknown` with a reason; each shows a
