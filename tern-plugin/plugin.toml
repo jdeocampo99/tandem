@@ -1,0 +1,7 @@
+schema = 1
+id = "tandem"
+name = "Tandem"
+version = "0.1.0"
+description = "Tandem views, project keys, palette commands and task links"
+window = "window.luau"
+styles = ["tandem.css"]

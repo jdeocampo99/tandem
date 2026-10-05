@@ -71,7 +71,11 @@ import {
 } from "./terminal/projects.ts";
 import { readTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
 import { runWelcome } from "./terminal/welcome.ts";
-import { terminalBackend, terminalContext } from "./terminal-backend/compose.ts";
+import {
+  reloadTerminalPlugin,
+  terminalBackend,
+  terminalContext,
+} from "./terminal-backend/compose.ts";
 import type { TerminalBackend, WorkspaceMover } from "./terminal-backend/contract.ts";
 
 const HELP_TEXT = `Tandem
@@ -757,6 +761,7 @@ async function runProjectFlow({
     `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
   );
   if (invocation.command === "update") {
+    await reloadTerminalPlugin(terminal, { run, cwd: environment.cwd });
     stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_CHECKOUT)}.\n`);
   }
   for (const [index, launch] of launches.entries()) {
