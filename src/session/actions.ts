@@ -6,9 +6,9 @@ import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../cont
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
 import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
+import type { CommentEdit, NewComment } from "../pr-review/edits.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
-import type { CommentEdit } from "../pr-review/service.ts";
 import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
@@ -190,11 +190,11 @@ export type TandemAction =
       readonly taskId: string;
       readonly page?: boolean | undefined;
     }>
-  | Readonly<{ readonly action: "review-notes"; readonly taskId: string }>
   | Readonly<{
       readonly action: "review-edit";
       readonly taskId: string;
       readonly comments?: readonly CommentEdit[] | undefined;
+      readonly add?: readonly NewComment[] | undefined;
       readonly summaryComment?: string | undefined;
     }>
   | Readonly<{
@@ -764,12 +764,11 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       ),
       action.action,
     ),
-  "review-notes": async (action, service) =>
-    actionResult(await service.reviewNotes(action.taskId), action.action),
   "review-edit": async (action, service) =>
     actionResult(
       await service.reviewEdit(action.taskId, {
         ...(action.comments === undefined ? {} : { comments: action.comments }),
+        ...(action.add === undefined ? {} : { add: action.add }),
         ...(action.summaryComment === undefined ? {} : { summaryComment: action.summaryComment }),
       }),
       action.action,

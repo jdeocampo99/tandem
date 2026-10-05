@@ -3,8 +3,8 @@ import { homedir } from "node:os";
 import { processEnvironmentSnapshot } from "../../config/environment.ts";
 import { appendDiagnosticEvent } from "../../runtime/diagnostics.ts";
 import { runTandemTool, type TandemCallDependencies } from "../../session/actions.ts";
+import type { CoordinatorMessage } from "../../session/coordinator-reply.ts";
 import type { SessionDeps } from "../../session/events.ts";
-import type { CoordinatorMessage } from "../../session/onboarding-guide.ts";
 import {
   type ChoiceConfirmation,
   promptRoutingConfig,

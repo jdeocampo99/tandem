@@ -1,3 +1,4 @@
+import { feedbackMessages } from "../adapters/lavish.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
 import { CLAUDE_CODE_PROVIDER } from "../harness/claude-code/models.ts";
@@ -293,60 +294,12 @@ export function readSetupChooseFolderText(rawFeedback: string): string | undefin
 }
 /** Plain Lavish messages in one poll are kept together, excluding structured setup actions. */
 export function readSetupCommentText(rawFeedback: string): string | undefined {
-  const messages: string[] = [];
-  let promptSuffix = -1;
-  let feedback = false;
-  for (const line of rawFeedback.split(/\r?\n/u)) {
-    const prompts = /^prompts\[\d+\]\{([^}]+)\}:$/u.exec(line);
-    if (prompts !== null) {
-      const fields = prompts[1]?.split(",") ?? [];
-      promptSuffix = fields.indexOf("prompt") === 1 ? fields.length - 2 : -1;
-      feedback = false;
-      continue;
-    }
-    if (/^feedback\[\d+\]\{/u.test(line)) {
-      promptSuffix = -1;
-      feedback = true;
-      continue;
-    }
-    if (feedback) {
-      const message = /^\s+message:\s*(.*)$/u.exec(line)?.[1]?.trim();
-      if (message) messages.push(message);
-    } else if (promptSuffix >= 0) {
-      const row = /^\s+"(?:[^"\\]|\\.)*",(.*)$/u.exec(line)?.[1];
-      if (row === undefined) continue;
-      const quoted = /^"(?:[^"\\]|\\.)*"/u.exec(row)?.[0];
-      let value: string;
-      if (quoted === undefined) {
-        const parts = row.split(",");
-        value = parts
-          .slice(0, parts.length > promptSuffix ? parts.length - promptSuffix : parts.length)
-          .join(",")
-          .trim();
-      } else {
-        try {
-          const parsed: unknown = JSON.parse(quoted);
-          value = typeof parsed === "string" ? parsed.trim() : "";
-        } catch {
-          value = row.trim();
-        }
-      }
-      if (!value) continue;
-      try {
-        const action: unknown = JSON.parse(value);
-        if (
-          isRecord(action) &&
-          (action.tandemSetup === 1 || action.tandemSearch === 1 || action.tandemChooseFolder === 1)
-        ) {
-          continue;
-        }
-      } catch {
-        // Ordinary freeform text need not be JSON.
-      }
-      messages.push(value);
-    }
-  }
-  return messages.length > 0 ? messages.join("\n\n") : undefined;
+  return feedbackMessages(
+    rawFeedback,
+    (action) =>
+      isRecord(action) &&
+      (action.tandemSetup === 1 || action.tandemSearch === 1 || action.tandemChooseFolder === 1),
+  );
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

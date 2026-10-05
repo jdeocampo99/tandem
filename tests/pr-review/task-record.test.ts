@@ -60,7 +60,7 @@ const job: WorkerJob = {
 const review = {
   head: "abc123",
   intent: "Retries uploads.",
-  readingOrder: [],
+  tour: [],
   concerns: [],
   comments: [],
   summaryComment: "Looks good.",
@@ -100,4 +100,30 @@ test("a review with a comment off the diff is sent back with the lines it can us
     );
   expect(() => submit(40)).toThrow("lines that can take comments: 10-12");
   expect(JSON.parse(submit(11).text).comments).toHaveLength(1);
+});
+
+test("a review with a tour stop off the diff is sent back naming the stop and its lines", () => {
+  const anchors = new Map([["src/upload.ts", new Set([10, 11, 12])]]);
+  const submit = (from: number, to: number) =>
+    resolveSubmittedReport(
+      job,
+      {
+        outcome: "completed",
+        report: JSON.stringify({
+          ...review,
+          tour: [
+            {
+              title: "Upload",
+              why: "The retry",
+              stops: [{ file: "src/upload.ts", from, to, title: "Retry loop", body: "Loops." }],
+            },
+          ],
+        }),
+      },
+      anchors,
+    );
+  expect(() => submit(30, 32)).toThrow(
+    'tour stop "Retry loop": lines 30-32 of src/upload.ts are outside the diff; lines in the diff: 10-12',
+  );
+  expect(JSON.parse(submit(9, 11).text).tour[0].stops).toHaveLength(1);
 });

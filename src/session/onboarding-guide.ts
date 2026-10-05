@@ -17,82 +17,16 @@ import {
 import type { SetupApplyResult } from "../onboarding/setup-page.ts";
 import { toolReport } from "../onboarding/tools.ts";
 import type { TandemService } from "../service/controller.ts";
+import { type CoordinatorAgentEnd, CoordinatorReplyWait } from "./coordinator-reply.ts";
 import type { SessionHost } from "./events.ts";
-
-export type CoordinatorMessage = Readonly<{
-  role: string;
-  content: string | readonly Readonly<{ type: string; text?: string }>[];
-  synthetic?: boolean;
-  superseded?: boolean;
-}>;
-
-export type CoordinatorAgentEnd = Readonly<{
-  messages: () => readonly CoordinatorMessage[];
-  willContinue: boolean;
-}>;
-
-function messageText(message: CoordinatorMessage): string | undefined {
-  if (typeof message.content === "string") return message.content.trim() || undefined;
-  const text = message.content
-    .filter((block) => block.type === "text" && block.text !== undefined)
-    .map((block) => block.text ?? "")
-    .join("\n")
-    .trim();
-  return text.length === 0 ? undefined : text;
-}
-
-function assistantText(message: CoordinatorMessage): string | undefined {
-  const text =
-    typeof message.content === "string"
-      ? message.content.trim()
-      : message.content
-          .filter((block) => block.type === "text" && block.text !== undefined)
-          .map((block) => block.text ?? "")
-          .join("\n")
-          .trim();
-  return text.length === 0 ? undefined : text;
-}
-
-function coordinatorAnswer(
-  messages: readonly CoordinatorMessage[],
-  prompt: string,
-): Readonly<{ matched: boolean; text?: string }> {
-  let promptIndex = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user" && !message.synthetic && messageText(message) === prompt) {
-      promptIndex = index;
-      break;
-    }
-  }
-  if (promptIndex < 0) return { matched: false };
-
-  let answer: string | undefined;
-  for (let index = promptIndex + 1; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (message?.role === "user" && !message.synthetic) break;
-    if (message?.role === "assistant" && !message.superseded) {
-      const text = assistantText(message);
-      if (text !== undefined) answer = text;
-    }
-  }
-  return answer === undefined ? { matched: true } : { matched: true, text: answer };
-}
 
 /** Waits that return with nothing to act on, in a row, before the listener gives up. */
 const MAX_IDLE_WAITS = 3;
-const COORDINATOR_REPLY_UNAVAILABLE =
-  "The coordinator did not return a final answer. Ask again here.";
 
 type GuideService = Pick<
   TandemService,
   "onboardingFacts" | "checkTools" | "awaitSetupAnswer" | "applySetup"
 >;
-type PendingCoordinatorReply = Readonly<{
-  prompt: string;
-  resolve: (reply: string | undefined) => void;
-  cleanup: () => void;
-}>;
 
 /**
  * Drives first-time setup in the Tandem coordinator with fixed wording wherever the step allows:
@@ -109,7 +43,7 @@ export class OnboardingGuide {
   /** The setup page listener, while one runs. */
   private listener: AbortController | undefined;
   /** The Lavish question currently awaiting the coordinator's final turn. */
-  private pendingCoordinatorReply: PendingCoordinatorReply | undefined;
+  private readonly replies = new CoordinatorReplyWait();
 
   constructor(
     private readonly deps: Readonly<{
@@ -149,36 +83,12 @@ export class OnboardingGuide {
   stop(): void {
     this.listener?.abort();
     this.listener = undefined;
-    const pending = this.pendingCoordinatorReply;
-    this.pendingCoordinatorReply = undefined;
-    pending?.cleanup();
-    pending?.resolve(undefined);
+    this.replies.cancel();
   }
+
   /** Delivers one completed coordinator turn to the comment that started it, if it matches. */
   agentEnd(end: CoordinatorAgentEnd): void {
-    const pending = this.pendingCoordinatorReply;
-    if (end.willContinue || pending === undefined) return;
-    const answer = coordinatorAnswer(end.messages(), pending.prompt);
-    if (!answer.matched) return;
-    this.pendingCoordinatorReply = undefined;
-    pending.cleanup();
-    pending.resolve(answer.text ?? COORDINATOR_REPLY_UNAVAILABLE);
-  }
-  private awaitCoordinatorReply(prompt: string, signal: AbortSignal): Promise<string | undefined> {
-    if (signal.aborted) return Promise.resolve(undefined);
-    const { promise, resolve } = Promise.withResolvers<string | undefined>();
-    let pending: PendingCoordinatorReply;
-    const onAbort = () => {
-      if (this.pendingCoordinatorReply === pending) this.pendingCoordinatorReply = undefined;
-      pending.cleanup();
-      resolve(undefined);
-    };
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    pending = { prompt, resolve, cleanup };
-    this.pendingCoordinatorReply = pending;
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) onAbort();
-    return promise;
+    this.replies.agentEnd(end);
   }
 
   private read(): Promise<OnboardingFacts> {
@@ -272,7 +182,7 @@ export class OnboardingGuide {
           await this.say(SETUP_PAGE_CLOSED);
           return;
         }
-        const awaiting = this.awaitCoordinatorReply(prompt, signal);
+        const awaiting = this.replies.wait(prompt, signal);
         try {
           await this.deps.host.perform({ type: "promptAsUser", text: prompt, deliverAs: "aside" });
         } catch (error) {

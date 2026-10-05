@@ -1,0 +1,729 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{title}}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/*{{tandem.css}}*/
+
+@keyframes flash{from{background:color-mix(in srgb,var(--you) 30%,transparent)}}
+@keyframes popIn{from{opacity:0;transform:translateY(4px) scale(.98)}}
+body{padding:0;--mast:57px}
+dialog{position:fixed;inset:0;margin:auto;height:fit-content;z-index:50;border:1px solid var(--line2);border-radius:12px;background:var(--raise);color:var(--ink);max-width:540px;width:calc(100% - 32px);padding:20px}
+kbd{font:11px var(--mono);border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 4px;color:var(--muted)}
+body.finishing :is(.mast,.shell){opacity:.45;transition:opacity .2s}
+dialog h2{margin:0 0 10px;font-size:16px}
+dialog li{margin:0 0 6px;color:var(--muted)}
+dialog li b{color:var(--ink);font-weight:500}
+.mast{position:sticky;top:0;z-index:20;background:var(--bg);display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);font-size:13px;color:var(--faint);min-width:0}
+.to-top{all:unset;box-sizing:border-box;cursor:pointer;display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mast-actions{flex:none;display:flex;align-items:center;gap:8px}
+.meta-line{margin:0 0 10px;font-size:12.5px;color:var(--faint)}
+.plus{color:var(--done)}
+.minus{color:var(--tandem)}
+.stat{font-size:11.5px;white-space:nowrap}
+.shell{--rail:250px;display:grid;grid-template-columns:var(--rail) minmax(0,1fr) 330px;align-items:start;transition:grid-template-columns .3s var(--ease)}
+.rail-open{display:none}
+.rail,.review-pane{position:sticky;top:var(--mast);height:calc(100vh - var(--mast));overflow:auto}
+.mainpane{min-width:0}
+.file,tr[data-line],.sec{scroll-margin-top:calc(var(--mast) + 16px)}
+.rail{border-right:1px solid var(--line);padding:14px 10px 32px}
+.review-pane{border-left:1px solid var(--line);padding:18px 16px 0;display:flex;flex-direction:column}
+.mainpane{padding:18px 24px 64px}
+.review-toggle{display:none}
+.side-close{display:none}
+.rail-head{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;color:var(--faint);padding:0 8px 6px}
+.dir-label{all:unset;box-sizing:border-box;width:100%;display:flex;align-items:center;gap:6px;cursor:pointer;font:11px var(--mono);color:var(--faint);padding:8px 8px 3px 2px;border-radius:var(--rc)}
+.dname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left}
+.dcount{margin-left:auto;font-size:10.5px;opacity:0;transition:opacity .2s}
+.chev{display:grid;place-items:center;transition:transform .25s var(--ease)}
+.dir-files{display:grid;grid-template-rows:1fr;transition:grid-template-rows .3s var(--ease)}
+.rail-tools{display:flex;gap:4px}
+.rail-tools{display:flex;gap:2px}
+.tree-file{all:unset;box-sizing:border-box;width:100%;display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:var(--rc);cursor:pointer}
+.tick{width:11px;height:11px;border-radius:50%;border:1.5px solid var(--line2);flex:none;transition:background .2s,border-color .2s}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--you);flex:none}
+.tabs{margin-bottom:18px}
+.view{gap:28px}
+.lead{margin:0;font-size:15.5px;line-height:1.6;max-width:72ch}
+.list{overflow:hidden}
+.sev{font:500 11px/1 var(--mono);padding:3px 6px;border-radius:var(--rb);justify-self:start;--c:var(--muted);background:color-mix(in srgb,var(--c) 16%,transparent);color:var(--c)}
+.loc{all:unset;cursor:pointer;font:12px var(--mono);color:var(--muted);white-space:nowrap;border-bottom:1px dotted var(--line2)}
+.changes{display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
+.view{display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
+.file{overflow:clip}
+.file-head{position:sticky;top:var(--mast);z-index:2;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--raise);border-bottom:1px solid var(--line);border-radius:10px 10px 0 0}
+.fold{all:unset;cursor:pointer;display:grid;place-items:center;width:22px;height:22px;border-radius:var(--rc);color:var(--muted);transition:transform .25s var(--ease),background .2s}
+.path{all:unset;cursor:pointer;font:500 13px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.viewed{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);cursor:pointer;white-space:nowrap;padding:3px 8px;border-radius:var(--rc);background:var(--sunk)}
+.drawer{display:grid;grid-template-rows:1fr;transition:grid-template-rows .35s var(--ease)}
+.gap-btn{text-align:right}
+.exp{all:unset;cursor:pointer;color:var(--muted)}
+.exp-all{all:unset;cursor:pointer;color:var(--muted)}
+.exp{display:inline-grid;place-items:center;width:28px;height:22px;border-radius:var(--rb);margin-right:6px;vertical-align:middle}
+.ctx{margin-left:12px;color:var(--faint)}
+.draft{font:13px/1.55 var(--sans);background:var(--sunk);border:1px solid var(--line);border-radius:10px;padding:10px 12px;transition:border-color .2s,opacity .2s}
+.by{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);font-weight:500}
+.mark{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;background:color-mix(in srgb,var(--tandem) 22%,transparent);color:var(--tandem);font:600 9.5px var(--sans);font-style:normal}
+.stack{display:grid;gap:8px}
+.review-pane>*{flex-shrink:0}
+.summary{padding:10px 12px;font-size:13px}
+.post{position:sticky;bottom:0;margin-top:auto;padding:14px 0 16px;background:var(--bg);display:grid;gap:10px;border-top:1px solid var(--line)}
+.post-row{display:flex;gap:8px}
+.post-status{margin:0;font-size:12.5px;color:var(--muted)}
+.finish-btn{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;white-space:nowrap}
+.finish{max-width:560px}
+.f-label{display:block;font-size:13px;font-weight:500;margin-bottom:6px}
+.f-verdicts{border:0;margin:14px 0 0;padding:0;display:grid;gap:4px}
+.f-summary-line{margin:14px 0 0;font-size:12.5px;color:var(--muted)}
+.f-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.post-note{margin:0;font-size:11.5px;color:var(--faint);text-align:center}
+.spacer-y{height:16px}
+.gh{display:inline-flex;align-items:center;gap:7px;text-decoration:none;padding:6px 12px;white-space:nowrap}
+.view{gap:0}
+.sec{padding:26px 0;border-top:1px solid var(--line);display:grid;gap:14px}
+.sec-h{display:flex;align-items:flex-start;gap:12px}
+.sec-n{font-size:11px;color:var(--faint);padding-top:3px;width:18px}
+.take{margin:12px 0 0;color:var(--muted);font-size:13.5px}
+.orow{display:grid;gap:4px;padding:10px 12px;font-size:13px}
+.ch-n{display:grid;place-items:center;width:22px;height:22px;border-radius:var(--rc);background:color-mix(in srgb,var(--you) 16%,transparent);color:var(--you);font-size:11.5px;flex:none}
+.tour{position:sticky;bottom:0;margin-top:16px;z-index:5;background:var(--raise);border:1px solid var(--line2);border-radius:12px;padding:12px 16px;box-shadow:0 -12px 32px rgb(0 0 0 / .35);animation:rowIn .35s var(--ease) both}
+.tour-top{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--faint)}
+.tour-ch{color:var(--you);font-weight:500;white-space:nowrap}
+.trail{display:flex;align-items:center;gap:2px;margin-top:6px;overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+.x{all:unset;cursor:pointer;margin-left:auto;color:var(--faint);padding:2px 6px;border-radius:var(--rb)}
+.has-draft{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)}
+.tour-nav{display:flex;align-items:center;gap:12px;margin-top:10px}
+.pips{display:flex;gap:4px;flex:1}
+.ch-row{display:flex;align-items:center;gap:12px;padding:10px 10px;border-top:1px solid var(--line)}
+.back{all:unset;cursor:pointer;font-size:12px;color:var(--faint);padding:2px 6px;border-radius:var(--rb)}
+.pop{position:absolute;z-index:6;background:var(--raise);border:1px solid var(--line2);border-radius:12px;padding:12px 14px;box-shadow:0 16px 40px rgb(0 0 0 / .45);text-align:left;animation:popIn .2s var(--ease) both}
+.pop-h{display:flex;align-items:flex-start;gap:10px}
+.pstop{display:grid;grid-template-columns:18px minmax(0,1fr);gap:10px;padding:9px 0 0;margin-top:9px;border-top:1px solid var(--line)}
+.pnone{margin:8px 0 0;color:var(--muted);font-size:12.5px}
+.pop-acts{display:flex;gap:8px;margin-top:12px}
+.chlist{padding:6px}
+.notes-line{margin:6px 0 0;font-size:12.5px;color:var(--faint)}
+.flow{padding:14px;position:relative;display:grid;gap:14px}
+.flow-row{display:grid;gap:6px}
+.flow-label{font-size:12px;color:var(--muted)}
+.flow-boxes{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
+.fbox{all:unset;box-sizing:border-box;cursor:pointer;display:grid;gap:1px;padding:7px 11px;border-radius:var(--rc);background:var(--sunk);border:1px solid var(--line2);max-width:min(100%,260px);transition:border-color .2s,opacity .2s}
+.flow-arrow{color:var(--faint)}
+.submit-note{margin:12px 0 0;font-size:12.5px;color:var(--tandem)}
+.mast h1{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mast a{color:var(--muted)}
+.mast h1{flex:1;min-width:0}
+.meta-line b{color:var(--muted);font-weight:500}
+.meta-line a{color:var(--muted)}
+.chev svg{width:12px;height:12px}
+.dir-files>div{overflow:hidden;min-height:0}
+.rail-tools button{all:unset;cursor:pointer;display:grid;place-items:center;width:24px;height:24px;color:var(--faint);border-radius:var(--rb)}
+.tree-file b{font-weight:500;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.drawer>div{overflow:hidden;min-height:0}
+table.diff{width:100%;border-collapse:collapse;table-layout:fixed;font:12.5px/1.65 var(--mono)}
+.diff td{border:0;padding:0;color:var(--ink)}
+col.c-no{width:46px}
+td.no{text-align:right;padding:0 8px;color:var(--faint);user-select:none;vertical-align:top}
+td.code{white-space:pre-wrap;word-break:break-word;padding:0 16px 0 12px}
+td.gap-label{padding:3px 12px}
+.draft header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.draft p{margin:6px 0 8px}
+.draft footer{display:flex;gap:6px}
+.draft textarea{width:100%;min-height:70px;font:inherit;color:var(--ink);background:var(--sunk);border:1px solid var(--line2);border-radius:var(--rc);padding:7px 9px;margin:6px 0 8px;resize:vertical}
+.review-pane h2{margin:0;font-size:15px;font-weight:600}
+.review-pane h3{margin:16px 0 8px;font-size:11.5px;font-weight:500;color:var(--faint);display:flex;justify-content:space-between}
+.summary p{margin:0}
+.post-status b{color:var(--ink);font-weight:500}
+.finish h2{margin:0 0 14px;font-size:16px}
+.f-label small{font-weight:400;color:var(--faint);margin-left:6px}
+.finish textarea{width:100%;font:13px/1.5 var(--sans);color:var(--ink);background:var(--sunk);border:1px solid var(--line2);border-radius:var(--rc);padding:8px 10px;resize:vertical}
+.f-verdicts label{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-radius:var(--rc);cursor:pointer}
+.f-verdicts input{margin-top:3px}
+.f-verdicts b{display:block;font-weight:500;font-size:13.5px}
+.f-verdicts small{color:var(--muted);font-size:12.5px}
+.f-summary-line b{color:var(--ink);font-weight:500}
+.sec-h>div{flex:1}
+.sec-h h2{margin:0;font-size:15px;font-weight:600}
+.take b{color:var(--ink);font-weight:600}
+.orow b{font-weight:500}
+.orow p{margin:0;color:var(--muted);font-size:12.5px}
+.trail button{all:unset;cursor:pointer;font:11.5px var(--mono);color:var(--faint);padding:2px 6px;border-radius:var(--rb)}
+.tour h3{margin:10px 0 2px;font-size:14.5px;font-weight:600}
+.tour p{margin:0;color:var(--muted);max-width:76ch}
+.pips i{width:6px;height:6px;border-radius:50%;background:var(--line2)}
+.ch-row>div{flex:1;min-width:0}
+.ch-row b{display:block;font-weight:500}
+.ch-row small{color:var(--muted);font-size:12.5px}
+.pop::before{content:"";position:absolute;top:-6px;left:calc(var(--caret,50%) - 6px);width:10px;height:10px;background:var(--raise);border-left:1px solid var(--line2);border-top:1px solid var(--line2);transform:rotate(45deg)}
+.pop-h>div{flex:1;min-width:0}
+.pop-h small{display:block;color:var(--you);font-size:12px;margin-top:2px}
+.pstop b{font-weight:500;font-size:13px}
+.pstop p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+.flow-label b{color:var(--you);font-weight:500;margin-right:6px}
+.fbox b{font:500 12.5px var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fbox small{font:11px var(--mono);color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.code i{font-style:normal}
+tr.add td{background:color-mix(in srgb,var(--done) 9%,transparent)}
+tr.del td{background:color-mix(in srgb,var(--tandem) 9%,transparent)}
+tr.gap td{background:var(--sunk);color:var(--faint);font-size:11.5px}
+tr.flash td{animation:flash 1.8s var(--ease)}
+tr.note td{padding:10px 16px 12px 104px;background:var(--bg)}
+tr.spot td{background:color-mix(in srgb,var(--you) 11%,transparent)}
+.to-top:hover{color:var(--you)}
+.to-top:focus-visible{outline:2px solid var(--you)}
+.mast .gh{padding:7px 9px}
+.dir-label:hover{color:var(--muted)}
+.dir-label .dot{display:none}
+.tree-file:hover{background:var(--sunk)}
+.tree-file.on{background:var(--sunk)}
+.tree-file .stat{margin-left:auto}
+.sev[data-sev="blocking"]{--c:var(--tandem)}
+.sev[data-sev="question"]{--c:var(--implement)}
+.sev[data-sev="suggestion"]{--c:var(--done)}
+.sev[data-sev="nit"]{--c:var(--faint)}
+.sev[data-sev="you"]{--c:var(--you)}
+.loc:hover{color:var(--ink);border-color:var(--muted)}
+.fold:hover{background:var(--line)}
+.path .dir{color:var(--faint);font-weight:400}
+.file-head .stat{margin-left:auto}
+.exp:hover{background:var(--line2);color:var(--ink)}
+.exp-all:hover{color:var(--ink)}
+.exp-all .n{font-family:var(--mono)}
+.draft.inline{max-width:680px;background:var(--raise)}
+.mark.me{background:color-mix(in srgb,var(--you) 22%,transparent);color:var(--you)}
+.draft .state{margin-left:auto;font-size:11.5px;color:var(--faint)}
+.draft[data-state="approved"]{border-color:color-mix(in srgb,var(--done) 45%,var(--line))}
+.draft[data-state="skipped"]{opacity:.45}
+.review-pane .sec-note{margin:4px 0 16px;font-size:12.5px}
+.post-row .primary{flex:1}
+.post-row .link{padding:8px 12px}
+.finish-btn .badge{background:color-mix(in srgb,var(--bg) 25%,transparent);border-radius:999px;padding:0 7px;font-size:11.5px}
+.finish-btn.sent{background:color-mix(in srgb,var(--done) 22%,transparent);color:var(--done)}
+.post-note.sent{color:var(--done)}
+.sec:first-child{border-top:0;padding-top:4px}
+.sec-h .sec-note{margin-top:2px;font-size:12.5px}
+.trail .ln{color:var(--faint)}
+.trail .arrow{color:var(--line2)}
+.x:hover{color:var(--ink);background:var(--line)}
+.tour-nav .num{font-size:12px;color:var(--faint)}
+.ch-row:first-child{border-top:0}
+.ch-row .count{font:11.5px var(--mono);color:var(--faint);white-space:nowrap}
+.back:hover{color:var(--ink);background:var(--line)}
+.pop-h .path{font:500 12.5px var(--mono);word-break:break-all}
+.fbox:hover{border-color:var(--muted)}
+.fbox:focus-visible{outline:2px solid var(--you)}
+.fbox.picked{border-color:var(--you)}
+.submit-note.sent{color:var(--done)}
+body.rail-hidden .shell{--rail:44px}
+body.rail-hidden .rail{padding:12px 6px;overflow:hidden}
+body.rail-hidden .rail-open{all:unset;cursor:pointer;display:grid;place-items:center;width:30px;height:30px;border-radius:var(--rc);color:var(--muted)}
+.rail-tools button:hover{color:var(--ink);background:var(--line)}
+.tree-file.viewed b{color:var(--faint)}
+td.code .k{color:var(--review)}
+td.code .f{color:var(--research)}
+td.code .s{color:var(--done)}
+td.code .c{color:var(--implement)}
+td.code .p{color:var(--you)}
+td.code .m{color:var(--faint);font-style:italic}
+td.code .u{color:var(--muted)}
+td.code .l{color:var(--implement)}
+td.code .d{color:var(--tandem)}
+.draft.side p{color:var(--muted);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.f-verdicts label:hover{background:var(--sunk)}
+.trail button:hover{color:var(--ink)}
+.trail button.now{background:color-mix(in srgb,var(--you) 16%,transparent);color:var(--you)}
+.trail button.done{color:var(--muted)}
+.pips i.on{background:var(--you)}
+.pips i.seen{background:var(--muted)}
+tr.add td.no{background:color-mix(in srgb,var(--done) 16%,transparent);color:var(--done)}
+tr.del td.no{background:color-mix(in srgb,var(--tandem) 16%,transparent);color:var(--tandem)}
+tr.ctx.revealed td{animation:rowIn .3s var(--ease) both}
+.f-verdicts label:has(input:checked){background:var(--sunk)}
+tr.spot td.no{color:var(--you)}
+tr.spot.add td{background:color-mix(in srgb,var(--you) 9%,color-mix(in srgb,var(--done) 9%,transparent))}
+.dir[data-collapsed="true"] .dcount{opacity:1}
+.dir[data-collapsed="true"] .chev{transform:rotate(-90deg)}
+.dir[data-collapsed="true"] .dir-files{grid-template-rows:0fr}
+.tree-file.viewed .tick{background:var(--done);border-color:var(--done)}
+.file[data-expanded="false"] .file-head{border-bottom-color:transparent;border-radius:10px}
+.file[data-expanded="false"] .fold{transform:rotate(-90deg)}
+.file[data-expanded="false"] .drawer{grid-template-rows:0fr}
+.draft[data-state="approved"] .approve{background:color-mix(in srgb,var(--done) 22%,transparent);color:var(--done)}
+.draft[data-state="approved"] .state{color:var(--done)}
+.draft .state:not(:empty){font:500 11px/1 var(--mono);padding:3px 6px;border-radius:var(--rb);background:color-mix(in srgb,var(--you) 16%,transparent);color:var(--you)}
+.f-actions .primary:disabled{opacity:.5;cursor:default}
+body.rail-hidden .rail>*:not(.rail-open){display:none}
+body.rail-hidden .rail-open:hover{background:var(--line);color:var(--ink)}
+.trail button.now .ln{color:inherit;opacity:.7}
+.draft[data-edited] .by::after{content:" · edited by you"}
+tr[data-line]:not([data-line=""]) td.hook{cursor:pointer;position:relative}
+.f-verdicts label:has(input[value=approve]:checked) b{color:var(--done)}
+.f-verdicts label:has(input[value=request-changes]:checked) b{color:var(--tandem)}
+.dir[data-collapsed="true"] .dir-label .dot{display:block}
+.draft[data-state="skipped"] .state:not(:empty){background:var(--line);color:var(--faint)}
+.flow.picking .fbox:not(.picked){opacity:.45}
+tr[data-line]:not([data-line=""]):hover td.hook::after{content:"+";position:absolute;right:-10px;top:2px;width:18px;height:18px;line-height:18px;text-align:center;border-radius:var(--rb);background:var(--you);color:var(--bg);font-weight:700;z-index:1}
+.file.touring tr:not(.spot):not(.note):not(.gap) td{opacity:.4;transition:opacity .3s}
+#tour-draft:not(:empty){margin-top:8px}
+@media (max-width:1100px){
+.shell{--rail:210px;grid-template-columns:var(--rail) minmax(0,1fr)}
+body.rail-hidden .shell{--rail:44px}
+.review-toggle{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;white-space:nowrap}
+.review-pane{position:fixed;top:var(--mast);right:0;bottom:0;height:auto;width:min(360px,92vw);z-index:15;background:var(--bg);box-shadow:-16px 0 40px rgb(0 0 0 / .5);transform:translateX(100%);transition:transform .3s var(--ease)}
+body.review-open .review-pane{transform:none}
+}
+@media (max-width:1100px){
+.side-close{display:inline-flex}
+}
+@media (max-width:760px){
+.shell{grid-template-columns:minmax(0,1fr)}
+.rail{display:none}
+}
+</style>
+</head>
+<body>
+<header class="mast">
+<span class="tag">#{{number}}</span>
+<h1><button type="button" class="to-top" title="Back to top">{{prtitle}}</button></h1>
+<div class="mast-actions">
+<button type="button" class="link review-toggle" id="review-toggle">Suggestions <span class="num" id="review-count"></span></button>
+<button type="button" class="primary finish-btn" id="finish-open">Review changes <span class="badge num" id="finish-count">0</span></button>
+<a class="link gh" data-lavish-action href="{{prurl}}" target="_blank" rel="noopener" title="View on GitHub" aria-label="View on GitHub"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+</div>
+</header>
+
+<div class="shell">
+<nav class="rail">
+<button type="button" class="rail-open" id="rail-open" title="Show file list" aria-label="Show file list"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button>
+<div class="rail-head"><span class="num" style="white-space:nowrap"><b id="viewed-count">0</b>/{{filecount}} viewed</span><span class="rail-tools"><button type="button" id="dirs-toggle" title="Collapse all folders" aria-label="Collapse all folders"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l3 3 3-3M5 13l3-3 3 3"/></svg></button><button type="button" id="rail-toggle" title="Hide file list" aria-label="Hide file list"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2.5" width="12" height="11" rx="2"/><path d="M6 2.5v11"/></svg></button></span></div>
+{{tree}}
+</nav>
+
+<main class="mainpane" id="main">
+<div class="tabs" id="tabs" role="tablist"><span class="tab-ind" aria-hidden="true"></span>
+<button type="button" class="tab" role="tab" aria-selected="true" data-tab="overview">Overview</button>
+<button type="button" class="tab" role="tab" aria-selected="false" data-tab="changes">Changes<span>{{filecount}}</span></button>
+</div>
+
+<div class="view" id="overview">
+<section class="sec">
+<header class="sec-h"><span class="sec-n num">01</span><div><h2>Summary</h2><p class="sec-note">Scope and intent of the change.</p></div></header>
+{{summary}}
+</section>
+{{walkthrough}}
+</div>
+
+<div class="changes" id="changes" hidden>
+{{changes}}
+</div>
+<div class="tour" id="tour" hidden>
+<div class="tour-top"><span class="tour-ch" id="tour-ch"></span><button type="button" class="x" data-tour-exit title="Exit tour (Esc)">✕</button></div>
+<div class="trail" id="tour-trail"></div>
+<h3 id="tour-title">Tour</h3><p id="tour-body"></p><div id="tour-draft"></div>
+<div class="tour-nav"><button type="button" class="link" data-tour-step="-1">← Back</button><span class="num" id="tour-count"></span><span class="pips" id="tour-pips"></span><button type="button" class="primary" data-tour-step="1" id="tour-next">Next →</button></div>
+</div>
+</main>
+
+<aside class="review-pane">
+<div style="display:flex;justify-content:space-between;align-items:center"><h2>Tandem's suggestions</h2><button type="button" class="x side-close" id="side-close" title="Close">✕</button></div>
+<p class="sec-note">Tandem drafted these comments. Add the ones you agree with to your review. Nothing is posted until you submit it.</p>
+{{concerns}}
+<h3><span>Suggested comments</span><span class="num" id="draft-count"></span></h3>
+<div class="stack" id="side-drafts">{{sidedrafts}}</div>
+<h3 id="yours-h" hidden><span>Your comments</span></h3>
+<div class="stack" id="side-yours"></div>
+<div class="spacer-y"></div>
+<div class="post">
+<p class="post-status" id="post-status"></p>
+<div class="post-row"><button type="button" class="link" id="approve-all">Add all</button><button type="button" class="primary" data-finish>Finish your review</button></div>
+</div>
+</aside>
+</div>
+
+<dialog id="finish" class="finish" aria-modal="true">
+<form id="post-form" method="dialog">
+<h2>Finish your review</h2>
+<label class="f-label" for="f-summary">Summary comment <small>Posted as the review body. Edit freely.</small></label>
+<textarea id="f-summary" name="summary" rows="4">{{summarycomment}}</textarea>
+<fieldset class="f-verdicts">
+<label><input type="radio" name="verdict" value="comment" checked><span><b>Comment</b><small>Submit general feedback without explicit approval.</small></span></label>
+<label><input type="radio" name="verdict" value="approve"><span><b>Approve</b><small>Submit feedback and approve merging these changes.</small></span></label>
+<label><input type="radio" name="verdict" value="request-changes"><span><b>Request changes</b><small>Submit feedback that must be addressed before merging.</small></span></label>
+</fieldset>
+<p class="f-summary-line" id="f-what"></p>
+<p class="submit-note" id="submit-note" hidden></p>
+<div class="f-actions"><button type="button" class="link" data-finish-close>Cancel</button><button type="button" class="primary" id="submit-review">Submit review</button></div>
+<p class="post-note">Submitting posts this review to GitHub. This is the last step.</p>
+</form>
+</dialog>
+
+{{data}}
+<script>
+const DATA = JSON.parse(document.getElementById("page-data").textContent);
+const { tour: TOUR, chapters: CHAPTERS, near: NEAR, filesHref, pr: PR } = DATA;
+let FILES;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const md = (t) => esc(t).replace(/`([^`]+)`/g, "<code>$1</code>");
+const sectionOf = (path) => document.querySelector(`.file[data-path="${CSS.escape(path)}"]`);
+const treeBtn = (path) => document.querySelector(`.tree-file[data-open="${CSS.escape(path)}"]`);
+const draftCards = (id) => document.querySelectorAll(`[data-draft="${CSS.escape(id)}"]`);
+const mastHeight = () => $(".mast").offsetHeight;
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+function moveInd() {
+  const b = $('#tabs .tab[aria-selected="true"]'), ind = $("#tabs .tab-ind");
+  ind.style.width = `${b.offsetWidth}px`; ind.style.height = `${b.offsetHeight}px`;
+  ind.style.transform = `translate(${b.offsetLeft}px,${b.offsetTop}px)`;
+}
+function showTab(name) {
+  for (const t of document.querySelectorAll("#tabs .tab")) t.setAttribute("aria-selected", t.dataset.tab === name);
+  $("#overview").hidden = name !== "overview";
+  $("#changes").hidden = name !== "changes";
+  moveInd();
+}
+function setOpen(section, open) {
+  section.dataset.expanded = open;
+  section.querySelector(".fold").setAttribute("aria-expanded", open);
+}
+function markTree(path) {
+  for (const b of document.querySelectorAll(".tree-file")) b.classList.toggle("on", b.dataset.open === path);
+  const btn = treeBtn(path);
+  if (btn) btn.closest(".dir").dataset.collapsed = "false";
+}
+function openFile(path, line) {
+  const section = sectionOf(path);
+  if (!section) return;
+  showTab("changes");
+  setOpen(section, true);
+  markTree(path);
+  const row = line && document.getElementById(`${section.id}-L${line}`);
+  requestAnimationFrame(() => {
+    (row || section).scrollIntoView({ block: row ? "center" : "start", behavior: "smooth" });
+    if (row) { row.classList.remove("flash"); void row.offsetWidth; row.classList.add("flash"); }
+  });
+}
+
+// Lines past the embedded ones come from the data file beside the page, fetched once on first need.
+function loadFiles() {
+  return fetch(filesHref).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  });
+}
+const lineHtml = (path, i) => NEAR[path]?.[i] ?? FILES?.[path]?.[i - 1];
+function show(gap, n) {
+  const section = gap.closest(".file"), path = section.dataset.path;
+  let from = +gap.dataset.from, to = +gap.dataset.to;
+  const delta = +gap.dataset.delta, up = gap.dataset.dir === "up";
+  const a = up ? to - n + 1 : from, b = up ? to : from + n - 1;
+  const rows = [];
+  for (let i = a; i <= b; i++) rows.push(`<tr class="ctx revealed" id="${section.id}-L${i}" data-line="${i}"><td class="no">${i + delta}</td><td class="no">${i}</td><td class="code">${lineHtml(path, i) || " "}</td></tr>`);
+  gap.insertAdjacentHTML(up ? "afterend" : "beforebegin", rows.join(""));
+  if (up) to = a - 1; else from = b + 1;
+  if (to < from) return gap.remove();
+  gap.dataset.from = from; gap.dataset.to = to;
+  const left = to - from + 1;
+  gap.querySelector(".n").textContent = left;
+  gap.querySelector(".w").textContent = left === 1 ? "hidden line" : "hidden lines";
+}
+function toGithub(gap) {
+  const left = +gap.dataset.to - +gap.dataset.from + 1;
+  gap.innerHTML = `<td colspan="2"></td><td class="gap-label"><span class="n">${left}</span> more line${left === 1 ? "" : "s"} could not load · <a class="exp-all" data-lavish-action target="_blank" rel="noopener" href="${esc(PR.url)}/files">View file on GitHub ↗</a></td>`;
+  delete gap.dataset.from;
+}
+async function expand(gap, count) {
+  if (!gap.isConnected || gap.dataset.busy || !gap.dataset.from) return;
+  const path = gap.closest(".file").dataset.path, up = gap.dataset.dir === "up";
+  const from = +gap.dataset.from, to = +gap.dataset.to, left = to - from + 1;
+  const n = Math.min(count === "all" ? left : +count, left);
+  let have = 0;
+  for (let k = 0; k < n; k++) {
+    if (lineHtml(path, up ? to - k : from + k) === undefined) break;
+    have++;
+  }
+  if (have < n && !FILES) {
+    gap.dataset.busy = "1";
+    try { FILES = await loadFiles(); } catch {
+      delete gap.dataset.busy;
+      if (have > 0) show(gap, have);
+      if (gap.isConnected) toGithub(gap);
+      return;
+    }
+    delete gap.dataset.busy;
+  }
+  show(gap, n);
+}
+// Opens the gap rows a tour stop needs, nearest the hunk first.
+async function reveal(section, from, to) {
+  for (const gap of [...section.querySelectorAll("tr.gap")]) {
+    if (!gap.dataset.from) continue;
+    const gf = +gap.dataset.from, gt = +gap.dataset.to;
+    if (gf > to || gt < from) continue;
+    await expand(gap, gap.dataset.dir === "up" ? gt - Math.max(gf, from) + 1 : Math.min(gt, to) - gf + 1);
+  }
+}
+
+function setState(id, state) {
+  for (const c of draftCards(id)) {
+    c.dataset.state = state;
+    c.querySelector(".state").textContent = { approved: "Pending", skipped: "Dismissed", pending: "" }[state];
+    const add = c.querySelector(".approve"); if (add) add.textContent = state === "approved" ? "Added ✓" : "Add to review";
+  }
+  update();
+}
+const sideDrafts = () => [...document.querySelectorAll(".draft.side[data-draft]")];
+function update() {
+  const all = sideDrafts().length;
+  const added = sideDrafts().filter((c) => c.dataset.state === "approved").length;
+  const undecided = sideDrafts().filter((c) => c.dataset.state === "pending").length;
+  const yours = document.querySelectorAll("#side-yours .draft").length;
+  $("#draft-count").textContent = `${added} of ${all} added`;
+  $("#yours-h").hidden = yours === 0;
+  $("#review-count").textContent = `${added}/${all}`;
+  $("#finish-count").textContent = added + yours;
+  const n = added + yours;
+  $("#post-status").innerHTML = `<b>${plural(n, "comment", "comments")}</b> in your review${undecided ? ` · ${plural(undecided, "suggestion", "suggestions")} not reviewed yet` : ""}`;
+  $("#f-what").innerHTML = `<b>${plural(n, "line comment", "line comments")}</b> will post with the summary${undecided ? `. ${plural(undecided, "suggestion you haven't", "suggestions you haven't")} reviewed will be left out.` : "."}`;
+}
+const draftFooter = '<button type="button" class="link approve" data-act="approve">Add to review</button><button type="button" class="link" data-act="skip">Dismiss</button><button type="button" class="link" data-act="edit">Edit</button>';
+
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  const ts = t.closest("[data-tour]"); if (ts) return startTour(+ts.dataset.tour);
+  const step = t.closest("[data-tour-step]");
+  if (step) { const i = at + +step.dataset.tourStep; return i >= TOUR.length ? endTour() : startTour(Math.max(0, i)); }
+  if (t.closest("[data-tour-exit]")) return endTour();
+  if (t.closest("[data-pop-close]")) return closePop();
+  if (!t.closest("#pop") && !t.closest(".fbox")) closePop();
+  const box = t.closest(".fbox"); if (box) return pick(box);
+  const tab = t.closest("[data-tab]"); if (tab) { if (tab.dataset.tab === "overview") endTour(); return showTab(tab.dataset.tab); }
+  const dirBtn = t.closest(".dir-label");
+  if (dirBtn) { const d = dirBtn.closest(".dir"); d.dataset.collapsed = d.dataset.collapsed !== "true"; return syncDirs(); }
+  if (t.closest("#dirs-toggle")) { const open = anyDirOpen(); for (const d of document.querySelectorAll(".rail .dir")) d.dataset.collapsed = open; return syncDirs(); }
+  const tree = t.closest("[data-open]"); if (tree) return openFile(tree.dataset.open);
+  const fold = t.closest(".fold, [data-fold]");
+  if (fold) { const s = fold.closest(".file"); return setOpen(s, s.dataset.expanded !== "true"); }
+  const exp = t.closest("[data-expand]"); if (exp) return expand(exp.closest("tr.gap"), exp.dataset.expand);
+  const act = t.closest("[data-act]");
+  if (act) {
+    const card = act.closest(".draft");
+    if (card.dataset.draft && act.dataset.act === "edit") {
+      const box = Object.assign(document.createElement("textarea"), { value: card.dataset.body, name: "edit", ariaLabel: "Edit comment" });
+      card.querySelector("p").replaceWith(box);
+      card.querySelector("footer").innerHTML = '<button type="button" class="primary" data-act="save-edit">Save</button><button type="button" class="link" data-act="cancel-edit">Cancel</button>';
+      box.focus();
+      return;
+    }
+    if (card.dataset.draft && (act.dataset.act === "save-edit" || act.dataset.act === "cancel-edit")) {
+      const saved = act.dataset.act === "save-edit";
+      const text = saved ? card.querySelector("textarea").value.trim() || card.dataset.body : card.dataset.body;
+      for (const c of draftCards(card.dataset.draft)) {
+        c.dataset.body = text;
+        if (saved && text !== c.dataset.original) c.dataset.edited = "";
+        const p = Object.assign(document.createElement("p"), { innerHTML: md(text) });
+        (c.querySelector("textarea") || c.querySelector("p")).replaceWith(p);
+        c.querySelector("footer").innerHTML = draftFooter;
+      }
+      return saved ? setState(card.dataset.draft, "approved") : update();
+    }
+    if (card.dataset.draft) {
+      const next = act.dataset.act === "approve" ? "approved" : "skipped";
+      return setState(card.dataset.draft, card.dataset.state === next ? "pending" : next);
+    }
+    if (act.dataset.act === "save") {
+      const text = card.querySelector("textarea").value.trim(); if (!text) return;
+      card.querySelector("textarea").replaceWith(Object.assign(document.createElement("p"), { textContent: text }));
+      card.dataset.state = "approved"; card.dataset.body = text; card.querySelector("footer").remove();
+      card.querySelector(".state").textContent = "Pending";
+      const copy = card.cloneNode(true); copy.classList.replace("inline", "side");
+      $("#side-yours").append(copy);
+    } else card.closest("tr").remove();
+    return update();
+  }
+  const loc = t.closest("[data-file]"); if (loc) return openFile(loc.dataset.file, loc.dataset.line);
+  const hook = t.closest("td.hook");
+  if (hook) {
+    const row = hook.closest("tr");
+    const path = row.closest(".file").dataset.path;
+    const note = document.createElement("tr"); note.className = "note";
+    note.innerHTML = `<td colspan="3"><article class="draft inline yours"><header><span class="by"><i class="mark me">Y</i>You</span><button type="button" class="loc" data-file="${esc(path)}" data-line="${row.dataset.line}">${esc(path.split("/").pop())}:${row.dataset.line}</button><span class="state"></span></header><textarea name="comment" aria-label="Your comment" placeholder="Leave a comment"></textarea><footer><button type="button" class="primary" data-act="save">Add comment</button><button type="button" class="link" data-act="cancel">Cancel</button></footer></article></td>`;
+    row.after(note); note.querySelector("textarea").focus();
+  }
+});
+document.addEventListener("change", (e) => {
+  const p = e.target.dataset.viewed; if (!p) return;
+  const section = e.target.closest(".file");
+  setOpen(section, !e.target.checked);
+  treeBtn(p).classList.toggle("viewed", e.target.checked);
+  $("#viewed-count").textContent = document.querySelectorAll(".tree-file.viewed").length;
+  if (e.target.checked) {
+    scrollBy({ top: section.getBoundingClientRect().top - mastHeight() - 12, behavior: "smooth" });
+  }
+});
+$("#approve-all").onclick = () => { for (const c of sideDrafts()) setState(c.dataset.draft, "approved"); };
+const DIR_ICON = {
+  collapse: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l3 3 3-3M5 13l3-3 3 3"/></svg>',
+  expand: '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6l3-3 3 3M5 10l3 3 3-3"/></svg>',
+};
+const anyDirOpen = () => [...document.querySelectorAll(".rail .dir")].some((d) => d.dataset.collapsed !== "true");
+function syncDirs() {
+  const open = anyDirOpen(), b = $("#dirs-toggle"), label = open ? "Collapse all folders" : "Expand all folders";
+  b.innerHTML = open ? DIR_ICON.collapse : DIR_ICON.expand; b.title = label; b.setAttribute("aria-label", label);
+}
+$("#rail-toggle").onclick = () => document.body.classList.add("rail-hidden");
+$("#rail-open").onclick = () => document.body.classList.remove("rail-hidden");
+const drawerMode = matchMedia("(max-width:1100px)");
+const syncDrawer = () => { $(".review-pane").inert = drawerMode.matches && !document.body.classList.contains("review-open"); };
+const setDrawer = (open) => { document.body.classList.toggle("review-open", open); syncDrawer(); };
+drawerMode.addEventListener("change", syncDrawer);
+$("#review-toggle").onclick = () => setDrawer(!document.body.classList.contains("review-open"));
+
+const SUBMISSION_TAG = "tandem-pr-review";
+const lavishReady = () => !!window.lavish && typeof window.lavish.queuePrompt === "function" && typeof window.lavish.sendQueuedPrompts === "function";
+let sent = false;
+function syncSubmit() {
+  const note = $("#submit-note"), btn = $("#submit-review");
+  const text = sent ? "Review sent to Tandem. Check the chat for the result." : lavishReady() ? "" : "Open this page in Lavish to submit your review.";
+  note.hidden = !text; note.textContent = text; note.classList.toggle("sent", sent);
+  btn.disabled = sent || !lavishReady();
+}
+const setFinishing = (on) => { document.body.classList.toggle("finishing", on); for (const el of document.querySelectorAll(".mast, .shell")) el.inert = on; };
+$("#finish").addEventListener("close", () => setFinishing(false));
+const openFinish = () => { setDrawer(false); update(); syncSubmit(); setFinishing(true); $("#finish").show(); };
+$("#finish-open").onclick = openFinish;
+const LABEL = { comment: "Submit review", approve: "Approve and submit", "request-changes": "Request changes" };
+$("#post-form").addEventListener("change", () => { $("#submit-review").textContent = LABEL[new FormData($("#post-form")).get("verdict")]; });
+$(".to-top").onclick = () => scrollTo({ top: 0, behavior: scrollY > 3000 ? "instant" : "smooth" });
+document.addEventListener("click", (e) => { if (e.target.closest("[data-finish]")) openFinish(); if (e.target.closest("[data-finish-close]")) $("#finish").close(); });
+$("#side-close").onclick = () => setDrawer(false);
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("dialog, #finish-open, [data-finish]")) $("#finish").close();
+  if (document.body.classList.contains("review-open") && !e.target.closest(".review-pane, #review-toggle, dialog")) setDrawer(false);
+});
+function submission() {
+  const drafts = sideDrafts().map((c) => ({
+    id: c.dataset.draft,
+    decision: c.dataset.state === "approved" ? "post" : c.dataset.state === "skipped" ? "drop" : "undecided",
+    ...(c.hasAttribute("data-edited") ? { body: c.dataset.body } : {}),
+  }));
+  const yours = [...document.querySelectorAll("#side-yours .draft")].map((c) => {
+    const loc = c.querySelector(".loc");
+    return { file: loc.dataset.file, line: +loc.dataset.line, body: c.dataset.body };
+  });
+  return { tandemPrReview: 1, verdict: new FormData($("#post-form")).get("verdict"), summary: $("#f-summary").value.trim(), drafts, yours };
+}
+$("#submit-review").addEventListener("click", () => {
+  if (sent) return;
+  syncSubmit();
+  if (!lavishReady()) return;
+  try {
+    window.lavish.queuePrompt(JSON.stringify(submission()), { tag: SUBMISSION_TAG, queueKey: SUBMISSION_TAG, text: "Tandem review submission" });
+    window.lavish.sendQueuedPrompts();
+  } catch (error) {
+    const note = $("#submit-note");
+    note.hidden = false; note.textContent = error instanceof Error ? error.message : "Could not send the review. Try again.";
+    return;
+  }
+  sent = true;
+  $("#finish").close();
+  $("#finish-open").classList.add("sent"); $("#finish-open").firstChild.textContent = "Review sent ";
+  syncSubmit();
+});
+
+let at = -1, tourRun = 0;
+const seen = new Set();
+const letter = (c) => String.fromCharCode(65 + c);
+async function startTour(i) {
+  const st = TOUR[i];
+  if (!st) return;
+  const run = ++tourRun;
+  at = i; seen.add(i);
+  for (const f of document.querySelectorAll(".file.touring")) f.classList.remove("touring");
+  for (const r of document.querySelectorAll("tr.spot")) r.classList.remove("spot");
+  closePop();
+  showTab("changes");
+  const section = sectionOf(st.file);
+  if (section) { setOpen(section, true); markTree(st.file); await reveal(section, st.from, st.to); }
+  if (run !== tourRun) return;
+  let first = null;
+  if (section) {
+    section.classList.add("touring");
+    for (let n = st.from; n <= st.to; n++) {
+      const row = document.getElementById(`${section.id}-L${n}`);
+      if (row) { row.classList.add("spot"); first = first || row; }
+    }
+  }
+  const ch = CHAPTERS[st.chapter];
+  $("#tour").hidden = false;
+  $("#tour-ch").textContent = `${letter(st.chapter)} · ${ch.title}`;
+  const inCh = TOUR.map((s, k) => [s, k]).filter(([s]) => s.chapter === st.chapter);
+  $("#tour-trail").innerHTML = inCh.map(([s, k]) => `<button type="button" data-tour="${k}" class="${k === i ? "now" : seen.has(k) ? "done" : ""}">${esc(s.file.split("/").pop())}<span class="ln">:${s.from}</span></button>`).join('<span class="arrow">→</span>');
+  $("#tour-title").textContent = st.title;
+  $("#tour-body").innerHTML = md(st.body);
+  $("#tour-draft").innerHTML = st.hasDraft ? '<span class="has-draft"><i class="mark">T</i>Tandem left a comment on these lines</span>' : "";
+  $("#tour-count").textContent = `${i + 1} / ${TOUR.length}`;
+  $("#tour-pips").innerHTML = TOUR.map((_, k) => `<i class="${k === i ? "on" : seen.has(k) ? "seen" : ""}"></i>`).join("");
+  $("#tour-next").textContent = i === TOUR.length - 1 ? "Finish" : "Next →";
+  requestAnimationFrame(() => {
+    const target = first || section;
+    if (!target) return;
+    const top = mastHeight(), view = innerHeight - top;
+    scrollBy({ top: target.getBoundingClientRect().top - top - view * 0.22, behavior: "smooth" });
+  });
+}
+function endTour() {
+  at = -1; tourRun++;
+  $("#tour").hidden = true;
+  for (const f of document.querySelectorAll(".file.touring")) f.classList.remove("touring");
+  for (const r of document.querySelectorAll("tr.spot")) r.classList.remove("spot");
+}
+
+function pick(box) {
+  const ci = +box.dataset.chapter, file = box.dataset.file;
+  for (const b of document.querySelectorAll(".fbox")) b.classList.toggle("picked", b === box);
+  $(".flow").classList.add("picking");
+  const stops = TOUR.map((st, i) => [st, i]).filter(([st]) => st.chapter === ci && st.file === file);
+  const pop = $("#pop");
+  const stopRows = stops.map(([st, i]) => `<div class="pstop"><span class="stop-n num">${i + 1}</span><div><b>${esc(st.title)}</b><p>${md(st.body)}</p></div></div>`).join("");
+  pop.innerHTML = `<div class="pop-h"><div><span class="path">${esc(file)}</span><small>${letter(ci)} · ${esc(CHAPTERS[ci].title)}</small></div><button type="button" class="x" data-pop-close title="Close (Esc)">✕</button></div>${stopRows}<div class="pop-acts"><button type="button" class="primary" data-tour="${stops[0][1]}">Start tour here</button><button type="button" class="link" data-file="${esc(file)}" data-line="${stops[0][0].from}">Open code</button></div>`;
+  pop.hidden = false;
+  const area = $(".flow").getBoundingClientRect(), r = box.getBoundingClientRect();
+  const w = Math.min(380, area.width - 24);
+  pop.style.width = `${w}px`;
+  const left = Math.max(12, Math.min(r.left - area.left + r.width / 2 - w / 2, area.width - w - 12));
+  pop.style.left = `${left}px`;
+  pop.style.top = `${r.bottom - area.top + 10}px`;
+  pop.style.setProperty("--caret", `${r.left - area.left + r.width / 2 - left}px`);
+  pop.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function closePop() {
+  const pop = $("#pop"), flow = $(".flow");
+  if (!pop || !flow) return;
+  pop.hidden = true;
+  for (const b of document.querySelectorAll(".fbox")) b.classList.remove("picked");
+  flow.classList.remove("picking");
+}
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { setDrawer(false); $("#finish").close(); }
+  if (e.key === "Escape" && $("#pop") && !$("#pop").hidden) return closePop();
+  if (at < 0 || e.target.closest("textarea, input")) return;
+  if (e.key === "ArrowRight") { e.preventDefault(); at === TOUR.length - 1 ? endTour() : startTour(at + 1); }
+  if (e.key === "ArrowLeft") { e.preventDefault(); startTour(Math.max(0, at - 1)); }
+  if (e.key === "Escape") endTour();
+});
+addEventListener("resize", moveInd);
+const syncMast = () => document.body.style.setProperty("--mast", `${mastHeight()}px`);
+new ResizeObserver(syncMast).observe($(".mast"));
+syncMast();
+syncDrawer();
+moveInd();
+update();
+</script>
+</body>
+</html>

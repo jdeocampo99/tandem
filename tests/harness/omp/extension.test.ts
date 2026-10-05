@@ -131,6 +131,7 @@ test("extension binds services to a clean source while preserving original ident
     board: async () => ({ needsYou: [] }),
     writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
+    reviewPagesOpen: () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -194,6 +195,7 @@ test("before_agent_start exposes a blocked source refresh instead of silently pl
     board: async () => ({ needsYou: [] }),
     writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
+    reviewPagesOpen: () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -260,6 +262,7 @@ test("session shutdown waits for an interval reconciliation already in flight", 
     board: async () => ({ needsYou: [] }),
     writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
+    reviewPagesOpen: () => [],
   } as unknown as TandemService;
   const pi = {
     zod,
@@ -316,6 +319,7 @@ test("OMP delivers a wake's hidden identifiers first, then the shown prompt that
     board: async () => ({ needsYou: [] }),
     writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
+    reviewPagesOpen: () => [],
   } as unknown as TandemService;
   const pi = {
     zod,

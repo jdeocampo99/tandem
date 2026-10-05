@@ -48,6 +48,7 @@ function coordinatorDeps(
         }),
         investigationQuestions: async () => [],
         writeBoardSnapshot: async () => {},
+        reviewPagesOpen: () => [],
         ...service,
       }) as TandemService,
     realpath: async (path) => path,

@@ -152,12 +152,12 @@ const validRequests: readonly Record<string, unknown>[] = [
     clone: false,
   },
   { action: "review-show", taskId: "t", page: true },
-  { action: "review-notes", taskId: "t" },
   { action: "review-edit", taskId: "t" },
   {
     action: "review-edit",
     taskId: "t",
     comments: [{ id: "c1", body: "b", severity: "nit", drop: false }, { id: "c2" }],
+    add: [{ file: "src/a.ts", line: 3, body: "mine" }],
     summaryComment: "s",
   },
   { action: "review-post", taskId: "t", verdict: "request-changes" },
