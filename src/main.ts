@@ -5,6 +5,7 @@ import type { PanelFocus } from "./board/panel.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
 import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
+import { runCli } from "./cli.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -100,7 +101,7 @@ Usage:
                            --popup closes on Esc or after going somewhere
   tandem panel home|prev|next
                            Go to this project's chat, or the previous or next project
-  tandem welcome           Show the welcome message again
+  tandem action COMMAND    Run a native view action (open, brief-comment, brief-request-changes,\n                           brief-approve, pr-comment, restart, steer, review-submit)\n  tandem welcome           Show the welcome message again
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
@@ -806,6 +807,45 @@ export async function runTerminal(
 ): Promise<TerminalRunResult> {
   const { stdout, stderr } = createTerminalOutput(dependencies);
   try {
+    if (argv[0] === "action") {
+      const action = argv[1];
+      if (
+        action === undefined ||
+        ![
+          "open",
+          "brief-comment",
+          "brief-request-changes",
+          "brief-approve",
+          "pr-comment",
+          "restart",
+          "steer",
+          "review-submit",
+        ].includes(action)
+      ) {
+        throw new Error(
+          "tandem action requires open, brief-comment, brief-request-changes, brief-approve, pr-comment, restart, steer, or review-submit",
+        );
+      }
+      const result = await runCli(argv.slice(1), {
+        ...(dependencies.cwd === undefined ? {} : { cwd: dependencies.cwd }),
+        ...(dependencies.processEnvironment === undefined
+          ? {}
+          : { processEnvironment: dependencies.processEnvironment }),
+        ...(dependencies.run === undefined ? {} : { run: dependencies.run }),
+        ...(dependencies.terminal === undefined ? {} : { terminal: dependencies.terminal }),
+        ...(dependencies.service === undefined ? {} : { service: dependencies.service }),
+        ...(dependencies.createService === undefined
+          ? {}
+          : { createService: dependencies.createService }),
+        stdout,
+        stderr,
+      });
+      return {
+        exitCode: result.exitCode,
+        status: result.error === undefined ? "action" : "error",
+        ...(result.error === undefined ? {} : { error: result.error }),
+      };
+    }
     const invocation = parseTerminalArgs(argv);
     if (invocation.help) {
       stdout(HELP_TEXT);

@@ -36,9 +36,14 @@ src/requests/plain-language.ts
 
 ## Approval
 
-- An explicit, human-confirmed main-conversation decision recording request id, revision, content
-  digest, and agreement digest. Refused unless id, revision, and content digest match the current
-  draft, so it never carries to another revision or request.
+- An explicit, human-confirmed decision in the main conversation or an Approve click in the native
+  brief view records request id, revision, content digest, and agreement digest. The native click
+  is the user's confirmation, like Submit on the PR review page; it needs no second dialog or
+  `--yes`. `tandem action brief-approve REQUEST_ID --input FILE` requires `briefRevision`,
+  `contentDigest`, and `agreementDigest` copied from the displayed view. All must match the current
+  durable draft inside the approval compare-and-swap. A stale click records nothing and never
+  approves a revision the user did not see. Conversation approval still requires the exact id,
+  revision, and content digest, with the agreement digest recorded from that draft.
 - An agreement change makes approval non-current: dispatch is refused and running work is paused
   via ownership-safe pause until reapproval. Annotation-only edits keep approval current.
 - `brief-abandon` records `abandonedAt` when the user drops a request before approving it. Only a
@@ -87,3 +92,18 @@ src/requests/plain-language.ts
 - Pane failures never close an unrelated pane or lose the brief: SQLite keeps the record, history,
   and referring tasks, and the Markdown is rewritten regardless. A pane receipt never changes a task
   stage or scope approval.
+
+## Native brief feedback
+
+- `tandem action brief-comment REQUEST_ID --input FILE` and `brief-request-changes` carry the
+  displayed `briefRevision`, `contentDigest`, and `agreementDigest`, plus optional overall `text`
+  and `comments: [{line, text}]`. Lines are one-based in the rendered brief Markdown. At least
+  one comment is required; there are at most 100 comments and 64,000 bytes of feedback.
+- Feedback names the revision the user saw. A preserved older revision is accepted only with its
+  matching digests and valid line anchors. It reaches the ownership-proven running coordinator as
+  user input prefixed with "From the open review page:", with the request, revision, quoted lines,
+  and comments. It never changes or approves the brief itself.
+- Request changes retires the owned brief projection after delivery, only while it still shows
+  that revision. A later revision stays open. Approval retires its projection through the existing
+  ownership-safe workflow and prompts the coordinator to continue the conversation. If that
+  notification fails after approval was recorded, the action returns the approval and a warning.

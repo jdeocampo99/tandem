@@ -409,6 +409,10 @@ export type TandemService = Readonly<{
   readonly approve: (id: string) => Promise<TaskRecord>;
   readonly draftRequestBrief: (input: DraftRequestBriefInput) => Promise<RequestBriefView>;
   readonly reviewRequestBrief: (requestId: string) => Promise<RequestBriefView>;
+  readonly closeRequestBriefReview: (
+    requestId: string,
+    briefRevision: number,
+  ) => Promise<RequestBriefView>;
   readonly approveRequestBrief: (intent: ApproveRequestBriefInput) => Promise<RequestBriefView>;
   /** Drops a request whose brief was never approved, so it stops awaiting approval. */
   readonly abandonRequestBrief: (requestId: string) => Promise<RequestBriefView>;
@@ -945,6 +949,8 @@ class TandemController {
       approve: (id) => this.approve(id),
       draftRequestBrief: (input) => this.draftRequestBrief(input),
       reviewRequestBrief: (requestId) => this.#requests.review(requestId),
+      closeRequestBriefReview: (requestId, briefRevision) =>
+        this.#requests.closeReview(requestId, briefRevision),
       approveRequestBrief: (intent) => this.approveRequestBrief(intent),
       abandonRequestBrief: (requestId) => this.#requests.abandon(requestId),
       pendingBriefApprovalId: () => this.#requests.pendingApprovalId(),

@@ -29,6 +29,12 @@ const MERGE_METHODS: Readonly<Record<MergeMethod, true>> = {
   rebase: true,
 };
 const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
+  "brief-comment": "brief-comment",
+  "brief-request-changes": "brief-request-changes",
+  "brief-approve": "brief-approve",
+  "pr-comment": "pr-comment",
+  open: "open",
+  "review-submit": "review-submit",
   launch: "launch",
   restart: "restart",
   models: "models",
@@ -67,6 +73,12 @@ const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
   merge: "merge",
 };
 const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
+  "brief-comment": 1,
+  "brief-request-changes": 1,
+  "brief-approve": 1,
+  "pr-comment": 1,
+  open: 2,
+  "review-submit": 1,
   launch: 0,
   restart: 1,
   models: 0,
@@ -102,6 +114,12 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
 export type MergeMethod = "merge" | "squash" | "rebase";
 
 export type CliCommand =
+  | "brief-comment"
+  | "brief-request-changes"
+  | "brief-approve"
+  | "pr-comment"
+  | "open"
+  | "review-submit"
   | "launch"
   | "restart"
   | "models"

@@ -45,6 +45,14 @@ import {
   waitForWatchDelay,
 } from "./cli-process.ts";
 
+import {
+  approveViewedBrief,
+  commentOnBrief,
+  commentOnPr,
+  openView,
+  submitReview,
+} from "./cli-view-actions.ts";
+
 const DEFAULT_WATCH_INTERVAL_MS = 2_000;
 
 /** Process capabilities the command handlers may use; each is injectable by the application. */
@@ -245,6 +253,12 @@ async function watch(context: CliCommandContext): Promise<CliCommandOutcome> {
 }
 
 const CLI_COMMAND_HANDLERS: Readonly<Record<CliCommand, CliCommandHandler>> = {
+  "brief-comment": (context) => commentOnBrief(context, false),
+  "brief-request-changes": (context) => commentOnBrief(context, true),
+  "brief-approve": approveViewedBrief,
+  "pr-comment": commentOnPr,
+  "review-submit": submitReview,
+  open: openView,
   launch,
   restart: async ({ invocation, service }) => ({
     value: await service().restart(taskIdFor(invocation)),

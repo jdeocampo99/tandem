@@ -54,6 +54,7 @@ export type ApproveRequestBriefInput = Readonly<{
   readonly requestId?: string;
   readonly briefRevision: number;
   readonly contentDigest: string;
+  readonly agreementDigest?: string;
 }>;
 
 export type DraftRequestBriefInput = Readonly<{
@@ -118,11 +119,7 @@ export class RequestBriefWorkflow {
     const requestId = intent.requestId ?? (await this.pendingApprovalId());
     const current = await this.#require(requestId);
     const approved = await this.#deps.store.update(current.id, current.revision, (record) =>
-      approveRequestBriefRecord(
-        record,
-        { requestId, briefRevision: intent.briefRevision, contentDigest: intent.contentDigest },
-        this.#deps.clock(),
-      ),
+      approveRequestBriefRecord(record, { ...intent, requestId }, this.#deps.clock()),
     );
     const pane = await closeRequestBriefPane(this.#paneDependencies(), approved);
     if (pane === undefined) return this.#view(approved, []);
@@ -146,6 +143,18 @@ export class RequestBriefWorkflow {
     const pane = await closeRequestBriefPane(this.#paneDependencies(), abandoned);
     if (pane === undefined) return this.#view(abandoned, []);
     const settled = await this.#deps.store.update(abandoned.id, abandoned.revision, (record) =>
+      withRequestReviewPane(record, pane, this.#deps.clock()),
+    );
+    return this.#view(settled, []);
+  }
+
+  /** Retires an owned review projection after feedback, without approving or changing the draft. */
+  async closeReview(requestId: string, briefRevision: number): Promise<RequestBriefView> {
+    const current = await this.#require(requestId);
+    if (current.draft.revision !== briefRevision) return this.#view(current, []);
+    const pane = await closeRequestBriefPane(this.#paneDependencies(), current);
+    if (pane === undefined) return this.#view(current, []);
+    const settled = await this.#deps.store.update(current.id, current.revision, (record) =>
       withRequestReviewPane(record, pane, this.#deps.clock()),
     );
     return this.#view(settled, []);

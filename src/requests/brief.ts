@@ -26,6 +26,7 @@ export type RequestBriefErrorCode =
   | "request-mismatch"
   | "stale-revision"
   | "stale-content"
+  | "stale-agreement"
   | "no-pending-approval"
   | "ambiguous-pending-approval"
   | "ambiguous-open-request"
@@ -52,6 +53,8 @@ export type RequestApprovalIntent = Readonly<{
   readonly requestId: string;
   readonly briefRevision: number;
   readonly contentDigest: string;
+  /** Native views also carry the agreement digest they displayed. */
+  readonly agreementDigest?: string;
 }>;
 
 /** Whether work may be dispatched under this request right now. */
@@ -270,6 +273,16 @@ export function approveRequestBriefRecord(
     throw new RequestBriefError(
       "stale-content",
       `Approval carries content digest ${JSON.stringify(intent.contentDigest)}, which is not the digest of revision ${record.draft.revision}`,
+      record.id,
+    );
+  }
+  if (
+    intent.agreementDigest !== undefined &&
+    intent.agreementDigest !== record.draft.agreementDigest
+  ) {
+    throw new RequestBriefError(
+      "stale-agreement",
+      "Approval carries a different agreement digest",
       record.id,
     );
   }

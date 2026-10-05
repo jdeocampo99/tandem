@@ -132,3 +132,27 @@ lives in `approvalPrompt` in src/session/actions.ts.
   other failures exit `1`.
 - Extension-side consent (live TUI confirmation) is in
   [OMP extension](omp-extension.md#tool-and-command-contract).
+
+## Native view actions
+
+Every native click invokes `tandem action COMMAND`. The view never edits durable state. The same
+commands are also available in the advanced action CLI (`bun src/cli.ts`).
+
+- `open task|brief|pr ID` validates the durable task or request, proves its running coordinator,
+  and asks `TerminalBackend.openView` to replace the main area (task) or open a split (brief/PR).
+  For `pr`, ID is the linked task id, including a `pr-review` task. Herdr opens briefs through the
+  existing review workflow and returns explicit warnings for unsupported native task/PR views.
+- Brief comment, request-changes, and approval use the revision-bound paths in
+  [request-briefs.md](request-briefs.md#native-brief-feedback).
+- `pr-comment TASK_ID --text TEXT` sends an in-scope fix request to the implementation task's
+  worker through `steer`. Only a task with an open or draft Tandem PR accepts it. It never posts a
+  GitHub comment, changes scope approval, publishes, or merges. `--input FILE` instead of `--text`
+  accepts optional `text` and `comments: [{file, line, text}]`; anchors stay in the worker message.
+  Comments are joined into one direction under the existing steering bounds.
+- `restart TASK_ID` uses central recovery; `steer --task TASK_ID --text TEXT` uses the existing
+  message path. These actions do not implement a second recovery or messaging mechanism.
+- `review-submit TASK_ID --input FILE` parses the same `ReviewSubmission` as the review page,
+  then calls the existing submit service. The click is confirmation; pinned-head refusal and
+  duplicate-post prevention remain in that service. Plain comments never become submissions.
+- The native action namespace does not expose publication or merge commands. Publishing, merging,
+  deployment, and destructive operations retain their separate conversation approvals.
