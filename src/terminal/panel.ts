@@ -1,13 +1,15 @@
 import {
   focusedProject,
   type HerdrFocus,
+  type PanelActivity,
   type PanelRow,
+  type PanelStep,
   type PanelTarget,
   type PanelView,
   panelView,
 } from "../board/panel.ts";
 import type { BoardSnapshot, PanelCoordinator } from "../board/snapshot.ts";
-import { draw, fit, type Line, lineWidth, span, type Tone } from "../board/terminal.ts";
+import { draw, fit, fitStart, type Line, lineWidth, span, type Tone } from "../board/terminal.ts";
 import type { CommandRunner } from "../contracts.ts";
 
 export type PanelInput =
@@ -29,6 +31,8 @@ export type PanelState = Readonly<{
   readonly help: boolean;
   /** Why the last go or switch did not get there; the next key clears it. */
   readonly notice?: string;
+  /** Keys of the rows whose step checklist is showing. */
+  readonly expanded: ReadonlySet<string>;
   readonly lastClick?: Readonly<{ key: string; at: number }>;
 }>;
 
@@ -56,8 +60,18 @@ const REFRESH_MS = 1_000;
 /** How long a lone Esc waits for the rest of an escape sequence split across reads. */
 const ESCAPE_WAIT_MS = 50;
 const PANEL_WIDTH = 46;
-const HELP = ["j k ↑ ↓ move · Enter go · / search", "1-9 [ ] project · Esc close · x hide"];
+const HELP = [
+  "j k ↑ ↓ move · Enter go · / search",
+  "Space steps · 1-9 [ ] project",
+  "Esc close · x hide",
+];
 const NO_COORDINATOR = "⚠ no coordinator is open for that project";
+const STEP_MARKS: Readonly<Record<PanelStep["status"], string>> = {
+  done: "☑",
+  doing: "▸",
+  todo: "☐",
+  dropped: "☒",
+};
 
 /**
  * Splits raw terminal input into keys, left clicks (SGR mouse), and focus changes. An escape
@@ -163,6 +177,7 @@ export function panelStep(
     if (key === "up" || key === "k") return move(-1);
     if (key === "enter") return go(rows[index]);
     if (state.query !== undefined) return { state };
+    if (key === " ") return { state: toggleSteps(state, rows[index]) };
     if (key === "/") return { state: { ...state, query: "" } };
     if (key === "escape") return frame.popup ? { state, effect: { kind: "close" } } : { state };
     if (/^[1-9]$/u.test(key)) return switchTo(chips[Number(key) - 1]?.repoPath);
@@ -174,6 +189,13 @@ export function panelStep(
   })();
   const { notice: _cleared, ...rest } = step.state;
   return { ...step, state: { ...rest, help: false } };
+}
+
+function toggleSteps(state: PanelState, row: PanelRow | undefined): PanelState {
+  if (row?.steps === undefined) return state;
+  const expanded = new Set(state.expanded);
+  if (!expanded.delete(row.key)) expanded.add(row.key);
+  return { ...state, expanded };
 }
 
 /**
@@ -320,7 +342,12 @@ export function renderPanel(
     for (const row of section.rows) {
       const first = body.length;
       body.push(rowLine(row, row.key === selected, style.width));
-      for (const text of row.lines.slice(0, 2)) body.push([span(`    ${text}`, "dim")]);
+      body.push(...rowDetails(row, style.width));
+      if (row.steps !== undefined && state.expanded.has(row.key)) {
+        for (const step of row.steps) {
+          body.push([span(`      ${STEP_MARKS[step.status]} ${step.text}`, "dim")]);
+        }
+      }
       spans.push({ key: row.key, first, last: body.length - 1 });
     }
     body.push([]);
@@ -375,6 +402,22 @@ function rowLine(row: PanelRow, selected: boolean, width: number): Line {
   return [...lead, ...name, gap, stage];
 }
 
+/** The row's second lines and its tool line, at most two together. */
+function rowDetails(row: PanelRow, width: number): Line[] {
+  const details: Line[] = row.lines.map((text) => [span(`    ${text}`, "dim")]);
+  if (row.activity !== undefined) details.push(activityLine(row.activity, width));
+  return details.slice(0, 2);
+}
+
+function activityLine(activity: PanelActivity, width: number): Line {
+  const lead = `    ▸ ${activity.verb}`;
+  const tail = activity.age === undefined ? "" : ` · ${activity.age}`;
+  const room = width - lineWidth([span(`${lead} ${tail}`)]);
+  const target =
+    activity.target === undefined || room < 2 ? "" : ` ${fitStart(activity.target, room)}`;
+  return [span(`${lead}${target}${tail}`, "dim")];
+}
+
 export type PanelDeps = Readonly<{
   readonly input: NodeJS.ReadableStream;
   readonly write: (text: string) => void;
@@ -414,6 +457,7 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
     selected: undefined,
     seen: undefined,
     help: deps.helpUnseen,
+    expanded: new Set(),
   };
   const refresh = async () => {
     try {

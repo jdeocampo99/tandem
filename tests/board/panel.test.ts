@@ -3,6 +3,7 @@ import { panelProject, panelView } from "../../src/board/panel.ts";
 import type { BoardSnapshot } from "../../src/board/snapshot.ts";
 import { type BoardState, boardView } from "../../src/board/view.ts";
 import { createRequestBriefRecord } from "../../src/requests/brief.ts";
+import type { WorkerActivity } from "../../src/workers/worker-activity.ts";
 import { task } from "../session/fixtures.ts";
 import { content, NOW, state, watch } from "./fixtures.ts";
 
@@ -297,4 +298,70 @@ test("the panel's project is the longest project path holding the directory", ()
   expect(panelProject(paths, "/work/app/packages/ui/src")).toBe("/work/app/packages/ui");
   expect(panelProject(paths, "/work/app")).toBe("/work/app");
   expect(panelProject(paths, "/work/apple")).toBe("/work/app");
+});
+
+test("running rows show the current step, then the tool, its target, and how long it has run", () => {
+  const todos = [
+    { content: "Read the brief", status: "completed" },
+    { content: "Write the test", status: "in_progress" },
+    { content: "Drop the shim", status: "abandoned" },
+    { content: "Make it pass", status: "pending" },
+  ];
+  const running = (id: string, stage: "implementing" | "scouting" | "reviewing") =>
+    task({ id, repoPath: APP, stage, objective: id, createdAt: "2030-01-01T11:48:00.000Z" });
+  const tool = (name: string, toolTarget: string) => ({
+    tool: name,
+    toolTarget,
+    toolStartedAt: "2030-01-01T11:59:56.000Z",
+  });
+  const view = panelView(
+    snapshot({
+      tasks: [
+        running("impl-edit", "implementing"),
+        running("impl-thinking", "implementing"),
+        running("impl-bare", "implementing"),
+        running("research-read", "scouting"),
+        running("research-thinking", "scouting"),
+        running("review-search", "reviewing"),
+      ],
+      activities: new Map<string, WorkerActivity>([
+        ["impl-edit", { ...tool("Edit", "src/auth/session.ts"), todos }],
+        ["impl-thinking", { todos }],
+        ["research-read", tool("read", "docs/reference/recovery.md")],
+        ["research-thinking", {}],
+        ["review-search", tool("mcp__docs__lookup", "auth")],
+      ]),
+    }),
+    { project: APP, query: "", now: NOW, readFailed: false },
+  );
+  const rows = Object.fromEntries(
+    (view.sections.find((section) => section.title === "Running")?.rows ?? []).map((row) => [
+      row.name,
+      { lines: row.lines, activity: row.activity, steps: row.steps?.map((step) => step.status) },
+    ]),
+  );
+  expect(rows).toEqual({
+    "impl-edit": {
+      lines: ["Write the test"],
+      activity: { verb: "edit", target: "src/auth/session.ts", age: "4s" },
+      steps: ["done", "doing", "dropped", "todo"],
+    },
+    "impl-thinking": {
+      lines: ["Write the test"],
+      activity: undefined,
+      steps: ["done", "doing", "dropped", "todo"],
+    },
+    "impl-bare": { lines: ["for 12m"], activity: undefined, steps: undefined },
+    "research-read": {
+      lines: [],
+      activity: { verb: "read", target: "docs/reference/recovery.md", age: "4s" },
+      steps: undefined,
+    },
+    "research-thinking": { lines: ["for 12m"], activity: undefined, steps: undefined },
+    "review-search": {
+      lines: [],
+      activity: { verb: "mcp__docs__lookup", target: "auth", age: "4s" },
+      steps: undefined,
+    },
+  });
 });

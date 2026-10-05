@@ -20,6 +20,7 @@ import {
   writeWorkerTerminal,
   writeWorkerTokenTally,
 } from "../workers/terminal.ts";
+import { writeWorkerActivity } from "../workers/worker-activity.ts";
 
 /**
  * Worker setup both adapters share: the job a worker process runs, its `WorkerSession`, and its
@@ -163,6 +164,7 @@ export async function openWorkerSteering(
     config,
     readInbox: () => readTaskInbox(config.inboxPath),
     writeReceipt: (receipt) => writeWorkerReceipt(config.receiptPath, receipt),
+    writeActivity: (activity) => writeWorkerActivity(config.receiptPath, activity),
     trace: harness.trace,
     delivery: harness.delivery,
   });

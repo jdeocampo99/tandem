@@ -1,4 +1,5 @@
 import type { TaskInbox, WorkerReceipt } from "../contracts.ts";
+import type { TodoItem } from "../playbooks/progress.ts";
 import {
   formatTaskMessages,
   markersFromText,
@@ -8,9 +9,16 @@ import {
   atLeastAsNewBatch,
   inboxMessageBatch,
   type ReceiptActivity,
+  toolName,
   touchedReceipt,
   type WorkerControlConfig,
 } from "../workers/control-protocol.ts";
+import {
+  type ActivityObservation,
+  type ActivityTool,
+  nextWorkerActivity,
+  type WorkerActivity,
+} from "../workers/worker-activity.ts";
 import type { ReplyFor, SessionDeps, SessionEvent, SessionHost } from "./events.ts";
 
 /**
@@ -29,6 +37,8 @@ export type WorkerSteeringDeps = Pick<SessionDeps, "clock" | "timers"> &
     /** The task inbox at `config.inboxPath`, or undefined when there is none. */
     readInbox(): Promise<TaskInbox | undefined>;
     writeReceipt(receipt: WorkerReceipt): Promise<void>;
+    /** Display only; a failed write is traced and never stops the worker. */
+    writeActivity(activity: WorkerActivity): Promise<void>;
     trace(event: string, detail?: Readonly<Record<string, unknown>>): void;
   }>;
 
@@ -68,6 +78,8 @@ export class WorkerSteering {
   private writeQueue = Promise.resolve();
   private pollInFlight = false;
   private retainedBatch: TaskMessageBatch | undefined;
+  private activity: WorkerActivity = {};
+  private activityWrites = Promise.resolve();
 
   private constructor(
     private readonly deps: WorkerSteeringDeps,
@@ -93,7 +105,10 @@ export class WorkerSteering {
       phase: "starting",
     };
     await deps.writeReceipt(receipt);
-    return new WorkerSteering(deps, receipt);
+    const steering = new WorkerSteering(deps, receipt);
+    // A restarted job reuses its directory, so the last run's tool line is cleared first.
+    steering.writeActivity({});
+    return steering;
   }
 
   /** The task whose inbox steers this worker. */
@@ -102,8 +117,15 @@ export class WorkerSteering {
   }
 
   /** Records harness activity; a failed receipt write aborts the worker. */
-  recordActivity(phase: WorkerReceipt["phase"], tool?: string): void {
-    void this.touch({ phase, tool, meaningful: true }).catch((error) => this.fail(error));
+  recordActivity(
+    phase: WorkerReceipt["phase"],
+    tool?: ActivityTool,
+    todos?: readonly TodoItem[],
+  ): void {
+    void this.touch({ phase, tool: toolName(tool?.name), meaningful: true }).catch((error) =>
+      this.fail(error),
+    );
+    this.showActivity({ phase, tool, todos });
   }
 
   async onSessionStart(): Promise<void> {
@@ -280,6 +302,22 @@ export class WorkerSteering {
   private async touch(activity: ReceiptActivity, force = false): Promise<void> {
     const touched = touchedReceipt(this.receipt, activity, isoNow(this.deps.clock));
     await this.persist(touched.receipt, force || touched.changed);
+  }
+
+  private showActivity(observation: ActivityObservation): void {
+    if (this.stopped) return;
+    const next = nextWorkerActivity(this.activity, observation, isoNow(this.deps.clock));
+    if (!next.changed) return;
+    this.activity = next.activity;
+    this.writeActivity(next.activity);
+  }
+
+  private writeActivity(activity: WorkerActivity): void {
+    this.activityWrites = this.activityWrites
+      .then(() => this.deps.writeActivity(activity))
+      .catch((error: unknown) =>
+        this.deps.trace("worker_activity_write_failed", { error: String(error) }),
+      );
   }
 
   private async observeInbox(): Promise<void> {

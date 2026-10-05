@@ -8,6 +8,7 @@ import { isTerminalTask } from "../service/records.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
 import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from "../tasks/trace.ts";
 import { raisedRoutingPause, routingPauseExplanation } from "../workers/execution-routing.ts";
+import type { WorkerActivity } from "../workers/worker-activity.ts";
 
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
@@ -38,6 +39,8 @@ export type BoardState = Readonly<{
   readonly finishedThisWeek: readonly TaskRollup[];
   /** Task id to when its worker last made progress; tasks without a receipt are absent. */
   readonly progressAt: ReadonlyMap<string, IsoTimestamp>;
+  /** Task id to what its primary worker is doing, for display; tasks without it are absent. */
+  readonly activities: ReadonlyMap<string, WorkerActivity>;
   /** Task id to the pane of its live primary worker; tasks without one are absent. */
   readonly workerPanes: ReadonlyMap<string, WorkerPane>;
 }>;
@@ -165,7 +168,8 @@ function isRunningBoardRow(value: unknown): value is RunningBoardRow {
     typeof row.repoPath === "string" &&
     typeof row.taskId === "string" &&
     typeof row.since === "string" &&
-    (row.worker === undefined || isWorkerPane(row.worker))
+    (row.worker === undefined || isWorkerPane(row.worker)) &&
+    (row.activity === undefined || recordOf(row.activity) !== undefined)
   );
 }
 
@@ -243,6 +247,7 @@ export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "taskId" | "
     taskId: string;
     since: string;
     worker?: WorkerPane;
+    activity?: WorkerActivity;
   }>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -295,9 +300,7 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
     ],
     running: live
       .filter((task): task is RunningTaskRecord => !needsYou(task) && isRunningStage(task.stage))
-      .map((task) =>
-        runningRow(task, now, state.progressAt.get(task.id), state.workerPanes.get(task.id)),
-      ),
+      .map((task) => runningRow(task, now, state, state.workerPanes.get(task.id))),
     pullRequests: pullRequests.rows
       .filter((row) => row.color !== "red")
       .map((row) => {
@@ -522,10 +525,12 @@ function taskNeedsYouRow(
 function runningRow(
   task: RunningTaskRecord,
   now: IsoTimestamp,
-  progressAt: IsoTimestamp | undefined,
+  state: Pick<BoardState, "progressAt" | "activities">,
   worker: WorkerPane | undefined,
 ): RunningBoardRow {
   const { mark, label } = RUNNING_LABELS[task.stage];
+  const progressAt = state.progressAt.get(task.id);
+  const activity = state.activities.get(task.id);
   return {
     key: `task:${task.id}:${task.stage}`,
     cause: task.stage,
@@ -538,6 +543,7 @@ function runningRow(
       progressAt !== undefined && Date.parse(now) - Date.parse(progressAt) > IDLE_MS
         ? `idle ${elapsed(progressAt, now)}`
         : elapsed(task.createdAt, now),
+    ...(activity === undefined ? {} : { activity }),
   };
 }
 

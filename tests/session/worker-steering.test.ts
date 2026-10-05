@@ -55,6 +55,7 @@ function steeringDeps(overrides: Partial<WorkerSteeringDeps> = {}) {
       }
       writes.push(receipt);
     },
+    writeActivity: async () => {},
     trace: () => {},
     delivery: "context",
     ...overrides,
@@ -154,7 +155,7 @@ test("a failed receipt write aborts the worker and stops steering", async () => 
   const writes = fixture.writes.length;
   expect(await steering.onContextBuild(undefined)).toEqual({});
   expect(await steering.onStopRequested(false)).toEqual({});
-  steering.recordActivity("tool", "bash");
+  steering.recordActivity("tool", { name: "bash" });
   await settle();
   expect(fixture.writes).toHaveLength(writes + 1);
 });
@@ -173,7 +174,7 @@ test("receipt writes run one at a time, in order, and heartbeats write at most o
     },
   });
   const steering = await WorkerSteering.open(fixture.deps);
-  steering.recordActivity("tool", "bash");
+  steering.recordActivity("tool", { name: "bash" });
   steering.recordActivity("idle");
   await settle();
   expect(order).toEqual(["start starting", "end starting", "start idle"]);

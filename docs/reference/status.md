@@ -215,11 +215,21 @@ tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
 - Running rows use the stage words `tandem status` uses. Second lines: a block's reason, the
   question, `waiting for a free worktree` (queued), `paused by you`, `for 12m` or `idle 42m`, the
   PR's watch note.
-- Keys: `j`/`k`/arrows move, `Enter` goes, `/` searches, `1`-`9` and `[` `]` switch project, `Esc`
-  closes a `--popup` or clears a search, Ctrl-C closes. Clicking a chip switches; clicking a row
-  selects it; double-clicking goes. The selection follows its task across stage changes. A key
-  help box shows until `x` or the first key, remembered by `<home>/panel-keys-seen`. An escape
-  sequence split across reads waits 50ms for its rest before it counts as `Esc`.
+- A running row whose worker is in a tool also shows `▸ <verb> <target> · <age>`, like
+  `▸ edit src/auth/session.ts · 4s`, from the primary worker's display-only activity file (see
+  [control.md](control.md#message-receipts)). Verbs are plain for both harnesses' tool names
+  (`read`, `edit`, `write`, `run`, `search`); any other tool shows its lowercased name. The age
+  runs from the tool's start to the snapshot's time. A target too wide for the panel is cut from
+  the left with `…`, so the file name stays. An implementing row puts its current step first: the
+  to-do in progress, else the next pending one. Other running rows show only the tool line while
+  a tool runs. `idle 42m` replaces the step; a row never shows more than two lines.
+- Keys: `j`/`k`/arrows move, `Enter` goes, `Space` shows or hides the selected running row's step
+  checklist (`☑` done, `▸` in progress, `☐` to do, `☒` dropped), `/` searches, `1`-`9` and `[` `]`
+  switch project, `Esc` closes a `--popup` or clears a search, Ctrl-C closes. Clicking a chip
+  switches; clicking a row selects it; double-clicking goes. The selection follows its task across
+  stage changes. A key help box shows until `x` or the first key, remembered by
+  `<home>/panel-keys-seen`. An escape sequence split across reads waits 50ms for its rest before
+  it counts as `Esc`.
 - When the rows are taller than the terminal, they scroll to keep the selection in sight; the
   chips, summary, and footer stay put.
 - Going: Needs you and Done rows focus the project's coordinator, running rows with a live
