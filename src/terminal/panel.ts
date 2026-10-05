@@ -11,6 +11,7 @@ import {
 import type { BoardSnapshot, PanelCoordinator } from "../board/snapshot.ts";
 import { draw, fit, fitStart, type Line, lineWidth, span, type Tone } from "../board/terminal.ts";
 import type { CommandRunner } from "../contracts.ts";
+import { isRecord } from "../coordinator/record.ts";
 
 export type PanelInput =
   | Readonly<{ kind: "up" | "down" | "enter" | "escape" | "backspace" | "interrupt" }>
@@ -198,6 +199,103 @@ function toggleSteps(state: PanelState, row: PanelRow | undefined): PanelState {
   const expanded = new Set(state.expanded);
   if (!expanded.delete(row.key)) expanded.add(row.key);
   return { ...state, expanded };
+}
+
+/** A move of the border left of the panel, as a fraction of the split's width. */
+export type PanelResize = Readonly<{
+  /** The window width this fit is for; the panel refits only once it changes. */
+  readonly areaWidth: number;
+  readonly direction: "left" | "right";
+  /** 0 when the panel already fits. */
+  readonly amount: number;
+}>;
+
+type Rect = Readonly<{ x: number; y: number; width: number; height: number }>;
+
+function rect(value: unknown): Rect | undefined {
+  if (!isRecord(value)) return undefined;
+  const { x, y, width, height } = value;
+  return typeof x === "number" &&
+    typeof y === "number" &&
+    typeof width === "number" &&
+    typeof height === "number"
+    ? { x, y, width, height }
+    : undefined;
+}
+
+function records(value: unknown): readonly Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+/**
+ * How to bring the panel back to `PANEL_WIDTH` columns, from `herdr pane layout`, or undefined to
+ * leave it alone. Herdr splits keep a ratio, so the panel refits whenever the window width
+ * changes (a client attaches or the terminal resizes) and never when only the border moved, which
+ * is the user dragging it. It never takes more than half its split.
+ */
+export function panelResize(
+  layout: unknown,
+  paneId: string,
+  fittedAreaWidth: number | undefined,
+): PanelResize | undefined {
+  const fields =
+    isRecord(layout) && isRecord(layout.result) && isRecord(layout.result.layout)
+      ? layout.result.layout
+      : undefined;
+  const areaWidth = rect(fields?.area)?.width;
+  if (areaWidth === undefined || areaWidth === fittedAreaWidth) return undefined;
+  const own = rect(records(fields?.panes).find((pane) => pane.pane_id === paneId)?.rect);
+  if (own === undefined) return undefined;
+  const split = records(fields?.splits)
+    .flatMap((entry) => {
+      const bounds = rect(entry.rect);
+      return entry.direction === "right" && bounds !== undefined ? [bounds] : [];
+    })
+    .filter(
+      (bounds) =>
+        bounds.x < own.x &&
+        bounds.x + bounds.width === own.x + own.width &&
+        bounds.y <= own.y &&
+        own.y + own.height <= bounds.y + bounds.height,
+    )
+    .sort((a, b) => b.x - a.x)[0];
+  if (split === undefined) return undefined;
+  const target = Math.min(PANEL_WIDTH, Math.floor(split.width / 2));
+  return {
+    areaWidth,
+    direction: own.width > target ? "right" : "left",
+    amount: Math.abs(own.width - target) / split.width,
+  };
+}
+
+/** Fits the panel's pane once for the current window width; the width it fitted for. */
+async function fitPanelPane(
+  deps: Pick<PanelDeps, "run" | "sessionId" | "cwd">,
+  paneId: string,
+  fittedAreaWidth: number | undefined,
+): Promise<number | undefined> {
+  const herdr = (...args: string[]) => ({
+    argv: ["herdr", "--session", deps.sessionId, ...args],
+    cwd: deps.cwd,
+  });
+  const layout = await deps.run(herdr("pane", "layout", "--pane", paneId));
+  if (layout.code !== 0) return fittedAreaWidth;
+  const resize = panelResize(JSON.parse(layout.stdout), paneId, fittedAreaWidth);
+  if (resize === undefined) return fittedAreaWidth;
+  if (resize.amount === 0) return resize.areaWidth;
+  const resized = await deps.run(
+    herdr(
+      "pane",
+      "resize",
+      "--pane",
+      paneId,
+      "--direction",
+      resize.direction,
+      "--amount",
+      resize.amount.toFixed(4),
+    ),
+  );
+  return resized.code === 0 ? resize.areaWidth : fittedAreaWidth;
 }
 
 /**
@@ -440,6 +538,10 @@ export type PanelDeps = Readonly<{
   readonly rememberHelpSeen: () => Promise<void>;
   /** Calls `stop` when the process is asked to end; returns how to stop listening. */
   readonly onExitSignal: (stop: () => void) => () => void;
+  /** The split pane a coordinator opened the panel in, which it keeps `PANEL_WIDTH` wide. */
+  readonly paneId: string | undefined;
+  /** Calls `resized` when the terminal changes size; returns how to stop listening. */
+  readonly onResize: (resized: () => void) => () => void;
 }>;
 
 const SCREEN_ON = "\x1b[?1049h\x1b[?25l\x1b[?1000h\x1b[?1006h\x1b[?1004h";
@@ -571,7 +673,24 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
   const timer = setInterval(() => {
     void refresh().then(() => guarded(redraw));
   }, REFRESH_MS);
+  let fittedAreaWidth: number | undefined;
+  let fitting = Promise.resolve();
+  // One fit at a time, so a burst of resizes reads the width the previous fit left.
+  const keepWidth = () => {
+    const paneId = deps.paneId;
+    if (paneId === undefined) return;
+    fitting = fitting
+      .then(async () => {
+        fittedAreaWidth = await fitPanelPane(deps, paneId, fittedAreaWidth);
+      })
+      .catch(() => undefined);
+  };
   const stopListening = deps.onExitSignal(() => close());
+  const stopResizing = deps.onResize(() => {
+    keepWidth();
+    guarded(redraw);
+  });
+  keepWidth();
   try {
     setRawMode(true);
     deps.write(SCREEN_ON);
@@ -584,6 +703,7 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
     clearInterval(timer);
     clearTimeout(flush);
     stopListening();
+    stopResizing();
     deps.input.off("data", onData);
     setRawMode(false);
     deps.input.pause();

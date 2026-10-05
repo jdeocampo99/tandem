@@ -8,6 +8,7 @@ import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
+import { PANEL_ENTRYPOINT } from "./coordinator/panel.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
@@ -878,6 +879,14 @@ export async function runTerminal(
             process.off("SIGTERM", stop);
             process.off("SIGHUP", stop);
           };
+        },
+        paneId:
+          !invocation.popup && environment.source.HERDR_PLUGIN_ENTRYPOINT_ID === PANEL_ENTRYPOINT
+            ? environment.source.HERDR_PANE_ID
+            : undefined,
+        onResize: (resized) => {
+          output.on("resize", resized);
+          return () => output.off("resize", resized);
         },
       });
       return { exitCode: 0, status: "panel" };

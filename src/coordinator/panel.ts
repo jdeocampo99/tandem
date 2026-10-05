@@ -16,33 +16,14 @@ import {
 export const PANEL_ENTRYPOINT = "panel";
 /** The pane title `herdr-plugin/herdr-plugin.toml` gives the panel, which Herdr shows as its label. */
 export const PANEL_TITLE = "Tandem panel";
-export const PANEL_COLUMNS = 46;
 
 type PanelRecord = Pick<CoordinatorRecord, "repoPath" | "endpoint" | "worktree">;
-
-export type PaneWidth = Readonly<{ readonly paneId: string; readonly width: number }>;
 
 /** What closing a coordinator's panel did; `failed` leaves the panel and its workspace alone. */
 export type PanelClosing =
   | Readonly<{ readonly outcome: "none" }>
   | Readonly<{ readonly outcome: "closed"; readonly paneId: string }>
   | Readonly<{ readonly outcome: "failed"; readonly reason: string }>;
-
-/**
- * How far to move the border between the coordinator and the panel to its right so the panel is
- * `PANEL_COLUMNS` wide, as a fraction of their combined width; undefined when it already fits.
- * Herdr has no width option for a split, only this ratio move.
- */
-export function panelResizeAmount(
-  panes: readonly PaneWidth[],
-  coordinatorPaneId: string,
-  panelPaneId: string,
-): number | undefined {
-  const coordinator = panes.find((pane) => pane.paneId === coordinatorPaneId)?.width;
-  const panel = panes.find((pane) => pane.paneId === panelPaneId)?.width;
-  if (coordinator === undefined || panel === undefined || panel <= PANEL_COLUMNS) return undefined;
-  return (panel - PANEL_COLUMNS) / (coordinator + panel);
-}
 
 /**
  * Whether Herdr's `pane get` answer is the panel pane in the coordinator's workspace, carrying the
@@ -96,7 +77,8 @@ async function savePanelPaneId(home: string, record: PanelRecord, paneId: string
 
 /**
  * Opens the Tandem panel right of the coordinator unless its recorded panel is still there, and
- * records the new pane. Returns why it could not, so a panel never blocks its coordinator.
+ * records the new pane; the panel keeps its own width. Returns why it could not, so a panel
+ * never blocks its coordinator.
  */
 export async function openPanelBeside(
   run: CommandRunner,
@@ -108,7 +90,6 @@ export async function openPanelBeside(
     if (recorded !== undefined && (await panelStillOpen(run, record, recorded))) return undefined;
     const panelPaneId = await openPanelPane(run, record);
     await savePanelPaneId(home, record, panelPaneId);
-    await fitPanel(run, record, panelPaneId);
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
@@ -210,44 +191,4 @@ async function openPanelPane(run: CommandRunner, record: PanelRecord): Promise<s
     throw new Error("herdr plugin pane open returned no pane id");
   }
   return pane.pane_id;
-}
-
-async function fitPanel(
-  run: CommandRunner,
-  record: PanelRecord,
-  panelPaneId: string,
-): Promise<void> {
-  const layout = await checked(
-    run,
-    herdr(record, ["pane", "layout", "--pane", record.endpoint.paneId]),
-    "herdr pane layout",
-  );
-  const panes =
-    isRecord(layout) && isRecord(layout.result) && isRecord(layout.result.layout)
-      ? layout.result.layout.panes
-      : undefined;
-  const widths = (Array.isArray(panes) ? panes : []).flatMap((pane): PaneWidth[] =>
-    isRecord(pane) &&
-    typeof pane.pane_id === "string" &&
-    isRecord(pane.rect) &&
-    typeof pane.rect.width === "number"
-      ? [{ paneId: pane.pane_id, width: pane.rect.width }]
-      : [],
-  );
-  const amount = panelResizeAmount(widths, record.endpoint.paneId, panelPaneId);
-  if (amount === undefined) return;
-  await checked(
-    run,
-    herdr(record, [
-      "pane",
-      "resize",
-      "--pane",
-      record.endpoint.paneId,
-      "--direction",
-      "right",
-      "--amount",
-      amount.toFixed(4),
-    ]),
-    "herdr pane resize",
-  );
 }
