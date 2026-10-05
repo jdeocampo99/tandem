@@ -25,7 +25,7 @@ function runner(catalogs: readonly string[]) {
 }
 const missing = JSON.stringify({ plugins: [], problems: [] });
 const ready = JSON.stringify({
-  plugins: [{ id: "tandem", status: "ready", window: true }],
+  plugins: [{ id: "tandem", status: "ready", host: true, window: true }],
   problems: [],
 });
 
@@ -76,6 +76,17 @@ test("malformed catalog fails closed before installation", async () => {
     ensureTernPlugin({ ...invalid, cwd: "/tmp", confirm: async () => true }),
   ).rejects.toThrow("invalid plugin catalog");
   expect(invalid.calls).toHaveLength(1);
+});
+
+test("window bindings alone do not count as a ready native view integration", async () => {
+  const incomplete = runner([
+    JSON.stringify({
+      plugins: [{ id: "tandem", status: "ready", host: false, window: true }],
+      problems: [],
+    }),
+  ]);
+  expect(await ensureTernPlugin({ ...incomplete, cwd: "/tmp" })).toBe(false);
+  expect(incomplete.calls).toHaveLength(1);
 });
 
 test("installer and update read the saved choice without contacting unselected terminals", async () => {

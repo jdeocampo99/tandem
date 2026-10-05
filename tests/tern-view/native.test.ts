@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,6 +81,17 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         loader: true,
         diff: true,
       });
+      const production = join(root, "tandem-plugin");
+      await cp(fileURLToPath(new URL("../../tern-plugin", import.meta.url)), production, {
+        recursive: true,
+      });
+      const installed = await run("plugin", "link", production, "--json");
+      expect(installed.code, installed.stderr).toBe(0);
+      const catalog = await run("plugin", "list", "--json");
+      const shared = JSON.parse(catalog.stdout).plugins.find(
+        (entry: { id: string }) => entry.id === "tandem",
+      );
+      expect(shared).toMatchObject({ status: "ready", host: true, window: true });
     } finally {
       daemon.kill("SIGTERM");
       await daemon.exited;

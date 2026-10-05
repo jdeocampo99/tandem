@@ -37,6 +37,20 @@ do not write directly to a guessed tty. The backend proves and records the helpe
 uses exact-id guards, and restores it through ordinary resource recovery after a daemon restart.
 Clicking the helper's inbox entry lands on its tab; the panel remains the project navigator.
 
+The UTF-8 wire sequence is `\u001b]777;notify;TITLE;BODY\u0007` (ESC, `]`, the payload, BEL).
+Use these alert kinds and title prefixes; put the task's displayed title or summary in `BODY`:
+
+| Kind | Title prefix |
+| --- | --- |
+| `needs-you` | `Tandem: Needs you` |
+| `done` | `Tandem: Done` |
+| `stuck` | `Tandem: Stuck` |
+
+The backend renders title and body as single-line plain text: replace semicolons and C0/DEL
+control characters (including ESC/BEL and newlines) with spaces before framing. The kind selects
+the title prefix; it is not an extra OSC field. Backend creation, endpoint recording, delivery
+and recovery of the helper pane belong to the terminal backend worker.
+
 ## Shared rendering foundation
 
 `src/tern-view/file.ts` writes private files by exclusive temp-file creation and atomic rename.
@@ -59,6 +73,18 @@ Luau modules load with relative `require` inside the package:
 | `text-field` | `create(text?, multiline?)`, `key(field, key) -> outcome`, `node(field, key, placeholder?)` |
 | `diff-row` | `row(line, commentAction?, cards?)`, `card(key, author, markdown, actions?)` |
 | `components` | `button(text, action, tone?)`, `text(text, tone?)`, `keyed(node, key)` |
+
+`host.luau` is the daemon entry point. It eagerly loads these four modules, so a missing or
+invalid helper fails plugin readiness before a block opens. Each renderer module returns its
+typed `BlockDef<State>`; register it with one line, with no shared dispatch table or view logic:
+
+```lua
+tern.block.define("panel", require("./panel"))
+```
+
+The renderer also adds a matching `[[blocks]]` entry with `id = "panel"` and its title to
+`plugin.toml`. Its native block kind is `tandem.panel`. Register every declared block before
+`host.luau` finishes. The foundation has no screen-specific registrations; wave 2 adds them.
 
 The loader checks the envelope and runs the renderer's shape parser before replacing its model.
 Reads are bounded to 8 MiB, regular files only, and refuse symlinks. Missing, malformed, wrong-kind

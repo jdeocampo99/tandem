@@ -11,7 +11,9 @@ export const TERN_PLUGIN_DIRECTORY = fileURLToPath(
 export const TERN_APP_BINARY = "/Applications/Tern.app/Contents/MacOS/tern";
 
 const catalogSchema = z.object({
-  plugins: z.array(z.object({ id: z.string(), status: z.string(), window: z.boolean() })),
+  plugins: z.array(
+    z.object({ id: z.string(), status: z.string(), host: z.boolean(), window: z.boolean() }),
+  ),
   problems: z.array(z.unknown()),
 });
 
@@ -51,7 +53,7 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
   const before = await catalog(deps);
   const existing = before.plugins.find((plugin) => plugin.id === TANDEM_TERN_PLUGIN);
   if (existing !== undefined) {
-    if (existing.status !== "ready" || !existing.window) return false;
+    if (existing.status !== "ready" || !existing.host || !existing.window) return false;
     return configureKeys(deps);
   }
   if (deps.confirm === undefined || !(await deps.confirm("Add Tandem's views and keys to Tern?"))) {
@@ -60,7 +62,8 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
   await command(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
   const after = await catalog(deps);
   const ready = after.plugins.some(
-    (plugin) => plugin.id === TANDEM_TERN_PLUGIN && plugin.status === "ready" && plugin.window,
+    (plugin) =>
+      plugin.id === TANDEM_TERN_PLUGIN && plugin.status === "ready" && plugin.host && plugin.window,
   );
   return ready && configureKeys(deps, true);
 }
@@ -87,7 +90,11 @@ export async function reloadTernPlugin(deps: TernPluginDependencies): Promise<bo
   const after = await catalog(deps);
   if (
     !after.plugins.some(
-      (plugin) => plugin.id === TANDEM_TERN_PLUGIN && plugin.status === "ready" && plugin.window,
+      (plugin) =>
+        plugin.id === TANDEM_TERN_PLUGIN &&
+        plugin.status === "ready" &&
+        plugin.host &&
+        plugin.window,
     )
   )
     throw new Error("Tandem's Tern plugin failed to reload");
