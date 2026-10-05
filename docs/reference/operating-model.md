@@ -77,7 +77,7 @@ assigned to new work.
 
 - Everything runs on the local machine: orchestration, durable state, workers, Herdr workspaces,
   Treehouse pool, Lavish control. No remote fleets, harnesses other than OMP and Claude Code
-  ([harness.md](harness.md)), alternate terminal backends beyond the Herdr implementation of the terminal port, relays, or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
+  ([harness.md](harness.md)), terminal backends other than Herdr and Tern behind the terminal port, relays, or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
   implementer's follow-up push to its own open PR touch the remote, through local `gh` and Git.
 - macOS only. The task-store lock is a Darwin native `O_EXLOCK` lock on the task-store directory
   with a 5-second default acquisition timeout (`DEFAULT_LOCK_TIMEOUT_MS`). Coordinator locks under
@@ -89,3 +89,25 @@ assigned to new work.
 - Authoritative contracts are in code: src/contracts.ts (types and roles), src/config/ (policy),
   src/tasks/lifecycle.ts (transitions), src/adapters/ (native tools), src/service/controller.ts
   (composition), src/harness/omp/, src/session/, src/instructions.ts (OMP integration).
+
+## Tern terminal backend
+
+Tern's daemon maps to a Tandem terminal session; a Tern tab supplies both workspace and tab ids.
+A project gets a uniquely named `tandem-<project>` Tern session and workers get background tabs in
+that same session. Names and titles are display state and never prove ownership. The adapter keeps
+u64 ids as strings, rechecks exact ids in the same scoped `tern ls --json` before mutations,
+compares acknowledgements, reads exact foreground-group argv from macOS without returning process
+environments, and refuses busy closes unless the caller explicitly authorizes force.
+Unknown outcomes keep resources and quarantine the effect rather than retrying it.
+
+Closing the last pane also sends `tern kill session` for its exact empty session. Tern 0.4.5 keeps
+its sole empty session after acknowledging that kill; Tandem preserves it and verifies no panes
+remain. The durable endpoint retains the native project session id. A coordinator relaunch reuses
+that exact session after checking its id, including an empty session retained by Tern. It creates
+a new session only when the stored id is absent; matching names never authorize reuse. Tern
+cannot reorder tabs or resize panes, so those operations return warnings. Native welcome and
+panel operations currently raise typed unavailable errors until the native view host ships.
+Alerts print OSC 777 to the tty of a recorded Tandem-owned pane, with exact pane and process
+checks. Composition injects the durable pane selector; without a proven record, alerts are refused.
+Worker OMP completion, error and ask notifications are off; coordinator ask notifications
+stay on through its separate config overlay.

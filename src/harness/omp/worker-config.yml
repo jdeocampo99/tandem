@@ -1,6 +1,11 @@
-# The coordinator's interview never auto-selects an ask answer, whatever the user's OMP setting.
+completion:
+  notify: off
+error:
+  notify: off
+# Workers ask through the coordinator and never notify independently.
 ask:
   timeout: 0
+  notify: off
 retry:
   modelFallback: false
   usageAwareFallback: false

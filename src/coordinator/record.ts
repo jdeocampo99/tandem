@@ -128,7 +128,16 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   ensureExactKeys(
     value,
-    ["terminal", "sessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
+    [
+      "sessionId",
+      "workspaceId",
+      "tabId",
+      "paneId",
+      "role",
+      "generation",
+      ...(Object.hasOwn(value, "terminal") ? ["terminal"] : []),
+      ...(Object.hasOwn(value, "terminalSessionId") ? ["terminalSessionId"] : []),
+    ],
     field,
   );
   const sessionId = sessionText(value.sessionId);
@@ -141,6 +150,9 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   return {
     terminal: storedEndpointTerminal(value.terminal, field),
     sessionId,
+    ...(value.terminalSessionId === undefined
+      ? {}
+      : { terminalSessionId: text(value.terminalSessionId, `${field}.terminalSessionId`) }),
     workspaceId,
     tabId,
     paneId,

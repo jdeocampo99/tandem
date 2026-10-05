@@ -215,6 +215,8 @@ export type TerminalName = "herdr" | "tern";
 export type Endpoint = {
   readonly terminal: TerminalName;
   readonly sessionId: string;
+  /** Native project session inside a terminal daemon, when the backend has one. */
+  readonly terminalSessionId?: string;
   readonly workspaceId: string;
   readonly tabId: string;
   readonly paneId: string;

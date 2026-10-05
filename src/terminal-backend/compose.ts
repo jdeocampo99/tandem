@@ -1,18 +1,38 @@
+import { AdapterError } from "../adapters/primitives.ts";
+import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { type HomeSettings, readHomeSettingsSync } from "../config/home-settings.ts";
 import type { CommandRunner, TerminalName } from "../contracts.ts";
-import type { TerminalBackend, TerminalContext } from "./contract.ts";
+import { canonicalPath } from "../coordinator/record.ts";
+import { listCoordinatorRecords } from "../coordinator/registry.ts";
+import type { SessionTarget, TerminalBackend, TerminalContext } from "./contract.ts";
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
-import { guardTerminalIdentity } from "./identity.ts";
+import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
 import { probeTern } from "./tern/availability.ts";
+import { type TernBackendOptions, ternBackend } from "./tern/backend.ts";
+import { TERN_CONTEXT } from "./tern/context.ts";
 
 export type TerminalComposition = Readonly<{
   /** Explicit Tandem home; omitted for isolated tests, which keep Herdr. */
   home?: string;
   herdr?: HerdrBackendOptions;
-  /** Filled by the stacked Tern adapter; absence refuses Tern before any terminal effect. */
-  tern?: (run: CommandRunner) => TerminalBackend;
+  tern?: TernBackendOptions;
+  /** Tests can replace the adapter factory while retaining selection and identity guards. */
+  createTern?: typeof ternBackend;
 }>;
+
+/** A notification may only target the one recorded coordinator for this exact repository. */
+async function notificationEndpoint(home: string, target: SessionTarget) {
+  const cwd = await canonicalPath(target.cwd, "notification cwd");
+  const records = (await listCoordinatorRecords(home, target.sessionId)).filter(
+    (record) => record.repoPath === cwd || record.worktree.path === cwd,
+  );
+  if (records.length > 1)
+    throw new AdapterError("Tern alert coordinator is ambiguous", "tern notify");
+  const endpoint = records[0]?.endpoint;
+  if (endpoint !== undefined) assertTerminalEndpoint("tern", endpoint);
+  return endpoint;
+}
 
 /** The saved choice shown by onboarding; an absent preference keeps Herdr until confirmed. */
 export function savedTerminalPreference(settings: HomeSettings) {
@@ -33,9 +53,19 @@ export function terminalBackend(
         : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal;
     const cached = backends.get(chosen);
     if (cached !== undefined) return cached;
-    const backend = chosen === "herdr" ? herdrBackend(run, options.herdr) : options.tern?.(run);
-    if (backend === undefined)
-      throw new Error("Tern's terminal backend is unavailable in this build; choose Herdr.");
+    const home = options.home;
+    const backend =
+      chosen === "herdr"
+        ? herdrBackend(run, options.herdr)
+        : (options.createTern ?? ternBackend)(run, {
+            ...options.tern,
+            ...(home === undefined || options.tern?.notificationEndpoint !== undefined
+              ? {}
+              : {
+                  notificationEndpoint: (target: SessionTarget) =>
+                    notificationEndpoint(home, target),
+                }),
+          });
     if (backend.name !== chosen)
       throw new Error(`terminal factory returned ${backend.name} for ${chosen}`);
     const guarded = guardTerminalIdentity(backend);
@@ -80,8 +110,44 @@ export function terminalBackend(
   };
 }
 
-/** How a process reads its inherited terminal pane from its environment; pure, so imported. */
-export const terminalContext: TerminalContext = HERDR_CONTEXT;
+/** A launch uses its selected backend's context, so foreign inherited ids are ignored. */
+export function terminalContextFor(terminal: TerminalName): TerminalContext {
+  return terminal === "tern" ? TERN_CONTEXT : HERDR_CONTEXT;
+}
+
+/** A newly launched terminal must not inherit the other terminal's pane identity. */
+export function terminalLaunchEnvironment(
+  terminal: TerminalName,
+  environment: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const foreign = terminalContextFor(terminal === "tern" ? "herdr" : "tern").variables;
+  return Object.fromEntries(
+    Object.entries(environment).filter(([name]) => !foreign.includes(name)),
+  );
+}
+
+function inheritedContext(source: TandemEnvironmentSource): TerminalContext | undefined {
+  const herdr = HERDR_CONTEXT.inheritedPane(source).status !== "outside";
+  const tern = TERN_CONTEXT.inheritedPane(source).status !== "outside";
+  if (herdr && tern) return undefined;
+  return tern ? TERN_CONTEXT : HERDR_CONTEXT;
+}
+
+/** Pure inherited context detection; mixed terminal identities never select a pane. */
+export const terminalContext: TerminalContext = {
+  variables: [...new Set([...HERDR_CONTEXT.variables, ...TERN_CONTEXT.variables])],
+  inheritedPane: (source) =>
+    inheritedContext(source)?.inheritedPane(source) ?? {
+      status: "invalid",
+      reason: "Both Herdr and Tern pane contexts are present; ownership is ambiguous",
+    },
+  sessionName: (source) => inheritedContext(source)?.sessionName(source),
+  workspaceId: (source) => inheritedContext(source)?.workspaceId(source),
+  paneInSession: (source, sessionId) => inheritedContext(source)?.paneInSession(source, sessionId),
+  focus: (source) => inheritedContext(source)?.focus(source) ?? {},
+  panelPaneId: (source) => inheritedContext(source)?.panelPaneId(source),
+  welcomePaneId: (source) => inheritedContext(source)?.welcomePaneId(source),
+};
 
 /** Onboarding checks availability through the same terminal composition boundary. */
 export const ternAvailability = probeTern;

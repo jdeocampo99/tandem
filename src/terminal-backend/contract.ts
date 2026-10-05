@@ -154,6 +154,8 @@ export type TerminalBackend = Readonly<{
         env?: Readonly<Record<string, string>>;
         parentWorkspaceId?: string;
         insertIndex?: number;
+        /** Previous durable identity, when reconnecting to a retained native project session. */
+        previousEndpoint?: Endpoint;
       }>,
   ): Promise<Readonly<{ endpoint: Endpoint; warnings: readonly string[] }>>;
   /**

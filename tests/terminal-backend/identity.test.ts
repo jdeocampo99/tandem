@@ -40,7 +40,7 @@ for (const chosen of ["herdr", "tern"] as const) {
       await writeFile(join(home, "settings.toml"), `terminal = "${chosen}"\n`);
       const terminal = terminalBackend(forbidden, {
         home,
-        tern: () => ({ ...terminalBackend(forbidden), name: "tern" }),
+        createTern: () => ({ ...terminalBackend(forbidden), name: "tern" }),
       });
       const result = await retireCoordinatorWorkspace(terminal, home, {
         repoPath: home,
@@ -109,7 +109,7 @@ test("an uncertain adapter effect remains quarantined after later calls and term
     await writeFile(join(home, "settings.toml"), 'terminal = "tern"\n');
     const terminal = terminalBackend(forbidden, {
       home,
-      tern: () => {
+      createTern: () => {
         let quarantined = false;
         return {
           ...terminalBackend(forbidden),
