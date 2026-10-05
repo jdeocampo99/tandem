@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
-import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import { harnessOfSelector } from "../harness/contract.ts";
 import { readOmpUsageLimits } from "../harness/omp/usage-limits.ts";
 import { nativeCatchUpView } from "../memory/native-view.ts";
@@ -33,9 +32,17 @@ import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { parseWorkerJob } from "../workers/jobs.ts";
 import { readWorkerActivity } from "../workers/worker-activity.ts";
 import { nativeBoardView } from "./native.ts";
-import { type NativeViews, nativeChangeSignature } from "./native-views.ts";
-import { type NativeTaskSummary, nativePanelView, nativeProjectSwitcher } from "./panel.ts";
-import type { BoardSnapshot } from "./snapshot.ts";
+import {
+  type NativeProjectSummary,
+  type NativeViewsPublication,
+  nativeBriefFile,
+  nativeChangeSignature,
+  nativePrFile,
+  nativeSummaryProjects,
+  nativeTaskFile,
+} from "./native-views.ts";
+import { type NativeTaskSummary, nativePanelView } from "./panel.ts";
+import { type BoardSnapshot, readNativeProjectSummaries } from "./snapshot.ts";
 
 export type NativeReadDependencies = Readonly<{
   home: string;
@@ -66,7 +73,7 @@ export class NativeViewsReader {
     snapshot: BoardSnapshot,
     project: string,
     sessions: ReadonlyMap<string, string> = new Map(),
-  ): Promise<NativeViews> {
+  ): Promise<NativeViewsPublication> {
     const deps = this.#deps;
     const now = deps.clock();
     const clock = () => now;
@@ -289,42 +296,26 @@ export class NativeViewsReader {
         recent: recentWork(saved.tasks, saved.watches, workstream.memory.name),
       }),
     );
-    const discovered = await discoverCoordinatorRecords({ home: deps.home });
-    const ternRecords = discovered.records
-      .filter(
-        (entry) =>
-          entry.placement === "session-directory" &&
-          "terminal" in entry.record.endpoint &&
-          entry.record.endpoint.terminal === "tern",
-      )
-      .map((entry) => entry.record);
-    const candidates = new Map<string, typeof ternRecords>();
-    for (const record of ternRecords)
-      candidates.set(record.repoPath, [...(candidates.get(record.repoPath) ?? []), record]);
-    const unambiguous = [...candidates.values()].flatMap((records) =>
-      records.length === 1 ? records : [],
-    );
-    const nativeSnapshot: BoardSnapshot = {
-      ...snapshot,
-      coordinators: [
-        ...snapshot.coordinators.filter((record) => !candidates.has(record.repoPath)),
-        ...unambiguous.map((record) => ({
-          repoPath: record.repoPath,
-          project: record.repoPath.split("/").at(-1) ?? record.repoPath,
-          workspaceId: record.endpoint.workspaceId,
-          paneId: record.endpoint.paneId,
-        })),
-      ],
+    const ownPanel = nativePanelView({ snapshot, project, now, tasks: summaries, bellCount: 0 });
+    const count = (title: string) =>
+      ownPanel.sections.find((section) => section.title === title)?.count ?? 0;
+    const sessionId = sessions.get(project);
+    const summary: NativeProjectSummary = {
+      repoPath: project,
+      name: basename(project),
+      writtenAt: now,
+      running: count("Running"),
+      needsYou: count("Needs you"),
+      ready: count("Ready"),
+      done: count("Recently done"),
+      ...(sessionId === undefined ? {} : { sessionId }),
     };
-    const nativeSessions = new Map([
-      ...sessions,
-      ...unambiguous.map((record) => [record.repoPath, record.endpoint.sessionId] as const),
-    ]);
-    for (const [repoPath, records] of candidates)
-      if (records.length !== 1) nativeSessions.delete(repoPath);
-    if (discovered.unreadable.length > 0)
-      warnings.push("Some coordinator records could not be read");
-    const projects = nativeProjectSwitcher(nativeSnapshot, project, nativeSessions);
+    const other = await readNativeProjectSummaries(deps.home, project);
+    warnings.push(...other.warnings);
+    const projects = nativeSummaryProjects([summary, ...other.summaries], project, now);
+    const briefViews = Object.fromEntries(
+      saved.briefs.map((brief) => [brief.id, briefView(brief)]),
+    );
     const fiveHour = usage.limits
       .filter((limit) => limit.window === "five-hour")
       .toSorted(
@@ -333,96 +324,141 @@ export class NativeViewsReader {
           (typeof b.remainingPercent === "number" ? b.remainingPercent : 101),
       )[0];
     return {
-      version: 1,
-      project,
-      writtenAt: now,
-      changeSignature: nativeChangeSignature({
-        tasks: saved.tasks.map((task) => ({
-          id: task.id,
-          stage: task.stage,
-          generation: task.generation,
-          reviewRound: task.reviewRound,
-          ...(task.communication?.question === undefined
-            ? {}
-            : { questionId: task.communication.question.id }),
-          ...(task.blockReason === undefined ? {} : { blockReason: task.blockReason }),
-          ...(task.pullRequest === undefined ? {} : { pullRequest: task.pullRequest }),
+      details: [
+        ...Object.entries(pages).map(([id, data]) => ({
+          file: nativeTaskFile(id),
+          view: { version: 1 as const, project, kind: "task" as const, data },
         })),
-        briefs: saved.briefs.map((brief) => ({
-          id: brief.id,
-          revision: brief.draft.revision,
-          contentDigest: brief.draft.contentDigest,
-          approvalState: briefView(brief).approvalState,
+        ...Object.entries(briefViews).map(([id, data]) => ({
+          file: nativeBriefFile(id),
+          view: { version: 1 as const, project, kind: "brief" as const, data },
         })),
-        workstreams: workstreams.map((workstream) => ({
-          name: workstream.memory.name,
-          savedAt: workstream.savedAt,
+        ...Object.entries(prViews).map(([, data]) => ({
+          file: nativePrFile(data.header.repo, data.header.number),
+          view: { version: 1 as const, project, kind: "pr" as const, data },
         })),
-        pullRequests: saved.watches.map((watch) => ({
-          key: `${watch.ref.repo}#${watch.ref.number}`,
-          ...(watch.head === undefined ? {} : { head: watch.head.oid }),
-          ...(watch.row === undefined ? {} : { status: watch.row.status, note: watch.row.note }),
-        })),
-      }),
-      panel: nativePanelView({
-        snapshot: nativeSnapshot,
+      ],
+      bundle: {
+        version: 1,
         project,
-        now,
-        tasks: summaries,
+        writtenAt: now,
+        summary,
+        changeSignature: nativeChangeSignature({
+          tasks: saved.tasks.map((task) => ({
+            id: task.id,
+            stage: task.stage,
+            generation: task.generation,
+            reviewRound: task.reviewRound,
+            ...(task.communication?.question === undefined
+              ? {}
+              : { questionId: task.communication.question.id }),
+            ...(task.blockReason === undefined ? {} : { blockReason: task.blockReason }),
+            ...(task.pullRequest === undefined ? {} : { pullRequest: task.pullRequest }),
+          })),
+          briefs: saved.briefs.map((brief) => ({
+            id: brief.id,
+            revision: brief.draft.revision,
+            contentDigest: brief.draft.contentDigest,
+            approvalState: briefView(brief).approvalState,
+          })),
+          workstreams: workstreams.map((workstream) => ({
+            name: workstream.memory.name,
+            savedAt: workstream.savedAt,
+          })),
+          pullRequests: saved.watches.map((watch) => ({
+            key: `${watch.ref.repo}#${watch.ref.number}`,
+            ...(watch.head === undefined ? {} : { head: watch.head.oid }),
+            ...(watch.row === undefined ? {} : { status: watch.row.status, note: watch.row.note }),
+          })),
+        }),
+        panel: nativePanelView({
+          snapshot,
+          project,
+          now,
+          tasks: summaries,
+          projects,
+          bellCount: saved.tasks.flatMap((task) =>
+            task.notifications.filter((notification) => !notification.acknowledged),
+          ).length,
+          ...(fiveHour === undefined ? {} : { fiveHour }),
+        }),
         projects,
-        bellCount: saved.tasks.flatMap((task) =>
-          task.notifications.filter((notification) => !notification.acknowledged),
-        ).length,
-        ...(fiveHour === undefined ? {} : { fiveHour }),
-      }),
-      projects,
-      tasks: pages,
-      briefs: Object.fromEntries(saved.briefs.map((brief) => [brief.id, briefView(brief)])),
-      pullRequests: prViews,
-      board: nativeBoardView(nativeSnapshot, project, summaries, now),
-      usage,
-      catchup: nativeCatchUpView(
-        project,
-        catchups,
-        snapshot.board.needsYou.filter((row) => row.repoPath === project),
-        [
-          ...saved.tasks
-            .filter(
-              (task) =>
-                task.pullRequest !== undefined &&
-                (task.stage === "merged" || task.pullRequest.state === "merged"),
-            )
-            .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-            .flatMap((task) =>
-              task.pullRequest === undefined
-                ? []
-                : [
-                    {
-                      number: task.pullRequest.number,
-                      title: task.pullRequest.title ?? task.title ?? task.objective,
-                      url:
-                        task.pullRequest.url ??
-                        `https://github.com/${task.pullRequest.repository}/pull/${task.pullRequest.number}`,
-                      state: "merged" as const,
-                    },
-                  ],
-            ),
-          ...saved.watches
-            .filter(
-              (watch) =>
-                watch.mergedAt !== undefined || watch.row?.status.startsWith("🎉") === true,
-            )
-            .map((watch) => ({
-              number: watch.ref.number,
-              title: watch.summary?.title ?? `#${watch.ref.number}`,
-              url:
-                watch.summary?.url ??
-                `https://github.com/${watch.ref.repo}/pull/${watch.ref.number}`,
-              state: "merged" as const,
-            })),
-        ],
-      ),
-      warnings,
+        tasks: Object.fromEntries(
+          summaries.map((task) => [
+            task.taskId,
+            { ...task, detailFile: nativeTaskFile(task.taskId) },
+          ]),
+        ),
+        briefs: Object.fromEntries(
+          Object.entries(briefViews).map(([id, brief]) => [
+            id,
+            {
+              requestId: brief.requestId,
+              title: brief.title,
+              revision: brief.revision,
+              changes: brief.changes,
+              approvalState: brief.approvalState,
+              abandoned: brief.abandoned,
+              commentCount: brief.commentCount,
+              detailFile: nativeBriefFile(id),
+            },
+          ]),
+        ),
+        pullRequests: Object.fromEntries(
+          Object.entries(prViews).map(([key, pr]) => [
+            key,
+            {
+              header: pr.header,
+              readAt: pr.readAt,
+              detailFile: nativePrFile(pr.header.repo, pr.header.number),
+            },
+          ]),
+        ),
+        board: nativeBoardView(snapshot, project, summaries, now),
+        usage,
+        catchup: nativeCatchUpView(
+          project,
+          catchups,
+          snapshot.board.needsYou.filter((row) => row.repoPath === project),
+          [
+            ...saved.tasks
+              .filter(
+                (task) =>
+                  task.pullRequest !== undefined &&
+                  (task.stage === "merged" || task.pullRequest.state === "merged"),
+              )
+              .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+              .flatMap((task) =>
+                task.pullRequest === undefined
+                  ? []
+                  : [
+                      {
+                        number: task.pullRequest.number,
+                        title: task.pullRequest.title ?? task.title ?? task.objective,
+                        url:
+                          task.pullRequest.url ??
+                          `https://github.com/${task.pullRequest.repository}/pull/${task.pullRequest.number}`,
+                        state: "merged" as const,
+                      },
+                    ],
+              ),
+            ...saved.watches
+              .filter(
+                (watch) =>
+                  watch.mergedAt !== undefined || watch.row?.status.startsWith("🎉") === true,
+              )
+              .map((watch) => ({
+                number: watch.ref.number,
+                title: watch.summary?.title ?? `#${watch.ref.number}`,
+                url:
+                  watch.summary?.url ??
+                  `https://github.com/${watch.ref.repo}/pull/${watch.ref.number}`,
+                state: "merged" as const,
+              })),
+          ],
+        ),
+        warnings,
+      },
     };
   }
 

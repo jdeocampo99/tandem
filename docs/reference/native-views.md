@@ -8,15 +8,32 @@ GitHub, provider limits, or the task store itself.
 
 `<home>/board-snapshot.json` retains its version-1 shape and Herdr behavior.
 
-`<home>/native-views/<key>.json` is the native bundle, where `key` is the full lowercase
-SHA-256 hex digest of the original project's exact `repoPath` string (UTF-8).
-Use `nativeViewsPath(home, repoPath)` from `src/board/snapshot.ts` to locate it. Two checkouts
-with the same basename have different files. The project's coordinator is the single writer,
-through the existing `writeBoardSnapshot` service operation, only for a Tern backend.
+`<home>/native-views/<key>.json` is the small native index polled by renderers. `key` reuses
+`repositoryKey(canonicalRepoPath)` from `src/config/repositories.ts`, the existing 24-character
+lowercase key for saved project settings and coordinator session directories. The registry's
+record filenames use the full path digest; saved settings already provide the shorter stable
+project key, so native views do not introduce another identity.
+Use `nativeViewsPath(home, canonicalRepoPath)` from `src/board/snapshot.ts` to locate it. Two
+checkouts with the same basename have different files. The project's coordinator is the single
+writer, through the existing `writeBoardSnapshot` service operation, only for a Tern backend.
 
-The directory is private (0700); the file is 0600. A unique temporary file and atomic rename
-publish the whole bundle together. On failure, the prior bundle stays readable; the existing
-coordinator snapshot error reporting handles the failed projection. No native file is authority.
+Task timelines, brief lines and PR patches/threads/tours live in separate detail files:
+
+- `<home>/native-views/<key>/task-<encodedTaskId>.json`
+- `<home>/native-views/<key>/brief-<encodedRequestId>.json`
+- `<home>/native-views/<key>/pr-<encodedOwnerRepo>-<number>.json`
+
+Identifiers use `encodeURIComponent`, so each filename remains one path segment. PR filenames
+include the repository to avoid collisions between reviews of the same number in different repos.
+`detailFile` in each index entry is relative to `<home>/native-views/<key>/`; resolve it using
+`nativeDetailPath(home, canonicalRepoPath, detailFile)`. Renderers read detail files when needed.
+
+Directories are private (0700); files are 0600. The writer compares the serialized content with
+the existing file and leaves an unchanged file's inode and modification time intact. Each changed
+file uses a unique temporary file and atomic rename. Details publish before the small index;
+there is no transaction across files. Actions still validate authoritative revision/head bindings.
+On failure, the last index remains readable and the existing coordinator snapshot error reporting
+handles the failed projection. No native file is authority.
 The normal coordinator reconciliation updates it. GitHub and provider cache refreshes run in a
 serial background queue, at most once per minute per PR/provider read, with command timeouts.
 They never hold up the snapshot. Shutdown drains the queue.
@@ -41,12 +58,13 @@ All timestamps are ISO strings, milliseconds are numbers, costs are integer USD 
   version: 1,
   project: string,                // original repoPath, not the pinned coordinator worktree
   writtenAt: string,
+  summary: NativeProjectSummary,  // this project's own counts and coordinator session only
   changeSignature: string,        // SHA-256 of meaningful saved changes, excluding timers
   panel: NativePanelView,
   projects: NativeProjectRow[],
-  tasks: Record<taskId, TaskPageView>,
-  briefs: Record<requestId, BriefView>,
-  pullRequests: Record<"owner/repo#N", PrPaneView>,
+  tasks: Record<taskId, NativeTaskIndex>,
+  briefs: Record<requestId, NativeBriefIndex>,
+  pullRequests: Record<"owner/repo#N", NativePrIndex>,
   board: NativeBoardView,
   usage: UsageView,
   catchup: NativeCatchUpView,
@@ -54,11 +72,50 @@ All timestamps are ISO strings, milliseconds are numbers, costs are integer USD 
 }
 ```
 
+### Index summaries and detail envelopes
+
+Schemas: `src/board/native-views.ts`, `NativeProjectSummary`, `NativeTaskIndex`,
+`NativeBriefIndex`, `NativePrIndex`, `NativeDetail`, `NativeViewsPublication`.
+
+```ts
+NativeProjectSummary = {
+  repoPath:string, name:string, writtenAt:string,
+  running:number, needsYou:number, ready:number, done:number, sessionId?:string
+}
+NativeTaskIndex = NativeTaskSummary & {detailFile:string}
+NativeBriefIndex = {
+  requestId:string, title:string, revision:number, changes:number,
+  approvalState:"unapproved"|"current"|"superseded", abandoned:boolean,
+  commentCount:number, detailFile:string
+}
+NativePrIndex = {header:PrPaneView["header"], readAt:string, detailFile:string}
+NativeDetail =
+  {version:1, project:string, kind:"task", data:TaskPageView} |
+  {version:1, project:string, kind:"brief", data:BriefView} |
+  {version:1, project:string, kind:"pr", data:PrPaneView}
+```
+
+`NativeTaskSummary` contains `{taskId,title,stage,createdAt,updatedAt,previousStage?,model?,
+harness?,branch?,costMicros?,unpricedSamples,pullRequest?}`. No timeline, findings, brief lines,
+conversation, patch or tour is embedded in these index entries. `NativeViewsPublication` is the
+in-process `{bundle:NativeViews,details:{file,view:NativeDetail}[]}` returned by `NativeViewsReader`;
+it is not a file schema. The writer refuses detail paths that escape the project directory or
+detail envelopes belonging to another project.
+
+Each coordinator publishes only its own `summary`. At write time it reads the other root bundles'
+version-1 summaries, validating project identity, filename and heartbeat. The switcher is computed
+from these published summaries, with no foreign task-store projection or coordinator record writes.
+Only projects with a valid published native summary appear. A summary more than ten seconds old
+shows offline, retains its last known counts and omits its stale focus session. Missing or malformed
+foreign summaries never become invented zero counts; malformed summaries add a warning. Reading
+and publishing this project's index never rewrites another project's bundle or details.
+
 ### Panel and project switcher
 
 Schemas: `src/board/panel.ts`, exports `NativePanelView`, `NativePanelRow`,
 `NativeProjectRow`, `NativePanelTarget`. Pure builders: `nativePanelView`,
-`nativeProjectSwitcher`. Existing `panelView` and text targets keep their behavior.
+`nativeProjectSwitcher` (snapshot-based), `nativeSummaryProjects` (published-summary based).
+The service uses the published-summary builder; existing `panelView` and text targets keep their behavior.
 
 ```ts
 NativePanelView = {
@@ -98,6 +155,7 @@ The compact meter uses the lowest known remaining percentage among the account 5
 Schema: `src/tasks/page-view.ts`, `TaskPageView`; pure builder `taskPageView`.
 Input: `TaskRecord`, matching task/generation `TaskInspection`, `StoredTimelineEvent[]`,
 worker activity, the actual routed model when available, and `TaskCostView`.
+This model is the `data` inside the task detail envelope.
 
 - `header`: `{id,title,stage,elapsed,returnLabel,model?,harness?,branch?}`.
 - `rightNow`: `{text,since?,age?}` using the shared panel tool vocabulary.
@@ -118,6 +176,7 @@ worker activity, the actual routed model when available, and `TaskCostView`.
 ### Brief pane
 
 Schema: `src/requests/native-view.ts`, `BriefView`; pure builder `briefView`.
+This model is the `data` inside the brief detail envelope.
 
 ```ts
 {
@@ -143,6 +202,7 @@ annotation/action integration, which can supply them when opening the pane.
 ### PR pane and diff/tour
 
 Schema: `src/pr-review/native-view.ts`, `PrPaneView`. Input schema: `CachedPullRequest`.
+This model is the `data` inside the PR detail envelope.
 Pure builder: `prPaneView`; effectful cache read: `src/pr-watch/native-cache.ts`.
 Tour chapters/stops reuse `ChapterInput` and `TourStopInput` from `src/pr-review/page.ts`.
 The existing HTML review page and native view share `parsePatch` in `src/pr-review/patch.ts`.
