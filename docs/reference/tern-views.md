@@ -232,7 +232,7 @@ project window. Chat and Lavish setup use the shared coordinator host's confirma
 choice, `configureTerminal` awaits the injected installer outside task-store serialization before
 setup opens projects. This is separate consent for linking and shortcuts; a declined prompt keeps
 the terminal choice and reports that the integration was left unchanged.
-Both installation and update reload read `readHomeSettings(home).terminal`; Herdr and homes
+Both installation and update reload read `readHomeSettingsSync(home).terminal`; Herdr and homes
 without a Tern choice perform no Tern plugin or key-setting effects. Update
 reloads after successful coordinator updates, without an installation prompt. Declining plugin
 or key consent leaves the integration unchanged and prints how to add it later.

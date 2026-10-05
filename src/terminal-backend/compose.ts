@@ -1,8 +1,4 @@
-import {
-  type HomeSettings,
-  readHomeSettings,
-  readHomeSettingsSync,
-} from "../config/home-settings.ts";
+import { type HomeSettings, readHomeSettingsSync } from "../config/home-settings.ts";
 import type { CommandRunner, TerminalName } from "../contracts.ts";
 import type { TerminalBackend, TerminalContext } from "./contract.ts";
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
@@ -88,12 +84,15 @@ export function terminalBackend(
 /** How a process reads its inherited terminal pane from its environment; pure, so imported. */
 export const terminalContext: TerminalContext = HERDR_CONTEXT;
 
+/** Onboarding checks availability through the same terminal composition boundary. */
+export const ternAvailability = probeTern;
+
 /** Onboarding uses the same composition boundary as backend selection. */
 export async function installTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
 ): Promise<boolean> {
-  return (await readHomeSettings(home)).terminal === "tern" ? ensureTernPlugin(dependencies) : true;
+  return readHomeSettingsSync(home).terminal === "tern" ? ensureTernPlugin(dependencies) : true;
 }
 
 /** Refresh window bindings only for the selected terminal, after a successful update. */
@@ -101,10 +100,5 @@ export async function reloadTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
 ): Promise<boolean> {
-  return (await readHomeSettings(home)).terminal === "tern"
-    ? reloadTernPlugin(dependencies)
-    : false;
+  return readHomeSettingsSync(home).terminal === "tern" ? reloadTernPlugin(dependencies) : false;
 }
-
-/** Onboarding checks availability through the same terminal composition boundary. */
-export const ternAvailability = probeTern;
