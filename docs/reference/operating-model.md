@@ -29,7 +29,12 @@ a restart never has to rebuild workflow from chat.
 5. **Delivery is gated.** A ready task opens its own draft PR. Final publishing is an explicit
    approval-bearing action; once published, PR watch merges the pull request when its checks
    pass ([pr-watch.md](pr-watch.md)). A draft is never merged.
-6. **Visuals are drawn outside the repository.** A research task's own scout writes HTML to a
+6. **Posting a PR review needs the user's approval.** From chat, `review-post` asks for a yes and
+   the user's verdict. On the review page, the user's Submit is that approval: Tandem's own code
+   (never the model) reads the tagged Submit control's message and posts with no second yes. Either
+   way the review is pinned to the reviewed commit and refused if the PR moved
+   ([pr-review.md](pr-review.md#show-edit-post)).
+7. **Visuals are drawn outside the repository.** A research task's own scout writes HTML to a
    private artifact directory when asked; the controller, not the scout, opens Lavish and owns the
    feedback listener, and routes the user's comments back to that scout.
 

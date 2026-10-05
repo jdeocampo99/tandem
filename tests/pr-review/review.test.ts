@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { commentableLines, lineRanges, numberedDiff } from "../../src/pr-review/diff.ts";
-import { anchorProblems, checkReview, parsePrReview } from "../../src/pr-review/review.ts";
+import {
+  anchorProblems,
+  checkReview,
+  parsePrReview,
+  stopProblem,
+  type TourStop,
+} from "../../src/pr-review/review.ts";
 
 const PATCH = `diff --git a/src/upload.ts b/src/upload.ts
 index 1111111..2222222 100644
@@ -26,7 +32,7 @@ function reviewWith(comments: readonly Record<string, unknown>[]): Record<string
   return {
     head: "abc123",
     intent: "Retries failed uploads.",
-    readingOrder: [{ file: "src/upload.ts", why: "the retry loop" }],
+    tour: [],
     concerns: [
       { title: "Style", detail: "Minor naming.", severity: "nit" },
       { title: "Lock leak", detail: "The lock is never released on error.", severity: "blocking" },
@@ -134,4 +140,84 @@ test("misplaced comments get a fix the reviewer can act on", () => {
   expect(anchorProblems(review, commentableLines(PATCH), false)).toEqual([
     "this is an intent review: leave comments empty and put those points in concerns and summaryComment",
   ]);
+});
+
+function stop(file: string, from: number, to: number, title = "A stop"): TourStop {
+  return { file, from, to, title, body: "What happens here." };
+}
+
+test("a tour stop must be a forward range on a changed file that touches the diff", () => {
+  const lines = commentableLines(PATCH);
+  expect(stopProblem(stop("src/other.ts", 1, 3), lines)).toBe(
+    "src/other.ts is not in the diff; stop on a changed file",
+  );
+  expect(stopProblem(stop("src/upload.ts", 13, 11), lines)).toBe(
+    "13-11 is not a line range; use 1 <= from <= to",
+  );
+  expect(stopProblem(stop("src/upload.ts", 0, 12), lines)).toBe(
+    "0-12 is not a line range; use 1 <= from <= to",
+  );
+  expect(stopProblem(stop("src/upload.ts", 20, 30), lines)).toBe(
+    "lines 20-30 of src/upload.ts are outside the diff; lines in the diff: 10-15",
+  );
+  // Line 15 is an unchanged context line inside the hunk; a range reaching it is fine.
+  expect(stopProblem(stop("src/upload.ts", 15, 25), lines)).toBeUndefined();
+  expect(stopProblem(stop("src/upload.ts", 5, 20), lines)).toBeUndefined();
+});
+
+test("the reviewer is told which tour stops to fix, with the lines it can use", () => {
+  const review = parsePrReview({
+    ...reviewWith([]),
+    tour: [
+      {
+        title: "Retry",
+        why: "The loop",
+        stops: [stop("src/upload.ts", 11, 13, "Loop"), stop("src/upload.ts", 30, 31, "Off")],
+      },
+    ],
+  });
+  expect(anchorProblems(review, commentableLines(PATCH), true)).toEqual([
+    'tour stop "Off": lines 30-31 of src/upload.ts are outside the diff; lines in the diff: 10-15',
+  ]);
+});
+
+test("the runner drops bad stops and chapters left empty, and says so", () => {
+  const checked = checkReview(
+    {
+      ...reviewWith([]),
+      tour: [
+        {
+          title: "Retry",
+          why: "The loop",
+          stops: [stop("src/upload.ts", 11, 13), stop("x.ts", 1, 1)],
+        },
+        { title: "Gone", why: "Nothing valid", stops: [stop("src/upload.ts", 40, 41)] },
+      ],
+    },
+    { kind: "full" },
+    commentableLines(PATCH),
+  );
+  expect(checked.review.tour).toEqual([
+    { title: "Retry", why: "The loop", stops: [stop("src/upload.ts", 11, 13)] },
+  ]);
+  expect(checked.notes).toEqual([
+    "2 tour stops pointed outside the diff, so they were left out of the tour.",
+  ]);
+});
+
+test("a round stored before the tour still reads, with an empty tour", () => {
+  const stored = {
+    head: "abc123",
+    intent: "Retries failed uploads.",
+    diagram: "flowchart TD\n  a --> b",
+    readingOrder: [{ file: "src/upload.ts", why: "the retry loop" }],
+    concerns: [],
+    comments: [],
+    summaryComment: "Looks good.",
+  };
+  const review = parsePrReview(stored);
+  expect(review.tour).toEqual([]);
+  expect(review.verdict).toBeUndefined();
+  expect(Object.keys(review)).not.toContain("diagram");
+  expect(Object.keys(review)).not.toContain("readingOrder");
 });

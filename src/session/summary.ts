@@ -1116,8 +1116,7 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
     action === "review-pr" ||
     action === "review-show" ||
     action === "review-edit" ||
-    action === "review-post" ||
-    action === "review-notes"
+    action === "review-post"
   ) {
     return summarizePrReview(value);
   }

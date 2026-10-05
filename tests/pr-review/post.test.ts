@@ -12,7 +12,7 @@ const POST = "gh api --method POST repos/acme/api/pulls/7/reviews";
 const review: PrReview = {
   head: "abc123",
   intent: "Retries uploads.",
-  readingOrder: [],
+  tour: [],
   concerns: [],
   comments: [
     {

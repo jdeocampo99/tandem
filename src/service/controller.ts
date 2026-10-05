@@ -90,12 +90,14 @@ import {
 import type { PlaybookClassifier } from "../playbooks/classify.ts";
 import { maintainPool } from "../pool/maintenance.ts";
 import type { PoolMaintenanceResult } from "../pool/policy.ts";
+import type { PrReviewEdits } from "../pr-review/edits.ts";
+import type { ReviewSubmission } from "../pr-review/page.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import {
   createPrReviewWorkflow,
   type PostPrReviewResult,
-  type PrReviewEdits,
   type PrReviewWorkflow,
+  type ReviewPageEvent,
   type ShowPrReviewResult,
   type StartPrReviewInput,
   type StartPrReviewResult,
@@ -478,12 +480,21 @@ export type TandemService = Readonly<{
     id: string,
     input?: { readonly page?: boolean },
   ) => Promise<ShowPrReviewResult>;
-  readonly reviewNotes: (id: string) => Promise<Readonly<{ taskId: string; feedback: string }>>;
+  /** Tasks whose review page this service opened and has not seen close. */
+  readonly reviewPagesOpen: () => readonly string[];
+  /** Waits for the open review page's next feedback; `reply` is shown in the page first. */
+  readonly awaitReviewPage: (
+    id: string,
+    signal: AbortSignal,
+    reply?: string,
+  ) => Promise<ReviewPageEvent>;
   readonly reviewEdit: (id: string, edits: PrReviewEdits) => Promise<ShowPrReviewResult>;
   readonly reviewPost: (
     id: string,
     input: { readonly verdict: ReviewVerdict; readonly approved: boolean },
   ) => Promise<PostPrReviewResult>;
+  /** Posts a submission from the review page; the user's click on Submit is the approval. */
+  readonly reviewSubmit: (id: string, submission: ReviewSubmission) => Promise<PostPrReviewResult>;
   readonly reviewAgain: (id: string) => Promise<TaskRecord>;
   readonly reviewClose: (id: string) => Promise<TaskRecord>;
   /** The board across every onboarded project, from saved state only; it never reads GitHub. */
@@ -950,10 +961,13 @@ class TandemController {
       requestBriefs: () => this.#accounting.briefs(),
       reviewPr: (input) => this.#prReviews.start(input),
       reviewShow: (id, input) => this.#prReviews.show(assertTaskId(id), input),
-      reviewNotes: (id) => this.#prReviews.notes(assertTaskId(id)),
+      reviewPagesOpen: () => this.#prReviews.openPages(),
+      awaitReviewPage: (id, signal, reply) =>
+        this.#prReviews.listen(assertTaskId(id), signal, reply),
       reviewEdit: (id, edits) => this.#prReviews.edit(assertTaskId(id), edits),
       reviewPost: (id, input) =>
         this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
+      reviewSubmit: (id, submission) => this.#prReviews.submit(assertTaskId(id), submission),
       reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       board: () => readBoard(this.#deps.home, this.#deps.clock),

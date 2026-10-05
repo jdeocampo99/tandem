@@ -262,3 +262,61 @@ export async function endPresentation(
     "lavish presentation end",
   );
 }
+
+/**
+ * The plain messages in one poll's feedback, joined, from both feedback rows and prompt rows.
+ * Prompt rows holding a page's structured action (`isAction` on the parsed JSON) are left out.
+ */
+export function feedbackMessages(
+  rawFeedback: string,
+  isAction: (action: unknown) => boolean,
+): string | undefined {
+  const messages: string[] = [];
+  let promptSuffix = -1;
+  let feedback = false;
+  for (const line of rawFeedback.split(/\r?\n/u)) {
+    const prompts = /^prompts\[\d+\]\{([^}]+)\}:$/u.exec(line);
+    if (prompts !== null) {
+      const fields = prompts[1]?.split(",") ?? [];
+      promptSuffix = fields.indexOf("prompt") === 1 ? fields.length - 2 : -1;
+      feedback = false;
+      continue;
+    }
+    if (/^feedback\[\d+\]\{/u.test(line)) {
+      promptSuffix = -1;
+      feedback = true;
+      continue;
+    }
+    if (feedback) {
+      const message = /^\s+message:\s*(.*)$/u.exec(line)?.[1]?.trim();
+      if (message) messages.push(message);
+    } else if (promptSuffix >= 0) {
+      const row = /^\s+"(?:[^"\\]|\\.)*",(.*)$/u.exec(line)?.[1];
+      if (row === undefined) continue;
+      const quoted = /^"(?:[^"\\]|\\.)*"/u.exec(row)?.[0];
+      let value: string;
+      if (quoted === undefined) {
+        const parts = row.split(",");
+        value = parts
+          .slice(0, parts.length > promptSuffix ? parts.length - promptSuffix : parts.length)
+          .join(",")
+          .trim();
+      } else {
+        try {
+          const parsed: unknown = JSON.parse(quoted);
+          value = typeof parsed === "string" ? parsed.trim() : "";
+        } catch {
+          value = row.trim();
+        }
+      }
+      if (!value) continue;
+      try {
+        if (isAction(JSON.parse(value))) continue;
+      } catch {
+        // Ordinary freeform text need not be JSON.
+      }
+      messages.push(value);
+    }
+  }
+  return messages.length > 0 ? messages.join("\n\n") : undefined;
+}

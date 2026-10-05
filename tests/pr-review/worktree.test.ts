@@ -176,7 +176,7 @@ function roundAt(head: string, from: string): PrReviewState["rounds"][number] {
     review: {
       head,
       intent: "x",
-      readingOrder: [],
+      tour: [],
       concerns: [],
       comments: [],
       summaryComment: "",
