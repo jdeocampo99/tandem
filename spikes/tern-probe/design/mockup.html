@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Tandem in Tern: views</title>
+<style>
+:root{--bg:#16181c;--pane:#1b1e23;--line:#2a2e35;--fg:#d6dae0;--dim:#7d8590;--acc:#7fb4ff;--ok:#6fcf97;--warn:#f2b45a;--bad:#ef7b7b;--mono:"Berkeley Mono","JetBrains Mono",ui-monospace,monospace;--ui:system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 700px at 30% 10%,#3a4a63,#1c2230 60%,#10131a);font-family:var(--mono);color:var(--fg);min-height:100vh;padding:0 0 50px}
+nav{position:sticky;top:0;z-index:100;display:flex;gap:4px;justify-content:center;padding:10px;background:#0b0d12e6;backdrop-filter:blur(10px);border-bottom:1px solid #ffffff18;font-family:var(--ui);font-size:12.5px;flex-wrap:wrap}
+nav a{color:#9aa4b2;text-decoration:none;padding:5px 11px;border-radius:6px}nav a:hover{background:#ffffff12}nav a.on{background:var(--acc);color:#0b1220;font-weight:600}
+.screen{display:none;width:1440px;margin:26px auto 0}.screen.on{display:block}
+.cap{font-family:var(--ui);font-size:14px;line-height:1.5;color:#c3cad4;margin:16px 4px 0;max-width:1200px}.cap b{color:#fff}
+.win{position:relative;width:1440px;height:900px;background:rgba(22,24,28,.9);border:1px solid #ffffff1f;border-radius:12px;box-shadow:0 40px 100px #000a;overflow:hidden;display:flex;font-size:12px}
+/* sidebar */
+.side{width:232px;flex:none;background:#12141980;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:12px 8px 8px}
+.lights{display:flex;gap:8px;padding:0 6px 14px}.lights i{width:12px;height:12px;border-radius:50%;display:block}
+.sess{display:flex;align-items:center;gap:9px;padding:6px;margin-bottom:10px}
+.av{display:flex}.av i{width:20px;height:20px;border-radius:50%;border:2px solid #16181c;margin-left:-6px;font-style:normal;font-size:9px;display:flex;align-items:center;justify-content:center;color:#0b1220;font-weight:700}.av i:first-child{margin-left:0}
+.sess b{font-family:var(--ui);font-size:13.5px}.sess span{margin-left:auto;color:var(--dim)}
+.st{display:flex;gap:9px;padding:7px 8px;border-radius:7px;cursor:pointer;align-items:flex-start}
+.st:hover{background:#ffffff0a}.st.on{background:#ffffff14}
+.st .ic{width:16px;height:16px;border:1.5px solid var(--dim);border-radius:4px;flex:none;margin-top:2px;position:relative}
+.st .ic::after{content:"";position:absolute;left:2px;right:2px;top:2px;height:2px;background:var(--dim)}
+.st.on .ic{border-color:var(--acc)}.st.on .ic::after{background:var(--acc)}
+.st .t{font-family:var(--ui);font-size:12.5px;color:var(--fg);line-height:1.25}.st .s{font-size:10px;color:var(--dim);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:168px}
+.st .t,.st .s{display:block}.st>div{min-width:0}
+.sp{flex:1}
+.sb{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;color:var(--dim);font-family:var(--ui);font-size:12px;cursor:pointer}.sb:hover{background:#ffffff0a}.sb kbd{margin-left:auto;font-family:var(--mono);font-size:10.5px;opacity:.8}
+.sb b{background:var(--bad);color:#fff;border-radius:8px;padding:0 6px;font-size:10px;margin-left:auto}
+.col{flex:1;min-width:0;display:flex;flex-direction:column}
+.main{flex:1;display:flex;min-height:0;position:relative}
+.left{flex:1;min-width:0;background:var(--pane);border-right:1px solid var(--line);display:flex;flex-direction:column;position:relative}
+.ph{height:28px;display:flex;align-items:center;padding:0 12px;color:var(--dim);border-bottom:1px solid var(--line);font-size:11px;gap:8px;flex:none}.ph .sub{margin-left:auto;font-style:italic;opacity:.8}
+.chat{flex:1;padding:16px 22px;overflow:hidden;line-height:1.6}
+.u{color:var(--acc)}.u::before{content:"> "}
+.c{margin:8px 0 14px}.c .tag{color:var(--ok)}
+.stat{border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin:10px 0;background:#00000030;color:var(--dim)}.stat div{display:flex;gap:10px}.stat .s{width:12px}
+.prompt{border-top:1px solid var(--line);padding:11px 22px;display:flex;gap:8px}
+.caret{width:7px;height:14px;background:var(--fg);animation:bl 1s steps(2) infinite}@keyframes bl{50%{opacity:0}}
+.lnk{color:var(--acc);text-decoration:underline;text-underline-offset:2px;cursor:pointer;position:relative}
+.lnk .tip{display:none;position:absolute;left:0;top:24px;white-space:nowrap;background:#2a2d33;border:1px solid #ffffff2a;border-radius:6px;padding:3px 8px;font-family:var(--ui);font-size:11px;color:#eee;text-decoration:none;z-index:5}
+.lnk:hover .tip,.lnk.hov .tip{display:block}
+.status{height:24px;border-top:1px solid var(--line);display:flex;align-items:center;padding:0 12px;gap:14px;color:var(--dim);font-size:11px;background:#00000025;flex:none}
+.status .r{margin-left:auto}.status .hl{color:var(--fg)}.status .w{color:var(--warn)}
+/* panel */
+.panel{width:380px;flex:none;display:flex;flex-direction:column;background:#ffffff05}
+.chips{display:flex;gap:5px;padding:8px 10px;border-bottom:1px solid var(--line);align-items:center}
+.pc{padding:3px 8px;border-radius:12px;border:1px solid #ffffff1a;color:var(--dim);font-size:10.5px}.pc.on{background:#7fb4ff22;border-color:#7fb4ff88;color:var(--fg)}
+.pbtn{margin-left:auto;font:inherit;font-size:10.5px;padding:1px 8px;border-radius:5px;border:1px solid #ffffff2a;background:#ffffff0d;color:var(--fg);cursor:pointer}
+.plist{flex:1;overflow:hidden;padding:4px 0}
+.sec{padding:10px 12px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);display:flex;gap:6px}.sec.need{color:var(--warn)}
+.row{position:relative;padding:7px 12px 7px 24px;cursor:pointer;border-left:2px solid transparent;line-height:1.4}
+.row:hover{background:#ffffff0d;border-left-color:var(--acc)}
+.row .g{position:absolute;left:9px;top:7px}
+.row .top{display:flex;gap:7px;align-items:baseline}.row .nm{color:var(--fg);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.row .stg{color:var(--dim);font-size:10.5px}.row .seg{letter-spacing:1px;color:var(--acc);font-size:11px}
+.row .mt{display:flex;gap:6px;align-items:center;color:var(--dim);font-size:10px;margin-top:1px}
+.row .why{color:var(--dim);font-family:var(--ui);font-size:11px;margin-top:2px}
+.row .live{color:var(--dim);font-size:10px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85}
+.row .hint{display:none;margin-left:auto;color:var(--acc)}.row:hover .hint{display:inline}
+.nd{position:absolute;left:-1px;top:11px;width:6px;height:6px;border-radius:50%;background:var(--acc)}
+.chip{border:1px solid #ffffff20;border-radius:4px;padding:0 5px;font-size:10px;white-space:nowrap}.chip.opus{color:#c8a2ff;border-color:#c8a2ff55}.chip.sonnet{color:#7fd6e8;border-color:#7fd6e855}.chip.pr{color:var(--ok);border-color:#6fcf9755}.chip.br{color:var(--dim)}
+.todos{margin:5px 0 2px;padding:5px 8px;background:#00000030;border-radius:5px;font-size:10.5px;color:var(--dim)}.todos .d{color:var(--ok)}.todos .n{color:var(--acc)}
+.pfoot{border-top:1px solid var(--line);padding:7px 12px;color:var(--dim);font-size:10.5px;flex:none}
+/* generic */
+button{font:inherit;font-family:var(--ui);font-size:12px;padding:6px 14px;border-radius:6px;border:1px solid #ffffff2a;background:#ffffff0d;color:var(--fg);cursor:pointer}button:hover{background:#ffffff1c}
+button.p{background:var(--acc);color:#0b1220;border-color:var(--acc);font-weight:600}button.sm{padding:3px 9px;font-size:11px}
+.pill{display:inline-block;border-radius:10px;padding:1px 9px;font-family:var(--ui);font-size:11px;border:1px solid}
+.pill.ok{color:var(--ok);border-color:#6fcf9766;background:#6fcf9714}.pill.warn{color:var(--warn);border-color:#f2b45a66;background:#f2b45a14}.pill.acc{color:var(--acc);border-color:#7fb4ff66;background:#7fb4ff14}.pill.dim{color:var(--dim);border-color:#ffffff2a}.pill.bad{color:var(--bad);border-color:#ef7b7b66;background:#ef7b7b14}
+.ui{font-family:var(--ui)}
+.float{position:absolute;background:#20242bf7;border:1px solid #ffffff2a;border-radius:12px;box-shadow:0 24px 70px #000c;z-index:10;overflow:hidden}
+.float .body{padding:16px 20px;font-family:var(--ui);font-size:13px;line-height:1.55}
+.float h2{margin:0 0 2px;font-size:17px}.float h5{margin:14px 0 4px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}.float ul{margin:0;padding-left:18px}.float li{margin:2px 0}
+.fh{display:flex;align-items:center;gap:8px;padding:7px 12px;background:#ffffff0c;border-bottom:1px solid var(--line);font-size:11px;color:var(--dim)}
+.btns{display:flex;gap:8px;margin-top:16px;align-items:center}
+.new{background:#6fcf9718;border-left:2px solid var(--ok);padding:1px 6px;margin-left:-8px;border-radius:0 4px 4px 0}
+.newtag{font-size:9.5px;color:var(--ok);text-transform:uppercase;letter-spacing:.06em;margin-left:6px}
+.old{color:var(--dim);text-decoration:line-through}
+textarea{width:100%;background:#00000040;color:var(--fg);border:1px solid #ffffff2a;border-radius:6px;padding:8px;font:12.5px var(--ui);height:64px;resize:none;margin-top:8px}
+/* task page */
+.tp{flex:1;min-width:0;display:flex;flex-direction:column;background:#181b20}
+.tph{padding:14px 20px 0;border-bottom:1px solid var(--line)}
+.tph h1{margin:0;font:600 19px var(--ui);display:flex;gap:10px;align-items:center}
+.tph .meta{display:flex;gap:10px;align-items:center;margin:8px 0 12px;color:var(--dim);font-size:11px;flex-wrap:wrap}
+.stage{letter-spacing:2px;color:var(--acc);font-size:13px}
+.tabs2{display:flex;gap:2px}.tabs2 a{padding:7px 13px;font:12.5px var(--ui);color:var(--dim);cursor:pointer;border-bottom:2px solid transparent}.tabs2 a:hover{color:var(--fg)}.tabs2 a.on{color:var(--fg);border-color:var(--acc)}
+.tbody{flex:1;overflow:hidden;padding:18px 22px;font-family:var(--ui);font-size:13px;line-height:1.55}
+.tbody .pg{display:none}.tbody .pg.on{display:block}
+.tbody h4{margin:16px 0 6px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);font-weight:600}.tbody h4:first-child{margin-top:0}
+.tbody ul{margin:0;padding-left:18px}.tbody li{margin:3px 0}
+.card2{background:#ffffff06;border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.todo2 div{padding:4px 0;display:flex;gap:9px}.todo2 .d{color:var(--ok)}.todo2 .n{color:var(--acc)}.todo2 .x{color:var(--dim)}
+.tl{border-left:1px solid var(--line);margin-left:6px}.tl div{padding:0 0 11px 16px;position:relative}.tl div::before{content:"";position:absolute;left:-4px;top:7px;width:7px;height:7px;border-radius:50%;background:var(--acc)}.tl div.k::before{background:var(--ok)}.tl div.w::before{background:var(--warn)}.tl time{font:11px var(--mono);color:var(--dim);margin-right:10px}
+table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);font-weight:400}th{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}td.n,th.n{text-align:right;font-family:var(--mono);font-size:12px}
+.add{color:var(--ok)}.del{color:var(--bad)}
+pre{margin:0;font:11.5px/1.55 var(--mono);background:#00000040;border:1px solid var(--line);border-radius:6px;padding:8px 10px;overflow:hidden;white-space:pre}
+pre .a{color:var(--ok);background:#6fcf9714;display:block}pre .r{color:var(--bad);background:#ef7b7b14;display:block}pre .h{color:var(--acc)}
+details summary{cursor:pointer;color:var(--dim);font-size:12px;padding:4px 0}
+.bar{height:8px;border-radius:4px;background:#ffffff10;overflow:hidden;display:flex}.bar i{display:block;height:100%}
+.qa{display:flex;gap:8px;margin-top:6px}
+/* board */
+.boardv{flex:1;display:flex;flex-direction:column;background:#171a1f}
+.board{flex:1;display:flex;gap:10px;padding:14px;overflow:hidden}
+.lane{flex:1;min-width:0;background:#ffffff06;border:1px solid var(--line);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:8px;align-content:flex-start}
+.lane h4{margin:0;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);display:flex;justify-content:space-between}.lane.need h4{color:var(--warn)}
+.card{background:#242830;border:1px solid #ffffff12;border-radius:7px;padding:9px;font-size:11.5px;line-height:1.4}.card.need{border-color:#f2b45a66}.card .t{margin-bottom:6px}
+.meta2{display:flex;flex-wrap:wrap;gap:5px;align-items:center;color:var(--dim);font-size:10px}
+.todo{display:flex;gap:2px;margin-top:6px;align-items:center;color:var(--dim);font-size:10px}.todo i{width:7px;height:7px;border:1px solid var(--dim);border-radius:2px;display:block}.todo i.d{background:var(--ok);border-color:var(--ok)}.todo span{margin-left:5px}
+/* inbox/palette */
+.inbox{width:430px;padding:0}
+.inbox h6{margin:0;padding:10px 14px 6px;font:600 13px var(--ui)}
+.grp{padding:6px 14px 2px;font:10px var(--ui);text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+.ir{display:flex;gap:10px;align-items:center;padding:8px 14px;font-family:var(--ui);font-size:12.5px}.ir.sel{background:#7fb4ff22}
+.ir .ic{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;flex:none}
+.ir .x{color:var(--dim);margin-left:auto;display:flex;gap:8px;align-items:center;font-size:11px}
+.ir .m{color:var(--dim);font-size:11.5px}
+.foot{border-top:1px solid var(--line);padding:8px 14px;font:11px var(--ui);color:var(--dim)}
+.pal{left:50%;top:70px;margin-left:-300px;width:600px}
+.pal input{width:100%;background:transparent;border:0;border-bottom:1px solid var(--line);padding:13px 16px;font:15px var(--ui);color:var(--fg);outline:0}
+.pr2{display:flex;padding:9px 16px;font-family:var(--ui);font-size:13px;cursor:pointer;align-items:center;gap:8px}.pr2:hover,.pr2.sel{background:#7fb4ff22}.pr2 kbd{margin-left:auto;font:11px var(--mono);color:var(--dim);background:#ffffff0d;border:1px solid #ffffff1a;border-radius:4px;padding:1px 6px}.pr2 em{color:var(--dim);font-style:normal;font-size:11px}
+/* usage */
+.usage{flex:1;padding:20px 26px;overflow:hidden;font-family:var(--ui);background:#171a1f}
+.grid{display:grid;gap:14px}.kp{font:600 26px var(--ui)}.kl{font-size:11px;color:var(--dim);margin-top:2px}
+.pr3{display:grid;grid-template-columns:34px 1fr 150px 190px 110px;gap:14px;align-items:center;padding:12px 18px;border-bottom:1px solid var(--line);font-family:var(--ui);font-size:13px;cursor:pointer}
+.pr3:hover,.pr3.sel{background:#ffffff0c}.pr3 small{display:block;color:var(--dim);font-size:11.5px;margin-top:2px}
+/* phone */
+.phonewrap{width:1440px;height:900px;display:flex;align-items:center;justify-content:center;gap:36px}
+.phone{width:390px;height:844px;border-radius:50px;background:#0f1115;border:10px solid #2b2e35;box-shadow:0 40px 100px #000a;position:relative;overflow:hidden;font-family:var(--ui)}
+.phone .sbar{height:50px;display:flex;justify-content:space-between;padding:16px 28px 0;font-size:14px;font-weight:600}
+.phone .nav{padding:6px 18px 10px;display:flex;align-items:center;gap:8px;font-size:20px;font-weight:700}
+.phone .seg2{display:flex;margin:0 16px 8px;background:#ffffff0f;border-radius:9px;padding:2px}.seg2 span{flex:1;text-align:center;padding:5px;font-size:12.5px;border-radius:7px;color:var(--dim)}.seg2 span.on{background:#ffffff1c;color:#fff}
+.pv{display:none;position:absolute;inset:50px 0 0}.pv.on{display:flex;flex-direction:column}
+.prow{margin:6px 14px;padding:11px 13px;background:#ffffff0a;border-radius:12px;font-size:14px;cursor:pointer}.prow small{display:block;color:var(--dim);font-size:12px;margin-top:2px}
+.prow.need{border:1px solid #f2b45a88;background:#f2b45a14}.prow.need b{color:var(--warn);margin-right:6px}
+.phn{width:300px;font:14px/1.6 var(--ui);color:#c3cad4}.phn b{color:#fff}
+
+.panel{border-right:1px solid var(--line)}.left{border-right:0}
+.pill.btn{cursor:pointer;background:#e9ecf1;color:#12141a;border-color:#e9ecf1;font-weight:600;padding:4px 12px;font-size:12px;border-radius:14px}
+.warnb{display:none;gap:12px;align-items:flex-start;padding:11px 20px;background:#f2b45a12;border-bottom:1px solid #f2b45a44;font-family:var(--ui)}
+.warnb.on{display:flex}.warnb b{color:var(--warn);font-size:13.5px}.warnb p{margin:2px 0 0;color:#a5adb8;font-size:12.5px;line-height:1.45}.warnb .x{color:var(--dim);cursor:pointer;font-size:16px;padding:0 4px}
+.glance{display:grid;grid-template-columns:1fr 1.5fr;gap:10px;margin:0 0 12px;font-family:var(--ui)}
+.gc{background:#ffffff06;border:1px solid var(--line);border-radius:8px;padding:8px 11px}.gc small{display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:3px}.gc div{font-size:12.5px;line-height:1.35}
+.track{display:flex;align-items:center;gap:0;font-size:11px;white-space:nowrap}.track span{color:var(--dim)}.track span.k{color:var(--ok)}.track span.k::before{content:"✓ "}.track span.on{color:#0b1220;background:var(--acc);border-radius:10px;padding:1px 8px;font-weight:600}.track i{color:#555c66;font-style:normal;margin:0 5px}
+.minbar{height:4px;border-radius:2px;background:#ffffff12;margin-top:5px}.minbar i{display:block;height:100%;width:60%;background:var(--ok);border-radius:2px}
+.msg{margin:0 22px 14px;border:1px solid #ffffff22;border-radius:14px;background:#1f2228;padding:10px 14px;font-family:var(--ui)}.msg .ph2{color:var(--dim);font-size:13px;margin-bottom:12px}.msg .r{display:flex;gap:10px;align-items:center;font-size:12px;color:var(--dim)}.msg .send{margin-left:auto;width:26px;height:26px;border-radius:50%;background:#555c66;color:#fff;display:flex;align-items:center;justify-content:center}
+.vt{border-left:2px solid var(--line);margin-left:7px}.vt>div{position:relative;padding:0 0 14px 20px}.vt>div::before{content:"";position:absolute;left:-7px;top:3px;width:12px;height:12px;border-radius:50%;background:var(--ok);border:2px solid #181b20}.vt>div.cur::before{background:var(--acc);box-shadow:0 0 0 3px #7fb4ff33}.vt>div.todo::before{background:#3a3f47}.vt .sub{margin:6px 0 0;padding:0;font-size:12px;color:#b3bbc6}.vt .sub div{padding:2px 0;display:flex;gap:8px;align-items:baseline}.vt time{font:11px var(--mono);color:var(--dim);margin-right:8px}
+.nxt{font:600 17px var(--ui);padding:12px 14px;border-radius:9px;margin:12px 0}.nxt.you{background:#f2b45a14;border:1px solid #f2b45a55;color:var(--warn)}.nxt.oth{background:#7fb4ff10;border:1px solid #7fb4ff44;color:var(--acc)}.nxt.ok{background:#6fcf9712;border:1px solid #6fcf9744;color:var(--ok)}.nxt small{display:block;font:400 11.5px var(--ui);color:var(--dim);margin-top:2px}
+.ghb{background:#e9ecf1;color:#12141a;border-radius:7px;padding:5px 12px;font:600 12px var(--ui);text-decoration:none;white-space:nowrap}
+.pl{width:236px;flex:none;border-right:1px solid var(--line);padding:8px 0;font-family:var(--ui)}.pli{padding:9px 14px;cursor:pointer;border-left:2px solid transparent}.pli:hover{background:#ffffff0a}.pli.on{background:#ffffff12;border-left-color:var(--acc)}.pli b{font-size:12.5px;display:block;font-weight:500}.pli span{font-size:11px}
+.cm{padding:7px 0;border-bottom:1px solid var(--line);font-size:12.5px}.cm small{color:var(--dim)}
+.bcol{flex:1;min-width:0;border-right:1px solid var(--line);display:flex;flex-direction:column}.bcol:last-child{border:0}
+.bch{display:flex;align-items:center;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line);font:13px var(--ui)}.bch i{width:8px;height:8px;border-radius:50%}.bch em{margin-left:auto;color:var(--dim);font-style:normal}
+.bcs{padding:12px;display:flex;flex-direction:column;gap:10px}
+.bc{background:#1d2026;border:1px solid #ffffff14;border-radius:10px;padding:12px 13px;font-family:var(--ui)}
+.bh{display:flex;gap:9px;align-items:flex-start;font-size:13.5px;line-height:1.3}.bh b{font-weight:600}
+.hx{width:22px;height:22px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}.hx.cc{background:#d9774a;color:#fff}.hx.omp{background:#6b5bd6;color:#fff}
+.bbr{font:11px var(--mono);color:var(--dim);margin:7px 0 0 31px;display:flex;gap:6px;align-items:center}
+.bd{height:1px;background:#ffffff12;margin:10px -13px}
+.bf{display:flex;font-size:12px;align-items:center}.bf .age{margin-left:auto;color:var(--dim);font:11px var(--mono)}.bf em{font-style:normal;color:var(--dim);margin-left:6px}
+.b2{display:flex;gap:8px;align-items:center;margin-top:7px;font:11px var(--mono);color:var(--dim)}.b2 .pr{color:var(--ok)}.b2 .pr.d{color:var(--dim)}
+.ln{position:relative;cursor:pointer;border-radius:4px;padding:1px 4px;margin-left:-4px}.ln:hover{background:#ffffff0c}.ln:hover::after{content:"+ note";position:absolute;right:-4px;top:1px;font-size:10px;opacity:.5}
+.note{display:none;margin:3px 0 6px 0;padding:6px 10px;background:#f2b45a14;border-left:2px solid var(--warn);border-radius:0 5px 5px 0;font-size:12px;color:#e6d3b0;list-style:none}.ln.has+.note{display:block}.ln.has{background:#f2b45a0a}
+.ln.has::before{content:"◩";color:var(--warn);position:absolute;left:-20px;top:1px;font-size:12px}
+.pgh{display:flex;align-items:center;gap:10px;padding:12px 20px;border-bottom:1px solid var(--line);font-family:var(--ui)}
+.lim{display:grid;grid-template-columns:1fr 1fr;gap:16px}.meter{margin:10px 0}.meter .t{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:5px}.meter .t span{color:var(--dim)}.meter .bar{height:12px;border-radius:6px}
+.mini{background:#0d0f13;border:1px solid var(--line);border-radius:8px;overflow:hidden;font:11.5px var(--mono)}.mini .rows{height:46px;padding:8px 12px;color:#555c66}.mini .sl{display:flex;gap:14px;padding:5px 12px;background:#00000040;border-top:1px solid var(--line);color:var(--dim);align-items:center}.hlseg{outline:2px solid var(--acc);outline-offset:2px;border-radius:3px;color:var(--fg);padding:0 4px;position:relative}.hlseg::after{content:"Tandem's status-line segment";position:absolute;left:0;top:-30px;white-space:nowrap;font:600 11px var(--ui);color:var(--acc)}
+.prop{position:absolute;left:0;right:0;top:0;z-index:12;background:#7fb4ff;color:#0b1220;font:12.5px var(--ui);padding:7px 20px;text-align:center}
+
+.edge{width:10px;flex:none;background:linear-gradient(90deg,#ffffff22,#ffffff05);border-right:1px solid #ffffff12}
+.ph3{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);font-family:var(--ui)}.ph3 b{font-size:14px}
+.lm{margin-left:auto;display:flex;gap:7px;align-items:center;font:11px var(--mono);color:var(--dim)}
+.mb{width:34px;height:4px;border-radius:2px;background:#ffffff18;display:inline-block;overflow:hidden}.mb u{display:block;height:100%;background:var(--warn)}
+.ib{width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--dim);cursor:pointer;font-size:13px}.ib:hover{background:#ffffff10;color:var(--fg)}
+.bellc{color:var(--dim);font-size:12px;display:flex;gap:4px;align-items:center}.bellc b{background:var(--bad);color:#fff;border-radius:8px;padding:0 5px;font:10px var(--ui)}
+.nh{padding:12px 12px 4px;font:600 11px var(--ui);color:var(--warn);text-transform:uppercase;letter-spacing:.08em}
+.dv{padding:14px 12px 3px;font-size:9.5px;color:#5f6670;text-transform:uppercase;letter-spacing:.1em;display:flex;align-items:center;gap:8px}.dv::after{content:"";flex:1;height:1px;background:#ffffff0d}
+.pr1{padding:6px 12px;cursor:pointer;border-left:2px solid transparent}.pr1:hover{background:#ffffff0d;border-left-color:var(--acc)}.pr1.need{background:#f2b45a0d}
+.pr1 .l1{display:flex;gap:8px;align-items:center;font-family:var(--ui);font-size:13px}.pr1 .l1 i{width:7px;height:7px;border-radius:50%;flex:none}.pr1 .l1 .nm{flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.pr1 .l1 .sg{color:var(--dim);font-size:11.5px}.pr1 .l1 .tm{color:var(--dim);font:11px var(--mono);width:30px;text-align:right}
+.pr1 .l2{margin:1px 0 0 15px;font:11px var(--ui);color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nb{margin:3px 0 6px;list-style:none;font-size:12px}.nb:empty{display:none}
+.nb.saved{color:#e6d3b0;padding:5px 10px;background:#f2b45a14;border-left:2px solid var(--warn);border-radius:0 5px 5px 0}
+.nb.edit{display:flex;gap:10px;align-items:center}.nb.edit input{flex:1;background:#00000055;border:1px solid var(--acc);border-radius:6px;padding:5px 9px;color:var(--fg);font:12.5px var(--ui);outline:0;box-shadow:0 0 0 3px #7fb4ff22;caret-color:var(--acc)}.nb.edit span{color:var(--dim);font-size:10.5px;white-space:nowrap}
+.prh{display:flex;gap:12px;align-items:flex-start;padding:12px 18px 10px;font-family:var(--ui)}.prh .t{font:600 16px var(--ui)}.prh .st{font:600 13px var(--ui);margin-top:3px}.prh .sb2{font-size:11.5px;color:var(--dim);margin-top:3px}
+.prbody{padding:14px 18px;font-family:var(--ui);font-size:13px;line-height:1.55;overflow:hidden;flex:1}
+.prbody h3{font-size:14px;margin:14px 0 4px}.prbody h3:first-child{margin-top:0}.prbody p{margin:0 0 6px;color:#c3cad4}.prbody code{font:11.5px var(--mono);background:#ffffff0f;padding:0 4px;border-radius:3px}.prbody ul{margin:0;padding-left:18px;color:#c3cad4}
+.ch{margin-bottom:10px}.cht{font:600 11px var(--ui);text-transform:uppercase;letter-spacing:.07em;color:var(--dim);margin-bottom:3px}
+.stop{padding:4px 8px;border-radius:5px;cursor:pointer;font-size:12.5px;border-left:2px solid transparent}.stop:hover{background:#ffffff0a}.stop.on{background:#7fb4ff14;border-left-color:var(--acc)}.stop code{font:11px var(--mono);color:var(--acc)}.stop span{color:var(--dim)}
+.fl{display:flex;gap:8px;padding:5px 8px;border-radius:5px;cursor:pointer;font:11.5px var(--mono);justify-content:space-between}.fl:hover{background:#ffffff0a}.fl.on{background:#7fb4ff14}
+.cmt{display:flex;gap:8px;align-items:center;margin:6px 0 4px;padding:5px 8px;background:#f2b45a10;border-left:2px solid var(--warn);border-radius:0 5px 5px 0}.cmt input{flex:1;background:transparent;border:0;color:var(--fg);font:12.5px var(--ui);outline:0}
+.capt{font-size:11px;color:var(--dim)}
+pre.hk span{display:block}.btns button{white-space:nowrap}
+
+pre.hk>span{display:block}
+.bdoc{flex:1;min-width:0;padding:18px 26px 18px 58px;font:14px/1.62 var(--ui);overflow:hidden}
+.bdoc ul{padding-left:20px}.bdoc li{margin:1px 0}
+.al{position:relative;border-radius:3px;transition:background .12s}
+.al .plus{position:absolute;left:-42px;top:1px;width:20px;height:20px;border-radius:50%;background:#7fb4ff;color:#0b1220;font:700 14px/20px var(--ui);text-align:center;opacity:0;cursor:pointer;pointer-events:none;z-index:2}
+.al:hover>.plus{opacity:1;pointer-events:auto}.al.hl:hover>.plus{opacity:0;pointer-events:none}
+.al .mk{position:absolute;left:-42px;top:-1px;color:#e8c14a;font:16px/1.5 var(--ui);cursor:pointer}
+.al.hl{background:#f2d65a22}.al.hl.act{background:#f2d65a50}
+.rail{width:330px;flex:none;position:relative;border-left:1px solid var(--line);background:#00000018}.rail.sm{width:235px;background:transparent}
+.rc{position:absolute;left:24px;right:12px;background:#262a31;border:1px solid #ffffff1c;border-radius:8px;padding:8px 10px;font:12.5px/1.45 var(--ui);transition:border-color .12s,box-shadow .12s}
+.rc::before{content:"";position:absolute;left:-25px;top:16px;width:24px;height:1px;background:#e8c14a99}
+.rc.act{border-color:#e8c14a;box-shadow:0 0 0 2px #e8c14a30}
+.rch{display:flex;gap:7px;align-items:center;margin-bottom:4px}.rch .no{color:#e8c14a;font-size:15px}.rch .av2{width:18px;height:18px;border-radius:50%;background:#5a6f94;color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;font-weight:700;flex:none}.rch .av2.you{background:#7fb4ff;color:#0b1220}.rch b{font-size:12px}.rch .tm2{color:var(--dim);font-size:11px}.rch .ic{margin-left:auto;display:flex;gap:9px;color:var(--dim)}.rch .ic u{text-decoration:none;cursor:pointer}.rch .ic u:hover{color:var(--fg)}
+.rc textarea{height:58px;margin:2px 0 6px}.rbt{display:flex;gap:6px}
+.rrep{margin:6px 0 0 4px;padding-left:8px;border-left:2px solid #ffffff18;font-size:12px}.rrep b{font-size:11.5px}
+.rf{display:flex;gap:8px;align-items:center;margin-top:6px}.rsd{color:var(--ok);font-size:11px}.rc.rs{opacity:.7}
+.bbar{display:flex;gap:12px;align-items:center;padding:12px 20px;border-top:1px solid var(--line);background:#00000030;font-family:var(--ui)}.bbar input{flex:1;background:#00000040;border:1px solid #ffffff22;border-radius:6px;padding:7px 10px;color:var(--fg);font:12.5px var(--ui);outline:0}.bbar button{white-space:nowrap}
+.prl{color:var(--ok);text-decoration:none}.prl:hover{text-decoration:underline}.prl.d{color:var(--dim)}
+.stk{font:600 10px var(--ui);color:var(--bad);border:1px solid #ef7b7b66;background:#ef7b7b14;border-radius:8px;padding:0 6px;margin-left:6px;vertical-align:1px}
+.ckrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.ckp{font:12px var(--ui);border-radius:14px;padding:3px 11px;border:1px solid}.ckp i{font-style:normal;opacity:.7;margin-left:3px}.ckp.ok{color:var(--ok);border-color:#6fcf9755;background:#6fcf9712}.ckp.run{color:var(--acc);border-color:#7fb4ff55;background:#7fb4ff12}.ckp.bad{color:var(--bad);border-color:#ef7b7b55;background:#ef7b7b12}.ckp a{text-decoration:underline;cursor:pointer}.ckp .spn{font-family:var(--mono);display:inline-block;width:12px}.ckp .tmr{font-family:var(--mono);font-weight:400}
+.conv{display:flex;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;background:#ffffff05}.conv .av2{width:24px;height:24px;border-radius:50%;background:#5a6f94;color:#fff;font:700 11px var(--ui);display:flex;align-items:center;justify-content:center;flex:none}
+pre.hk{overflow:hidden;padding:8px 6px 8px 32px;font-size:10.5px}pre.hk .al .plus,pre.hk .al .mk{left:-26px}
+pre.hk{color:#d6dae0}pre.hk .a{color:#d6dae0;background:#6fcf9719}pre.hk .r{color:#d6dae0;background:#ef7b7b19}pre.hk .h{color:var(--dim);background:transparent}
+pre.hk .gn{display:inline-block;width:28px;text-align:right;color:#5f6670;font-style:normal;margin-right:12px;user-select:none}
+pre.hk .al.hl{box-shadow:inset 3px 0 #e8c14a}pre.hk .al.hl.act{background:#f2d65a38}
+
+.dfl{font:10.5px/1.6 var(--mono);background:#00000040;border:1px solid var(--line);border-radius:6px;padding:4px 0;color:#d6dae0}
+.dfl>.al{white-space:pre;overflow:hidden;padding-right:8px;border-radius:0}
+.dfl>.al.a{background:#6fcf9719}.dfl>.al.r{background:#ef7b7b19}.dfl>.al.h{color:var(--dim)}
+.dfl>.al.hl{box-shadow:inset 3px 0 #e8c14a}.dfl>.al.hl.act{background:#f2d65a38}
+.dfl .gn{display:inline-block;width:30px;margin-left:24px;text-align:right;color:#5f6670;font-style:normal;margin-right:12px;user-select:none}
+.dfl .al .plus{left:3px;top:1px;width:16px;height:16px;font-size:12px;line-height:16px}.dfl .al .mk{left:3px;top:0;font-size:13px}
+.rc.inl{position:static;margin:6px 10px 8px 54px;white-space:normal;font-family:var(--ui)}
+.rc.inl::before{display:none}
+.bdoc .rc.inl{margin:5px 0 10px 6px}
+.fsw{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}.fsw span{font:11px var(--mono);padding:3px 9px;border:1px solid #ffffff1c;border-radius:12px;color:var(--dim);cursor:pointer}.fsw span:hover{background:#ffffff0c}.fsw span.on{background:#7fb4ff22;border-color:#7fb4ff88;color:var(--fg)}
+.sw{padding:2px 8px;border:1px solid #ffffff22;border-radius:5px;color:var(--fg);cursor:pointer;background:#ffffff0a}
+.swm{display:none;position:absolute;left:96px;top:32px;background:#232730;border:1px solid #ffffff2a;border-radius:8px;z-index:5;min-width:300px;padding:4px;font-family:var(--ui)}.swm.on{display:block}
+.swi{padding:7px 10px;border-radius:5px;cursor:pointer;font-size:12.5px}.swi:hover{background:#7fb4ff22}.swi span{font-size:11px;margin-left:6px}
+.xx{margin-left:auto;cursor:pointer;font-size:14px;padding:0 4px}.xx:hover{color:var(--fg)}
+
+.al.hl:hover>.plus{opacity:1;pointer-events:auto}
+.bdoc .al.hl{box-shadow:inset 3px 0 #e8c14a}
+.bdoc .rc.inl{margin:0 0 10px 0;border-radius:0 0 6px 6px;border-left:3px solid #e8c14a;padding-left:12px}
+.dfl .rc.inl{margin:0;border-radius:0;border-width:0 0 1px 3px;border-left-color:#e8c14a;padding-left:54px;background:#262a31;border-bottom-color:#ffffff14}
+.dfl .rc.inl.act,.bdoc .rc.inl.act{box-shadow:none;background:#2d3139}
+.panel{position:relative}
+.pj{cursor:pointer;font-size:14px}.od{font:700 10px var(--ui);font-style:normal;background:var(--warn);color:#1a1200;border-radius:8px;padding:0 5px;margin-left:3px;vertical-align:2px}
+.ddm{position:absolute;left:8px;top:46px;width:352px;background:#232730;border:1px solid #ffffff2a;border-radius:10px;box-shadow:0 20px 50px #000b;z-index:9;padding:4px;font-family:var(--ui)}
+.dr{display:flex;align-items:center;gap:9px;padding:9px 10px;border-radius:6px;cursor:pointer}.dr:hover{background:#7fb4ff22}.dr .ck{width:14px;color:var(--acc);font-size:12px}.dr .nm{font-size:13px}.dr .sm2{color:var(--dim);font-size:11.5px}.dr kbd{margin-left:auto;font:11px var(--mono);color:var(--dim);background:#ffffff0d;border:1px solid #ffffff1a;border-radius:4px;padding:1px 6px}
+.dr .bd2{background:var(--warn);color:#1a1200;border-radius:8px;padding:0 6px;font:700 10px var(--ui)}
+.ddf{border-top:1px solid var(--line);margin-top:4px;padding:9px 10px 5px;font-size:12.5px;cursor:pointer}.ddh{padding:2px 10px 7px;color:var(--dim);font-size:11px}
+.hl{padding-left:10px!important}
+</style></head><body>
+<nav id="nav"></nav>
+<div id="screens"></div>
+<script>
+const $=s=>document.querySelector(s);
+const seg=(n,t=5)=>'▪'.repeat(n)+'▫'.repeat(t-n);
+function win(active,inner,over='',badge=3){return `<div class="win"><div class="edge"></div><div class="col">${inner}</div>${over}</div>`}
+const CHAT=`<div class="chat">
+ <div class="u">Add a Tern terminal backend so Tandem can run its panes and board inside Tern.</div>
+ <div class="c">Sounds doable. Tandem already talks to Herdr through one adapter, so Tern can slot in beside it without touching the task logic. I drafted a brief covering the adapter, pane launch, and the board. Nothing starts until you approve it.</div>
+ <div class="c">While you read, I queued a small spike on how Tern names panes so the adapter does not guess.</div>
+ <div class="stat">
+  <div><span class="s" style="color:var(--acc)">●</span>Tern backend adapter <span style="margin-left:auto">fixing review · 3/5 · opus · 12m</span></div>
+  <div><span class="s" style="color:var(--warn)">◐</span>Fix panel width <span style="margin-left:auto">changes requested</span></div>
+  <div><span class="s" style="color:var(--warn)">⚑</span>Approve brief: Tern backend <span style="margin-left:auto">needs you</span></div>
+ </div>
+ <div class="u">Looks right, I'll read the brief.</div>
+ <div class="c"><span class="tag">tandem</span> Take your time. Approving moves it to Queued and a worker picks it up.</div></div>
+ <div class="prompt"><span style="color:var(--acc)">❯</span><span class="caret"></span></div>`;
+const leftPane=(inner=CHAT)=>`<div class="left"><div class="ph">coordinator · tandem <span class="sub">opus</span></div>${inner}</div>`;
+const todos=[['d','Read Herdr adapter'],['d','Define Tern pane port'],['d','Launch worker pane'],['n','Close and release panes'],['x','Tests for pane lifecycle']];
+const prl=(n,t='',d=0)=>`<a class="prl ${d?'d':''}" href="https://github.com/jdeocampo99/tandem/pull/${n}" target="_blank" rel="noopener">#${n}${t?' '+t:''} ↗</a>`;
+const R=(c,nm,sg,tm,l2,cls='')=>`<div class="pr1 ${cls}"><div class="l1"><i style="background:${c}"></i><span class="nm">${nm}</span><span class="sg">${sg}</span><span class="tm">${tm}</span></div><div class="l2">${l2}</div></div>`;
+const DR=(ck,n,sm,bd,k)=>`<div class="dr"><span class="ck">${ck?'✓':''}</span><div><div class="nm">${n}</div><div class="sm2">${sm}</div></div>${bd?`<span class="bd2" style="margin-left:auto">${bd}</span>`:''}<kbd ${bd?'style="margin-left:8px"':''}>${k}</kbd></div>`;
+const DDM=`<div class="ddm">${DR(1,'tandem','4 running · 1 needs you',1,'⌘1')}${DR(0,'tagalog-learning-app','2 running · 1 needs you',1,'⌘2')}${DR(0,'music-app','idle · 1 PR ready',0,'⌘3')}<div class="ddf">+ Open another project…</div><div class="ddh">⌘⇧[ / ⌘⇧] previous / next project</div></div>`;
+const mkPanel=dd=>`<div class="panel"><div class="ph3"><b class="pj">tandem ▾${dd?'':' <i class="od">1</i>'}</b><span class="lm">5h 62% · 2h14m <i class="mb"><u style="width:62%"></u></i></span><span class="bellc">&#9830; <b>3</b></span><span class="ib" title="PRs">⎇</span><span class="ib" title="Board">▦</span></div><div class="plist">
+<div class="nh">Needs you · 1</div>${R('var(--warn)','Approve brief: Tern backend','brief','2m','opus · waiting for your approval','need')}
+<div class="dv">Running · 4</div>${R('var(--acc)','Tern backend adapter','fixing','12m','opus · editing tern/adapter.ts')}${R('var(--acc)','Board snapshot writer','implementing','6m','sonnet · reading board/snapshot.ts')}${R('var(--acc)','Inbox alerts from task events','in review','21m','sonnet · reviewer reading tests/session')}${R('var(--bad)','Fix panel width','stuck','34m','opus · same 2 problems twice')}
+<div class="dv">Ready · 2</div>${R('var(--ok)','Terminal port refactor','ready','52m','opus · '+prl(281)+' · waiting on you to publish')}${R('var(--ok)','Panel keyboard navigation','armed','41m','sonnet · '+prl(278)+' · merging now')}
+<div class="dv">Recently done · 3</div></div><div class="pfoot">⌘⇧B board · ⌘⇧P PRs · ⌘⇧U usage</div>${dd?DDM:''}</div>`;
+const PANEL=mkPanel(false),PANELP=mkPanel(true);
+const main=(...a)=>`<div class="main">${a.join('')}</div>`;
+const ORCH=`<span class="pill btn">← Orchestrator</span>`;
+
+/* ---------- annotation rail (shared by brief and PR diff) ---------- */
+const ANN={},LAYOUTS=[];const CIRC='①②③④⑤⑥⑦⑧⑨';
+function annot(scope,key,init,cb){
+ const items=ANN[key]||(ANN[key]=init.map(x=>({...x})));
+ const L=a=>scope.querySelector(`.al[data-a="${a}"]`);
+ scope.querySelectorAll('.al').forEach(l=>{if(!l.querySelector(':scope>.plus')){const b=document.createElement('span');b.className='plus';b.textContent='+';b.title='Comment';b.onclick=()=>{let it=items.find(x=>x.a==l.dataset.a);if(!it){it={a:l.dataset.a,who:'you',time:'now',text:'',edit:true,replies:[]};items.push(it)}else if(it.who=='you')it.edit=true;else it.replying=true;draw(true)};l.append(b)}});
+ function order(){return items.slice().sort((x,y)=>L(x.a).compareDocumentPosition(L(y.a))&4?-1:1)}
+ function card(it,i){const mine=it.who=='you';
+  return `<div class="rc inl ${it.resolved?'rs':''}" data-a="${it.a}"><div class="rch"><span class="av2 ${mine?'you':''}">${it.who[0].toUpperCase()}</span><b>${it.who}</b><span class="tm2">${it.time}</span>${mine&&!it.edit?'<span class="ic"><u data-act="edit" title="Edit">✎</u><u data-act="del" title="Delete">✕</u></span>':''}</div>`+
+  (it.edit?`<textarea placeholder="Comment…">${it.text}</textarea><div class="rbt"><button class="p sm" data-act="save">Comment</button><button class="sm" data-act="cancel">Cancel</button></div>`:`<div class="rt">${it.text}</div>`)+
+  (it.replies||[]).map(r=>`<div class="rrep"><b>${r[0]}</b> <span style="color:var(--dim);font-size:11px">${r[1]}</span><div>${r[2]}</div></div>`).join('')+
+  (it.replying?`<textarea placeholder="Reply…"></textarea><div class="rbt"><button class="p sm" data-act="rsave">Reply</button><button class="sm" data-act="cancel">Cancel</button></div>`:'')+
+  (!mine&&!it.replying?`<div class="rf"><button class="sm" data-act="reply">Reply</button>${it.resolved?'<span class="rsd">✓ resolved</span>':''}</div>`:'')+`</div>`}
+ function draw(focus){const ord=order();
+  scope.querySelectorAll('.al').forEach(l=>{l.classList.remove('hl','act');const m=l.querySelector(':scope>.mk');if(m)m.remove()});
+  scope.querySelectorAll('.rc').forEach(x=>x.remove());
+  ord.forEach((it,i)=>{const l=L(it.a);l.classList.add('hl');   const t=document.createElement('div');t.innerHTML=card(it,i);const c=t.firstElementChild;l.after(c);
+   c.onmouseenter=()=>l.classList.add('act');c.onmouseleave=()=>l.classList.remove('act');
+   l.onmouseenter=()=>{if(l.classList.contains('hl'))c.classList.add('act')};l.onmouseleave=()=>c.classList.remove('act');
+   c.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>{const a=b.dataset.act;const ta=c.querySelector('textarea');
+    if(a=='edit'){it.old=it.text;it.edit=true}
+    else if(a=='del'){items.splice(items.indexOf(it),1)}
+    else if(a=='save'){const v=ta.value.trim();if(v){it.text=v;it.edit=false}else if(it.old===undefined){items.splice(items.indexOf(it),1)}else{it.edit=false}delete it.old}
+    else if(a=='cancel'){if(it.replying)it.replying=false;else if(it.old===undefined&&!it.text)items.splice(items.indexOf(it),1);else{if(it.old!==undefined)it.text=it.old;it.edit=false;delete it.old}}
+    else if(a=='reply')it.replying=true;
+    else if(a=='rsave'){const v=ta.value.trim();if(v)(it.replies=it.replies||[]).push(['you','now',v]);it.replying=false}
+    draw(true)})});
+  if(focus){const t=scope.querySelector('.rc textarea');if(t){t.focus();t.setSelectionRange(t.value.length,t.value.length)}}
+  if(cb)cb(items.filter(x=>x.who=='you'&&!x.edit&&x.text).length)}
+ draw();return {draw};
+}
+const fmt=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+/* ---------- PR data + render ---------- */
+const nums=l=>{let o=0,n=0;return l.map(x=>{if(x[0]=='@'){const m=x.match(/-(\d+).*\+(\d+)/);o=+m[1];n=+m[2];return ''}if(x[0]=='-')return String(o++);if(x[0]=='+'){o++;return String(n++)}o++;return String(n++)})};
+const hk=l=>{const g=nums(l);return `<pre class="hk">${l.map((x,i)=>`<span class="${x[0]=='+'?'a':x[0]=='-'?'r':x[0]=='@'?'h':''}"><i class="gn">${g[i]}</i>${x.replace(/</g,'&lt;')||' '}</span>`).join('')}</pre>`};
+const hk2=l=>{const g=nums(l);return `<div class="dfl">${l.map((x,i)=>`<div class="al ${x[0]=='+'?'a':x[0]=='-'?'r':x[0]=='@'?'h':''}" data-a="${i}"><i class="gn">${g[i]}</i>${x.replace(/</g,'&lt;')||' '}</div>`).join('')}</div>`};
+const PRD={
+'281':{t:'Terminal port refactor',w:'Needs you',wc:'warn',draft:1,state:'Waiting on you: publish it (draft → ready)',sc:'warn',task:'task #98',cs:'7 commits',ad:482,de:121,
+ cks:[['typecheck','ok','41s'],['tests','ok','2m 10s'],['lint','ok','9s']],
+ desc:'<h3>What</h3><p>Moves every terminal operation (panes, focus, close, notifications) behind one <code>TerminalBackend</code> port. Herdr becomes the first implementation.</p><h3>Why</h3><p>Tandem needs to run inside Tern as well. Callers should not know which terminal they are in.</p><h3>How tested</h3><ul><li>Port contract tests run against the Herdr backend</li><li><code>bun run check</code>, lint and the full test suite pass</li><li>Existing Herdr scenario evals are unchanged</li></ul>',
+ conv:[['copilot','10:58','Reviewed 6 files and left 2 line comments. The port is clean; consider a union type for <code>env.terminal</code>.','review'],['justin','11:03','Looks good. I will publish once the two comments are settled.','']],
+ th:[{f:'compose.ts',at:'pickBackend(env',who:'copilot',time:'10:58',text:'<code>env.terminal</code> is a plain string here. A union type would catch typos at compile time.',replies:[['justin','11:02','Agreed, I will ask the worker.']]},
+  {f:'compose.ts',at:'fail("no terminal',who:'you',time:'now',text:'Should this throw a typed error?',edit:true},
+  {f:'launch.ts',at:'backend.launchPane',who:'justin',time:'11:03',text:'Is the old Herdr fallback still reachable here?',replies:[['worker','11:05','No. reset.ts was the only other caller and it now uses the port.']]},
+  {f:'herdr/backend.ts',at:'return { launchPane',who:'copilot',time:'10:59',text:'Nit: align the property order with the interface.',resolved:true}],
+ tour:[['Introduce the port',[['port.ts','12-30','The contract','one interface for panes, focus and close',['@@ -0,0 +12,8 @@','+export interface TerminalBackend {','+  launchPane(spec: PaneSpec): Promise<PaneId>;','+  closePane(id: PaneId): Promise<void>;','+  focusPane(id: PaneId): Promise<void>;','+  listPanes(): Promise<PaneInfo[]>;','+}']],['compose.ts','20-34','One place to pick','a backend is chosen here and nowhere else',['@@ -0,0 +20,6 @@','+export function pickBackend(env: Env): TerminalBackend {','+  return env.terminal === "herdr"','+    ? herdrBackend(env)','+    : fail("no terminal backend");','+}']]]],
+  ['Move the callers',[['launch.ts','98-118','Launch uses the port','no direct Herdr calls left',['@@ -98,7 +98,5 @@','-  await herdr.pane.split(opts);','+  const id = await backend.launchPane(spec);','   registerPane(task, id);']],['reset.ts','40-52','Reset closes through the port','same ownership checks as before',['@@ -40,6 +40,6 @@','-  await herdr.pane.close(id);','+  await backend.closePane(id);']]]],
+  ['Keep Herdr working',[['herdr/backend.ts','1-24','Herdr implements the port','behavior is unchanged',['@@ -0,0 +1,6 @@','+export function herdrBackend(env: Env): TerminalBackend {','+  return { launchPane: splitPane, closePane, focusPane, listPanes };','+}']],['herdr.test.ts','15-30','Test pins every operation','one case per port method',['@@ -0,0 +15,5 @@','+test("closePane releases the pane", async () => {','+  const id = await backend.launchPane(spec);','+  await backend.closePane(id);','+  expect(await backend.listPanes()).toEqual([]);']]]]],
+ fc:{'port.ts':[52,11],'compose.ts':[34,0],'launch.ts':[24,31],'reset.ts':[9,12],'herdr/backend.ts':[96,40],'herdr.test.ts':[78,0]}},
+'283':{t:'Tern backend adapter',w:'CI running',wc:'acc',draft:1,state:'Worker is fixing a failed check',sc:'acc',task:'task #102',cs:'4 commits',ad:196,de:13,
+ cks:[['typecheck','ok','38s'],['tests','run',72],['lint','bad']],th:[],conv:[],
+ desc:'<h3>What</h3><p>Adds a Tern backend next to the Herdr one: launch, close and focus panes in a Tern session.</p><h3>Why</h3><p>Lets Tandem run its panes and board inside Tern.</p><h3>How tested</h3><ul><li>Pane lifecycle test against a fake Tern socket</li><li>Herdr tests unchanged</li></ul>',
+ tour:[['The adapter',[['adapter.ts','20-44','Connects to Tern','socket path comes from one lookup',['@@ -0,0 +20,5 @@','+const sock = ternSocketPath(env);','+const conn = await connect(sock);']],['adapter.ts','60-96','Launch and close','close releases the slot (fix in progress)',['@@ -60,4 +60,6 @@','-  await conn.send(close(id));','+  const out = await conn.send(close(id));','+  if (!out.ok) keepReserved(id);']]]],
+  ['Port changes',[['port.ts','18-26','closePane reports an outcome','callers can tell failure from success',['@@ -18,3 +18,4 @@','-  closePane(id): Promise<void>;','+  closePane(id): Promise<CloseOutcome>;']],['launch.ts','98-110','Launch picks Tern or Herdr','by the project setting',['@@ -98,4 +98,4 @@','-  const b = herdrBackend(env);','+  const b = pickBackend(env);']]]],
+  ['Tests',[['tern.test.ts','30-48','Pane lifecycle','currently failing: slot not released',['@@ -0,0 +30,4 @@','+test("releases pane on close", async () => {','+  await backend.closePane(id);','+  expect(slots.reserved(id)).toBe(false);']],['fake-socket.ts','1-20','Fake Tern socket','used by tests only',['@@ -0,0 +1,3 @@','+export function fakeTern(): Socket {','+  return memorySocket(ternProtocol);']]]]],
+ fc:{'adapter.ts':[148,0],'port.ts':[36,4],'launch.ts':[12,9],'tern.test.ts':[0,0],'fake-socket.ts':[0,0]}},
+'278':{t:'Panel keyboard navigation',w:'Merging',wc:'ok',draft:0,state:'CI passed: PR watch is merging it',sc:'ok',task:'task #95',cs:'3 commits',ad:88,de:20,
+ cks:[['typecheck','ok','40s'],['tests','ok','2m 04s'],['lint','ok','9s']],th:[],conv:[['justin','09:48','Approved. Auto-merge is armed.','review']],
+ desc:'<h3>What</h3><p>Arrow keys move the selection in the panel; Enter opens the row.</p><h3>Why</h3><p>The panel was mouse-only.</p><h3>How tested</h3><ul><li>Selection wraps at both ends</li><li>Enter on a PR row opens it</li></ul>',
+ tour:[['Keys',[['panel.ts','30-48','Arrow keys','move selection and wrap',['@@ -30,3 +30,5 @@','+  if (key === "down") sel = (sel + 1) % rows.length;','+  if (key === "up") sel = (sel - 1 + rows.length) % rows.length;']],['panel.ts','60-72','Enter','opens the selected row',['@@ -60,2 +60,4 @@','+  if (key === "enter") open(rows[sel]);']]]],
+  ['Tests',[['panel.test.ts','10-22','Wrap at the ends','last row then down goes to first',['@@ -0,0 +10,3 @@','+test("selection wraps", () => {','+  expect(press(["down","down"], 2)).toBe(0);']],['panel.test.ts','30-40','Enter on a PR row','opens it',['@@ -0,0 +30,3 @@','+test("enter opens a PR", () => {','+  expect(press(["enter"])).toBe("open:#281");']]]],
+  ['Docs',[['status.md','12-18','Documented keys','one short table',['@@ -12,2 +12,4 @@','+| up / down | move selection |','+| enter | open |']],['README.md','80-84','Short mention','one line',['@@ -80,1 +80,2 @@','+Use the arrow keys in the panel.']]]]],
+ fc:{'panel.ts':[24,6],'panel.test.ts':[52,0],'status.md':[8,0],'README.md':[4,2]}}};
+const ckpills=p=>p.cks.map(c=>c[1]=='ok'?`<span class="ckp ok">✓ ${c[0]} <i>${c[2]}</i></span>`:c[1]=='run'?`<span class="ckp run"><b class="spn">⠋</b> ${c[0]} · running <b class="tmr" data-s="${c[2]}">${fmt(c[2])}</b></span>`:`<span class="ckp bad">✗ ${c[0]} · <a>view log</a></span>`).join('');
+function renderPR(el,id,st){st=st||{tab:'Description',stop:'0-0',file:0};const p=PRD[id];
+ const stops=p.tour.flatMap((c,i)=>c[1].map((x,j)=>[i+'-'+j,x]));const cur=(stops.find(x=>x[0]==st.stop)||stops[0])[1];
+ const files=[...new Set(stops.map(x=>x[1][0]))];const fcur=files[st.file]||files[0];
+ const unres=p.th.filter(t=>!t.resolved&&t.who!='you').length;
+ const fl=f=>stops.filter(x=>x[1][0]==f).flatMap(x=>x[1][4]);
+ let body='';
+ if(st.tab=='Description')body=p.desc+`<h3>Conversation</h3>`+(p.conv.length?p.conv.map(c=>`<div class="conv"><span class="av2">${c[0][0].toUpperCase()}</span><div><b style="font-size:12.5px">${c[0]}</b> <span style="color:var(--dim);font-size:11px">${c[1]}${c[3]?' · reviewed':''}</span><div style="font-size:12.5px;color:#c3cad4">${c[2]}</div></div></div>`).join(''):'<div style="color:var(--dim);font-size:12.5px">No conversation yet</div>');
+ else if(st.tab=='Tour')body=p.tour.map((c,i)=>`<div class="ch"><div class="cht">${i+1} · ${c[0]}</div>${c[1].map((x,j)=>`<div class="stop ${i+'-'+j==st.stop?'on':''}" data-s="${i}-${j}"><code>${x[0]}:${x[1]}</code> <b style="font-weight:600">${x[2]}</b><span>: ${x[3]}</span></div>`).join('')}</div>`).join('')+`<div style="font:11px var(--mono);color:var(--dim);margin:4px 0">${cur[0]}:${cur[1]}</div>`+hk(cur[4]);
+ else body=`<div class="ds"><div class="fsw">${files.map((f,i)=>{const n=p.th.filter(t=>t.f==f&&t.who!='you').length;return `<span class="${i==st.file?'on':''}" data-f="${i}">${f.split('/').pop()}${n?` <b style="color:#e8c14a;font-weight:400">●${n}</b>`:''}</span>`}).join('')}</div><div style="font:11px var(--mono);color:var(--dim);margin-bottom:5px"><span class="add">+${p.fc[fcur][0]}</span> <span class="del">-${p.fc[fcur][1]}</span> · ${fcur}</div>${hk2(fl(fcur))}<div class="capt" style="margin-top:6px">Hover a line and click + to comment. Your comments on Tandem's PRs go to the worker as fix requests.</div></div>`;
+ el.innerHTML=`<div class="prh"><div style="flex:1;min-width:0"><div class="t">#${id} ${p.t} <span class="pill ${p.draft?'dim':'ok'}" style="vertical-align:2px;font-size:10.5px">${p.draft?'draft':'open'}</span></div><div class="st" style="color:var(--${p.sc})">${p.state}</div><div class="ckrow">${ckpills(p)}</div><div class="sb2" style="margin-top:8px">${unres?`<a class="lnk" data-jump style="color:var(--warn)">${unres} unresolved comments</a>`:'no unresolved comments'} · <a class="lnk">${p.task} ↗</a> · ${p.cs} · <span class="add">+${p.ad}</span> <span class="del">−${p.de}</span></div></div><a class="ghb" title="Opens in Tern's browser pane">Open PR ↗</a></div><div class="tabs2" style="padding:0 12px;border-bottom:1px solid var(--line)">${['Description','Tour','Diff'].map(t=>`<a class="${t==st.tab?'on':''}" data-t="${t}">${t}</a>`).join('')}</div><div class="prbody">${body}</div>`;
+ el.querySelectorAll('.tabs2 a').forEach(a=>a.onclick=()=>renderPR(el,id,{tab:a.dataset.t,stop:st.stop,file:st.file}));
+ el.querySelectorAll('.stop').forEach(a=>a.onclick=()=>renderPR(el,id,{tab:'Tour',stop:a.dataset.s,file:st.file}));
+ el.querySelectorAll('.fsw span').forEach(a=>a.onclick=()=>renderPR(el,id,{tab:'Diff',stop:st.stop,file:+a.dataset.f}));
+ const j=el.querySelector('[data-jump]');if(j)j.onclick=()=>{const t=p.th.find(x=>!x.resolved&&x.who!='you');renderPR(el,id,{tab:'Diff',stop:st.stop,file:files.indexOf(t.f),jump:1})};
+ if(st.tab=='Diff'){const lines=fl(fcur);const init=p.th.filter(t=>t.f==fcur).map(t=>({a:String(lines.findIndex(l=>l.includes(t.at))),who:t.who,time:t.time,text:t.text,replies:t.replies,resolved:t.resolved,edit:t.edit}));annot(el.querySelector('.ds'),`pr-${id}-${fcur}`,init);
+  if(st.jump){const c=el.querySelector('.rc:not(.rs)');if(c){c.classList.add('act');el.querySelector(`.al[data-a="${c.dataset.a}"]`).classList.add('act')}}}
+}
+
+/* ---------- screens ---------- */
+const S={};
+const CAP={
+projects:['Projects','Each project is its own Tern session. Switch from the panel header, with ⌘1–9, or from Tern\'s inbox, which jumps straight to whatever needs you in any project.','the Herdr workspace list and switching with `tandem` in each terminal.'],
+panel:['Default','Tern\'s own sidebar is hidden (only a 10px edge hint at the far left). The Tandem panel is the one navigator: one line per task, one dim line for what it is doing or why it stopped.','the Herdr workspace list and the `tandem panel` text board.'],
+task:['Task page','Clicking a panel row opens a native task page. The header shows what it is doing right now and how far through review it is; to-dos live in Overview. "← Orchestrator" goes back to the coordinator; the message box steers the worker. Try "show bad state".','`tandem status TASK_ID --json`, `tandem trace`, and hunting through the worker pane.'],
+brief:['Brief approval','Opens beside the conversation, like today. Ask about it in chat while you comment on lines. Approve or Request changes closes the pane and the coordinator replies in the conversation.','the Lavish browser page opened in a separate window.'],
+prs:['PR view','Opens beside the conversation. The #281 switcher in the pane title picks another PR. The pane says who acts next, shows CI with live timers, and has Description, Tour and Diff tabs; review threads and your comments sit under their lines. "Open PR ↗" (and every PR link on the board and panel) opens GitHub in Tern\'s built-in browser pane.','`gh pr list` plus `tandem watch` output.'],
+board:['Board','Full-window and view-only. The lane says the state; each card shows the agent, branch, the reason, model, cost, and PR.','the `tandem status --watch` text board.'],
+usage:['Usage','Limits first (what you can still spend), then today, then the breakdown.','the `tandem report` HTML page and manual quota checks.'],
+catchup:['Catch-up card','Proposed: shown automatically when you open a project after 4+ hours away, only if something changed. Today it only appears when you ask the coordinator.','scrolling back through chat and `tandem memory` to rebuild context.'],
+chrome:['Window features','Tandem commands in the Tern command palette, clickable task links in chat, and Tandem entries in the Tern inbox.','typing `tandem` subcommands and Herdr notifications.'],
+phone:['Phone','The same session in the Tern iOS app. Native views work on the phone; browser pages (Lavish) only on the Mac.','having no way to approve a brief away from the desk.']};
+const cap=k=>`<div class="cap"><b>${CAP[k][0]}.</b> ${CAP[k][1]} Replaces today: ${CAP[k][2]}</div>`;
+
+S.panel=win(0,main(PANEL,leftPane()));
+S.projects=win(0,main(PANELP,leftPane()));
+
+/* task */
+const TABN=['Overview','Brief','Progress','Diff','PR','Cost'];
+const T={
+Overview:`<h4>Summary</h4><div class="card2">Tandem is adding Tern as a second place to run its panes, next to Herdr. The worker built the pane port and launching a worker pane. Review found two problems with closing panes, so the worker is fixing them now and will then add tests for the full pane lifecycle.</div>
+<h4>To-do · 3 of 5 done</h4><div class="card2 todo2">${todos.map(([k,x])=>`<div class="${k}"><span>${k=='d'?'☑':k=='n'?'◐':'☐'}</span>${x}${k=='n'?' <span class="pill acc" style="margin-left:auto">doing</span>':''}</div>`).join('')}</div>
+<h4>Recent activity</h4><div class="card2" style="font:11.5px var(--mono);color:var(--dim);line-height:1.8"><div><span style="color:var(--fg)">11:34</span>  editing src/terminal-backend/tern/adapter.ts</div><div><span style="color:var(--fg)">11:33</span>  ran bun test tests/terminal-backend · 1 failing</div><div><span style="color:var(--fg)">11:31</span>  review finding 2 of 2 received</div><div><span style="color:var(--fg)">11:29</span>  review round 1 started</div><div><span style="color:var(--fg)">11:26</span>  validation passed, 3 of 3 checks</div></div>`,
+Brief:`<h4>Goal</h4>Let Tandem launch and manage its coordinator and worker panes in Tern, with the task board shown natively.<h4>Scope</h4><ul><li>Tern adapter next to the Herdr adapter</li><li>Launch, close and focus panes by task</li><li>Write the board snapshot for the native panel</li><li>Raise inbox alerts for needs-you events</li></ul><h4>Acceptance</h4><ul><li>A task opens a worker tab in the project session</li><li>Closing a task releases its pane</li><li>Herdr behavior is unchanged</li></ul><div style="color:var(--dim);font-size:11.5px;margin-top:12px">Approved by you at 09:12 · revision 2</div>`,
+Progress:`<div class="vt">
+<div><b>Implement</b> <span class="pill ok">done</span> <time style="color:var(--dim)">09:13–11:05</time><div class="sub"><div><time>09:19</time>Pane port defined</div><div><time>09:24</time>Worker pane launch works against a fake Tern socket</div></div></div>
+<div><b>Validate</b> <span class="pill ok">passed on 2nd run</span><div class="sub"><div><time>11:06</time><span style="color:var(--ok)">✓</span> typecheck · 8.2s</div><div><time>11:06</time><span style="color:var(--ok)">✓</span> lint · 3.1s</div><div><time>11:07</time><span style="color:var(--bad)">✗</span> tests tern.test.ts · 11.7s</div></div><details><summary>▸ Output (1 failure)</summary><pre>✗ tern adapter &gt; releases pane on close
+  expected pane "p-7" to be released
+  received: still reserved   at tern.test.ts:42</pre></details><div class="sub"><div><time>11:22</time><span style="color:var(--ok)">✓</span> tests rerun · 11.5s</div></div></div>
+<div><b>Review</b> <span class="pill warn">2 findings</span><div class="sub"><div><time>11:29</time><span class="pill bad">high</span> Pane slot not released if close fails <a class="lnk" style="font:11px var(--mono)">adapter.ts:96</a> <span class="pill acc">fixing</span></div><div><time>11:31</time><span class="pill warn">medium</span> Socket path built without escaping spaces <a class="lnk" style="font:11px var(--mono)">adapter.ts:41</a> <span class="pill acc">fixing</span></div></div></div>
+<div class="cur"><b>Fix · round 1 of 2</b> <span class="pill acc">in progress</span><div class="sub"><div><time>11:34</time>editing adapter.ts</div></div></div>
+<div class="todo"><span style="color:var(--dim)">Review round 2 · Ready · PR #283 marked ready</span></div></div>`,
+Diff:`<table><tr><th>File</th><th class="n">+</th><th class="n">-</th></tr><tr><td>src/terminal-backend/tern/adapter.ts</td><td class="n add">+148</td><td class="n del">-0</td></tr><tr><td>src/terminal-backend/port.ts</td><td class="n add">+36</td><td class="n del">-4</td></tr><tr><td>src/coordinator/launch.ts</td><td class="n add">+12</td><td class="n del">-9</td></tr></table>
+<h4 style="margin-top:14px">src/terminal-backend/port.ts</h4><pre><span class="h">@@ -18,7 +18,11 @@ export interface TerminalPort {</span>
+   launchPane(spec: PaneSpec): Promise&lt;PaneId&gt;;
+<span class="r">-  closePane(id: PaneId): Promise&lt;void&gt;;</span>
+<span class="a">+  closePane(id: PaneId): Promise&lt;CloseOutcome&gt;;</span>
+<span class="a">+  focusPane(id: PaneId): Promise&lt;void&gt;;</span>
+   listPanes(): Promise&lt;PaneInfo[]&gt;;
+ }</pre>`,
+PR:'',
+Cost:`<table><tr><th>Model</th><th class="n">Tokens in</th><th class="n">Tokens out</th><th class="n">Cost</th></tr><tr><td><span class="chip opus">opus</span> implementer</td><td class="n">412k</td><td class="n">38k</td><td class="n">$1.24</td></tr><tr><td><span class="chip sonnet">sonnet</span> research</td><td class="n">290k</td><td class="n">21k</td><td class="n">$0.31</td></tr><tr><td><b>Total</b></td><td class="n">702k</td><td class="n">59k</td><td class="n"><b>$1.55</b></td></tr></table>
+<h4 style="margin-top:16px">Elapsed per stage · 12m</h4><div class="bar"><i style="width:17%;background:#7fd6e8"></i><i style="width:8%;background:#7d8590"></i><i style="width:55%;background:var(--acc)"></i><i style="width:20%;background:var(--warn)"></i></div><div style="display:flex;gap:16px;font-size:11.5px;color:var(--dim);margin-top:6px"><span>research 2m</span><span>brief 1m</span><span>implement 7m</span><span>validate + review 2m</span></div>`};
+T.PR='<div id="taskpr" style="margin:-18px -22px"></div>';
+const BRSVG=`<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="4" cy="3" r="2"/><circle cx="4" cy="13" r="2"/><circle cx="12" cy="6" r="2"/><path d="M4 5v6M12 8c0 3-8 1-8 3"/></svg>`;
+const TASKPAGE=`<div class="tp"><div class="tph"><div style="display:flex;align-items:center;gap:10px"><h1 style="flex:1">Tern backend adapter <span style="color:var(--dim);font-weight:400;font-size:13px">task #102</span></h1><span class="pill dim" id="badtog" style="cursor:pointer">show bad state</span>${ORCH}</div>
+<div class="meta"><span class="chip opus">opus</span><span>12m elapsed</span><span class="chip br">${BRSVG} tandem/tern-backend-adapter</span></div>
+<div class="glance"><div class="gc"><small>Right now</small><div style="font:11.5px var(--mono);color:var(--fg)">▸ editing src/terminal-backend/tern/adapter.ts · 4s ago</div></div><div class="gc"><small>Agent progress</small><div class="track"><span class="k">Implement</span><i>→</i><span class="k">Validate</span><i>→</i><span class="k">Review</span><i>→</i><span class="on">Fix · round 1 of 2</span><i>→</i><span>Ready</span></div></div></div>
+<div class="tabs2" id="tt">${TABN.map((t,i)=>`<a class="${i?'':'on'}" data-t="${t}">${t}</a>`).join('')}</div></div>
+<div class="warnb" id="bad"><span style="color:var(--warn);font-size:15px">⚠</span><div style="flex:1"><b>Stuck: review found the same 2 problems twice</b><p>The fix did not change the result, so Tandem stopped retrying on its own. Restart gives the worker a fresh start; Steer lets you tell it what to try.</p></div><button class="p sm">Restart</button><button class="sm">Steer…</button><span class="x" id="badx">×</span></div>
+<div class="tbody" id="tb">${TABN.map((t,i)=>`<div class="pg ${i?'':'on'}" data-t="${t}">${T[t]}</div>`).join('')}</div>
+<div class="msg"><div class="ph2">Message the worker…</div><div class="r"><span>+</span><span class="chip opus" style="font-family:var(--ui)">opus 5.5 ▾</span><span style="margin-left:6px">Steers the worker; it reads this at its next step</span><span class="send">↑</span></div></div></div>`;
+S.task=win(1,main(PANEL,TASKPAGE));
+
+/* brief */
+let bi=0;const AL=(t,c='',tag='li')=>`<${tag} class="al ${c}" data-a="b${++bi}">${t}</${tag}>`;
+const NEW=' <span class="newtag">new</span>';
+const chatX=m=>`<div class="left" style="flex:none;width:510px"><div class="ph">coordinator · tandem <span class="sub">opus</span></div><div class="chat" style="font-size:12px">${m}</div><div class="prompt"><span style="color:var(--acc)">❯</span><span class="caret"></span></div></div>`;
+const CHATB=chatX(`<div class="u">Add a Tern terminal backend so Tandem can run its panes and board inside Tern.</div><div class="c"><span class="tag">tandem</span> I drafted the brief and opened it on the right. Comment on any line, or ask me here.</div><div class="u">why only three alert types?</div><div class="c"><span class="tag">tandem</span> Needs-you, done and stuck are the only events that ask a person to act. Everything else is progress and stays in the panel. If you want a fourth, say which and I will add it to the brief.</div>`);
+const BRIEF=`<div class="tp" style="border-left:1px solid var(--line)"><div class="ph" style="height:34px;color:var(--fg)">Brief · Tern terminal backend · rev 2 · <span style="color:var(--ok)">3 changes</span><span class="xx" style="color:var(--dim)">×</span></div>
+<div id="bscope" style="flex:1;min-height:0;overflow:hidden"><div class="bdoc" style="font-size:13px;padding:6px 18px 10px 50px;height:100%;overflow-y:auto">
+<h5>Goal</h5>${AL('Let Tandem launch and manage its coordinator and worker panes in Tern, with the task board shown natively.','','div')}
+<h5>Scope</h5><ul>${AL('Tern adapter next to the Herdr adapter')}${AL('Launch, close and focus panes by task')}${AL('One Tern session per project; coordinator and workers are tabs'+NEW,'new')}${AL('Write the board snapshot for the native panel')}${AL('Raise inbox alerts for needs-you events')}</ul>
+<h5>Out of scope</h5><ul>${AL('Removing the Herdr adapter')}${AL('Android support'+NEW,'new')}</ul>
+<h5>Acceptance criteria</h5><ul>${AL('A task opens a worker tab in the project session')}${AL('Closing a task releases its pane')}${AL('Herdr behavior is unchanged')}</ul>
+<h5>Risks</h5><ul>${AL('Tern pane names may change between releases; the adapter pins them behind one lookup'+NEW,'new')}${AL('Inbox alert volume if many tasks finish together')}</ul>
+</div></div>
+<div class="bbar" style="padding:10px 14px;gap:8px"><b style="font-size:12.5px;white-space:nowrap"><span id="nc">2 comments</span></b><input placeholder="Overall comment" style="min-width:0"><button class="p">Approve</button><button>Request changes (<span id="nn">2</span>)</button></div></div>`;
+S.brief=win(0,main(PANEL,CHATB,BRIEF));
+
+/* prs */
+const CHATP=chatX(`<div class="u">what does compose.ts change?</div><div class="c"><span class="tag">tandem</span> It adds <code>pickBackend</code> (lines 20-34), the one place that chooses Herdr or Tern from settings. Callers stop choosing a terminal themselves. Copilot left a thread on that line; it is open on the Diff tab.</div>`);
+const PRS=`<div class="tp" style="border-left:1px solid var(--line)"><div class="ph" style="height:34px;position:relative;color:var(--fg)">Pull request <span class="sw" id="prsw">#281 ▾</span><span class="xx" style="color:var(--dim)">×</span><div class="swm" id="swm">${['281','283','278'].map(id=>`<div class="swi" data-pr="${id}">#${id} ${PRD[id].t}<span style="color:var(--${PRD[id].wc})">● ${PRD[id].w}</span></div>`).join('')}</div></div><div id="prd" style="flex:1;display:flex;flex-direction:column;min-height:0"></div></div>`;
+S.prs=win(0,main(PANEL,CHATP,PRS));
+
+/* board */
+const bc=(h,t,br,sc,st,why,age,m,cost,pr)=>`<div class="bc"><div class="bh"><span class="hx ${h}">${h=='cc'?'✻':'ω'}</span><b>${t}</b></div><div class="bbr">${BRSVG} ${br}</div><div class="bd"></div><div class="bf"><span style="color:#b3bbc6">${why}</span><span class="age">${age}</span></div><div class="b2"><span class="chip ${m}">${m}</span><span>${cost}</span>${pr?(m=>prl(m[1],m[2].trim(),/draft/.test(m[2])))(pr.match(/#(\d+)(.*)/)):''}</div></div>`;
+const lane=(c,n,k,cards)=>`<div class="bcol"><div class="bch"><i style="background:${c}"></i><span style="color:${c}">${n}</span><em>${k}</em></div><div class="bcs">${cards}</div></div>`;
+const BOARD=`<div class="boardv"><div class="pgh"><b style="font-size:15px;flex:1">Board · tandem <span style="color:var(--dim);font-weight:400;font-size:12px;margin-left:8px">view-only · ⌘⇧B or esc to close</span></b><span class="pill dim">+ Task</span>${ORCH}</div><div style="flex:1;display:flex">
+${lane('var(--acc)','Working',2,bc('cc','Tern backend adapter','tandem/tern-backend-adapter','var(--acc)','Working','fixing review findings','12m ago','opus','$1.55','#283 draft')+bc('omp','Board snapshot writer','tandem/board-snapshot','var(--acc)','Working','writing snapshot.ts','6m ago','sonnet','$0.42',''))}
+${lane('var(--warn)','Needs you',1,bc('cc','Approve brief: Tern backend','tandem/tern-backend-brief','var(--warn)','Needs you','approval needed','2m ago','opus','$0.18',''))}
+${lane('#f2d65a','In review',2,bc('cc','Fix panel width <span class="stk">stuck</span>','tandem/fix-panel-width','var(--bad)','Changes requested','same 2 problems twice','34m ago','opus','$1.84','')+bc('omp','Inbox alerts from task events','tandem/inbox-alerts','#f2d65a','Review pending','reviewer reading','21m ago','sonnet','$0.88',''))}
+${lane('var(--ok)','Ready to merge',2,bc('cc','Terminal port refactor','tandem/terminal-port','var(--ok)','Ready','waiting on you to publish','52m ago','opus','$2.31','#281 draft')+bc('omp','Panel keyboard navigation','tandem/panel-keys','var(--ok)','Ready','auto-merge armed','41m ago','sonnet','$0.64','#278 open'))}
+</div></div>`;
+S.board=win(0,`<div class="main">${BOARD}</div>`);
+
+/* usage */
+const bars=[['Opus',3.05,'#c8a2ff'],['Sonnet',0.98,'#7fd6e8'],['Haiku',0.09,'#7d8590']];
+const wk=[['Opus',15.60,'#c8a2ff'],['Sonnet',5.45,'#7fd6e8'],['Haiku',0.35,'#7d8590']];
+const chart=(d,max)=>`<svg width="300" height="${d.length*30}" font-family="system-ui" font-size="12">${d.map((x,i)=>`<text x="0" y="${i*30+16}" fill="#9aa4b2">${x[0]}</text><rect x="58" y="${i*30+4}" width="${x[1]/max*180}" height="16" rx="3" fill="${x[2]}"/><text x="${58+x[1]/max*180+8}" y="${i*30+17}" fill="#d6dae0">$${x[1].toFixed(2)}</text>`).join('')}</svg>`;
+const meter=(l,pct,rs,c)=>`<div class="meter"><div class="t"><b style="font-weight:500">${l}</b><span><b style="color:var(--fg)">${pct}% left</b> · resets in ${rs}</span></div><div class="bar"><i style="width:${pct}%;background:${c}"></i></div></div>`;
+const H4=t=>`<h4 style="margin:0 0 10px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)">${t}</h4>`;
+const USAGE=`<div class="usage"><div style="display:flex;align-items:center"><h2 style="margin:0;font-size:20px;flex:1">Usage · tandem</h2>${ORCH}</div>
+<div class="lim" style="margin-top:16px"><div class="card2" style="padding:14px 18px">${H4('Limits · Claude Max (personal)')}${meter('5-hour window',62,'2h 14m','var(--warn)')}${meter('Weekly',71,'3d 6h','var(--ok)')}</div><div class="card2" style="padding:14px 18px">${H4('Limits · Codex (team)')}${meter('5-hour window',88,'4h 40m','var(--ok)')}${meter('Weekly',54,'4d 3h','var(--warn)')}</div></div>
+<div class="grid" style="grid-template-columns:repeat(4,1fr);margin:16px 0"><div class="card2"><div class="kp">$4.12</div><div class="kl">cost today</div></div><div class="card2"><div class="kp">3h 41m</div><div class="kl">agent time today</div></div><div class="card2"><div class="kp">9</div><div class="kl">tasks done today</div></div><div class="card2"><div class="kp">$21.40</div><div class="kl">this week</div></div></div>
+<div class="grid" style="grid-template-columns:1fr 1fr 1fr;gap:16px"><div class="card2">${H4('Cost by model · today')}${chart(bars,3.05)}</div><div class="card2">${H4('Cost by model · week')}${chart(wk,15.6)}</div><div class="card2">${H4('Time per stage · today')}<table style="font-size:12.5px"><tr><td>Research</td><td class="n">24m</td></tr><tr><td>Implementing</td><td class="n">1h 52m</td></tr><tr><td>Validating</td><td class="n">18m</td></tr><tr><td>Review</td><td class="n">49m</td></tr><tr><td>Waiting on you</td><td class="n">18m</td></tr></table></div></div>
+</div>`;
+S.usage=win(0,`<div class="main">${USAGE}</div>`);
+
+/* catchup */
+const CATCH=`<div class="float" style="left:430px;top:60px;width:600px"><div class="prop" style="position:static">Proposed: shown automatically when you open a project after 4+ hours away, only if something changed. Today it only appears when you ask the coordinator.</div><div class="fh"><span>Welcome back · tandem</span><span style="margin-left:auto">esc dismiss</span></div><div class="body">
+<h2>Since you left (9h)</h2>
+<h5>Merged</h5><ul><li>#276 Status line summary</li><li>#277 Inbox alerts from task events</li></ul>
+<h5 style="color:var(--warn)">Needs you</h5><ul><li>Approve brief: Tern backend (waiting 2m)</li></ul>
+<h5>Blocked</h5><ul><li>Fix panel width: review found the same 2 problems twice, stopped after 2 automatic restarts. Needs a steer or a restart.</li></ul>
+<h5>Where we left off</h5><div class="card2" style="font-size:12.5px">Workstream: <b>Tern backend</b>. Pane naming spike is done and the adapter design is settled. Next: approve the brief, then the adapter and board snapshot writer run in parallel. Follow-up: decide whether Herdr stays as a fallback.</div>
+<div class="btns"><button class="p">Open what needs me</button><button>Dismiss</button></div></div></div>`;
+S.catchup=win(0,main(PANEL,leftPane()),CATCH);
+
+/* chrome */
+const CHATLINK=CHAT.replace('I drafted a brief covering the adapter, pane launch, and the board.','I drafted a brief and queued <span class="lnk hov">task #102 Tern backend adapter<span class="tip">⌘-click to open task</span></span>.');
+const PAL=`<div class="float pal" style="margin-left:-180px"><input value="Tandem" readonly><div style="padding:4px 0 6px">
+<div class="pr2 sel">Tandem: New request… <em>start a brief</em><kbd>⌘⇧N</kbd></div><div class="pr2">Tandem: Open task… <em>search tasks</em><kbd>⌘⇧O</kbd></div><div class="pr2">Tandem: Toggle board<kbd>⌘⇧B</kbd></div><div class="pr2">Tandem: Show PRs<kbd>⌘⇧P</kbd></div><div class="pr2">Tandem: Usage<kbd>⌘⇧U</kbd></div></div></div>`;
+const INBOX=`<div class="float inbox" style="left:20px;top:48px"><h6>Needs attention</h6>
+<div class="grp">tandem</div>
+<div class="ir sel"><span class="ic" style="background:#f2b45a22;color:var(--warn)">⚑</span><div><b>coordinator</b><div class="m">Approve brief: Tern backend</div></div><span class="x">now <span>×</span></span></div>
+<div class="ir"><span class="ic" style="background:#6fcf9722;color:var(--ok)">✓</span><div><b>worker · Tern backend adapter</b><div class="m">PR #283 draft opened</div></div><span class="x">4m <span>×</span></span></div>
+<div class="ir"><span class="ic" style="background:#ef7b7b22;color:var(--bad)">!</span><div><b>worker · Fix panel width</b><div class="m">Review found 2 problems twice</div></div><span class="x">×2 · 21m <span>×</span></span></div>
+<div class="foot">↑↓ select · ↵ go to pane · ⌫ dismiss · esc close</div></div>`;
+S.chrome=win(0,main(PANEL,leftPane(CHATLINK)),PAL+INBOX);
+
+/* phone */
+const sh=t=>`<div style="padding:10px 18px 2px;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em">${t}</div>`;
+const H5=t=>`<h5 style="margin:10px 0 3px;font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em">${t}</h5>`;
+const PHONE=`<div class="phonewrap"><div class="phone"><div class="sbar"><span>9:41</span><span>●●● ▮</span></div>
+<div class="pv on"><div class="nav">tandem ▾ <i class="od">1</i> <span style="margin-left:auto;font:11px var(--mono);color:var(--dim);font-weight:400">5h 62% · 2h14m</span><span style="font-size:13px;color:var(--warn);margin-left:10px">&#9830; 3</span></div><div class="seg2"><span class="on">Panel</span><span>Coordinator</span><span>Tabs</span></div>
+<div style="padding:8px 18px 2px;font-size:11px;color:var(--warn);text-transform:uppercase;letter-spacing:.08em">Needs you · 1</div>
+<div class="prow need"><b>⚑</b>Approve brief: Tern backend<small>Waiting for your approval · 2m</small></div>
+${sh('Running · 4')}<div class="prow">Tern backend adapter<small>fixing · opus · 12m</small></div><div class="prow">Board snapshot writer<small>implementing · sonnet · 6m</small></div><div class="prow">Inbox alerts from task events<small>in review · sonnet · 21m</small></div><div class="prow">Fix panel width<small>stuck · same 2 problems twice</small></div>
+${sh('Ready · 2')}<div class="prow">Terminal port refactor<small>PR #281 · CI green · waiting on you</small></div><div class="prow">Panel keyboard navigation<small>PR #278 · auto-merge armed</small></div>
+</div></div>
+<div class="phone"><div class="sbar"><span>9:41</span><span>●●● ▮</span></div><div class="pv on"><div class="nav"><span style="color:var(--acc);font-size:15px">‹ Panel</span></div><div style="padding:0 18px;font-size:13px;line-height:1.5;overflow:hidden">
+<div style="font-size:19px;font-weight:700">Brief: Tern terminal backend</div><div style="color:var(--dim);font-size:11.5px;margin-bottom:8px">revision 2 · <span style="color:var(--ok)">3 changes</span></div>
+${H5('Goal')}Run Tandem's panes and board inside Tern.
+${H5('Scope')}<ul style="margin:0;padding-left:18px"><li>Tern adapter next to Herdr</li><li>Launch, close, focus panes</li><li class="new">One session per project <span class="newtag">new</span></li><li>Board snapshot and inbox alerts</li></ul>
+${H5('Acceptance')}<ul style="margin:0;padding-left:18px"><li>Task opens a worker tab</li><li>Closing releases its pane</li><li>Herdr unchanged</li></ul>
+${H5('Risks')}<ul style="margin:0;padding-left:18px"><li class="new">Tern pane names may change <span class="newtag">new</span></li></ul></div>
+<div style="margin-top:auto;padding:12px 16px 26px;display:flex;flex-direction:column;gap:8px"><button class="p" style="padding:12px;font-size:15px;border-radius:10px">Approve</button><button style="padding:12px;font-size:15px;border-radius:10px">Request changes</button></div></div></div>
+<div class="phn"><b>Same session, phone layout.</b><br>The flagged row opens brief approval (right). Task pages, PRs and usage work the same way.<br><br><span style="color:var(--dim)">Native views work on phone; browser pages (Lavish) only on the Mac. A brief with "Edit in browser" hides that button here.</span></div></div>`;
+S.phone=PHONE;
+
+/* ---------- mount ---------- */
+const ORDER=[['panel','1 Panel'],['projects','2 Projects'],['task','3 Task'],['brief','4 Brief'],['prs','5 PRs'],['board','6 Board'],['usage','7 Usage'],['catchup','8 Catch-up'],['chrome','9 Window'],['phone','10 Phone']];
+$('#nav').innerHTML=ORDER.map(([k,l])=>`<a href="#${k}" data-k="${k}">${l}</a>`).join('');
+$('#screens').innerHTML=ORDER.map(([k])=>`<div class="screen" id="s-${k}">${S[k]}${cap(k)}</div>`).join('');
+function route(){const k=ORDER.some(o=>o[0]==location.hash.slice(1))?location.hash.slice(1):'panel';document.querySelectorAll('.screen').forEach(e=>e.classList.toggle('on',e.id=='s-'+k));document.querySelectorAll('nav a').forEach(a=>a.classList.toggle('on',a.dataset.k==k));LAYOUTS.forEach(f=>f());if(k=='brief'){const t=document.querySelector('#s-brief .rc textarea');if(t){t.focus();t.setSelectionRange(t.value.length,t.value.length)}}}
+addEventListener('hashchange',route);route();
+document.querySelectorAll('.tabs2 a').forEach(a=>a.onclick=()=>{document.querySelectorAll('.tabs2 a').forEach(x=>x.classList.toggle('on',x==a));document.querySelectorAll('.tbody .pg').forEach(p=>p.classList.toggle('on',p.dataset.t==a.dataset.t))});
+document.querySelectorAll('.pal .pr2').forEach(r=>r.onmouseenter=()=>{document.querySelectorAll('.pal .pr2').forEach(x=>x.classList.toggle('sel',x==r))});
+renderPR($('#prd'),'281');renderPR($('#taskpr'),'283');
+$('#prsw').onclick=()=>$('#swm').classList.toggle('on');document.querySelectorAll('.swi').forEach(p=>p.onclick=()=>{$('#swm').classList.remove('on');$('#prsw').textContent='#'+p.dataset.pr+' ▾';renderPR($('#prd'),p.dataset.pr)});
+$('#badtog').onclick=()=>$('#bad').classList.toggle('on');$('#badx').onclick=()=>$('#bad').classList.remove('on');
+annot($('#bscope'),'brief',[{a:'b6',who:'you',time:'now',text:'only needs-you, done, stuck'},{a:'b10',who:'you',time:'now',text:'also when the worker crashes'},{a:'b11',who:'you',time:'now',text:'keep the Herdr tests unchanged too',edit:true}],n=>{$('#nn').textContent=n;$('#nc').textContent=n+(n==1?' comment':' comments')});
+const SPN='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';let sf=0;
+setInterval(()=>{sf=(sf+1)%10;document.querySelectorAll('.spn').forEach(e=>e.textContent=SPN[sf])},90);
+setInterval(()=>document.querySelectorAll('.tmr').forEach(e=>{e.dataset.s=+e.dataset.s+1;e.textContent=fmt(+e.dataset.s)}),1000);
+route();
+</script></body></html>
