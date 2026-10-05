@@ -3,7 +3,10 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { quoteShellCommand } from "../../../src/adapters/commands.ts";
 import { EndpointBusyError } from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import {
+  ternBackend,
+  ternNotificationEndpoint,
+} from "../../../src/terminal-backend/tern/backend.ts";
 import { paneMutation } from "../../../src/terminal-backend/tern/endpoints.ts";
 import {
   decode,
@@ -148,12 +151,12 @@ nativeTest(
       });
       const listed = await run({ argv: [TERN_BINARY, "ls", "--json"], cwd: root });
       const shown = JSON.parse(listed.stdout) as { sessions: { tabs: { shown: boolean }[] }[] };
-      expect(shown.sessions[0]?.tabs.map((tab) => tab.shown)).toEqual([true, false]);
+      expect(shown.sessions[0]?.tabs.map((tab) => tab.shown)).toEqual([true, false, false]);
       await assertCreatedContext(worker.endpoint);
       await terminal.close({ endpoint: worker.endpoint, cwd: root });
       await ternBackend(run, {
         binary: TERN_BINARY,
-        notificationEndpoint: async () => created.endpoint,
+        notificationEndpoint: async () => ternNotificationEndpoint(created.endpoint),
       }).notify({ ...session, title: "Done", body: "Tandem isolated native check" });
       await terminal.close(target);
       expect(await terminal.listPanes(session)).toEqual([]);

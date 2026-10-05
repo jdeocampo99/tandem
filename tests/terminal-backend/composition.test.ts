@@ -14,7 +14,7 @@ import {
 } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "../evals/scenario.ts";
 
-test("a coordinator record never authorizes Tern helper-pane alerts", async () => {
+test("Tern alerts use the recorded helper and refuse missing or foreign ownership", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
     const writes: CommandRequest[] = [];
@@ -55,17 +55,32 @@ test("a coordinator record never authorizes Tern helper-pane alerts", async () =
       command: ["omp"],
       harness: DEFAULT_HARNESS,
     };
-    await saveCoordinatorRecord(world.home, record);
+    const { notificationPane, ...coordinator } = endpoint;
+    expect(notificationPane).toBeDefined();
+    await saveCoordinatorRecord(world.home, {
+      ...record,
+      endpoint: coordinator,
+    });
     const beforeCoordinatorAlert = calls.length;
     await expect(alert()).rejects.toThrow("requires a recorded Tandem-owned pane");
     expect(calls).toHaveLength(beforeCoordinatorAlert);
     expect(writes).toHaveLength(0);
+    await saveCoordinatorRecord(world.home, record);
+    const beforeHelperAlert = calls.length;
+    await alert();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.argv[4]).toBe("\x1b]777;notify;Needs you;Review ready\x07");
+    const alertCalls = calls.slice(beforeHelperAlert);
+    expect(
+      alertCalls.some((call) => call.argv.includes(notificationPane?.paneId ?? "missing")),
+    ).toBe(true);
+    expect(alertCalls.some((call) => call.argv.includes(endpoint.paneId))).toBe(false);
     await saveCoordinatorRecord(world.home, {
       ...record,
       endpoint: { ...endpoint, terminal: "herdr" },
     });
     const before = calls.length;
-    await expect(alert()).rejects.toThrow("requires a recorded Tandem-owned pane");
+    await expect(alert()).rejects.toThrow("quarantined herdr endpoint under tern");
     const foreignHelper = terminalBackend(run, {
       home: world.home,
       tern: {
@@ -89,7 +104,7 @@ test("a coordinator record never authorizes Tern helper-pane alerts", async () =
       }),
     ).rejects.toThrow("quarantined herdr endpoint under tern");
     expect(calls).toHaveLength(before);
-    expect(writes).toHaveLength(0);
+    expect(writes).toHaveLength(1);
     const path = recordPath(world.home, world.sessionId, world.repoPath);
     await writeFile(
       path,

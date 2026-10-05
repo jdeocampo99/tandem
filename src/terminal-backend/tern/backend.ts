@@ -6,7 +6,7 @@ import {
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
-import type { CommandRunner, Endpoint } from "../../contracts.ts";
+import type { CommandRunner, Endpoint, TerminalPaneLocation } from "../../contracts.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import {
   close,
@@ -31,11 +31,29 @@ import {
 
 export type TernBackendOptions = TernOptions &
   Readonly<{
-    /** Durable composition may supply an owned alert pane after a restart. */
+    /** Resolve only the recorded dedicated helper, including after a restart. */
     notificationEndpoint?: (target: SessionTarget) => Promise<Endpoint | undefined>;
     clock?: () => number;
     wait?: (milliseconds: number) => Promise<void>;
   }>;
+
+/** Resolve the recorded helper without discovering a substitute pane by title or placement. */
+export function ternNotificationEndpoint(owner: Endpoint): Endpoint | undefined {
+  if (owner.notificationPane === undefined) return undefined;
+  if (owner.terminalSessionId === undefined || owner.notificationPane.paneId === owner.paneId)
+    throw new EndpointOwnershipError(
+      owner,
+      "recorded alert helper lacks an independent native identity",
+    );
+  return {
+    terminal: owner.terminal,
+    sessionId: owner.sessionId,
+    terminalSessionId: owner.terminalSessionId,
+    ...owner.notificationPane,
+    role: "coordinator",
+    generation: 0,
+  };
+}
 
 /** Tern's daemon is the port session; a Tern tab supplies both workspaceId and tabId. */
 export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}): TerminalBackend {
@@ -105,6 +123,90 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       return { focused: false as const, code: 1, detail: String(error) };
     }
   };
+  const createNotificationPane = async (
+    owner: EndpointTarget,
+    previous: Endpoint | undefined,
+  ): Promise<TerminalPaneLocation> => {
+    const stored =
+      previous !== undefined && previous.terminalSessionId === owner.endpoint.terminalSessionId
+        ? ternNotificationEndpoint(previous)
+        : undefined;
+    if (stored !== undefined) {
+      try {
+        await exactPane(commands, { endpoint: stored, cwd: owner.cwd });
+        return { workspaceId: stored.workspaceId, tabId: stored.tabId, paneId: stored.paneId };
+      } catch (error) {
+        if (!(error instanceof EndpointOwnershipError && error.reason === "missing")) throw error;
+      }
+    }
+    const placement = await exactPane(commands, owner);
+    const created = await commands.mutate(
+      owner.cwd,
+      ["new", "tab", placement.session.id, "--cwd", owner.cwd],
+      Created,
+    );
+    if (
+      created.session !== placement.session.id ||
+      created.block === owner.endpoint.paneId ||
+      created.tab === owner.endpoint.tabId
+    )
+      throw new TernOutcomeUnknownError(
+        "tern alert helper",
+        "helper creation acknowledged another placement",
+      );
+    const helper: Endpoint = {
+      terminal: "tern",
+      sessionId: owner.endpoint.sessionId,
+      terminalSessionId: created.session,
+      workspaceId: created.tab,
+      tabId: created.tab,
+      paneId: created.block,
+      role: "coordinator",
+      generation: 0,
+    };
+    await exactPane(commands, { endpoint: helper, cwd: owner.cwd });
+    await initializeShell(commands, { endpoint: helper, cwd: owner.cwd });
+    await rename({
+      sessionId: helper.sessionId,
+      workspaceId: helper.workspaceId,
+      cwd: owner.cwd,
+      label: "Tandem alerts",
+    });
+    return { workspaceId: helper.workspaceId, tabId: helper.tabId, paneId: helper.paneId };
+  };
+  const closeWithNotification = (
+    target: EndpointTarget & Readonly<{ force?: boolean }>,
+    strict: boolean,
+  ) =>
+    guard(target.endpoint.paneId, async () => {
+      const helper = ternNotificationEndpoint(target.endpoint);
+      if (helper !== undefined) {
+        for (const endpoint of [target.endpoint, helper]) {
+          try {
+            if (
+              (await inspect(commands, { endpoint, cwd: target.cwd })).activeWorker &&
+              target.force !== true
+            )
+              throw new EndpointBusyError(endpoint);
+          } catch (error) {
+            if (
+              !(error instanceof EndpointOwnershipError && error.reason === "missing") ||
+              (strict && endpoint === target.endpoint)
+            )
+              throw error;
+          }
+        }
+      }
+      await close(commands, target, strict);
+      if (helper !== undefined)
+        await guard(helper.paneId, () =>
+          close(commands, {
+            endpoint: helper,
+            cwd: target.cwd,
+            ...(target.force === undefined ? {} : { force: target.force }),
+          }),
+        );
+    });
   return {
     name: "tern",
     openView: async ({ view }) => ({
@@ -136,12 +238,8 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       }
       return { wasRunning: true };
     },
-    close: async (target) => {
-      await guard(target.endpoint.paneId, () => close(commands, target));
-    },
-    closeOwned: async (target) => {
-      await guard(target.endpoint.paneId, () => close(commands, { ...target, force: true }, true));
-    },
+    close: (target) => closeWithNotification(target, false),
+    closeOwned: (target) => closeWithNotification({ ...target, force: true }, true),
     isPaneGone: (error) => error instanceof EndpointOwnershipError && error.reason === "missing",
     isEndpointGone: (error) =>
       (error instanceof EndpointOwnershipError && error.reason === "missing") ||
@@ -248,8 +346,23 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           cwd: target.cwd,
           ...(target.env === undefined ? {} : { env: target.env }),
         });
+        let notificationPane: TerminalPaneLocation | undefined;
+        if (target.role === "coordinator" && target.parentWorkspaceId === undefined) {
+          try {
+            notificationPane = await createNotificationPane(
+              { endpoint, cwd: target.cwd },
+              target.previousEndpoint,
+            );
+          } catch (cause) {
+            if (cause instanceof TernOutcomeUnknownError) throw cause;
+            throw new TernOutcomeUnknownError("tern alert helper verification", cause);
+          }
+        }
         return {
-          endpoint,
+          endpoint: {
+            ...endpoint,
+            ...(notificationPane === undefined ? {} : { notificationPane }),
+          },
           warnings:
             target.parentWorkspaceId === undefined
               ? []
@@ -275,7 +388,10 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
             "split did not land beside the exact anchor",
           );
         const endpoint: Endpoint = {
-          ...anchor,
+          terminal: "tern",
+          sessionId: anchor.sessionId,
+          workspaceId: anchor.workspaceId,
+          tabId: anchor.tabId,
           terminalSessionId: created.session,
           paneId: created.block,
           role: input.role,
@@ -388,6 +504,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           "notification endpoint belongs to another daemon namespace",
         );
       const inspected = await check({ endpoint, cwd: target.cwd });
+      if (inspected.activeWorker) throw new EndpointBusyError(endpoint);
       const pid = inspected.processInfo.shellPid;
       if (pid === undefined)
         throw new AdapterError("Tern alert pane has no tty process", "tern notify");

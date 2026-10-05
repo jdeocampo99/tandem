@@ -309,8 +309,10 @@ close, recovery, or navigation: its ids never authorize an operation in the sele
 Derived board navigation retains the terminal tag; an older untagged snapshot is treated as Herdr.
 
 Tern composition uses `ternBackend` and `TERN_CONTEXT`. Alerts require a recorded per-project
-Tandem helper-pane endpoint. A coordinator record never authorizes the alert. Without an owned
-helper-pane lookup, the backend refuses the alert before reaching the terminal.
+Tandem helper-pane endpoint. Composition resolves the exact repository or worktree owner in the
+requested Tandem session, then uses `ternNotificationEndpoint` to derive its recorded helper identity.
+Missing, ambiguous, or foreign-terminal records refuse the alert before reaching the terminal; the
+coordinator pane itself never receives the alert.
 
 Every coordinator and worker launch into Tern sets `TANDEM_SESSION` and
 `TANDEM_TERN_WORKSPACE_ID` from the owned endpoint. Coordinator bootstrap and direct launch keep

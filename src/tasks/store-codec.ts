@@ -577,8 +577,9 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
     value,
     [
       "terminal",
-      "terminalSessionId",
       "sessionId",
+      "terminalSessionId",
+      "notificationPane",
       "workspaceId",
       "tabId",
       "paneId",
@@ -590,6 +591,14 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
   return {
     terminal: storedEndpointTerminal(value.terminal, source),
     sessionId: requiredText(value, "sessionId", source),
+    ...(value.notificationPane === undefined
+      ? {}
+      : {
+          notificationPane: parseNotificationPane(
+            value.notificationPane,
+            `${source}.notificationPane`,
+          ),
+        }),
     ...(value.terminalSessionId === undefined
       ? {}
       : { terminalSessionId: requiredText(value, "terminalSessionId", source) }),
@@ -599,6 +608,16 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
     // ponytail: legacy panes may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
     role: requiredEnum(value, "role", LEGACY_ENDPOINT_ROLES, source),
     generation: requiredInteger(value, "generation", source),
+  };
+}
+
+function parseNotificationPane(value: unknown, source: string) {
+  if (!isRecord(value)) failState(source, "notification pane must be an object");
+  assertExactKeys(value, ["workspaceId", "tabId", "paneId"], source);
+  return {
+    workspaceId: requiredText(value, "workspaceId", source),
+    tabId: requiredText(value, "tabId", source),
+    paneId: requiredText(value, "paneId", source),
   };
 }
 
