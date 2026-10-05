@@ -1,7 +1,7 @@
 import type { TerminalContext } from "../contract.ts";
 
 /** Tern exports only a pane id. Tandem launch context supplies the daemon and tab ids. */
-export const TERN_CONTEXT: TerminalContext = {
+export const ternContext: TerminalContext = {
   variables: [
     "TERN_PANE",
     "TERN_PANE_SOCKET",
