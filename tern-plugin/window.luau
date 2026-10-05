@@ -13,11 +13,13 @@ local function run(cx: WindowCx, args: { string })
  table.insert(argv, "--cwd"); table.insert(argv, info.cwd)
  local window = tern.getenv("TERN_WINDOW_KEY")
  if window and window ~= "" then table.insert(argv, "--window"); table.insert(argv, window) end
- local ok, problem = pcall(function() tern.process.run(argv, { cwd = "." }, function(result, callbackCx)
-  if result.status ~= 0 and callbackCx then
-   callbackCx:toast("error", "Tandem couldn't run that action", result.stderr)
-  end
- end) end)
+ local ok, problem = pcall(function()
+  tern.process.run(argv, { cwd = "." }, function(result, callbackCx)
+   if result.status ~= 0 and callbackCx then
+    callbackCx:toast("error", "Tandem couldn't run that action", result.stderr)
+   end
+  end)
+ end)
  if not ok then cx:toast("error", "Tandem couldn't start that action", tostring(problem)) end
 end
 

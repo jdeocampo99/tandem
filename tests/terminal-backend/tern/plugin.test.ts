@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { readHomeSettings, saveTerminalChoice } from "../../../src/config/home-settings.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
+import { createTandemService } from "../../../src/service/controller.ts";
+import {
+  installTerminalPlugin,
+  reloadTerminalPlugin,
+} from "../../../src/terminal-backend/compose.ts";
 import { ensureTernPlugin, reloadTernPlugin } from "../../../src/terminal-backend/tern/plugin.ts";
 
 function runner(catalogs: readonly string[]) {
@@ -70,4 +76,66 @@ test("malformed catalog fails closed before installation", async () => {
     ensureTernPlugin({ ...invalid, cwd: "/tmp", confirm: async () => true }),
   ).rejects.toThrow("invalid plugin catalog");
   expect(invalid.calls).toHaveLength(1);
+});
+
+test("installer and update read the saved choice without contacting unselected terminals", async () => {
+  const home = await mkdtemp("/tmp/tandem-plugin-choice-");
+  const selected = runner([missing, ready, ready, ready]);
+  const deps = {
+    ...selected,
+    cwd: home,
+    settingsPath: join(home, "tern-settings.json"),
+    confirm: async () => true,
+  };
+  try {
+    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    expect(await reloadTerminalPlugin(home, deps)).toBe(false);
+    expect(selected.calls).toHaveLength(0);
+    await saveTerminalChoice(home, "tern");
+    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    expect(await reloadTerminalPlugin(home, deps)).toBe(true);
+    expect(selected.calls.map((call) => call.argv[2])).toEqual([
+      "list",
+      "link",
+      "list",
+      "list",
+      "reload",
+      "list",
+    ]);
+    await saveTerminalChoice(home, "herdr");
+    expect(await reloadTerminalPlugin(home, deps)).toBe(false);
+    expect(selected.calls).toHaveLength(6);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("chat and setup terminal selection awaits plugin consent after saving the Tern choice", async () => {
+  const home = await mkdtemp("/tmp/tandem-plugin-onboarding-");
+  const observed: (string | undefined)[] = [];
+  const run: CommandRunner = async (request) => ({
+    code: 0,
+    stdout: request.argv.includes("state") ? JSON.stringify({ gate: { signed_in: true } }) : "{}",
+    stderr: "",
+  });
+  const service = createTandemService({
+    home,
+    sessionId: "test",
+    run,
+    installTerminalPlugin: async () => {
+      observed.push((await readHomeSettings(home)).terminal);
+      return false;
+    },
+  });
+  try {
+    await service.configureTerminal("herdr");
+    expect(observed).toEqual([]);
+    const selected = await service.configureTerminal("tern");
+    expect(observed).toEqual(["tern"]);
+    expect(selected.terminal).toBe("tern");
+    expect(selected.reason).toContain("left unchanged");
+  } finally {
+    await service.shutdown();
+    await rm(home, { recursive: true, force: true });
+  }
 });

@@ -126,3 +126,15 @@ after adding the mappings so it reads the settings.
 `tandem update`; it never silently installs one. Onboarding retains the separate consent for
 Tern's global sidebar setting. Native renderer definitions and CLI action handlers build on this
 foundation in the subsequent stacked PRs.
+
+`setup.sh` invokes `src/terminal-backend/setup.ts`, which reads the saved home terminal choice
+and runs the existing Herdr setup or the Tern installer. The terminal front door also offers
+Tern installation after project preparation saves the terminal choice and before opening a
+project window. Chat and Lavish setup use the shared coordinator host's confirmation port: after saving a Tern
+choice, `configureTerminal` awaits the injected installer outside task-store serialization before
+setup opens projects. This is separate consent for linking and shortcuts; a declined prompt keeps
+the terminal choice and reports that the integration was left unchanged.
+Both installation and update reload read `readHomeSettings(home).terminal`; Herdr and homes
+without a Tern choice perform no Tern plugin or key-setting effects. Update
+reloads after successful coordinator updates, without an installation prompt. Declining plugin
+or key consent leaves the integration unchanged and prints how to add it later.
