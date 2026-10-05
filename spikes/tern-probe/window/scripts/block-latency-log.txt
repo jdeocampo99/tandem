@@ -1,0 +1,29 @@
+init pane=1640677507073 args=/tmp/tern-window-test/tasks.json
+render stamp=1791213925292 wall=1791214080563 delta=155271
+render stamp=1791214089352 wall=1791214089550 delta=198
+render stamp=1791214091666 wall=1791214092566 delta=900
+render stamp=1791214093989 wall=1791214094564 delta=575
+render stamp=1791214096311 wall=1791214096578 delta=267
+render stamp=1791214098642 wall=1791214099591 delta=949
+render stamp=1791214100970 wall=1791214101594 delta=624
+event {"act":"select","ev":"action","id":"main.items.t102","sf":"p","value":"102"}
+event {"act":"approve","ev":"action","id":"dock.1","sf":"p","value":"102"}
+key approve 103
+init pane=1640677507075 args=/private/tmp/tern-window-test/a.tandemtasks.json
+render stamp=1791214100970 wall=1791214126945 delta=25975
+init pane=1640677507077 args=/tmp/tern-window-test/tasks.json,102
+render stamp=1791214100970 wall=1791214160480 delta=59510
+init pane=1640677507077 args=/tmp/tern-window-test/tasks.json,102
+init pane=1640677507073 args=/tmp/tern-window-test/tasks.json
+init pane=1640677507075 args=/private/tmp/tern-window-test/a.tandemtasks.json
+render stamp=1791214100970 wall=1791214347000 delta=246030
+render stamp=1791214100970 wall=1791214347000 delta=246030
+render stamp=1791214100970 wall=1791214347000 delta=246030
+render stamp=1791214437159 wall=1791214437480 delta=321
+render stamp=1791214437159 wall=1791214437480 delta=321
+render stamp=1791214463339 wall=1791214463572 delta=233
+render stamp=1791214463339 wall=1791214463573 delta=234
+render stamp=1791214464092 wall=1791214464577 delta=485
+render stamp=1791214464092 wall=1791214464578 delta=486
+render stamp=1791214480118 wall=1791214480622 delta=504
+render stamp=1791214480118 wall=1791214480622 delta=504

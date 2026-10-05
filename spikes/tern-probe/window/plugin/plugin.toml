@@ -1,0 +1,12 @@
+schema = 1
+id = "tandemwin"
+name = "Tandem window probe"
+version = "0.0.1"
+description = "Throwaway window-feature probe for spikes/tern-probe/window"
+host = "host.luau"
+window = "window.luau"
+
+[[blocks]]
+id = "tasks"
+title = "Tandem tasks"
+files = ["*.tandemtasks.json"]
