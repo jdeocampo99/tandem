@@ -112,7 +112,12 @@ cannot reorder tabs or resize panes, so those operations return warnings. Native
 panel operations currently raise typed unavailable errors until the native view host ships.
 Task, brief and PR presentations return `opened: false` with a warning until that host ships;
 they never type view commands into a conversation or claim to have opened a view.
-Alerts print OSC 777 to the tty of a recorded Tandem-owned pane, with exact pane and process
-checks. Composition injects the durable pane selector; without a proven record, alerts are refused.
+Luau view blocks have no PTY. Each project session gets a dedicated background PTY helper tab;
+the coordinator's durable endpoint records its exact pane, tab and workspace in `notificationPane`.
+Relaunch reuses that helper only by its recorded identity. Coordinator closure checks both panes
+for busy processes and exact ownership before mutation, closes the helper through the same guards,
+and keeps resources when any outcome is uncertain. Alerts print OSC 777 to that helper's tty with
+exact pane and process checks. Composition resolves it through `ternNotificationEndpoint`; if it
+is gone, alerts are refused without selecting another pane. The caller supplies the alert text.
 Worker OMP completion, error and ask notifications are off; coordinator ask notifications
 stay on through its separate config overlay.

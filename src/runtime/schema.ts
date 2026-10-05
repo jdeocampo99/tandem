@@ -733,6 +733,11 @@ function endpoint(value: unknown, field: string): Endpoint {
   const role = enumValue(value.role, LEGACY_ENDPOINT_ROLES, `${field}.role`);
   return {
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
+    ...(value.notificationPane === undefined
+      ? {}
+      : {
+          notificationPane: notificationPane(value.notificationPane, `${field}.notificationPane`),
+        }),
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
     ...(value.terminalSessionId === undefined
       ? {}
@@ -741,6 +746,17 @@ function endpoint(value: unknown, field: string): Endpoint {
     paneId: singleLine(value.paneId, `${field}.paneId`),
     role,
     generation: nonNegativeInteger(value.generation, `${field}.generation`),
+  };
+}
+
+function notificationPane(value: unknown, field: string) {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  if (Object.keys(value).some((key) => !["workspaceId", "tabId", "paneId"].includes(key)))
+    throw new TypeError(`${field} contains unknown notification pane fields`);
+  return {
+    workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
+    tabId: singleLine(value.tabId, `${field}.tabId`),
+    paneId: singleLine(value.paneId, `${field}.paneId`),
   };
 }
 

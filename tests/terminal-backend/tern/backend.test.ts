@@ -6,7 +6,10 @@ import { recordPath } from "../../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import type { TerminalView } from "../../../src/terminal-backend/contract.ts";
-import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import {
+  ternBackend,
+  ternNotificationEndpoint,
+} from "../../../src/terminal-backend/tern/backend.ts";
 import {
   Created,
   decode,
@@ -87,8 +90,8 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
         complete: true,
       }),
     ).toHaveLength(1);
-    expect(await terminal.snapshot(session)).toHaveLength(3);
-    expect(await terminal.listWorkspaces({ ...session, complete: true })).toHaveLength(2);
+    expect(await terminal.snapshot(session)).toHaveLength(4);
+    expect(await terminal.listWorkspaces({ ...session, complete: true })).toHaveLength(3);
     for (const endpoint of [root.endpoint, split, worker.endpoint]) {
       const initialization = calls.find(
         (request) =>
@@ -171,6 +174,13 @@ test("a relaunched backend reuses the exact session from durable coordinator, ta
     );
     if (recorded === undefined) throw new Error("missing durable coordinator");
     expect(recorded.endpoint.terminalSessionId).toBe(first.endpoint.terminalSessionId);
+    expect(recorded.endpoint.notificationPane).toEqual(first.endpoint.notificationPane);
+    expect(snapshot.tasks[0]?.endpoints?.[0]?.notificationPane).toEqual(
+      first.endpoint.notificationPane,
+    );
+    expect(snapshot.runtime.tasks[0]?.endpoints[0]?.notificationPane).toEqual(
+      first.endpoint.notificationPane,
+    );
     // An empty native session may survive terminal restoration or Tern's acknowledged last close.
     world.removePane(first.endpoint.paneId);
     const relaunched = await ternBackend(run).createWorkspace({
@@ -179,8 +189,9 @@ test("a relaunched backend reuses the exact session from durable coordinator, ta
     });
     expect(relaunched.endpoint.terminalSessionId).toBe(recorded.endpoint.terminalSessionId);
     expect(relaunched.endpoint.paneId).not.toBe(recorded.endpoint.paneId);
+    expect(relaunched.endpoint.notificationPane).toEqual(recorded.endpoint.notificationPane);
     const nativeCreates = calls.filter((request) => request.argv[1] === "new");
-    expect(nativeCreates.map((request) => request.argv[2])).toEqual(["session", "tab"]);
+    expect(nativeCreates.map((request) => request.argv[2])).toEqual(["session", "tab", "tab"]);
     const index = calls.findLastIndex((request) => request.argv[1] === "new");
     expect(calls[index - 1]?.argv[1]).toBe("ls");
     expect(calls[index]?.argv[3]).toBe(recorded.endpoint.terminalSessionId);
@@ -223,7 +234,7 @@ test("an absent stored session creates a new session without adopting a matching
     expect(relaunched.endpoint.terminalSessionId).not.toBe(impostor.session);
     expect(
       calls.filter((request) => request.argv[1] === "new").map((request) => request.argv[2]),
-    ).toEqual(["session", "session"]);
+    ).toEqual(["session", "tab", "session", "tab"]);
     expect(world.paneIsPresent(impostor.block)).toBe(true);
   });
 });
@@ -240,11 +251,73 @@ test("notifications require the injected durable endpoint even after a backend c
     });
     const alert = { ...session, title: "Done", body: "Task complete" };
     await expect(terminal.notify(alert)).rejects.toThrow("recorded Tandem-owned pane");
-    world.removePane(created.endpoint.paneId);
+    const helper = ternNotificationEndpoint(created.endpoint);
+    if (helper === undefined) throw new Error("missing recorded helper");
+    world.removePane(helper.paneId);
+    const other = world.openPane({ paneId: "48", cwd: world.repoPath });
+    world.titlePane(other.paneId, helper.paneId);
     await expect(
-      ternBackend(world.run, { notificationEndpoint: async () => created.endpoint }).notify(alert),
+      ternBackend(world.run, { notificationEndpoint: async () => helper }).notify(alert),
     ).rejects.toBeInstanceOf(EndpointOwnershipError);
+    expect(world.paneIsPresent(other.paneId)).toBe(true);
     expect(world.trace().some((event) => event.action === "tern close")).toBe(false);
+  });
+});
+
+test("an uncertain helper creation retains both panes and prevents blind retry", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    let helperCreates = 0;
+    const terminal = ternBackend(async (request) => {
+      const result = await world.run(request);
+      if (request.argv[1] === "new" && request.argv[2] === "tab") {
+        helperCreates += 1;
+        return { ...result, stdout: result.stdout.replace(/"session":"\d+"/u, '"session":"999"') };
+      }
+      return result;
+    });
+    const target = {
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      label: "coordinator",
+      role: "coordinator" as const,
+      generation: 0,
+    };
+    await expect(terminal.createWorkspace(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    await expect(terminal.createWorkspace(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    expect(helperCreates).toBe(1);
+    const snapshot = await world.snapshot();
+    expect(
+      snapshot.resources.retained.filter((resource) => resource.startsWith("pane:")),
+    ).toHaveLength(2);
+    expect(world.trace().some((event) => ["tern close", "tern kill"].includes(event.action))).toBe(
+      false,
+    );
+  });
+});
+
+test("a busy recorded helper refuses project closure before either pane is closed", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const terminal = ternBackend(world.run);
+    const created = await terminal.createWorkspace({
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      label: "coordinator",
+      role: "coordinator",
+      generation: 0,
+    });
+    const helper = ternNotificationEndpoint(created.endpoint);
+    if (helper === undefined) throw new Error("missing recorded helper");
+    world.replaceForeground(helper.paneId, ["omp", "--mode", "worker"]);
+    await expect(
+      terminal.close({ endpoint: created.endpoint, cwd: world.repoPath }),
+    ).rejects.toThrow("active foreground worker");
+    expect(world.paneIsPresent(created.endpoint.paneId)).toBe(true);
+    expect(world.paneIsPresent(helper.paneId)).toBe(true);
+    expect(world.trace().some((event) => event.action === "tern close")).toBe(false);
+    await terminal.interrupt({ endpoint: helper, cwd: world.repoPath });
+    await terminal.close({ endpoint: created.endpoint, cwd: world.repoPath });
+    expect(world.paneIsPresent(helper.paneId)).toBe(false);
+    expect(world.trace().filter((event) => event.action === "tern kill")).toHaveLength(1);
   });
 });
 

@@ -210,10 +210,18 @@ export type ResolvedPolicy = {
  */
 export const LEGACY_ENDPOINT_ROLES = [...MODEL_ROLE_ORDER, "verifier"] as const;
 
+export type TerminalPaneLocation = Readonly<{
+  workspaceId: string;
+  tabId: string;
+  paneId: string;
+}>;
+
 export type Endpoint = {
   readonly sessionId: string;
   /** Native project session inside a terminal daemon, when the backend has one. */
   readonly terminalSessionId?: string;
+  /** Dedicated alert PTY in this native project session, owned with the coordinator. */
+  readonly notificationPane?: TerminalPaneLocation;
   readonly workspaceId: string;
   readonly tabId: string;
   readonly paneId: string;
