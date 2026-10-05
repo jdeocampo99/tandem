@@ -1,0 +1,1622 @@
+[
+  {
+    "question": "isolation",
+    "herdr": [],
+    "facts": {
+      "isolatedRoot": "/private/tmp/tern-probe-XZIYzF",
+      "isolatedEnv": [
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "PATH",
+        "TERM",
+        "TERN_CONFIG_DIR",
+        "TERN_DAEMON_SOCKET",
+        "STENCIL_LOG_DIR",
+        "ZDOTDIR",
+        "TANDEM_PROBE_HOST_LOG"
+      ],
+      "liveStructureBefore": "92228c00e2a3d70827bf988e895d5f8aa65d96646dd3acb41017865f0b93fad1",
+      "liveStructureAfter": "92228c00e2a3d70827bf988e895d5f8aa65d96646dd3acb41017865f0b93fad1",
+      "liveStructureIdentical": true,
+      "liveRawIdentical": true,
+      "liveRawChangedPaths": [],
+      "userZshHistoryUnchanged": true,
+      "liveMentionsProbeSessions": false
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 15,
+        "stdout": "sha256:03b8524fc4f0a91b698486cd89493b6125fbcc74716d78467ffe1571f8a20407 (2401 bytes, withheld)",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 12,
+        "stdout": "sha256:03b8524fc4f0a91b698486cd89493b6125fbcc74716d78467ffe1571f8a20407 (2401 bytes, withheld)",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "a. identity",
+    "herdr": ["workspace create", "pane split", "pane get", "session restart"],
+    "facts": {
+      "newSessionReturns": {
+        "session": "25769803777",
+        "tab": "25769803778",
+        "block": "25769803779"
+      },
+      "splitReturns": {
+        "session": "25769803777",
+        "tab": "25769803778",
+        "block": "30064771073"
+      },
+      "splitParentageMatchesLs": true,
+      "idsHigh32Bits": [6, 6, 6, 6, 6, 7, 16],
+      "idsWithinJsSafeInteger": true,
+      "lsCwd": "/private/tmp/tern-probe-XZIYzF/work b",
+      "processCwd": "/private/tmp/tern-probe-XZIYzF/work b",
+      "processCwdIsRealpath": true,
+      "daemonStopExit": 143,
+      "idsStableAcrossRestart": true,
+      "layoutStableAcrossRestart": true,
+      "shellPidsBefore": [12280, 12283],
+      "shellPidsAfter": [12298, 12300],
+      "oldShellsAliveAfterRestart": [false, false],
+      "newIdAfterRestartUnused": true
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": [
+          "tern",
+          "new",
+          "session",
+          "tandem-probe-a",
+          "--cwd",
+          "/private/tmp/tern-probe-XZIYzF/work-a",
+          "--json"
+        ],
+        "exit": 0,
+        "ms": 18,
+        "stdout": "{\n  \"session\": 25769803777,\n  \"tab\": 25769803778,\n  \"block\": 25769803779\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "split",
+          "25769803779",
+          "right",
+          "--cwd",
+          "/private/tmp/tern-probe-XZIYzF/work b",
+          "--json"
+        ],
+        "exit": 0,
+        "ms": 19,
+        "stdout": "{\n  \"session\": 25769803777,\n  \"tab\": 25769803778,\n  \"block\": 30064771073\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 15,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "25769803779", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"pane\": 25769803779,\n  \"child\": {\n    \"pid\": 12280,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  },\n  \"group\": 12280,\n  \"foreground\": {\n    \"pid\": 12280,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "30064771073", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"pane\": 30064771073,\n  \"child\": {\n    \"pid\": 12283,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12283,\n  \"foreground\": {\n    \"pid\": 12283,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "25769803779", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 25769803779,\n  \"child\": {\n    \"pid\": 12298,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  },\n  \"group\": 12298,\n  \"foreground\": {\n    \"pid\": 12298,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "30064771073", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"pane\": 30064771073,\n  \"child\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12300,\n  \"foreground\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "split",
+          "25769803779",
+          "down",
+          "--cwd",
+          "/private/tmp/tern-probe-XZIYzF/work-a",
+          "--json"
+        ],
+        "exit": 0,
+        "ms": 16,
+        "stdout": "{\n  \"session\": 25769803777,\n  \"tab\": 25769803778,\n  \"block\": 68719476737\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "68719476737", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 68719476737\n}\n",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "b. window scoping",
+    "herdr": ["HERDR_* context", "session status"],
+    "facts": {
+      "sessionB": {
+        "session": "77309411329",
+        "tab": "77309411330",
+        "block": "77309411331"
+      },
+      "oneCallerReachesBothSessions": true,
+      "sessionQualifiedSelectorPane": "77309411331",
+      "bareProgramSelector": {
+        "exit": 1,
+        "stderr": "tern process: `zsh` names blocks 25769803779, 30064771073; name one by id or as session/block"
+      },
+      "unknownWindowLs": {
+        "exit": 0,
+        "sessions": 0
+      },
+      "unknownWindowProcess": {
+        "exit": 1,
+        "stderr": "tern process: no block is called `77309411331`"
+      },
+      "emptyWindowKeyLsSessions": 2,
+      "paneEnv": {
+        "TERN_COMPLETE": "1",
+        "TERN_CONFIG_DIR": "/private/tmp/tern-probe-XZIYzF/config",
+        "TERN_DAEMON_SOCKET": "/private/tmp/tern-probe-XZIYzF/d.sock",
+        "TERN_IDENTITY": "{\"hops\":[{\"principal\":\"<user>\",\"method\":\"local\",\"from\":\"\",\"host\":\"<host>\",\"user\":\"<user>\"}]}",
+        "TERN_LENSES": "1",
+        "TERN_PANE_SOCKET": "/private/tmp/tern-probe-XZIYzF/d.sock",
+        "TERN_PANE": "25769803779",
+        "TERN_WINDOW_KEY": "",
+        "TERN_WINDOW_SOCKET": ""
+      },
+      "paneEnvHasSessionOrTab": false,
+      "whoami": "{\"hops\":[{\"principal\":\"<user>\",\"method\":\"local\",\"from\":\"\",\"host\":\"<host>\",\"user\":\"<user>\"}]}"
+    },
+    "unproven": [
+      {
+        "claim": "With two GUI windows, a caller outside both needs --window KEY to reach the second.",
+        "reason": "No isolated GUI window exists. A real window passes the closed-beta account gate, whose keychain credentials the user's live Tern shares; `tern serve` runs its own ephemeral session."
+      }
+    ],
+    "raw": [
+      {
+        "argv": [
+          "tern",
+          "new",
+          "session",
+          "tandem-probe-b",
+          "--cwd",
+          "/private/tmp/tern-probe-XZIYzF/work b",
+          "--json"
+        ],
+        "exit": 0,
+        "ms": 17,
+        "stdout": "{\n  \"session\": 77309411329,\n  \"tab\": 77309411330,\n  \"block\": 77309411331\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "77309411331", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 77309411331,\n  \"child\": {\n    \"pid\": 12320,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12320,\n  \"foreground\": {\n    \"pid\": 12320,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "25769803779", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 25769803779,\n  \"child\": {\n    \"pid\": 12298,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  },\n  \"group\": 12298,\n  \"foreground\": {\n    \"pid\": 12298,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "77309411331", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 77309411331,\n  \"child\": {\n    \"pid\": 12320,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12320,\n  \"foreground\": {\n    \"pid\": 12320,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "tandem-probe-b/zsh", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 77309411331,\n  \"child\": {\n    \"pid\": 12320,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12320,\n  \"foreground\": {\n    \"pid\": 12320,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "zsh", "--json"],
+        "exit": 1,
+        "ms": 13,
+        "stdout": "",
+        "stderr": "tern process: `zsh` names blocks 25769803779, 30064771073; name one by id or as session/block\n"
+      },
+      {
+        "argv": ["tern", "ls", "--window", "tandem-probe-no-such-window", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "process",
+          "77309411331",
+          "--window",
+          "tandem-probe-no-such-window",
+          "--json"
+        ],
+        "exit": 1,
+        "ms": 13,
+        "stdout": "",
+        "stderr": "tern process: no block is called `77309411331`\n"
+      },
+      {
+        "argv": ["tern", "ls", "--window", "", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Leaf\": 77309411331\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "run",
+          "25769803779",
+          "env | grep '^TERN_' | sort > '/private/tmp/tern-probe-XZIYzF/pane-env.txt'; '~/.local/bin/tern' whoami --json > '/private/tmp/tern-probe-XZIYzF/pane-whoami.json' 2>&1"
+        ],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "c. process proof",
+    "herdr": ["pane process-info", "ps scan"],
+    "facts": {
+      "idleShell": {
+        "pane": "30064771073",
+        "child": {
+          "pid": 12300,
+          "name": "zsh",
+          "argv": ["/bin/zsh", "-l"],
+          "cwd": "/private/tmp/tern-probe-XZIYzF/work b"
+        },
+        "group": 12300,
+        "foreground": {
+          "pid": 12300,
+          "name": "zsh",
+          "argv": ["/bin/zsh", "-l"],
+          "cwd": "/private/tmp/tern-probe-XZIYzF/work b"
+        }
+      },
+      "idleForegroundIsShell": true,
+      "busy": {
+        "pane": "30064771073",
+        "child": {
+          "pid": 12300,
+          "name": "zsh",
+          "argv": ["/bin/zsh", "-l"],
+          "cwd": "/private/tmp/tern-probe-XZIYzF/work b"
+        },
+        "group": 12345,
+        "foreground": {
+          "pid": 12345,
+          "name": "bun",
+          "argv": ["/opt/homebrew/Cellar/bun/1.3.14/bin/bun", "-e", "setInterval(()=>{},1e3)"],
+          "cwd": "/private/tmp/tern-probe-XZIYzF/work b"
+        }
+      },
+      "busySeenAfterMs": 13,
+      "foregroundDistinctFromShell": true,
+      "groupIsForegroundPid": true,
+      "argvExact": true,
+      "psLine": "12345 12345 /opt/homebrew/Cellar/bun/1.3.14/bin/bun -e setInterval(()=>{},1e3)",
+      "psAgreesOnGroup": true
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": ["tern", "process", "30064771073", "--json"],
+        "exit": 0,
+        "ms": 15,
+        "stdout": "{\n  \"pane\": 30064771073,\n  \"child\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12300,\n  \"foreground\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "run",
+          "30064771073",
+          "'/opt/homebrew/Cellar/bun/1.3.14/bin/bun' -e 'setInterval(()=>{},1e3)'"
+        ],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "30064771073", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 30064771073,\n  \"child\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12345,\n  \"foreground\": {\n    \"pid\": 12345,\n    \"name\": \"bun\",\n    \"argv\": [\n      \"/opt/homebrew/Cellar/bun/1.3.14/bin/bun\",\n      \"-e\",\n      \"setInterval(()=>{},1e3)\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "d. input",
+    "herdr": ["pane send-keys", "pane send-text", "pane run", "interrupt"],
+    "facts": {
+      "waitUntilPrompt": {
+        "block": "158913789953",
+        "status": null
+      },
+      "ctrlCAck": {
+        "block": "30064771073"
+      },
+      "ctrlCStoppedForeground": true,
+      "ctrlCStoppedAfterMs": 13,
+      "interruptedPidAlive": false,
+      "sendTextAck": {
+        "block": "30064771073"
+      },
+      "sendTextReachedShell": true,
+      "unknownKey": {
+        "exit": 1,
+        "stderr": "tern send: unknown key `not-a-key`"
+      },
+      "ctrlDAck": {
+        "block": "158913789953"
+      },
+      "ctrlDExitStatus": 0,
+      "exitedPaneStillListedAfter1500ms": true,
+      "exitedPaneLive": true,
+      "exitedPaneProcess": {
+        "pane": "158913789953",
+        "child": null,
+        "group": null,
+        "foreground": null
+      },
+      "waitUntilExit": {
+        "block": "158913789953",
+        "status": 0
+      }
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": ["tern", "process", "30064771073", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 30064771073,\n  \"child\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12345,\n  \"foreground\": {\n    \"pid\": 12345,\n    \"name\": \"bun\",\n    \"argv\": [\n      \"/opt/homebrew/Cellar/bun/1.3.14/bin/bun\",\n      \"-e\",\n      \"setInterval(()=>{},1e3)\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "send", "30064771073", "keys", "ctrl+c", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 30064771073\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "30064771073", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 30064771073,\n  \"child\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12300,\n  \"foreground\": {\n    \"pid\": 12300,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "send",
+          "30064771073",
+          "text",
+          "echo tandem-probe-text-$((40+2))\r",
+          "--json"
+        ],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"block\": 30064771073\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "capture", "30064771073"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "/private/tmp/tern-probe-XZIYzF/work b % '/opt/homebrew/Cellar/bun/1.3.14/bin/bun' -e 'setInterval(()=>{},1e3)'\n^C\n/private/tmp/tern-probe-XZIYzF/work b % echo tandem-probe-text-$((40+2))\ntandem-probe-text-42\n/private/tmp/tern-probe-XZIYzF/work b %\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "send", "30064771073", "keys", "not-a-key", "--json"],
+        "exit": 1,
+        "ms": 12,
+        "stdout": "",
+        "stderr": "tern send: unknown key `not-a-key`\n"
+      },
+      {
+        "argv": ["tern", "split", "25769803779", "down", "--json"],
+        "exit": 0,
+        "ms": 17,
+        "stdout": "{\n  \"session\": 25769803777,\n  \"tab\": 25769803778,\n  \"block\": 158913789953\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "158913789953", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 158913789953,\n  \"child\": {\n    \"pid\": 12359,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  },\n  \"group\": 12359,\n  \"foreground\": {\n    \"pid\": 12359,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "wait", "158913789953", "--until", "prompt", "--timeout", "5", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"block\": 158913789953,\n  \"status\": null\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "send", "158913789953", "keys", "ctrl+d", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 158913789953\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 158913789953,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": 0,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Split\": {\n                  \"id\": 158913789954,\n                  \"axis\": \"Column\",\n                  \"ratio\": 0.5,\n                  \"a\": {\n                    \"Leaf\": 25769803779\n                  },\n                  \"b\": {\n                    \"Leaf\": 158913789953\n                  }\n                }\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Leaf\": 77309411331\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 158913789953,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": 0,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Split\": {\n                  \"id\": 158913789954,\n                  \"axis\": \"Column\",\n                  \"ratio\": 0.5,\n                  \"a\": {\n                    \"Leaf\": 25769803779\n                  },\n                  \"b\": {\n                    \"Leaf\": 158913789953\n                  }\n                }\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Leaf\": 77309411331\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "158913789953", "--json"],
+        "exit": 0,
+        "ms": 12,
+        "stdout": "{\n  \"pane\": 158913789953,\n  \"child\": null,\n  \"group\": null,\n  \"foreground\": null\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "wait", "158913789953", "--until", "exit", "--timeout", "3", "--json"],
+        "exit": 0,
+        "ms": 12,
+        "stdout": "{\n  \"block\": 158913789953,\n  \"status\": 0\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "158913789953", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 158913789953\n}\n",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "e. close semantics",
+    "herdr": ["pane close", "workspace retirement"],
+    "facts": {
+      "idleClose": {
+        "exit": 0,
+        "ack": {
+          "block": "197568495617"
+        },
+        "goneFromLsAfterMs": 14
+      },
+      "busyClose": {
+        "exit": 0,
+        "ack": {
+          "block": "214748364801"
+        },
+        "goneFromLs": true,
+        "foregroundKilled": true
+      },
+      "nonexistentId": {
+        "exit": 1,
+        "stderr": "tern close: no block is called `999999999999`"
+      },
+      "alreadyClosedId": {
+        "exit": 1,
+        "stderr": "tern close: no block is called `197568495617`"
+      },
+      "unknownWindow": {
+        "exit": 1,
+        "stderr": "tern close: no block is called `77309411331`",
+        "paneStillThere": true
+      },
+      "victimRetitledToStaleId": true,
+      "staleIdResolvesToRetitledPane": true,
+      "staleIdClose": {
+        "requested": "197568495617",
+        "exit": 0,
+        "ack": {
+          "block": "257698037761"
+        },
+        "closedOtherPane": true
+      },
+      "lastPaneClose": {
+        "exit": 0,
+        "sessionRemains": true
+      },
+      "sessionTabsAfterLastPane": 0,
+      "killSessionById": {
+        "session": "77309411329"
+      },
+      "killSessionAgain": {
+        "exit": 1,
+        "stderr": "tern kill: no session is called `77309411329` (sessions: tandem-probe-a)"
+      }
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": ["tern", "split", "25769803779", "down", "--json"],
+        "exit": 0,
+        "ms": 17,
+        "stdout": "{\n  \"session\": 25769803777,\n  \"tab\": 25769803778,\n  \"block\": 197568495617\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "197568495617", "--json"],
+        "exit": 0,
+        "ms": 12,
+        "stdout": "{\n  \"pane\": 197568495617,\n  \"child\": {\n    \"pid\": 12423,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  },\n  \"group\": 12423,\n  \"foreground\": {\n    \"pid\": 12423,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "197568495617", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 197568495617\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Leaf\": 77309411331\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "split", "25769803779", "down", "--json"],
+        "exit": 0,
+        "ms": 17,
+        "stdout": "{\n  \"session\": 25769803777,\n  \"tab\": 25769803778,\n  \"block\": 214748364801\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "214748364801", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 214748364801,\n  \"child\": {\n    \"pid\": 12432,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  },\n  \"group\": 12432,\n  \"foreground\": {\n    \"pid\": 12432,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "run",
+          "214748364801",
+          "'/opt/homebrew/Cellar/bun/1.3.14/bin/bun' -e 'setInterval(()=>{},1e3)'"
+        ],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "214748364801", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 214748364801,\n  \"child\": {\n    \"pid\": 12432,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  },\n  \"group\": 12442,\n  \"foreground\": {\n    \"pid\": 12442,\n    \"name\": \"bun\",\n    \"argv\": [\n      \"/opt/homebrew/Cellar/bun/1.3.14/bin/bun\",\n      \"-e\",\n      \"setInterval(()=>{},1e3)\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "214748364801", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"block\": 214748364801\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Leaf\": 77309411331\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "999999999999", "--json"],
+        "exit": 1,
+        "ms": 14,
+        "stdout": "",
+        "stderr": "tern close: no block is called `999999999999`\n"
+      },
+      {
+        "argv": ["tern", "close", "197568495617", "--json"],
+        "exit": 1,
+        "ms": 13,
+        "stdout": "",
+        "stderr": "tern close: no block is called `197568495617`\n"
+      },
+      {
+        "argv": [
+          "tern",
+          "close",
+          "77309411331",
+          "--window",
+          "tandem-probe-no-such-window",
+          "--json"
+        ],
+        "exit": 1,
+        "ms": 12,
+        "stdout": "",
+        "stderr": "tern close: no block is called `77309411331`\n"
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Leaf\": 77309411331\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "split", "77309411331", "right", "--json"],
+        "exit": 0,
+        "ms": 17,
+        "stdout": "{\n  \"session\": 77309411329,\n  \"tab\": 77309411330,\n  \"block\": 257698037761\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "257698037761", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 257698037761,\n  \"child\": {\n    \"pid\": 12451,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12451,\n  \"foreground\": {\n    \"pid\": 12451,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "send",
+          "257698037761",
+          "text",
+          "printf '\\033]0;197568495617\\007'; sleep 30\r"
+        ],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 257698037761,\n              \"title\": \"197568495617\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 257698037762,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 77309411331\n              },\n              \"b\": {\n                \"Leaf\": 257698037761\n              }\n            }\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "process", "197568495617", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"pane\": 257698037761,\n  \"child\": {\n    \"pid\": 12451,\n    \"name\": \"zsh\",\n    \"argv\": [\n      \"/bin/zsh\",\n      \"-l\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  },\n  \"group\": 12460,\n  \"foreground\": {\n    \"pid\": 12460,\n    \"name\": \"sleep\",\n    \"argv\": [\n      \"sleep\",\n      \"30\"\n    ],\n    \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\"\n  }\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "197568495617", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 257698037761\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": [\n        {\n          \"id\": 77309411330,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": false,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 77309411331,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Leaf\": 77309411331\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "77309411331", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 77309411331\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    },\n    {\n      \"id\": 77309411329,\n      \"name\": \"tandem-probe-b\",\n      \"shown\": false,\n      \"tabs\": []\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "kill", "session", "77309411329", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"session\": 77309411329\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "kill", "session", "77309411329", "--json"],
+        "exit": 1,
+        "ms": 13,
+        "stdout": "",
+        "stderr": "tern kill: no session is called `77309411329` (sessions: tandem-probe-a)\n"
+      }
+    ]
+  },
+  {
+    "question": "f. events",
+    "herdr": ["pane exit / close polling", "status refresh"],
+    "facts": {
+      "kinds": {
+        "client_connected": 65,
+        "client_left": 66,
+        "pane_spawned": 8,
+        "layout_changed": 15,
+        "cwd_changed": 7,
+        "title_changed": 16,
+        "pane_closed": 6,
+        "pane_exited": 1,
+        "bell": 1
+      },
+      "perPane": {
+        "rootA": ["pane_spawned", "cwd_changed", "title_changed", "title_changed", "title_changed"],
+        "splitA": [
+          "pane_spawned",
+          "cwd_changed",
+          "title_changed",
+          "title_changed",
+          "title_changed",
+          "title_changed",
+          "title_changed"
+        ],
+        "rootB": ["pane_spawned", "cwd_changed", "title_changed", "pane_closed"]
+      },
+      "streamEnds": [
+        {
+          "exit": 1,
+          "stderr": "tern events: the session daemon stopped\n"
+        },
+        {
+          "exit": 143,
+          "stderr": ""
+        }
+      ],
+      "commandEventsOnCli": false
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 621,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"25769803779\",\"by\":7}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 621,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":7}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 639,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"30064771073\",\"by\":8}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 639,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":8}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 648,
+        "stdout": "{\"event\":\"cwd_changed\",\"pane\":\"25769803779\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 649,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"25769803779\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 665,
+        "stdout": "{\"event\":\"cwd_changed\",\"pane\":\"30064771073\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 666,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"30064771073\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 882,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"68719476737\",\"by\":6}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 882,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":6}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 895,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":7}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 895,
+        "stdout": "{\"event\":\"pane_closed\",\"pane\":\"68719476737\",\"by\":7}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 912,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"77309411331\",\"by\":8}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 913,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":8}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 936,
+        "stdout": "{\"event\":\"cwd_changed\",\"pane\":\"77309411331\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 937,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"77309411331\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1034,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"25769803779\",\"title\":\"env | grep '^TERN_' | sort > '/private/tmp/tern-probe-XZIYzF/pane-env.txt'; '~/.local/bin/tern' whoami --json > '/private/tmp/tern-probe-XZIYzF/pane-whoami.json' 2>&1\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1056,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"25769803779\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1167,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"30064771073\",\"title\":\"'/opt/homebrew/Cellar/bun/1.3.14/bin/bun' -e 'setInterval(()=>{},1e3)'\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1213,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"30064771073\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1237,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"30064771073\",\"title\":\"echo tandem-probe-text-$((40+2))\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1239,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"30064771073\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1278,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"158913789953\",\"by\":28}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1278,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":28}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1303,
+        "stdout": "{\"event\":\"cwd_changed\",\"pane\":\"158913789953\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1304,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"158913789953\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 1320,
+        "stdout": "{\"event\":\"pane_exited\",\"pane\":\"158913789953\",\"status\":0}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2887,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":36}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2887,
+        "stdout": "{\"event\":\"pane_closed\",\"pane\":\"158913789953\",\"by\":36}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2905,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"197568495617\",\"by\":37}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2905,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":37}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2929,
+        "stdout": "{\"event\":\"cwd_changed\",\"pane\":\"197568495617\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2930,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"197568495617\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2930,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":39}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2930,
+        "stdout": "{\"event\":\"pane_closed\",\"pane\":\"197568495617\",\"by\":39}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2961,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"214748364801\",\"by\":41}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2961,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":41}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2986,
+        "stdout": "{\"event\":\"cwd_changed\",\"pane\":\"214748364801\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2987,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"214748364801\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work-a\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 2989,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"214748364801\",\"title\":\"'/opt/homebrew/Cellar/bun/1.3.14/bin/bun' -e 'setInterval(()=>{},1e3)'\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3015,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":45}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3015,
+        "stdout": "{\"event\":\"pane_closed\",\"pane\":\"214748364801\",\"by\":45}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3097,
+        "stdout": "{\"event\":\"pane_spawned\",\"pane\":\"257698037761\",\"by\":51}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3097,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":51}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3121,
+        "stdout": "{\"event\":\"cwd_changed\",\"pane\":\"257698037761\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3122,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"257698037761\",\"title\":\"/private/tmp/tern-probe-XZIYzF/work b\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3125,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"257698037761\",\"title\":\"printf '\\u001b]0;197568495617\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3125,
+        "stdout": "{\"event\":\"bell\",\"pane\":\"257698037761\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3125,
+        "stdout": "{\"event\":\"title_changed\",\"pane\":\"257698037761\",\"title\":\"197568495617\"}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3163,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":56}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3163,
+        "stdout": "{\"event\":\"pane_closed\",\"pane\":\"257698037761\",\"by\":56}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3190,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":58}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3190,
+        "stdout": "{\"event\":\"pane_closed\",\"pane\":\"77309411331\",\"by\":58}",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "events"],
+        "exit": null,
+        "ms": 3216,
+        "stdout": "{\"event\":\"layout_changed\",\"by\":60}",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "g. plugin",
+    "herdr": [
+      "plugin link",
+      "plugin pane open",
+      "ui.tab_bar_right",
+      "notification show",
+      "keys.command"
+    ],
+    "facts": {
+      "manifest": "schema = 1\nid = \"tandemprobe\"\nname = \"Tandem probe\"\nversion = \"0.0.1\"\ndescription = \"Throwaway plugin for spikes/tern-probe/probe.ts\"\nhost = \"host.luau\"\nwindow = \"window.luau\"\n\n[[blocks]]\nid = \"panel\"\ntitle = \"Tandem probe panel\"\n",
+      "linkExit": 0,
+      "pluginDir": {
+        "dir": "/private/tmp/tern-probe-XZIYzF/config/plugins"
+      },
+      "loaded": {
+        "id": "tandemprobe",
+        "version": "0.0.1",
+        "status": "ready",
+        "host": true,
+        "window": true,
+        "blocks": [
+          {
+            "id": "panel",
+            "title": "Tandem probe panel"
+          }
+        ]
+      },
+      "problems": 0,
+      "cliLaunchGrammar": [
+        "tern split BLOCK right|down [LAUNCH]      a block beside BLOCK",
+        "LAUNCH is [--cwd DIR] [--keep-open] [-- COMMAND...]; as in a window, a"
+      ],
+      "headlessServe": {
+        "answered": true,
+        "sessions": [
+          {
+            "name": "Default",
+            "tabs": 1,
+            "current": true
+          }
+        ],
+        "tabs": [
+          {
+            "title": "tern-probe-XZIYzF",
+            "color": null,
+            "panes": 1,
+            "active": true,
+            "zoomed": false,
+            "busy": false,
+            "alert": null
+          }
+        ],
+        "gate": {
+          "applies": false,
+          "phase": "off",
+          "signed_in": false,
+          "handle": null,
+          "error": null
+        }
+      },
+      "isolatedDaemonClientKindsWhileServeRan": ["cli", "cli"],
+      "hostHookKinds": {
+        "loaded": 3,
+        "cwd": 9,
+        "title": 18,
+        "command_started": 5,
+        "command_finished": 3,
+        "pane_exited": 1,
+        "host_toast": 1
+      },
+      "hostHookSamples": [
+        {
+          "kind": "loaded",
+          "ev": {
+            "context": "host",
+            "panes": [],
+            "plugin": {
+              "data": "/private/tmp/tern-probe-XZIYzF/config/plugin-data/tandemprobe",
+              "dir": "~/Coding_Projects/tandem-wt/spike/tern-probe/spikes/tern-probe/plugin",
+              "id": "tandemprobe",
+              "name": "Tandem probe"
+            }
+          }
+        },
+        {
+          "kind": "cwd",
+          "ev": {
+            "pane": "25769803779",
+            "path": "/private/tmp/tern-probe-XZIYzF/work-a"
+          }
+        },
+        {
+          "kind": "title",
+          "ev": {
+            "pane": "25769803779",
+            "title": "/private/tmp/tern-probe-XZIYzF/work-a"
+          }
+        },
+        {
+          "kind": "command_started",
+          "ev": {
+            "cwd": "/private/tmp/tern-probe-XZIYzF/work-a",
+            "line": "env | grep '^TERN_' | sort > '/private/tmp/tern-probe-XZIYzF/pane-env.txt'; '~/.local/bin/tern' whoami --json > '/private/tmp/tern-probe-XZIYzF/pane-whoami.json' 2>&1",
+            "pane": "25769803779"
+          }
+        },
+        {
+          "kind": "command_finished",
+          "ev": {
+            "line": "env | grep '^TERN_' | sort > '/private/tmp/tern-probe-XZIYzF/pane-env.txt'; '~/.local/bin/tern' whoami --json > '/private/tmp/tern-probe-XZIYzF/pane-whoami.json' 2>&1",
+            "pane": "25769803779",
+            "status": 0,
+            "took_ms": 21
+          }
+        },
+        {
+          "kind": "pane_exited",
+          "ev": {
+            "pane": "158913789953",
+            "status": 0
+          }
+        },
+        {
+          "kind": "host_toast",
+          "ev": {
+            "err": null,
+            "ok": true
+          }
+        }
+      ]
+    },
+    "unproven": [
+      {
+        "claim": "The window half (status segment, toast, palette command, key bind, block opened in a split) works.",
+        "reason": "Each is window-only Luau. The CLI LAUNCH grammar takes a command, never a block kind. `tern serve` is an ephemeral in-process session: it does not attach to the daemon or load TERN_CONFIG_DIR plugins. A real window passes the closed-beta account gate, which shares keychain credentials with the user's live Tern. So no isolated window ran window.luau."
+      }
+    ],
+    "raw": [
+      {
+        "argv": [
+          "tern",
+          "plugin",
+          "link",
+          "~/Coding_Projects/tandem-wt/spike/tern-probe/spikes/tern-probe/plugin",
+          "--json"
+        ],
+        "exit": 0,
+        "ms": 86,
+        "stdout": "{\n  \"id\": \"tandemprobe\",\n  \"version\": \"0.0.1\",\n  \"dir\": \"~/Coding_Projects/tandem-wt/spike/tern-probe/spikes/tern-probe/plugin\"\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "plugin", "dir", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"dir\": \"/private/tmp/tern-probe-XZIYzF/config/plugins\"\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "plugin", "list", "--json"],
+        "exit": 0,
+        "ms": 16,
+        "stdout": "{\n  \"plugins\": [\n    {\n      \"id\": \"tandemprobe\",\n      \"name\": \"Tandem probe\",\n      \"version\": \"0.0.1\",\n      \"description\": \"Throwaway plugin for spikes/tern-probe/probe.ts\",\n      \"icon\": \"puzzle\",\n      \"css\": \"\",\n      \"blocks\": [\n        {\n          \"id\": \"panel\",\n          \"title\": \"Tandem probe panel\",\n          \"icon\": \"puzzle\",\n          \"files\": [],\n          \"palette\": true\n        }\n      ],\n      \"lenses\": [],\n      \"host\": true,\n      \"window\": true,\n      \"status\": \"ready\"\n    }\n  ],\n  \"problems\": [],\n  \"jit\": true,\n  \"canvas\": true\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "split", "--help"],
+        "exit": 0,
+        "ms": 15,
+        "stdout": "tern split BLOCK right|down [LAUNCH]      a block beside BLOCK\n\nLAUNCH is [--cwd DIR] [--keep-open] [-- COMMAND...]; as in a window, a\nblock whose program succeeds closes unless kept open.\n\nBLOCK is an id, @focused, a title or a program name, as SESSION/BLOCK to\nlook in one session. --json prints what a command found or did as JSON.\n\nEvery command works on one window's sessions: --window KEY's, else the\nwindow of the pane it runs in (its key is $TERN_WINDOW_KEY there), else\nthe first window.\n\n`tern help` lists every command; `tern COMMAND --help` shows one.\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "new", "--help"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "tern new session NAME [LAUNCH]            a session with one tab\ntern new tab [SESSION] [LAUNCH]           a tab (default: in the session shown)\n\nLAUNCH is [--cwd DIR] [--keep-open] [-- COMMAND...]; as in a window, a\nblock whose program succeeds closes unless kept open.\n\nBLOCK is an id, @focused, a title or a program name, as SESSION/BLOCK to\nlook in one session. --json prints what a command found or did as JSON.\n\nEvery command works on one window's sessions: --window KEY's, else the\nwindow of the pane it runs in (its key is $TERN_WINDOW_KEY there), else\nthe first window.\n\n`tern help` lists every command; `tern COMMAND --help` shows one.\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ctl", "--control", "/private/tmp/tern-probe-XZIYzF/ctl.sock", "state"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\"ok\":true,\"tabs\":[{\"title\":\"tern-probe-XZIYzF\",\"color\":null,\"panes\":1,\"active\":true,\"zoomed\":false,\"busy\":false,\"alert\":null}],\"focused\":{\"id\":2,\"label\":\"tern-probe-XZIYzF\",\"cwd\":\"/private/tmp/tern-probe-XZIYzF\",\"git\":null,\"running\":null,\"busy\":false,\"last\":null,\"exited\":null,\"error\":null,\"prompt\":true,\"selection\":null},\"panes\":[{\"id\":2,\"cols\":160,\"rows\":45}],\"palette\":null,\"palette_scope\":null,\"sessions\":[{\"name\":\"Default\",\"tabs\":1,\"current\":true}],\"find\":null,\"theme_dark\":\"titanium\",\"theme_light\":\"light\",\"theme_preview\":null,\"menu\":false,\"layout\":\"tiles\",\"tab_orientation\":\"horizontal\",\"tab_badges\":false,\"status_bar\":false,\"pane_headers\":\"Never\",\"material\":\"Clear\",\"opacity\":60,\"blur\":56,\"glass_hud\":false,\"density\":\"Compact\",\"picker\":null,\"pane_drag\":null,\"decks\":[\"Shell\"],\"font\":13,\"theme\":\"light\",\"viewport\":[1280.0,800.0],\"csd\":false,\"focused_element\":\"textarea.tv-input\",\"inbox\":{\"open\":false,\"count\":0,\"selected\":null,\"entries\":[]},\"hosts\":{\"current\":\"<host>\",\"hosts\":[{\"name\":\"<host>\",\"address\":\"\",\"state\":\"Connected\",\"sessions\":1,\"identity\":\"<user>@<host> (local)\"}],\"popover\":null,\"dialog\":null},\"prefs\":null,\"peek\":{\"level\":\"closed\",\"pos\":0.0,\"selected\":0,\"strip\":[],\"groups\":[],\"grid\":[]},\"pips\":[],\"files\":{\"shown\":false,\"root\":null},\"file_blocks\":[],\"pip_commits\":0,\"melt\":null,\"quicklook\":null,\"lightbox\":null,\"term_link\":null,\"gate\":{\"applies\":false,\"phase\":\"off\",\"signed_in\":false,\"handle\":null,\"error\":null},\"task_manager_blocks\":{\"blocks\":[],\"paused\":false,\"interval_ms\":2000,\"seq\":null},\"screen_blocks\":[],\"git_blocks\":{\"blocks\":[],\"dialog\":false,\"peek\":false,\"files_tab\":\"files\",\"refs\":{\"filter\":\"\",\"folded\":[],\"sections\":[{\"kind\":\"branches\",\"count\":0,\"shown\":false,\"folded\":false},{\"kind\":\"remotes\",\"count\":0,\"shown\":false,\"folded\":false},{\"kind\":\"tags\",\"count\":0,\"shown\":false,\"folded\":false},{\"kind\":\"stashes\",\"count\":0,\"shown\":false,\"folded\":false},{\"kind\":\"worktrees\",\"count\":0,\"shown\":false,\"folded\":false},{\"kind\":\"submodules\",\"count\":0,\"shown\":false,\"folded\":false}]}},\"sqlite_blocks\":{\"blocks\":[],\"recent\":[],\"asking\":0},\"notebook_blocks\":[],\"board_blocks\":[],\"profile_blocks\":{\"blocks\":[]},\"font_family\":\"\",\"face\":\"BerkeleyMono Nerd Font\",\"tabs_out\":false,\"update\":{\"status\":\"off\",\"release\":null,\"received\":null,\"total\":null,\"message\":null,\"asked\":false,\"announced\":null},\"carly\":{\"open\":false,\"peek\":false,\"tasks\":[{\"id\":0,\"title\":\"Heartbeat\",\"when\":\"heartbeat\",\"check\":null,\"prompt\":null,\"pane\":null,\"once\":false,\"window\":\"\",\"paused\":false,\"by\":\"heartbeat\",\"next\":null,\"runs\":[]}],\"phase\":\"idle\",\"target\":null,\"field\":\"\",\"placeholder\":\"\",\"notice\":null,\"voice\":null,\"turns\":[],\"last_tool\":null}}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "inspect", "--json"],
+        "exit": 0,
+        "ms": 15,
+        "stdout": "{\n  \"sessions\": [],\n  \"detached\": [],\n  \"panes\": [],\n  \"clients\": [\n    {\n      \"conn\": 2,\n      \"identity\": {\n        \"hops\": [\n          {\n            \"principal\": \"<user>\",\n            \"method\": \"local\",\n            \"from\": \"\",\n            \"host\": \"<host>\",\n            \"user\": \"<user>\"\n          }\n        ]\n      },\n      \"kind\": \"cli\",\n      \"since\": 1791171024295\n    },\n    {\n      \"conn\": 6,\n      \"identity\": {\n        \"hops\": [\n          {\n            \"principal\": \"<user>\",\n            \"method\": \"local\",\n            \"from\": \"\",\n            \"host\": \"<host>\",\n            \"user\": \"<user>\"\n          }\n        ]\n      },\n      \"kind\": \"cli\",\n      \"since\": 1791171024723\n    }\n  ]\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ctl", "--control", "/private/tmp/tern-probe-XZIYzF/ctl.sock", "quit"],
+        "exit": 0,
+        "ms": 15,
+        "stdout": "{\"ok\":true}\n",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "h. readiness",
+    "herdr": ["status server", "status --json"],
+    "facts": {
+      "lsBeforeDaemonExit": 1,
+      "lsBeforeDaemonStderr": "tern ls: no Tern is running (no session daemon on /private/tmp/tern-probe-XZIYzF/d.sock: No such file or directory (os error 2)); start Tern, or run this inside a Tern pane",
+      "daemonReady": true,
+      "readyAfterMs": 129,
+      "readyAttempts": 2,
+      "freshDaemonSessions": 0,
+      "socketAfterIdleExit": false,
+      "idleExitCode": 0,
+      "idleExitAfterMs": 10538
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 1,
+        "ms": 13,
+        "stdout": "",
+        "stderr": "tern ls: no Tern is running (no session daemon on /private/tmp/tern-probe-XZIYzF/d.sock: No such file or directory (os error 2)); start Tern, or run this inside a Tern pane\n"
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 12,
+        "stdout": "{\n  \"sessions\": [],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"tandem-probe-a\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "kill", "session", "25769803777", "--json"],
+        "exit": 0,
+        "ms": 15,
+        "stdout": "{\n  \"session\": 25769803777\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "plugin", "unlink", "tandemprobe", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"removed\": \"/private/tmp/tern-probe-XZIYzF/config/plugins/tandemprobe.path\"\n}\n",
+        "stderr": ""
+      }
+    ]
+  },
+  {
+    "question": "i. port ops",
+    "herdr": [
+      "renameWorkspace",
+      "createWorkspace label",
+      "focusAgent",
+      "openWelcome",
+      "fitPanel",
+      "notify"
+    ],
+    "facts": {
+      "renameSessionById": {
+        "exit": 0,
+        "nameAfter": "└ probe task: ünïcode label"
+      },
+      "duplicateSessionName": {
+        "exit": 1,
+        "stderr": "tern new: a session is already called `└ probe task: ünïcode label`"
+      },
+      "focus": {
+        "exit": 0,
+        "stdout": "{\n  \"block\": 25769803779\n}",
+        "stderr": ""
+      },
+      "pipOverCoordinator": {
+        "exit": 0,
+        "stdout": "{\n  \"block\": 326417514497\n}",
+        "stderr": ""
+      },
+      "dockBack": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "scriptVerbs": [
+        "ls",
+        "inspect",
+        "new",
+        "split",
+        "run",
+        "move",
+        "pip",
+        "dock",
+        "rename",
+        "focus",
+        "close",
+        "kill",
+        "wait",
+        "keep-open",
+        "send",
+        "capture",
+        "process",
+        "events",
+        "browser"
+      ],
+      "verbsForMissingOps": {
+        "resize": false,
+        "notify": false,
+        "toast": false,
+        "order": false
+      },
+      "version": "tern 0.4.5 (1d14241)"
+    },
+    "unproven": [],
+    "raw": [
+      {
+        "argv": ["tern", "rename", "25769803777", "└ probe task: ünïcode label", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"session\": 25769803777\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "ls", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"sessions\": [\n    {\n      \"id\": 25769803777,\n      \"name\": \"└ probe task: ünïcode label\",\n      \"shown\": true,\n      \"tabs\": [\n        {\n          \"id\": 25769803778,\n          \"number\": 1,\n          \"name\": null,\n          \"shown\": true,\n          \"zoomed\": false,\n          \"blocks\": [\n            {\n              \"id\": 25769803779,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work-a\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": true,\n              \"live\": true\n            },\n            {\n              \"id\": 30064771073,\n              \"title\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"cwd\": \"/private/tmp/tern-probe-XZIYzF/work b\",\n              \"program\": \"/bin/zsh\",\n              \"args\": [\n                \"-l\"\n              ],\n              \"command\": null,\n              \"cols\": 80,\n              \"rows\": 24,\n              \"exited\": null,\n              \"keep_open\": false,\n              \"focused\": false,\n              \"live\": true\n            }\n          ],\n          \"splits\": {\n            \"Split\": {\n              \"id\": 30064771074,\n              \"axis\": \"Row\",\n              \"ratio\": 0.5,\n              \"a\": {\n                \"Leaf\": 25769803779\n              },\n              \"b\": {\n                \"Leaf\": 30064771073\n              }\n            }\n          }\n        }\n      ]\n    }\n  ],\n  \"detached\": []\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "new", "session", "└ probe task: ünïcode label", "--json"],
+        "exit": 1,
+        "ms": 13,
+        "stdout": "",
+        "stderr": "tern new: a session is already called `└ probe task: ünïcode label`\n"
+      },
+      {
+        "argv": ["tern", "rename", "25769803777", "tandem-probe-a", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"session\": 25769803777\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "focus", "25769803779", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"block\": 25769803779\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": [
+          "tern",
+          "split",
+          "25769803779",
+          "right",
+          "--keep-open",
+          "--json",
+          "--",
+          "sh",
+          "-c",
+          "echo hi"
+        ],
+        "exit": 0,
+        "ms": 16,
+        "stdout": "{\n  \"session\": 25769803777,\n  \"tab\": 25769803778,\n  \"block\": 326417514497\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "pip", "326417514497", "--over", "25769803779", "--json"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "{\n  \"block\": 326417514497\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "dock", "326417514497", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 326417514497\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "close", "326417514497", "--json"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "{\n  \"block\": 326417514497\n}\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "help"],
+        "exit": 0,
+        "ms": 14,
+        "stdout": "Tern — a multiplexing terminal\n\nusage:\n  tern [DIR]                   open a window with a tab in DIR, beside the sessions the daemon keeps\n                               (also --dir DIR, which only a fresh session starts in; default: the\n                               current directory from a shell or, on Linux, a file manager, else\n                               home)\n  tern FILE[:LINE[:COL]]       open a window in FILE's directory, FILE in a tab\n  tern -e COMMAND [ARGS...]    open a window with a tab running COMMAND in the current directory\n                               (first argument only: how desktops start a terminal for a command)\n  tern open [--split right|down|--tab|--preview] [--wait] PATH[:LINE[:COL]]...\n                               show files in file blocks beside the block it runs in, starting Tern\n                               when none runs; --wait returns once they close, so EDITOR='tern open\n                               --wait' works\n  tern ls|inspect|new|split|run|move|pip|dock|rename|focus|close|kill|wait|keep-open|send|capture|\n      process|events|browser ...\n                               script sessions from the command line, every window following live,\n                               with Tern running or inside a Tern pane (`tern COMMAND --help` shows\n                               a command's arguments)\n  tern whoami [--json]         the identity chain of the pane it runs in\n  tern --version               this build's version and commit (also -V)\n  tern plugin list|reload|dir|install|remove|link|unlink|types ...\n                               manage the plugins in the plugins directory (`tern plugin --help`)\n  tern daemon [--socket PATH]  the session daemon keeping panes' programs alive between windows\n                               (windows start it)\n  tern remote serve|install|login|trust|hosts|discover ...\n                               remoting: the network service in front of session daemons, and its\n                               tools\n  tern web serve [--listen ADDR:PORT] [--token FILE] [--assets DIR] [--allow-origin ORIGIN]...\n      [--access FILE]\n                               serve the web client and the daemon to browsers\n  tern register                make Tern this user's handler of its URL schemes and file types\n  tern unregister              undo `register`\n  tern help [dev]              this help, or the developer tooling's: shots, headless sessions, the\n                               control endpoint and the scenario commands\n\nenvironment:\n  TERN_CONFIG_DIR=DIR      where settings.json and the rest of Tern's state live\n  TERN_DAEMON_SOCKET=PATH  the session daemon's socket\n  TERN_AUTH_URL=ORIGIN     sign in to the Stencil account the closed beta requires at ORIGIN\n                           (default https://auth.stencil.so)\n  TERN_BUILD_URL=ORIGIN    take updates from the build service at ORIGIN (default\n                           https://build.stencil.so)\n",
+        "stderr": ""
+      },
+      {
+        "argv": ["tern", "--version"],
+        "exit": 0,
+        "ms": 13,
+        "stdout": "tern 0.4.5 (1d14241)\n",
+        "stderr": ""
+      }
+    ]
+  }
+]
