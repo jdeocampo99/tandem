@@ -571,6 +571,7 @@ test("asking how it's going shows the board without a coordinator turn, and a Je
   const view = {
     now: "2030-01-01T00:00:05.000Z",
     projects: ["app"],
+    projectPaths: ["/work/app"],
     needsYou: [
       {
         key: "brief:req-1",
@@ -585,6 +586,7 @@ test("asking how it's going shows the board without a coordinator turn, and a Je
     running: [],
     pullRequests: [],
     finished: 0,
+    doneToday: [],
   } as const;
   const service = { board: async () => view } as unknown as TandemService;
   try {

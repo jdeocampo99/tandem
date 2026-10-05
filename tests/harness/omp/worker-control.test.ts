@@ -22,6 +22,7 @@ import {
   WORKER_CONTROL_ENV,
 } from "../../../src/workers/control-protocol.ts";
 import { readWorkerTerminal, WORKER_JOB_PATH_ENV } from "../../../src/workers/terminal.ts";
+import { readWorkerActivity, type WorkerActivity } from "../../../src/workers/worker-activity.ts";
 
 type Handler = (event: unknown, context: unknown) => unknown | Promise<unknown>;
 
@@ -296,6 +297,39 @@ test("the combined worker extension runs both its steering and terminal handlers
     expect(markerCount((steered as { messages: unknown[] }).messages)).toBe(1);
     expect(watched).toBeUndefined();
     expect((await readWorkerReceipt(receiptPath, identity))?.appliedRevision).toBe(1);
+
+    const activityWhen = async (done: (activity: WorkerActivity | undefined) => boolean) => {
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const activity = await readWorkerActivity(receiptPath);
+        if (done(activity)) return activity;
+        await Bun.sleep(5);
+      }
+      return readWorkerActivity(receiptPath);
+    };
+    const path = "docs/reference/recovery.md";
+    await fake.emit(
+      "tool_execution_start",
+      { type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path } },
+      context,
+    );
+    expect(await activityWhen((activity) => activity?.tool !== undefined)).toMatchObject({
+      tool: "read",
+      toolTarget: path,
+    });
+    const todos = [{ content: "Read the brief", status: "in_progress" }];
+    await fake.emit(
+      "tool_execution_end",
+      {
+        type: "tool_execution_end",
+        toolCallId: "todo-1",
+        toolName: "todo",
+        result: { details: { phases: [{ tasks: todos }] } },
+        isError: false,
+      },
+      context,
+    );
+    expect(await activityWhen((activity) => activity?.todos !== undefined)).toEqual({ todos });
+    expect(await readWorkerReceipt(receiptPath, identity)).not.toContainKey("todos");
 
     const submit = fake.tools.get("submit_report");
     if (submit === undefined) throw new Error("missing submit_report");

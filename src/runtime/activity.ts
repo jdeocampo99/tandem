@@ -41,24 +41,31 @@ export function taskRecordForRuntime(
   return runtime;
 }
 
+/** The task's primary worker jobs (scout, or implementer) for its current generation, newest first. */
+export function currentPrimaryJobs(
+  task: TaskRecord,
+  runtime: RuntimeTaskState | undefined,
+): DurableJob[] {
+  const primaryRole = task.kind === "scout" ? "scout" : "implementer";
+  return (runtime?.jobs ?? [])
+    .filter(
+      (job) =>
+        job.kind === "worker" && job.role === primaryRole && job.generation === task.generation,
+    )
+    .reverse();
+}
+
 /**
- * The receipt of the newest primary worker (scout, or implementer) for the task's current
- * generation that has one; unreadable receipts are skipped.
+ * The receipt of the newest primary worker for the task's current generation that has one;
+ * unreadable receipts are skipped.
  */
 export async function latestPrimaryReceipt(
   task: TaskRecord,
   runtime: RuntimeTaskState | undefined,
 ): Promise<WorkerReceipt | undefined> {
-  const primaryRole = task.kind === "scout" ? "scout" : "implementer";
-  const jobs = (runtime?.jobs ?? []).filter(
-    (job) =>
-      job.kind === "worker" &&
-      job.role === primaryRole &&
-      job.generation === task.generation &&
-      job.receiptPath !== undefined,
-  );
-  for (const job of jobs.reverse()) {
-    const receipt = await readWorkerReceipt(job.receiptPath as string, {
+  for (const job of currentPrimaryJobs(task, runtime)) {
+    if (job.receiptPath === undefined) continue;
+    const receipt = await readWorkerReceipt(job.receiptPath, {
       jobId: job.id,
       taskId: task.id,
       generation: job.generation,

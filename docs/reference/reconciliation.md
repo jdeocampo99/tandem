@@ -36,9 +36,11 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
 
 ### Classification
 
-- Live owned coordinator: it, its pane, and its lease are retained and named with the session.
-- Stopped owned coordinator: workspace retired through the same proof-then-close owner a replacement
-  launch uses, then its exact lease released and record removed.
+- Live owned coordinator: it, its pane, its recorded panel pane (Tandem UI), and its lease are
+  retained and named with the session.
+- Stopped owned coordinator: workspace retired, its panel closed first, through the same
+  proof-then-close owner a replacement launch uses, then its exact lease released and record
+  removed.
 - Orphaned coordinator lease (coordinator holder identity, no record names it): released by exact
   lease id, holder, and path when its checkout is clean.
 - Dirty, unmerged, unlanded, foreign, or ownership-uncertain worktree: retained with the reason.

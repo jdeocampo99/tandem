@@ -848,7 +848,7 @@ async function closeForceCoordinators(
       );
     }
     await closeCoordinatorPane(run, latest);
-    const workspaceRetirement = await retireCoordinatorWorkspace(run, latest);
+    const workspaceRetirement = await retireCoordinatorWorkspace(run, scope.home, latest);
     stopped.push({ ...latest, workspaceRetirement });
   }
 }
@@ -1014,7 +1014,7 @@ async function closeIdleCoordinators(
       const latestSnapshot = await readSessionSnapshot(run, scope.sessionId, latest.worktree.path);
       await assertIdleResetCoordinator(run, latestSnapshot, latest);
       await closeCoordinatorPane(run, latest);
-      const workspaceRetirement = await retireCoordinatorWorkspace(run, latest);
+      const workspaceRetirement = await retireCoordinatorWorkspace(run, scope.home, latest);
       stopped.push({ ...latest, workspaceRetirement });
     } catch (error) {
       if (stopped.length === 0) throw error;

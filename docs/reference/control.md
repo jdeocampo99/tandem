@@ -75,6 +75,15 @@ src/terminal/cli-arguments.ts, src/cli.ts
   **delivered** = it entered provider-bound context. None of these means the change was
   implemented; check the receipt instead of claiming code changed.
 - `steer` and `answer` return a queued receipt; the child applies it at the next safe boundary.
+- What a worker is doing goes in a separate, display-only file, `activity.json` beside its
+  receipt (src/workers/worker-activity.ts), so the receipt's strict format never changes and an
+  older coordinator can still read a newer worker's receipt. It holds the running tool, its target,
+  when it started, and the latest to-do list (at most 50 items). Targets are at most 120
+  characters: a path keeps its end, a URL only its host and path, and a command only its leading
+  words up to the first flag, assignment, URL, `@`, or quote, so credentials are not stored. The
+  worker rewrites it (temp file and rename) whenever the tool, target, or list changes; a failed
+  write is traced and never stops the worker. Only the board reads it, leniently: a missing or
+  broken file is no activity. Recovery and steering never read it, and nothing decides on it.
 - Query `messages` when the user asks or before a dependent decision, never in a model-driven poll
   loop. Receipts, heartbeats, and passive progress need no follow-up model turn.
 - Compact output shows only the latest entry (`steer`/`answer`) or the current question plus

@@ -148,9 +148,17 @@ the coordinator's chat is compacted after a task finishes so later turns don't p
 ## One view of everything
 
 `tandem status` shows every project at once: what needs you, what's running, and your pull
-requests. In Herdr you don't have to ask: the tab bar always shows a one-line summary like
-`🙋 3 need you · 🔨 2 running · 🟡 1 🟢 1`, and `prefix+t` pops up the full view, live, from any
-pane (Esc or q closes it). When something new needs you, Herdr shows a notification.
+requests. In Herdr you don't have to ask: a narrow panel beside each project's chat shows what
+every agent is doing, and Enter on a row jumps to it. The tab bar counts what needs you
+(`● 2 need you`), and when something new does, Herdr shows a notification. A few keys work from
+any pane, even inside an agent:
+
+- `prefix+t` opens the panel as a popup (Esc closes it). Closing the side panel loses nothing;
+  `prefix+t` or running `tandem` brings it back.
+- `prefix+0` goes back to this project's chat.
+- `prefix+,` and `prefix+.` go to the previous or next project.
+
+Herdr's sidebar starts hidden, since the panel does its job; `prefix+b` shows it.
 `tandem status --watch` works in any terminal.
 
 ![tandem status in a terminal: Needs you comes first; Running tasks are grouped under muted project headings, with stage and elapsed time before each objective; PRs show check progress bars; and a weekly summary follows](docs/images/status.svg)
@@ -183,8 +191,8 @@ cd tandem
 ```
 
 It installs whatever is missing, updates Herdr if it's older than 0.8.2, and offers to add Tandem's
-tab-bar summary, notifications, and `prefix+t` popup to your Herdr config (it shows the lines and
-asks first). Read
+panel, keys, tab-bar summary, and notifications to your Herdr config (it shows the lines and asks
+first). Read
 [setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep Bun's global bin
 directory on your `PATH`.
 

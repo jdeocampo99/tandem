@@ -36,6 +36,7 @@ import {
 } from "./exclusivity.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { COORDINATOR_SCRIPT_DIRECTORY, findRunningCoordinator } from "./ownership.ts";
+import { openPanelBeside } from "./panel.ts";
 import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
@@ -118,6 +119,8 @@ export type CoordinatorLaunchResult = Readonly<{
   readonly previousResources?: CoordinatorResourceOutcome;
   /** What happened to stopped coordinator records other Tandem sessions held for this repository. */
   readonly otherSessionReconciliations?: readonly CoordinatorSessionReconciliation[];
+  /** Why the Tandem panel could not open beside the coordinator, when it could not. */
+  readonly panelFailure?: string;
 }>;
 
 export type CoordinatorLaunchDependencies = Readonly<{
@@ -656,10 +659,11 @@ async function assertRunningCoordinatorSource(
  */
 async function retireSettledCoordinatorWorkspace(
   dependencies: CoordinatorLaunchDependencies,
+  home: string,
   previous: CoordinatorRecord,
 ): Promise<CoordinatorWorkspaceRetirement> {
   for (let attempt = 1; ; attempt += 1) {
-    const retirement = await retireCoordinatorWorkspace(dependencies.run, previous);
+    const retirement = await retireCoordinatorWorkspace(dependencies.run, home, previous);
     if (retirement.outcome !== "quarantined" || attempt >= RESTORED_SHELL_ATTEMPTS) {
       return retirement;
     }
@@ -680,7 +684,11 @@ async function replacePreviousCoordinator(
     readonly previousResources: CoordinatorResourceOutcome;
   }>
 > {
-  const workspaceRetirement = await retireSettledCoordinatorWorkspace(dependencies, previous);
+  const workspaceRetirement = await retireSettledCoordinatorWorkspace(
+    dependencies,
+    paths.home,
+    previous,
+  );
   const previousResources = await applyCoordinatorReplacement({
     run: dependencies.run,
     home: paths.home,
@@ -719,7 +727,13 @@ export async function launchCoordinatorUnlocked(
   });
   if (running !== undefined) {
     await assertRunningCoordinatorSource(request, dependencies, running, context);
-    if (request.restart !== true) return coordinatorResultFromRecord(running);
+    if (request.restart !== true) {
+      const panelFailure = await openPanelBeside(dependencies.run, paths.home, running);
+      return {
+        ...coordinatorResultFromRecord(running),
+        ...(panelFailure === undefined ? {} : { panelFailure }),
+      };
+    }
   }
   // A restart checks before it closes the coordinator it replaces.
   if (request.restart !== true) await checkNewCoordinator(request, dependencies);
@@ -784,6 +798,7 @@ export async function launchCoordinatorUnlocked(
       ? {}
       : { workspaceRetirement: startup.workspaceRetirement }),
     ...(previousResources === undefined ? {} : { previousResources }),
+    ...(startup.panelFailure === undefined ? {} : { panelFailure: startup.panelFailure }),
   };
 }
 
@@ -849,6 +864,7 @@ type CoordinatorStartupResult = Readonly<{
   readonly tabId?: string;
   readonly processExitCode?: number;
   readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
+  readonly panelFailure?: string;
 }>;
 
 function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): LaunchIo {
@@ -1032,7 +1048,11 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
     // Starting Herdr can restore the previous workspace and its saved label.
     if (previous !== undefined) {
-      workspaceRetirement = await retireSettledCoordinatorWorkspace(dependencies, previous);
+      workspaceRetirement = await retireSettledCoordinatorWorkspace(
+        dependencies,
+        paths.home,
+        previous,
+      );
     }
   }
   const workspaceResult = await runExternal(dependencies.run, {
@@ -1098,13 +1118,14 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     command: argv,
   });
   await awaitReadyOrStop(dependencies, harness, started, argv, coordinatorCwd);
-  await waitForCoordinatorOwnership(
+  const owned = await waitForCoordinatorOwnership(
     dependencies.run,
     dependencies.sleep,
     paths.home,
     request.sessionId,
     paths.repo,
   );
+  const panelFailure = await openPanelBeside(dependencies.run, paths.home, owned);
   return {
     command: argv,
     direct: false,
@@ -1112,6 +1133,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     tabId: workspace.tabId,
     paneId: workspace.paneId,
     ...(workspaceRetirement === undefined ? {} : { workspaceRetirement }),
+    ...(panelFailure === undefined ? {} : { panelFailure }),
   };
 }
 

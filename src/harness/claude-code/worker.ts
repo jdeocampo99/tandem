@@ -126,14 +126,14 @@ export function claudeCodeWorker(pane: ClaudeCodePane, parts: WorkerParts): Sess
       case "toolStart": {
         const call = claudeCodeToolCall(event.call);
         session.onToolStart(call);
-        steering?.recordActivity("tool", call.name);
+        steering?.recordActivity("tool", call);
         return DONE;
       }
       case "toolEnd": {
         const call = claudeCodeToolCall(event.call);
         const todos = todoList.apply(event.call, event.result);
         session.onToolEnd({ call, ...(todos === undefined ? {} : { todos }) });
-        steering?.recordActivity("idle", call.name);
+        steering?.recordActivity("idle", call, todos);
         const steer = await steering?.takePending();
         return { type: "toolContext", context: steer === undefined ? [] : [steer] };
       }

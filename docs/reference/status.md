@@ -106,17 +106,37 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
   once. Esc and q are what close it in Herdr's popup, which receives every key, including Herdr's
   prefix, until its command exits. It takes no task ID, `--json`, `--logs`, or `--line`.
 
-## In Herdr: the tab bar and `prefix+t`
+## In Herdr: the panel, the tab bar, and the keys
 
-- `tandem status --line` prints one line for Herdr's tab-bar status area (`ui.tab_bar_right`),
-  like `🙋 3 need you · 🔨 2 running · 🔴 1 🟡 1 🟢 1`:
-  - `🙋 N need(s) you` counts the Needs you rows, or `✓ nothing needs you` when there are none;
-  - `🔨 N running` counts Running rows other than paused ones, and is left out at zero;
-  - the dots count pull requests by PR watch color (red ones come from Needs you), each left out
-    at zero;
-  - with nothing needing you, running, or watched it prints `✓ all quiet`.
-  Herdr strips colors there, so emoji carry the meaning. It reads saved state like `tandem status`
-  (never GitHub, no footer, no git call) and takes no task ID, `--json`, `--logs`, or `--watch`.
+- Each coordinator's workspace has the panel (`tandem panel`, below) split 46 columns wide to the
+  right of its chat; see [coordinator.md](coordinator.md#the-panel-beside-each-coordinator). Herdr's
+  sidebar starts hidden, so the panel is how you reach projects and workers; `prefix+b` shows the
+  sidebar again. Closing the panel loses nothing: `prefix+t` opens the same panel as a popup
+  anywhere, and running `tandem` puts the split back.
+- Keys, all through Herdr's prefix so they work inside a worker too:
+
+  | Key | Does |
+  | --- | --- |
+  | `prefix+t` | The panel as a popup (90% by 90%), on the focused project; Esc closes it |
+  | `prefix+0` | This project's coordinator chat |
+  | `prefix+,` `prefix+.` | The previous or next project with an open coordinator, wrapping |
+
+  `prefix+h`, `prefix+1`-`9`, and `prefix+[` are Herdr's own (focus left, switch tab, copy mode),
+  so Tandem leaves them alone. `prefix+0`, `prefix+,`, and `prefix+.` run the `tandem.ui` plugin
+  actions `home`, `project-prev`, and `project-next`, which run `tandem panel home|prev|next`.
+- "This project" is the one Herdr's focus is in: the project whose coordinator, or running task's
+  primary worker, owns the focused workspace (`HERDR_ACTIVE_WORKSPACE_ID` for popups,
+  `workspace_id` in `HERDR_PLUGIN_CONTEXT_JSON` for actions and plugin panes), else the project
+  containing the focused pane's directory (`focused_pane_cwd` in the same context, or
+  `HERDR_ACTIVE_PANE_CWD`), else the first project. A coordinator's own panel is told its project
+  with `TANDEM_PANEL_PROJECT`. `TANDEM_REPO` and `HERDR_WORKSPACE_ID` are not used: the Herdr
+  server inherits the first coordinator's. With no open coordinator in the focused project, next
+  goes to the first open project and prev to the last. A key that finds
+  nowhere to go exits non-zero with the reason on stderr, which Herdr keeps in its plugin log.
+- `tandem status --line` prints one line for Herdr's tab-bar status area (`ui.tab_bar_right`):
+  `● N need(s) you`, counting Needs you rows across every project, or `✓ nothing needs you`. The
+  panel shows the rest. It reads saved state like `tandem status` (never GitHub, no footer, no git
+  call) and takes no task ID, `--json`, `--logs`, or `--watch`.
   A locked state or any other error exits non-zero with nothing on stdout, and Herdr clears the
   entry until the next run.
 - `setup.sh` runs src/terminal/herdr-setup.ts, which:
@@ -128,17 +148,25 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
     still older;
   - plans additions to `$XDG_CONFIG_HOME/herdr/config.toml` (default `~/.config/herdr/`; one file
     for every Herdr session): a `tab_bar_right` command entry running `status --line` every 5
-    seconds with a 10-second timeout, `[ui.toast]` with `delivery = "herdr"` (Herdr's
-    notifications are off by default), and a `[[keys.command]]` popup on `prefix+t` (90% by 90%)
-    running `status --watch`. Both commands use absolute paths to Bun and `src/main.ts`, because
-    Herdr runs them through `/bin/sh -lc`, whose PATH may not include Bun's bin directory;
-  - leaves the user's settings alone: an existing `tab_bar_right`, a `ui` set without a `[ui]`
-    table, a config that mentions toasts at all (including `off`), or another binding on
-    `prefix+t` is skipped, and it prints the line to add by hand. An existing `[ui]` table gets
-    the entry inserted under its header; otherwise a `[ui]` table is appended. Entries already
-    running `status --line` or `status --watch` count as done, so re-running adds nothing;
-  - names what it would add in one question (like "Add Tandem's tab bar and prefix+t popup to
-    Herdr?") and writes nothing without a terminal to ask in or a yes. Parts already there print
+    seconds with a 10-second timeout, `sidebar_start_collapsed = true` and
+    `sidebar_collapsed_mode = "hidden"` under `[ui]` (the start setting applies when Herdr next
+    starts), `[ui.toast]` with `delivery = "herdr"` (Herdr's notifications are off by default), a
+    `[[keys.command]]` popup on `prefix+t` (90% by 90%) running `panel --popup`, and
+    `plugin_action` bindings for `prefix+0`, `prefix+comma`, and `prefix+period`. Commands use
+    absolute paths to Bun and `src/main.ts`, because Herdr runs them through `/bin/sh -lc`, whose
+    PATH may not include Bun's bin directory;
+  - leaves the user's settings alone: an existing `tab_bar_right`, either sidebar key, a `ui` set
+    without a `[ui]` table, a config that mentions toasts at all (including `off`), or another
+    binding on any of its keys is skipped, and it prints the line to add by hand. An existing
+    `[ui]` table gets entries inserted under its header; otherwise a `[ui]` table is appended.
+    Entries already running `status --line` or `panel --popup`, or naming a `tandem.ui` action,
+    count as done, so re-running adds nothing. The one `[[keys.command]]` block an earlier Tandem
+    wrote, on `prefix+t` with exactly a quoted Bun then this checkout's quoted `src/main.ts status
+    --watch`, has its command replaced by `panel --popup` and its `Tandem status` description by
+    `Tandem panel`, in place. Any other `status --watch` binding is the user's;
+  - names what it would add in one question (like "Add Tandem's tab bar, hidden sidebar, prefix+t
+    panel, and prefix+0 prefix+comma prefix+period keys to Herdr?") and writes nothing without a
+    terminal to ask in or a yes. Parts already there print
     nothing; parts left to the user print one line each with what to add. It copies the old file to `config.toml.before-tandem`, and if `herdr config check`
     passed before and fails after, it writes the old file back;
   - then, on every run, applies the config to the Herdr session Tandem uses (resolved like
@@ -153,10 +181,86 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
       as busy), and the user says yes; then the user runs `tandem` to reopen projects.
       Otherwise it prints the command to run later.
   - then, whatever happened above, links Tandem's Herdr plugin (`herdr-plugin/`, id `tandem.ui`,
-    which holds the welcome popup; see [coordinator.md](coordinator.md#the-tandem-coordinator))
-    with `herdr --session <session> plugin link` after asking "Add Tandem's welcome popup to
-    Herdr?". A plugin already in `herdr plugin list` counts as done; no terminal or a no links
-    nothing.
+    which holds the welcome popup, the panel pane, and the key actions; see
+    [coordinator.md](coordinator.md#the-tandem-coordinator)) with
+    `herdr --session <session> plugin link` after asking "Add Tandem's welcome popup and panel to
+    Herdr?". A plugin already in `herdr plugin list` counts as done: Herdr reads a linked
+    plugin's manifest from its directory on each use, so an update's new panes and actions work
+    without relinking or reloading (checked on Herdr 0.9.1). No terminal or a no links nothing.
+    The welcome pane keeps running `welcome.sh`, which manifests linked before the panel name;
+    new entries run `tandem.sh`.
+
+## `tandem panel`
+
+A narrow live view of one project (about 46 columns) that navigates instead of only showing.
+Code: src/board/snapshot.ts (the file), src/board/panel.ts (pure view model),
+src/terminal/panel.ts (keys, mouse, Herdr commands, drawing). Tests: tests/board/panel.test.ts,
+tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
+
+- Every coordinator reconcile reads the board once, uses it for the notification below, and
+  writes it with its session's coordinator records to `<home>/board-snapshot.json` (temp file and
+  rename; `version: 1`). A failed write never blocks the reconcile and is logged once until a write
+  works again. Panels read only that file, every second, and redraw on change; they never take the
+  state lock.
+- The footer says why the panel may be out of date: `⚠ no status yet` before any snapshot,
+  `⚠ can't read state, retrying` when the file cannot be read, and, once the snapshot is over 10
+  seconds old, `⚠ updated 43s ago · no coordinator running` (or `· can't read state, retrying`).
+- Top to bottom: one chip per project (number, name, how many need you, `offline` without a
+  coordinator record), `2 need you · 4 running`, then Needs you, Running, Pull requests, and Done
+  today (tasks completed or merged in the last day). Empty sections are left out; with nothing
+  needing you or running it says `✓ All quiet.`. A running task with a watched pull request shows
+  only as the pull request, and a task done today only as its Done row.
+- A blue `•` marks rows whose stage or words changed since the panel last lost focus; elapsed
+  times do not count. What was seen covers every project, so searching or switching marks nothing.
+- Running rows use the stage words `tandem status` uses; a ready task's stage reads
+  `ready to publish`. Second lines, each from what Tandem already saved, with the row's
+  `tandem status` words when that is missing:
+  - A brief: `brief: <size> change`, the brief's own size rating, then `no review` when the user
+    chose that while planning, or the review level its task recorded (`light review`,
+    `standard review`). The level is usually unknown before approval and is then left out.
+  - A ready task: `draft PR #421` (or `PR #421`) from the task's pull request record.
+  - A stop: the block cause in plain words from one table in src/board/panel.ts (`a review
+    failed`, `out of fix rounds`), else the block reason the site wrote, prefixed
+    `stopped after 2 restarts:` when recovery spent restarts on the task's current generation.
+  - Fixing after review: `review found 2 issues · fixing them`, counting open ledger findings that
+    block at the task's review level.
+  - The question itself, `waiting for a free worktree` (queued), `paused by you`, `for 12m`, the
+    PR's watch note.
+  - A running row whose worker made no progress for 5 minutes turns yellow and reads
+    `no progress for 6m`. It never says Tandem is restarting the worker: nothing records that
+    recovery noticed a quiet worker that is still alive.
+- A running row whose worker is in a tool also shows `▸ <verb> <target> · <age>`, like
+  `▸ edit src/auth/session.ts · 4s`, from the primary worker's display-only activity file (see
+  [control.md](control.md#message-receipts)). Verbs are plain for both harnesses' tool names
+  (`read`, `edit`, `write`, `run`, `search`); any other tool shows its lowercased name. The age
+  runs from the tool's start to the snapshot's time. A target too wide for the panel is cut from
+  the left with `…`, so the file name stays. An implementing row puts its current step first: the
+  to-do in progress, else the next pending one. Other running rows show only the tool line while
+  a tool runs. `no progress for 6m` replaces the step; a row never shows more than two lines.
+- Keys: `j`/`k`/arrows move, `Enter` goes, `Space` shows or hides the selected running row's step
+  checklist (`☑` done, `▸` in progress, `☐` to do, `☒` dropped), `/` searches, `1`-`9` and `[` `]`
+  switch project, `Esc` closes a `--popup` or clears a search, Ctrl-C closes. Clicking a chip
+  switches; clicking a row selects it; double-clicking goes. The selection follows its task across
+  stage changes. A key help box shows until `x` or the first key, remembered by
+  `<home>/panel-keys-seen`. An escape sequence split across reads waits 50ms for its rest before
+  it counts as `Esc`.
+- When the rows are taller than the terminal, they scroll to keep the selection in sight; the
+  chips, summary, and footer stay put.
+- Going: Needs you and Done rows focus the project's coordinator, running rows with a live
+  primary worker focus that worker's pane, pull requests `open` in the browser; queued and paused
+  rows go nowhere. Focusing runs `herdr --session <session> workspace focus <workspace>` then
+  `agent focus <pane>`; the second may fail (Herdr focuses only panes it knows run an agent) and
+  the workspace focus still counts. Switching project focuses that coordinator's workspace. A
+  `--popup` exits after a successful go or switch. A go or switch that cannot get there says so
+  in the footer (`⚠ no coordinator is open for that project`, `⚠ Herdr couldn't focus it`,
+  `⚠ couldn't open the link`) until the next key.
+- Search matches every word as a prefix of a word in the row's name, stage, kind (`needs you`,
+  `stuck`, `review`, `pr`, `queued`, `done`, `running`), or project, across every project, grouped
+  under project headings. Query and rows split into words the same way, so `#412`, `fix-auth`,
+  and `acme/app` match.
+- SIGTERM, SIGHUP, and drawing errors close the panel the same way Esc does: the terminal leaves
+  raw mode, mouse reporting, and the alternate screen before the process ends.
+- Without a terminal to read keys from, it draws once and exits.
 
 ## The notification when something new needs you
 

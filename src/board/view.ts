@@ -1,13 +1,25 @@
 import { basename } from "node:path";
-import type { IsoTimestamp, RequestBriefRecord, TaskRecord, TaskStage } from "../contracts.ts";
+import {
+  type BlockCauseKind,
+  type IsoTimestamp,
+  isBlockCauseKind,
+  REQUEST_BRIEF_SIZES,
+  type RequestBriefRecord,
+  type ReviewLevel,
+  type TaskRecord,
+  type TaskStage,
+} from "../contracts.ts";
 import { type PrWatch, type PrWatchPoll, sameRef } from "../pr-watch/store.ts";
 import { elapsed, PR_MARKS, type PrWatchViewRow, prWatchView } from "../pr-watch/view.ts";
 import { awaitsApproval, requestApprovalState } from "../requests/brief.ts";
 import type { DurableExecutionRoutingPause } from "../runtime/schema.ts";
 import { isTerminalTask } from "../service/records.ts";
+import { ledgerBlockers } from "../tasks/findings.ts";
+import { recordedReviewLevel } from "../tasks/review-levels.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
 import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from "../tasks/trace.ts";
 import { raisedRoutingPause, routingPauseExplanation } from "../workers/execution-routing.ts";
+import type { WorkerActivity } from "../workers/worker-activity.ts";
 
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
@@ -38,23 +50,38 @@ export type BoardState = Readonly<{
   readonly finishedThisWeek: readonly TaskRollup[];
   /** Task id to when its worker last made progress; tasks without a receipt are absent. */
   readonly progressAt: ReadonlyMap<string, IsoTimestamp>;
+  /** Task id to what its primary worker is doing, for display; tasks without it are absent. */
+  readonly activities: ReadonlyMap<string, WorkerActivity>;
+  /** Task id to the pane of its live primary worker; tasks without one are absent. */
+  readonly workerPanes: ReadonlyMap<string, WorkerPane>;
+  /** Task id to the automatic restarts recovery spent on its current generation; none are absent. */
+  readonly restarts: ReadonlyMap<string, number>;
 }>;
+
+/** Where a task's worker runs in Herdr, so the panel can focus it. */
+export type WorkerPane = Readonly<{ readonly workspaceId: string; readonly paneId: string }>;
 
 export type BoardView = Readonly<{
   readonly now: IsoTimestamp;
   /** Project names, for the header. */
   readonly projects: readonly string[];
+  /** The same projects' checkout paths, in the same order. */
+  readonly projectPaths: readonly string[];
   /** When PR watch last read GitHub. */
   readonly checkedAt?: IsoTimestamp;
   readonly needsYou: readonly BoardRow[];
   readonly running: readonly RunningBoardRow[];
   /** Watched pull requests that do not need the user. */
-  readonly pullRequests: readonly PrWatchViewRow[];
+  readonly pullRequests: readonly BoardPullRequest[];
   /** Completed, merged, and cancelled tasks, which the board leaves out. */
   readonly finished: number;
+  /** Tasks completed or merged in the last day, newest first; `tandem status` only counts them. */
+  readonly doneToday: readonly BoardRow[];
   /** The last 7 days; absent when no task finished in them. */
   readonly week?: WeekSummary;
 }>;
+
+export type BoardPullRequest = PrWatchViewRow & Readonly<{ readonly repoPath?: string }>;
 
 export type WeekSummary = Pick<
   TraceSummary,
@@ -68,13 +95,28 @@ export type BoardRow = Readonly<{
   readonly cause: "brief" | "question" | "model-question" | "pull-request" | TaskStage;
   /** The project the row belongs to; absent for a pull request no project claims. */
   readonly repoPath?: string;
+  /** The task the row stands for; absent for briefs and pull requests no task opened. */
+  readonly taskId?: string;
+  /** A pull request row's page. */
+  readonly url?: string;
   readonly project: string;
   readonly mark: string;
   readonly name: string;
   readonly text: string;
   /** How long a running task has existed, like 12m. */
   readonly since?: string;
+  /** A brief's own size rating; absent on briefs saved before summaries. */
+  readonly briefSize?: BriefSize;
+  /** How a brief's work will be reviewed, when that is already known. */
+  readonly reviewLevel?: ReviewLevel | "none";
+  /** A ready task's pull request. */
+  readonly pullRequest?: Readonly<{ readonly number: number; readonly draft: boolean }>;
+  /** A blocked task's typed cause, when the site that blocked it recorded one. */
+  readonly blockKind?: BlockCauseKind;
+  /** Automatic restarts recovery spent on a blocked task's current generation, when any. */
+  readonly restarts?: number;
 }>;
+export type BriefSize = (typeof REQUEST_BRIEF_SIZES)[number];
 const BOARD_ROW_CAUSES = new Set<BoardRow["cause"]>([
   "brief",
   "question",
@@ -107,16 +149,18 @@ export function isBoardView(value: unknown): value is BoardView {
   return (
     view !== undefined &&
     typeof view.now === "string" &&
-    Array.isArray(view.projects) &&
-    view.projects.every((project) => typeof project === "string") &&
+    isStringArray(view.projects) &&
+    isStringArray(view.projectPaths) &&
     (view.checkedAt === undefined || typeof view.checkedAt === "string") &&
     Array.isArray(view.needsYou) &&
     view.needsYou.every(isBoardRow) &&
     Array.isArray(view.running) &&
     view.running.every(isRunningBoardRow) &&
     Array.isArray(view.pullRequests) &&
-    view.pullRequests.every(isPrWatchViewRow) &&
+    view.pullRequests.every(isBoardPullRequest) &&
     isFiniteNumber(view.finished) &&
+    Array.isArray(view.doneToday) &&
+    view.doneToday.every(isBoardRow) &&
     (view.week === undefined || isWeekSummary(view.week))
   );
 }
@@ -129,11 +173,21 @@ function isBoardRow(value: unknown): value is BoardRow {
     typeof row.cause === "string" &&
     BOARD_ROW_CAUSES.has(row.cause as BoardRow["cause"]) &&
     (row.repoPath === undefined || typeof row.repoPath === "string") &&
+    (row.taskId === undefined || typeof row.taskId === "string") &&
+    (row.url === undefined || typeof row.url === "string") &&
     typeof row.project === "string" &&
     typeof row.mark === "string" &&
     typeof row.name === "string" &&
     typeof row.text === "string" &&
-    (row.since === undefined || typeof row.since === "string")
+    (row.since === undefined || typeof row.since === "string") &&
+    (row.briefSize === undefined || REQUEST_BRIEF_SIZES.some((size) => size === row.briefSize)) &&
+    (row.reviewLevel === undefined ||
+      row.reviewLevel === "none" ||
+      row.reviewLevel === "light" ||
+      row.reviewLevel === "standard") &&
+    (row.pullRequest === undefined || isFiniteNumber(recordOf(row.pullRequest)?.number)) &&
+    (row.blockKind === undefined || isBlockCauseKind(row.blockKind)) &&
+    (row.restarts === undefined || isFiniteNumber(row.restarts))
   );
 }
 
@@ -144,8 +198,23 @@ function isRunningBoardRow(value: unknown): value is RunningBoardRow {
     row !== undefined &&
     isRunningStage(row.cause) &&
     typeof row.repoPath === "string" &&
-    typeof row.since === "string"
+    typeof row.taskId === "string" &&
+    typeof row.since === "string" &&
+    (row.worker === undefined || isWorkerPane(row.worker)) &&
+    (row.activity === undefined || recordOf(row.activity) !== undefined) &&
+    (row.openFindings === undefined || isFiniteNumber(row.openFindings))
   );
+}
+
+function isWorkerPane(value: unknown): value is WorkerPane {
+  const pane = recordOf(value);
+  return (
+    pane !== undefined && typeof pane.workspaceId === "string" && typeof pane.paneId === "string"
+  );
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function isPrWatchViewRow(value: unknown): value is PrWatchViewRow {
@@ -162,8 +231,14 @@ function isPrWatchViewRow(value: unknown): value is PrWatchViewRow {
     (row.checkCounts === undefined || isCheckCounts(row.checkCounts)) &&
     typeof row.status === "string" &&
     typeof row.note === "string" &&
-    (row.link === undefined || typeof row.link === "string")
+    (row.link === undefined || typeof row.link === "string") &&
+    (row.taskId === undefined || typeof row.taskId === "string")
   );
+}
+
+function isBoardPullRequest(value: unknown): value is BoardPullRequest {
+  const repoPath = recordOf(value)?.repoPath;
+  return isPrWatchViewRow(value) && (repoPath === undefined || typeof repoPath === "string");
 }
 
 function isCheckCounts(value: unknown): boolean {
@@ -198,14 +273,20 @@ function recordOf(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "since"> &
+export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "taskId" | "since"> &
   Readonly<{
     cause: RunningStage;
     repoPath: string;
+    taskId: string;
     since: string;
+    worker?: WorkerPane;
+    activity?: WorkerActivity;
+    /** Review findings still blocking a task that is fixing them; absent when none are recorded. */
+    openFindings?: number;
   }>;
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
 /** A running task whose worker has made no progress for this long shows as idle. */
 const IDLE_MS = 5 * 60 * 1000;
 const NAME_CHARS = 30;
@@ -243,19 +324,29 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
   return {
     now,
     projects: state.projects.map((path) => basename(path)),
+    projectPaths: state.projects,
     ...(pullRequests.readAt === undefined ? {} : { checkedAt: pullRequests.readAt }),
     needsYou: [
-      ...state.briefs.filter(awaitsApproval).map(briefRow),
+      ...state.briefs.filter(awaitsApproval).map((brief) => briefRow(brief, state.tasks)),
       ...live
         .filter(needsYou)
-        .map((task) => taskNeedsYouRow(task, modelQuestion(task, state.routingPauses))),
+        .map((task) => taskNeedsYouRow(task, modelQuestion(task, state.routingPauses), state)),
       ...red.map((row) => pullRequestRow(row, state)),
     ],
     running: live
       .filter((task): task is RunningTaskRecord => !needsYou(task) && isRunningStage(task.stage))
-      .map((task) => runningRow(task, now, state.progressAt.get(task.id))),
-    pullRequests: pullRequests.rows.filter((row) => row.color !== "red"),
+      .map((task) => runningRow(task, now, state, state.workerPanes.get(task.id))),
+    pullRequests: pullRequests.rows
+      .filter((row) => row.color !== "red")
+      .map((row) => {
+        const { repoPath } = pullRequestOwner(row, state);
+        return repoPath === undefined ? row : { ...row, repoPath };
+      }),
     finished: state.tasks.length - live.length,
+    doneToday: state.tasks
+      .filter((task) => doneWithinDay(task, now))
+      .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(doneRow),
     ...(state.finishedThisWeek.length === 0 ? {} : { week: weekSummary(state.finishedThisWeek) }),
   };
 }
@@ -403,7 +494,12 @@ function taskNeedsYou(task: TaskRecord): boolean {
   return task.communication?.question !== undefined || NEEDS_YOU_STAGES.includes(task.stage);
 }
 
-function briefRow(brief: RequestBriefRecord): BoardRow {
+function briefRow(brief: RequestBriefRecord, tasks: readonly TaskRecord[]): BoardRow {
+  const { summary, skipReview } = brief.draft.content;
+  const reviewLevel =
+    skipReview === true
+      ? "none"
+      : tasks.find((task) => task.requestId === brief.id)?.reviewLevel?.level;
   return {
     key: `brief:${brief.id}`,
     cause: "brief",
@@ -415,6 +511,8 @@ function briefRow(brief: RequestBriefRecord): BoardRow {
       requestApprovalState(brief) === "unapproved"
         ? "brief waiting for approval"
         : "brief changed, needs approval again",
+    ...(summary === undefined ? {} : { briefSize: summary.size.level }),
+    ...(reviewLevel === undefined ? {} : { reviewLevel }),
   };
 }
 
@@ -439,6 +537,7 @@ function modelQuestion(
 function taskNeedsYouRow(
   task: TaskRecord,
   model: Readonly<{ key: string; text: string }> | undefined,
+  state: Pick<BoardState, "restarts">,
 ): BoardRow {
   const question = task.communication?.question;
   const reason: Pick<BoardRow, "key" | "cause" | "text"> =
@@ -463,19 +562,43 @@ function taskNeedsYouRow(
     name: shorten(task.objective, NAME_CHARS),
     mark: "🙋",
     text: shorten(reason.text, TEXT_CHARS),
+    ...(reason.cause === "blocked" ? stopFacts(task, state.restarts.get(task.id)) : {}),
+    ...(reason.cause === "ready" && task.pullRequest !== undefined
+      ? {
+          pullRequest: {
+            number: task.pullRequest.number,
+            draft: task.pullRequest.state === "draft",
+          },
+        }
+      : {}),
+  };
+}
+
+function stopFacts(
+  task: TaskRecord,
+  restarts: number | undefined,
+): Pick<BoardRow, "blockKind" | "restarts"> {
+  return {
+    ...(task.blockCause === undefined ? {} : { blockKind: task.blockCause.kind }),
+    ...(restarts === undefined || restarts === 0 ? {} : { restarts }),
   };
 }
 
 function runningRow(
   task: RunningTaskRecord,
   now: IsoTimestamp,
-  progressAt: IsoTimestamp | undefined,
+  state: Pick<BoardState, "progressAt" | "activities">,
+  worker: WorkerPane | undefined,
 ): RunningBoardRow {
   const { mark, label } = RUNNING_LABELS[task.stage];
+  const progressAt = state.progressAt.get(task.id);
+  const activity = state.activities.get(task.id);
+  const open = task.stage === "awaiting-fixes" ? openFindings(task) : 0;
   return {
     key: `task:${task.id}:${task.stage}`,
     cause: task.stage,
     ...taskIdentity(task),
+    ...(worker === undefined ? {} : { worker }),
     name: task.objective,
     mark,
     text: label,
@@ -483,21 +606,60 @@ function runningRow(
       progressAt !== undefined && Date.parse(now) - Date.parse(progressAt) > IDLE_MS
         ? `idle ${elapsed(progressAt, now)}`
         : elapsed(task.createdAt, now),
+    ...(activity === undefined ? {} : { activity }),
+    ...(open === 0 ? {} : { openFindings: open }),
   };
 }
 
-function taskIdentity(task: TaskRecord): Readonly<{ repoPath: string; project: string }> {
+function openFindings(task: TaskRecord): number {
+  return ledgerBlockers(task.findingLedger ?? [], recordedReviewLevel(task).level).length;
+}
+
+function doneWithinDay(task: TaskRecord, now: IsoTimestamp): boolean {
+  return (
+    (task.stage === "completed" || task.stage === "merged") &&
+    Date.parse(now) - Date.parse(task.updatedAt) <= DAY_MS
+  );
+}
+
+function doneRow(task: TaskRecord): BoardRow {
+  return {
+    key: `task:${task.id}:${task.stage}`,
+    cause: task.stage,
+    ...taskIdentity(task),
+    mark: "✅",
+    name: task.objective,
+    text:
+      task.stage === "merged" ? "merged" : task.kind === "scout" ? "notes ready in chat" : "done",
+  };
+}
+
+function taskIdentity(
+  task: TaskRecord,
+): Readonly<{ repoPath: string; taskId: string; project: string }> {
   return {
     repoPath: task.repoPath,
+    taskId: task.id,
     project: basename(task.repoPath),
   };
 }
 
 /** A red PR row: it belongs to its task's project, or the checkout it was watched from. */
-function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
+function pullRequestOwner(
+  row: PrWatchViewRow,
+  state: BoardState,
+): Readonly<{ task?: TaskRecord; repoPath?: string }> {
   const watch = state.watches.find((candidate) => sameRef(candidate.ref, row));
   const task = state.tasks.find((candidate) => candidate.id === watch?.taskId);
   const repoPath = task?.repoPath ?? watch?.repoPath;
+  return {
+    ...(task === undefined ? {} : { task }),
+    ...(repoPath === undefined ? {} : { repoPath }),
+  };
+}
+
+function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
+  const { task, repoPath } = pullRequestOwner(row, state);
   const note = row.link === undefined ? row.note : `${row.note} → ${row.link}`;
   return {
     key: `pr:${row.repo}#${row.number}`,
@@ -505,6 +667,8 @@ function pullRequestRow(row: PrWatchViewRow, state: BoardState): BoardRow {
     ...(repoPath === undefined ? {} : { repoPath }),
     project:
       repoPath === undefined ? row.repo.slice(row.repo.indexOf("/") + 1) : basename(repoPath),
+    ...(task === undefined ? {} : { taskId: task.id }),
+    ...(row.url.length === 0 ? {} : { url: row.url }),
     mark: "🔴",
     name: `${row.repo}#${row.number} ${row.branch}`.trimEnd(),
     text: note.length > 0 ? note : row.status,

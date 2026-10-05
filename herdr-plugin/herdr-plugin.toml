@@ -1,9 +1,9 @@
-# Tandem's Herdr plugin. ./setup.sh links it; the Tandem coordinator opens the welcome popup.
+# Tandem's Herdr plugin. ./setup.sh links it; coordinators open the welcome popup and the panel.
 id = "tandem.ui"
 name = "Tandem"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.8.2"
-description = "Tandem's welcome popup"
+description = "Tandem's welcome popup, the panel beside each coordinator, and keys to move between projects"
 platforms = ["linux", "macos"]
 
 [[panes]]
@@ -13,3 +13,24 @@ placement = "popup"
 width = 70
 height = 12
 command = ["sh", "welcome.sh"]
+
+[[panes]]
+id = "panel"
+title = "Tandem panel"
+placement = "split"
+command = ["sh", "tandem.sh", "panel"]
+
+[[actions]]
+id = "home"
+title = "Tandem: this project's chat"
+command = ["sh", "tandem.sh", "panel", "home"]
+
+[[actions]]
+id = "project-prev"
+title = "Tandem: previous project"
+command = ["sh", "tandem.sh", "panel", "prev"]
+
+[[actions]]
+id = "project-next"
+title = "Tandem: next project"
+command = ["sh", "tandem.sh", "panel", "next"]

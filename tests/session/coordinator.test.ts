@@ -36,8 +36,18 @@ function coordinatorDeps(
     createService: () =>
       ({
         prWatchNotices: async () => [],
-        board: async () => ({ now: "", projects: [], needsYou: [], running: [], pullRequests: [] }),
+        board: async () => ({
+          now: "",
+          projects: [],
+          projectPaths: [],
+          needsYou: [],
+          running: [],
+          pullRequests: [],
+          finished: 0,
+          doneToday: [],
+        }),
         investigationQuestions: async () => [],
+        writeBoardSnapshot: async () => {},
         reviewPagesOpen: () => [],
         ...service,
       }) as TandemService,
@@ -345,6 +355,64 @@ test("turn usage is recorded with the injected clock and the resolved repository
   ]);
 });
 
+test("each reconcile reads the board once and saves that same board for the panel", async () => {
+  const board = {
+    now: "2030-01-01T00:00:00.000Z",
+    projects: [],
+    projectPaths: [],
+    needsYou: [],
+    running: [],
+    pullRequests: [],
+    finished: 0,
+    doneToday: [],
+  };
+  let reads = 0;
+  const saved: unknown[] = [];
+  const session = new CoordinatorSession(
+    coordinatorDeps({
+      list: async () => [],
+      board: async () => {
+        reads += 1;
+        return board;
+      },
+      writeBoardSnapshot: async (written) => {
+        saved.push(written);
+      },
+    }),
+  );
+
+  await session.reconcile(false);
+
+  expect(reads).toBe(1);
+  expect(saved).toEqual([board]);
+});
+
+test("a snapshot write that keeps failing is retried every reconcile but logged once until it works", async () => {
+  const logged: string[] = [];
+  const outcomes = ["fail", "fail", "ok", "fail"];
+  let writes = 0;
+  const session = new CoordinatorSession(
+    coordinatorDeps(
+      {
+        list: async () => [],
+        writeBoardSnapshot: async () => {
+          writes += 1;
+          if (outcomes.shift() === "fail") throw new Error("disk full");
+        },
+      },
+      { logError: (message) => logged.push(message) },
+    ),
+  );
+
+  for (let round = 0; round < 4; round += 1) await session.reconcile(false);
+
+  expect(writes).toBe(4);
+  expect(logged).toEqual([
+    "Tandem could not save the board for the panel",
+    "Tandem could not save the board for the panel",
+  ]);
+});
+
 test("one Herdr notification names what of this project's just landed in Needs you, not what was already there or a block", async () => {
   const row = (key: string, repoPath: string, cause: BoardRow["cause"] = "brief") => ({
     key,
@@ -363,10 +431,12 @@ test("one Herdr notification names what of this project's just landed in Needs y
       board: async () => ({
         now: "",
         projects: [],
+        projectPaths: [],
         needsYou,
         running: [],
         pullRequests: [],
         finished: 0,
+        doneToday: [],
       }),
       notifyNeedsYou: async (repoPath, rows) => {
         notified.push([repoPath, rows.map((each) => each.key)]);
@@ -634,10 +704,12 @@ function welcomeSession(
         board: async () => ({
           now: "",
           projects: options.projects,
+          projectPaths: options.projects,
           needsYou: [],
           running: [],
           finished: 0,
           pullRequests: [],
+          doneToday: [],
         }),
       },
       {

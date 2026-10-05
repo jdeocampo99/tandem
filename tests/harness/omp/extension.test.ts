@@ -129,6 +129,7 @@ test("extension binds services to a clean source while preserving original ident
     },
     prWatchNotices: async () => [],
     board: async () => ({ needsYou: [] }),
+    writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
     reviewPagesOpen: () => [],
   } as unknown as TandemService;
@@ -192,6 +193,7 @@ test("before_agent_start exposes a blocked source refresh instead of silently pl
     shutdown: async () => undefined,
     prWatchNotices: async () => [],
     board: async () => ({ needsYou: [] }),
+    writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
     reviewPagesOpen: () => [],
   } as unknown as TandemService;
@@ -258,6 +260,7 @@ test("session shutdown waits for an interval reconciliation already in flight", 
     },
     prWatchNotices: async () => [],
     board: async () => ({ needsYou: [] }),
+    writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
     reviewPagesOpen: () => [],
   } as unknown as TandemService;
@@ -314,6 +317,7 @@ test("OMP delivers a wake's hidden identifiers first, then the shown prompt that
     acknowledge: async () => blocked,
     prWatchNotices: async () => [],
     board: async () => ({ needsYou: [] }),
+    writeBoardSnapshot: async () => {},
     investigationQuestions: async () => [],
     reviewPagesOpen: () => [],
   } as unknown as TandemService;

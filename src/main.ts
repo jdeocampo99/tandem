@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
 import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
+import type { HerdrFocus } from "./board/panel.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
+import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
@@ -39,6 +41,7 @@ import {
   hasActiveHerdrContext,
   launchProjects,
   otherSessionReconciliationNotices,
+  panelFailureNotice,
   previousResourcesFromLaunch,
   previousResourcesNotice,
   renestWarningsFromLaunch,
@@ -46,6 +49,7 @@ import {
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
+import { type PanelAction, runPanel, runPanelAction } from "./terminal/panel.ts";
 import {
   createServiceFor,
   prepareProjects,
@@ -92,6 +96,10 @@ Usage:
   tandem reset --hard      Delete all Tandem state and worktrees; next run onboards from scratch
   tandem configure [PATH]  Inspect or save repository settings
   tandem config [PATH]     Open the project's settings file in $VISUAL/$EDITOR
+  tandem panel             What every agent is doing, and one key to get to it
+                           --popup closes on Esc or after going somewhere
+  tandem panel home|prev|next
+                           Go to this project's chat, or the previous or next project
   tandem welcome           Show the welcome message again
 
 Options:
@@ -759,6 +767,8 @@ async function runProjectFlow({
       resources === undefined ? undefined : previousResourcesNotice(repoPath, resources);
     if (resourceNotice !== undefined) stdout(resourceNotice);
     for (const notice of otherSessionReconciliationNotices(repoPath, launch)) stdout(notice);
+    const panelNotice = panelFailureNotice(repoPath, launch);
+    if (panelNotice !== undefined) stdout(panelNotice);
   }
   return {
     exitCode: 0,
@@ -766,6 +776,36 @@ async function runProjectFlow({
     projects: roots,
     sessionId: environment.sessionId,
     launches,
+  };
+}
+
+function isPanelAction(value: string): value is PanelAction {
+  return value === "home" || value === "prev" || value === "next";
+}
+
+/**
+ * Where Herdr's focus is, from what Herdr hands a plugin pane, plugin action, or popup command.
+ * `TANDEM_PANEL_PROJECT` names the project a coordinator opened its panel for. `TANDEM_REPO` and
+ * `HERDR_WORKSPACE_ID` are not used: the Herdr server inherits the first coordinator's.
+ */
+function herdrFocus(environment: TerminalEnvironment): HerdrFocus {
+  const source = environment.source;
+  let context: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(source.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
+    if (typeof parsed === "object" && parsed !== null) context = parsed as Record<string, unknown>;
+  } catch {
+    // No context; the active-pane variables or the directory decide.
+  }
+  const text = (value: unknown) => (typeof value === "string" ? value : undefined);
+  const workspaceId = source.HERDR_ACTIVE_WORKSPACE_ID ?? text(context.workspace_id);
+  return {
+    ...(workspaceId === undefined ? {} : { workspaceId }),
+    cwd:
+      source.TANDEM_PANEL_PROJECT ??
+      text(context.focused_pane_cwd) ??
+      source.HERDR_ACTIVE_PANE_CWD ??
+      environment.cwd,
   };
 }
 
@@ -797,6 +837,50 @@ export async function runTerminal(
     }
     if (invocation.command === "memory") {
       return await handleMemory({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "panel") {
+      // Panels read only the snapshot coordinators write, never the state, so they take no lock.
+      const [action] = invocation.paths;
+      if (action !== undefined) {
+        if (!isPanelAction(action)) {
+          throw new Error(`tandem panel takes home, prev, or next; received ${action}`);
+        }
+        const failure = await runPanelAction(action, {
+          readSnapshot: () => readBoardSnapshot(environment.home),
+          run,
+          sessionId: environment.sessionId,
+          focus: herdrFocus(environment),
+          cwd: environment.cwd,
+        });
+        if (failure !== undefined) stderr(`${failure}\n`);
+        return { exitCode: failure === undefined ? 0 : 1, status: "panel" };
+      }
+      const output = dependencies.output ?? process.stdout;
+      const keysSeen = join(environment.home, "panel-keys-seen");
+      await runPanel({
+        input: dependencies.input ?? process.stdin,
+        write: stdout,
+        size: () => output as { columns?: number; rows?: number },
+        color: streamIsTTY(output) && (environment.source.NO_COLOR ?? "").length === 0,
+        clock: () => new Date(),
+        readSnapshot: () => readBoardSnapshot(environment.home),
+        run,
+        sessionId: environment.sessionId,
+        cwd: environment.cwd,
+        focus: herdrFocus(environment),
+        popup: invocation.popup,
+        helpUnseen: !(await Bun.file(keysSeen).exists()),
+        rememberHelpSeen: () => Bun.write(keysSeen, "").then(() => undefined),
+        onExitSignal: (stop) => {
+          process.once("SIGTERM", stop);
+          process.once("SIGHUP", stop);
+          return () => {
+            process.off("SIGTERM", stop);
+            process.off("SIGHUP", stop);
+          };
+        },
+      });
+      return { exitCode: 0, status: "panel" };
     }
     if (invocation.command === "welcome") {
       await runWelcome({

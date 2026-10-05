@@ -220,12 +220,48 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   Its pane's "press Enter to start it again" offer reruns the recorded command with the old path,
   which no longer exists, so run `tandem update` once after upgrading to relaunch it.
 
+## The panel beside each coordinator
+
+Code: src/coordinator/panel.ts. Tests: tests/coordinator/panel.test.ts.
+
+- Once a coordinator in its own workspace is ready and owned, launch opens the `tandem.ui` plugin's
+  `panel` pane: `herdr plugin pane open --plugin tandem.ui --entrypoint panel --placement split
+  --target-pane <coordinator pane> --direction right --no-focus --env
+  TANDEM_PANEL_PROJECT=<repo>`. Herdr refuses `--workspace` together with `--target-pane`.
+- Herdr has no width for a split, so launch reads `herdr pane layout` and moves the border with
+  `herdr pane resize --pane <coordinator pane> --direction right --amount <(panel - 46) / (both
+  widths)>`, leaving the panel 46 columns. The split keeps that ratio, so attaching from a terminal
+  of another width scales it.
+- Only Herdr's open response names a plugin pane, so launch keeps the pane id in
+  `<digest of repo>.panel` (`{"paneId": …}`) beside the coordinator's record in the registry. The
+  record itself is unchanged, so an older Tandem still reads it, and registry discovery reads only
+  `.json` files. The file is display state: missing or unreadable means no recorded panel. The
+  recorded pane counts as the panel only while `herdr pane get` shows it in the coordinator's
+  workspace with the title `Tandem panel`.
+- Every `tandem` run (reconnect) and every restart opens the panel again when the recorded one is
+  gone, on purpose: closing it loses nothing and running `tandem` brings it back. Nothing else
+  reopens it. Herdr does not restore plugin panes after a server restart, so the next `tandem`
+  brings it back too.
+- A panel that cannot open (plugin not linked, Herdr refused) never blocks the coordinator; launch
+  prints `Tandem's panel did not open beside <repo> (<reason>); tandem panel --popup shows it
+  anywhere.`.
+- The caller's-pane (direct) launch path has no record and opens no panel; `tandem` always
+  launches coordinators in their own workspaces.
+- `tandem fix` needs no pane scan for it: the panel belongs to its coordinator's record, so a live
+  coordinator keeps it and a stopped one's retirement closes it.
+
 ## Retiring a coordinator workspace
 
 Applies when launch replaces a stopped coordinator and during reset.
 
 - Herdr removes a workspace when its last pane closes. Retirement closes the coordinator's own
   pane only once exact ownership and a stopped process are proven.
+- After that proof, and before counting the panes left, it closes the recorded panel with
+  `herdr plugin pane close`, which refuses panes no plugin owns. A lone panel would otherwise keep
+  the workspace alive, renamed `◇ <repo> (old)`. A closed panel is left out of that count even
+  while Herdr still lists it. A panel that cannot be closed never fails retirement: the coordinator's
+  pane still closes and the workspace is retained with "panel could not be closed". Restart closes
+  the coordinator's pane first; the retirement that follows still closes the panel.
 - If other panes share the workspace, it is renamed `◇ <repo> (old)` instead. Those
   extra panes are never closed just for sharing the workspace; they are reported with the outcome.
 - A workspace with a user-set custom label is left entirely untouched, pane included.
