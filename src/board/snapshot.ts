@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { IsoTimestamp } from "../contracts.ts";
+import type { NativeViews } from "./native-views.ts";
 import { type BoardView, isBoardView } from "./view.ts";
 
 /** A project's open coordinator chat, so the panel can focus it. */
@@ -82,4 +83,22 @@ function isPanelCoordinator(value: unknown): value is PanelCoordinator {
     typeof entry.workspaceId === "string" &&
     typeof entry.paneId === "string"
   );
+}
+
+/** Full path is keyed by the original repository identity, never a basename or a Tern title. */
+export function nativeViewsPath(home: string, repoPath: string): string {
+  return join(home, "native-views", `${createHash("sha256").update(repoPath).digest("hex")}.json`);
+}
+
+/** Only the project's coordinator calls this writer. Readers see one complete bundle per rename. */
+export async function writeNativeViews(home: string, views: NativeViews): Promise<void> {
+  await mkdir(join(home, "native-views"), { recursive: true, mode: 0o700 });
+  const path = nativeViewsPath(home, views.project);
+  const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(views)}\n`, { flag: "wx", mode: 0o600 });
+    await rename(temporary, path);
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }

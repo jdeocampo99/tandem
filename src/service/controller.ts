@@ -6,8 +6,9 @@ import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
+import { NativeViewsReader } from "../board/native-read.ts";
 import { readBoard } from "../board/read.ts";
-import { writeBoardSnapshot } from "../board/snapshot.ts";
+import { type BoardSnapshot, writeBoardSnapshot, writeNativeViews } from "../board/snapshot.ts";
 import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts";
 import {
   type HomeSettings,
@@ -641,6 +642,7 @@ class TaskRevisionConflictError extends Error {
 
 class TandemController {
   readonly #deps: ServiceDependencies;
+  readonly #nativeViews: NativeViewsReader;
   readonly #source: SourceInboxWorkflow;
   readonly #presentationFeedback: PresentationFeedbackWorkflow;
   readonly #presentationRuntime: PresentationRuntimeWorkflow;
@@ -663,6 +665,7 @@ class TandemController {
   #sourceReady = true;
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
+    this.#nativeViews = new NativeViewsReader(deps);
     this.#drafts = new DraftRefreshWorkflow({
       home: deps.home,
       clock: deps.clock,
@@ -984,20 +987,35 @@ class TandemController {
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       board: () => readBoard(this.#deps.home, this.#deps.clock),
       notifyNeedsYou: (repoPath, rows) => this.notifyNeedsYou(repoPath, rows),
-      writeBoardSnapshot: async (board) =>
-        writeBoardSnapshot(this.#deps.home, {
+      writeBoardSnapshot: async (board) => {
+        const records = await listCoordinatorRecords(this.#deps.home, this.#deps.sessionId);
+        const snapshot: BoardSnapshot = {
           version: 1,
           writtenAt: this.#deps.clock(),
           board,
-          coordinators: (await listCoordinatorRecords(this.#deps.home, this.#deps.sessionId)).map(
-            (record) => ({
-              repoPath: record.repoPath,
-              project: basename(record.repoPath),
-              workspaceId: record.endpoint.workspaceId,
-              paneId: record.endpoint.paneId,
-            }),
-          ),
-        }),
+          coordinators: records.map((record) => ({
+            repoPath: record.repoPath,
+            project: basename(record.repoPath),
+            workspaceId: record.endpoint.workspaceId,
+            paneId: record.endpoint.paneId,
+          })),
+        };
+        await writeBoardSnapshot(this.#deps.home, snapshot);
+        const project =
+          this.#deps.sourceWorkspace?.repoPath ??
+          records.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
+            ?.repoPath;
+        if (this.#deps.terminal.name.toLowerCase() === "tern" && project !== undefined) {
+          await writeNativeViews(
+            this.#deps.home,
+            await this.#nativeViews.read(
+              snapshot,
+              project,
+              new Map(records.map((record) => [record.repoPath, record.endpoint.sessionId])),
+            ),
+          );
+        }
+      },
       prWatch: () => this.#prWatch.view(),
       prWatchStart: async (input) => this.#prWatch.start(await this.namedPullRequest(input)),
       prWatchStop: async (input) => this.#prWatch.stop((await this.namedPullRequest(input)).ref),
@@ -2066,7 +2084,8 @@ class TandemController {
     const tick = this.#tickPromise;
     const presentation = this.#presentationFeedback.shutdown();
     const prWatch = this.#prWatch.settle();
-    const inFlight = [...(tick === undefined ? [] : [tick]), presentation, prWatch];
+    const nativeViews = this.#nativeViews.settle();
+    const inFlight = [...(tick === undefined ? [] : [tick]), presentation, prWatch, nativeViews];
     const shutdown = Promise.allSettled(inFlight).then(() => undefined);
     this.#shutdownPromise = shutdown;
     await shutdown;
