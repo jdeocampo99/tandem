@@ -296,6 +296,13 @@ test("lists available OMP models with conservative optional metadata", async () 
             selector: "openai-codex/gpt-5.5",
             thinking: ["low"],
           },
+          {
+            provider: "anthropic",
+            id: "claude-3-5-sonnet-20240620",
+            selector: "anthropic/claude-3-5-sonnet-20240620",
+            reasoning: false,
+            thinking: null,
+          },
         ],
       }),
     ),
@@ -317,6 +324,13 @@ test("lists available OMP models with conservative optional metadata", async () 
       id: "gpt-5.5",
       selector: "openai-codex/gpt-5.5",
       thinking: ["low"],
+    },
+    {
+      provider: "anthropic",
+      id: "claude-3-5-sonnet-20240620",
+      selector: "anthropic/claude-3-5-sonnet-20240620",
+      reasoning: false,
+      thinking: ["off"],
     },
   ]);
   expect(runner.calls).toHaveLength(1);
