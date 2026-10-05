@@ -30,6 +30,10 @@
                 "message": "Only src/harness/omp/ and its tests may import OMP. Go through the launch port in src/harness/contract.ts."
               },
               {
+                "group": ["**/terminal-backend/herdr/**"],
+                "message": "Only the terminal-backend Herdr implementation may import Herdr modules. Use the backend-neutral terminal port."
+              },
+              {
                 "group": ["**/harness/omp/launch.ts", "**/harness/claude-code/launch.ts"],
                 "message": "Resolve a harness with harnessFor in src/harness/resolve.ts instead of importing it."
               }
@@ -50,6 +54,16 @@
   "overrides": [
     {
       "includes": ["src/harness/omp/**", "tests/harness/omp/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/terminal-backend/herdr/**", "tests/terminal-backend/herdr/**"],
       "linter": {
         "rules": {
           "style": {

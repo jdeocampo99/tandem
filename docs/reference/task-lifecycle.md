@@ -5,8 +5,8 @@ Task stages, approvals, fix rounds, post-research continuation, child terminals,
 Code: src/tasks/lifecycle.ts, src/tasks/required-stages.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
 src/tasks/trace.ts, src/tasks/research-continuation.ts,
 src/tasks/research-continuation-classifier.ts, src/session/research-follow-up.ts,
-src/service/source.ts, src/adapters/herdr.ts, src/adapters/herdr-status.ts,
-src/session/worker.ts, src/session/worker-steering.ts, src/harness/omp/terminal-extension.ts
+src/service/source.ts, src/terminal-backend/herdr/, src/session/worker.ts, src/session/worker-steering.ts,
+src/harness/omp/terminal-extension.ts
 
 ## Creation and source pinning
 
