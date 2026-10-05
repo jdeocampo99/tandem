@@ -84,12 +84,14 @@ identify the file, side and line stably; actions carry the same anchor in their 
 The linked package registers ⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘1–9 and ⌘⇧[ / ⌘⇧], the five Tandem palette
 entries, and task/brief/PR links. Arguments pass through an argv array and `tandem.sh`, with the
 originating pane id and cwd; no user text is interpolated into a shell command.
-Every window action uses the following CLI surface:
+Window and native view actions use the following CLI surface:
 
 ```text
 tandem native board|prs|usage|new-request|open-task CONTEXT
 tandem native open task|brief|pr ID CONTEXT
 tandem native project 1..9|prev|next CONTEXT
+tandem native brief-comment|brief-request-changes|brief-approve REQUEST_ID --input FILE CONTEXT
+tandem native pr-comment TASK_ID --text TEXT CONTEXT
 CONTEXT = --pane ID --cwd PATH [--window KEY]
 ```
 
@@ -106,6 +108,48 @@ The backend must prove that a supplied key owns the named pane. Without a key it
 unique owning window from that exact pane and refuses ambiguous targeting. The action worker
 owns `native open`; renderer workers own board/PRs/usage/project. This layer owns the calling
 convention and plugin only, without a shared native dispatcher.
+
+### JSON action input
+
+Brief actions pass `--input` and an absolute file path as separate argv elements. Renderers
+finish writing one UTF-8 JSON object before spawning the CLI, with a new file for each action
+in a private Tandem-owned directory supplied by the TypeScript view producer. The directory
+uses `0700`; TypeScript-created input files use `0600`. Never put action input in the plugin
+package, a repository, an environment variable, or an interpolated shell command. The file
+stays unchanged until that invocation finishes; the caller owns cleanup after completion or
+known spawn failure. The CLI reads the file without deleting it. An uncertain process outcome
+does not authorize another invocation.
+
+Every brief action carries the exact identity of the displayed draft:
+
+```json
+{
+  "briefRevision": 3,
+  "contentDigest": "displayed-content-digest",
+  "agreementDigest": "displayed-agreement-digest"
+}
+```
+
+`brief-approve` sends only those three fields. `brief-comment` and `brief-request-changes` may
+also include `text` and `comments`, where each comment is `{ "line": 12, "text": "Feedback" }`.
+Line numbers are positive, one-based lines of the displayed brief Markdown, and the renderer
+copies revision and digests from its view model without recalculating them or refreshing them
+behind the user's click. The CLI owns shape, revision, digest and approval validation. Unknown
+fields are refused. Feedback allows at most 100 comments and 64,000 bytes of encoded feedback.
+The JSON object does not contain `requestId`: the command's positional `REQUEST_ID` names it.
+
+For example, the caller passes this argv suffix, preserving paths with spaces as one argument:
+
+```text
+native brief-request-changes REQUEST_ID --input /absolute/private/action.json
+  --pane ID --cwd /absolute/project/path [--window KEY]
+```
+
+`pr-comment` takes `--text` and the user's complete text as separate argv elements, with the
+same context. The action worker owns all brief and PR mutation handlers alongside `native open`;
+renderer workers own collecting input, writing the action file, invoking the CLI and cleanup.
+
+### Completion and installation
 
 Exit 0 means the action completed or the user cancelled a picker. Refusal, missing context,
 unavailable commands and effect failures exit nonzero with a useful diagnostic on stderr.
