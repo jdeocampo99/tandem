@@ -11,7 +11,9 @@ import { type TernBackendOptions, ternBackend, ternNotificationEndpoint } from "
 import { TERN_CONTEXT } from "./tern/context.ts";
 
 export type TerminalComposition = Readonly<{
-  /** Explicit Tandem home; omitted for isolated tests, which keep Herdr. */
+  /** Overrides saved settings; without either choice, Herdr is the default. */
+  terminal?: TerminalName;
+  /** Explicit Tandem home supplies saved settings and durable notification ownership. */
   home?: string;
   herdr?: HerdrBackendOptions;
   tern?: TernBackendOptions;
@@ -52,9 +54,10 @@ export function terminalBackend(
   const backends = new Map<TerminalName, TerminalBackend>();
   const select = (): TerminalBackend => {
     const chosen =
-      options.home === undefined
+      options.terminal ??
+      (options.home === undefined
         ? "herdr"
-        : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal;
+        : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal);
     const cached = backends.get(chosen);
     if (cached !== undefined) return cached;
     const home = options.home;

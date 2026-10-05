@@ -14,9 +14,9 @@ import {
 } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "../evals/scenario.ts";
 
-test("Tern alerts use the recorded helper and refuse missing or foreign ownership", async () => {
+test("explicit Tern selection overrides saved Herdr and alerts require the recorded helper", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
-    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "herdr"\n');
     const writes: CommandRequest[] = [];
     const calls: CommandRequest[] = [];
     const run: CommandRunner = async (request) => {
@@ -29,7 +29,7 @@ test("Tern alerts use the recorded helper and refuse missing or foreign ownershi
       }
       return world.run(request);
     };
-    const terminal = terminalBackend(run, { home: world.home });
+    const terminal = terminalBackend(run, { terminal: "tern", home: world.home });
     const alert = () =>
       terminal.notify({
         sessionId: world.sessionId,
@@ -82,6 +82,7 @@ test("Tern alerts use the recorded helper and refuse missing or foreign ownershi
     const before = calls.length;
     await expect(alert()).rejects.toThrow("quarantined herdr endpoint under tern");
     const foreignHelper = terminalBackend(run, {
+      terminal: "tern",
       home: world.home,
       tern: {
         notificationEndpoint: async () => ({ ...endpoint, terminal: "herdr" }),
