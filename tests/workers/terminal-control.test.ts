@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRequest, CommandResult, Endpoint } from "../../src/contracts.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { type WorkerTerminalJob, writeWorkerTerminal } from "../../src/workers/terminal.ts";
 import { prepareWorkerTerminal } from "../../src/workers/terminal-control.ts";
 
@@ -133,7 +134,11 @@ test("a close whose first exit keys are lost is completed by re-sending them (#2
   const { job, stopAck } = await completedWorker(home);
   try {
     const pane: Pane = { active: true, exitBursts: 0, exitSendsNeeded: 2 };
-    await prepareWorkerTerminal(paneRunner(pane), { endpoint: ENDPOINT, cwd: home, job }, FAST);
+    await prepareWorkerTerminal(
+      terminalBackend(paneRunner(pane)),
+      { endpoint: ENDPOINT, cwd: home, job },
+      FAST,
+    );
     expect(pane.active).toBe(false);
     expect(pane.exitBursts).toBe(2);
   } finally {
@@ -148,7 +153,11 @@ test("a worker whose process never exits still fails closed after the wait", asy
   try {
     const pane: Pane = { active: true, exitBursts: 0, exitSendsNeeded: Number.POSITIVE_INFINITY };
     await expect(
-      prepareWorkerTerminal(paneRunner(pane), { endpoint: ENDPOINT, cwd: home, job }, FAST),
+      prepareWorkerTerminal(
+        terminalBackend(paneRunner(pane)),
+        { endpoint: ENDPOINT, cwd: home, job },
+        FAST,
+      ),
     ).rejects.toThrow("has not exited");
     expect(pane.exitBursts).toBeGreaterThanOrEqual(2);
   } finally {
@@ -162,7 +171,11 @@ test("a close that takes on the first exit keys sends them only once", async () 
   const { job, stopAck } = await completedWorker(home);
   try {
     const pane: Pane = { active: true, exitBursts: 0, exitSendsNeeded: 1 };
-    await prepareWorkerTerminal(paneRunner(pane), { endpoint: ENDPOINT, cwd: home, job }, FAST);
+    await prepareWorkerTerminal(
+      terminalBackend(paneRunner(pane)),
+      { endpoint: ENDPOINT, cwd: home, job },
+      FAST,
+    );
     expect(pane.active).toBe(false);
     expect(pane.exitBursts).toBe(1);
   } finally {

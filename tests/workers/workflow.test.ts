@@ -3,6 +3,7 @@ import type { BlockCause } from "../../src/contracts.ts";
 import { taskRuntime } from "../../src/runtime/activity.ts";
 import { readRuntimeState, runtimeFile } from "../../src/runtime/persistence.ts";
 import { transitionStoredTask } from "../../src/tasks/store.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { WorkerWorkflow } from "../../src/workers/workflow.ts";
 import {
   SCENARIO_TASK_ID,
@@ -36,6 +37,7 @@ function workflowFor(world: ScenarioWorld, blocks: RecordedBlock[]): WorkerWorkf
     poolRoot: world.poolRoot,
     workerTimeoutMs: undefined,
     run: world.run,
+    terminal: terminalBackend(world.run),
     clock: world.clock,
     idFactory: world.idFactory,
     store: world.store,

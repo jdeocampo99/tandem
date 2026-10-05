@@ -1,7 +1,5 @@
 import { realpath } from "node:fs/promises";
 import { runCommand } from "../adapters/commands.ts";
-import { openWelcomePopup } from "../adapters/herdr.ts";
-import { createHerdrStatusReporter } from "../adapters/herdr-status.ts";
 import {
   environmentForContext,
   processEnvironmentSnapshot,
@@ -28,6 +26,7 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "../tasks/research-continuation-classifier.ts";
+import { terminalBackend } from "../terminal-backend/compose.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -38,7 +37,7 @@ export type CoordinatorOptions = Readonly<{
   readonly environment?: Partial<TandemBoundaryEnvironment>;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly tickIntervalMs?: number;
-  /** Runs the Herdr status commands; the real command runner when absent. */
+  /** Runs the terminal's status commands; the real command runner when absent. */
   readonly run?: CommandRunner;
 }>;
 
@@ -88,6 +87,7 @@ function createCoordinatorService(
               repoPath: environment.repo,
               sourceRepoPath: sourceRepo,
               run: runCommand,
+              terminal: terminalBackend(runCommand),
             }),
         }),
   });
@@ -103,12 +103,12 @@ export function bindCoordinator(
     cwd: harness.cwd,
     sessionId: harness.sessionId,
   });
-  const run = options.run ?? runCommand;
+  const terminal = terminalBackend(options.run ?? runCommand);
   const session = new CoordinatorSession({
     host: harness.host,
     clock: { now: () => Date.now(), monotonic: () => performance.now() },
     timers: harness.timers,
-    status: createHerdrStatusReporter(run, {
+    status: terminal.agentStatusReporter({
       cwd: harness.cwd,
       agentLabel: "tandem-coordinator",
       ...(options.processEnvironment === undefined
@@ -124,7 +124,7 @@ export function bindCoordinator(
       if (environment.coordinatorPaneId === undefined) {
         throw new Error("the coordinator is not running in a Tandem Herdr pane");
       }
-      await openWelcomePopup(run, {
+      await terminal.openWelcome({
         sessionId: environment.sessionId,
         cwd: harness.cwd,
         paneId: environment.coordinatorPaneId,

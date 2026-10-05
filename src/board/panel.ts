@@ -202,14 +202,14 @@ export function panelProject(projectPaths: readonly string[], path: string): str
 }
 
 /** Where Herdr's focus is: the focused pane's workspace, when known, and a directory. */
-export type HerdrFocus = Readonly<{ readonly workspaceId?: string; readonly cwd: string }>;
+export type PanelFocus = Readonly<{ readonly workspaceId?: string; readonly cwd: string }>;
 
 /**
  * The project Herdr's focus is in: the one whose coordinator or worker runs in the focused
  * workspace, or else the one the directory is in. Worker worktrees sit outside every project, so
  * the workspace comes first.
  */
-export function focusedProject(snapshot: BoardSnapshot, focus: HerdrFocus): string | undefined {
+export function focusedProject(snapshot: BoardSnapshot, focus: PanelFocus): string | undefined {
   const { workspaceId } = focus;
   const owner =
     workspaceId === undefined

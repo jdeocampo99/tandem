@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
 import { checkTools } from "../../src/onboarding/tools.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 function runner(results: Readonly<Record<string, CommandResult | "missing">>) {
   return async (request: CommandRequest): Promise<CommandResult> => {
@@ -14,30 +15,26 @@ function runner(results: Readonly<Record<string, CommandResult | "missing">>) {
 const ok = (stdout: string): CommandResult => ({ code: 0, stdout, stderr: "" });
 
 test("a ready machine passes every check", async () => {
-  const checks = await checkTools(
-    runner({
-      "herdr --version": ok("herdr 0.9.1"),
-      "herdr plugin list": ok("- tandem.ui (Tandem) enabled [local:/tandem/herdr-plugin]\n"),
-      "omp --version": ok("omp 1.2.3"),
-      "git --version": ok("git version 2.50.0"),
-      "gh auth status": ok("Logged in"),
-    }),
-    { cwd: "/tmp", sessionId: "tandem" },
-  );
+  const run = runner({
+    "herdr --version": ok("herdr 0.9.1"),
+    "herdr plugin list": ok("- tandem.ui (Tandem) enabled [local:/tandem/herdr-plugin]\n"),
+    "omp --version": ok("omp 1.2.3"),
+    "git --version": ok("git version 2.50.0"),
+    "gh auth status": ok("Logged in"),
+  });
+  const checks = await checkTools(run, terminalBackend(run), { cwd: "/tmp", sessionId: "tandem" });
   expect(checks.every((check) => check.ok)).toBe(true);
 });
 
 test("each missing tool names the command that fixes it", async () => {
-  const checks = await checkTools(
-    runner({
-      "herdr --version": ok("herdr 0.7.5"),
-      "herdr plugin list": ok("No plugins installed.\n"),
-      "omp --version": "missing",
-      "git --version": ok("git version 2.50.0"),
-      "gh auth status": { code: 1, stdout: "", stderr: "not logged in" },
-    }),
-    { cwd: "/tmp", sessionId: "tandem" },
-  );
+  const run = runner({
+    "herdr --version": ok("herdr 0.7.5"),
+    "herdr plugin list": ok("No plugins installed.\n"),
+    "omp --version": "missing",
+    "git --version": ok("git version 2.50.0"),
+    "gh auth status": { code: 1, stdout: "", stderr: "not logged in" },
+  });
+  const checks = await checkTools(run, terminalBackend(run), { cwd: "/tmp", sessionId: "tandem" });
   const byName = new Map(checks.map((check) => [check.name, check]));
   expect(byName.get("Herdr")).toMatchObject({ ok: false, detail: "0.7.5, needs 0.8.2+" });
   expect(byName.get("OMP")).toMatchObject({

@@ -6,7 +6,7 @@ one-line form in Herdr's tab bar, and the Herdr notification when something new 
 Code: src/board/ (`view.ts` sections and the chat rendering, `terminal.ts` the terminal
 rendering, `read.ts` the state read and live loop), src/terminal/status.ts (the footer's
 data), src/main.ts (`tandem status`), src/session/coordinator.ts (`notifyOnArrival`),
-src/session/prompt-routing.ts (the `board` lookup), src/terminal/herdr-setup.ts (the Herdr
+src/session/prompt-routing.ts (the `board` lookup), src/terminal-backend/herdr/setup.ts (the Herdr
 config that setup.sh adds). Tests: tests/board/,
 tests/terminal/main.test.ts.
 
@@ -139,7 +139,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
   call) and takes no task ID, `--json`, `--logs`, or `--watch`.
   A locked state or any other error exits non-zero with nothing on stdout, and Herdr clears the
   entry until the next run.
-- `setup.sh` runs src/terminal/herdr-setup.ts, which:
+- `setup.sh` runs src/terminal-backend/herdr/setup.ts, which:
   - updates Herdr when `herdr --version` is older than 0.8.2, the first release with command
     entries in the tab bar (popup keybindings arrived in 0.7.4): `brew upgrade herdr` when the
     binary resolves under Homebrew, `herdr update` otherwise, showing its output only if Herdr is

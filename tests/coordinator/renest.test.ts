@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { planRenest, renestWorkspaces } from "../../src/coordinator/renest.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
 import {
   type FakeSidebar,
   fakeSidebar,
@@ -41,13 +43,34 @@ async function liveExample(world: World, extra: readonly string[] = []): Promise
   ]);
   return fakeSidebar(["wV", "w1F", "w1G", "w1B", ...extra]);
 }
+function fakeTerminal(sidebar: FakeSidebar): TerminalBackend {
+  const terminal = terminalBackend(sidebar.run);
+  return {
+    ...terminal,
+    orderWorkspaceAfter: async (input) => {
+      try {
+        await sidebar.moveWorkspace({
+          socketPath: "/tmp/fake-herdr.sock",
+          workspaceId: input.workspaceId,
+          insertIndex: input.insertIndex ?? sidebar.order.indexOf(input.parentWorkspaceId) + 1,
+        });
+        return [];
+      } catch (error) {
+        return [
+          `workspace.move failed; worker placement was preserved: ${error instanceof Error ? error.message : String(error)}`,
+        ];
+      }
+    },
+  };
+}
 
 const renest = (world: World, sidebar: FakeSidebar, apply: boolean) =>
-  renestWorkspaces(
-    sidebar.run,
-    { home: world.home, sessionId: SESSION, cwd: world.home, apply },
-    { moveWorkspace: sidebar.moveWorkspace },
-  );
+  renestWorkspaces(fakeTerminal(sidebar), {
+    home: world.home,
+    sessionId: SESSION,
+    cwd: world.home,
+    apply,
+  });
 
 test("task workspaces are moved back under their own coordinator, oldest first", async () => {
   await withWorld(async (world) => {
@@ -179,7 +202,7 @@ test("an unreadable Herdr session is a warning, never an error", async () => {
   await withWorld(async (world) => {
     await saveCoordinator(world.home, world.tagalog, "w1G");
     const report = await renestWorkspaces(
-      async () => ({ code: 1, stdout: "", stderr: "no server" }),
+      terminalBackend(async () => ({ code: 1, stdout: "", stderr: "no server" })),
       { home: world.home, sessionId: SESSION, cwd: world.home, apply: true },
     );
     expect(report.moved).toBe(0);

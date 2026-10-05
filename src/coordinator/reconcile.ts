@@ -25,6 +25,7 @@ import {
 } from "../service/superseded.ts";
 
 import { createTaskStore } from "../tasks/store.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import {
@@ -236,6 +237,7 @@ export type ReconcileReport = Readonly<{
 
 export type ReconcileScanInput = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly home: string;
   /** The pool every repository without a coordinator record of its own would use. */
   readonly poolRoot: string;
@@ -248,6 +250,7 @@ export type ReconcileScanInput = Readonly<{
 
 export type ReconcileApplyInput = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly home: string;
   readonly plan: ReconcilePlan;
   readonly clock: Clock;
@@ -258,6 +261,7 @@ export type ReconcileApplyInput = Readonly<{
 
 export type ReconcileInput = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly home: string;
   readonly poolRoot: string;
   readonly repoPaths: readonly string[];
@@ -302,11 +306,12 @@ async function fileExists(path: string): Promise<boolean> {
 
 async function observeCoordinatorLiveness(
   run: CommandRunner,
+  terminal: TerminalBackend,
   home: string,
   found: DiscoveredCoordinatorRecord,
 ): Promise<CoordinatorLiveness> {
   try {
-    const running = await findRunningCoordinator(run, {
+    const running = await findRunningCoordinator(run, terminal, {
       home,
       sessionId: found.sessionId,
       repoPath: found.record.repoPath,
@@ -345,7 +350,7 @@ async function observeCoordinators(
       });
       continue;
     }
-    const liveness = await observeCoordinatorLiveness(input.run, home, found);
+    const liveness = await observeCoordinatorLiveness(input.run, input.terminal, home, found);
     coordinators.push({
       found,
       liveness,
@@ -830,7 +835,7 @@ async function applyCoordinatorItem(
     return { item, outcome: "quarantined", reason: outcome.reason };
   }
   const settled = await withCoordinatorLaunchLock(input.home, item.found.sessionId, async () => {
-    const paneRetirement = await retireCoordinatorWorkspace(input.run, input.home, record);
+    const paneRetirement = await retireCoordinatorWorkspace(input.terminal, input.home, record);
     return applyCoordinatorReplacement({
       run: input.run,
       home: input.home,
@@ -924,7 +929,13 @@ function applyScoutItems(
 ): Promise<void> {
   return recordTaskCleanup(
     items,
-    () => finishPendingScoutCleanup({ home: input.home, run: input.run, clock: input.clock }),
+    () =>
+      finishPendingScoutCleanup({
+        home: input.home,
+        run: input.run,
+        terminal: input.terminal,
+        clock: input.clock,
+      }),
     results,
   );
 }
@@ -943,6 +954,7 @@ function applyImplementationItems(
       finishPendingImplementationCleanup({
         home: input.home,
         run: input.run,
+        terminal: input.terminal,
         clock: input.clock,
         discard: input.discard,
         taskIds: new Set(items.map((item) => item.taskId)),
@@ -1149,6 +1161,7 @@ export async function reconcileTandemResources(input: ReconcileInput): Promise<R
   const newId = input.newId ?? randomUUID;
   const observation = await scanTandemResources({
     run: input.run,
+    terminal: input.terminal,
     home: input.home,
     poolRoot: input.poolRoot,
     repoPaths: input.repoPaths,
@@ -1176,6 +1189,7 @@ export async function reconcileTandemResources(input: ReconcileInput): Promise<R
     failures: observation.failures,
     results: await applyTandemReconciliation({
       run: input.run,
+      terminal: input.terminal,
       home: observation.home,
       plan,
       clock,

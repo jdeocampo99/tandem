@@ -10,6 +10,7 @@ import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { createTandemService } from "../../src/service/controller.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import {
   SCENARIO_POLICY,
   type ScenarioWorld,
@@ -42,6 +43,7 @@ function launchDependencies(
 ): CoordinatorLaunchDependencies {
   return {
     run: world.run,
+    terminal: terminalBackend(world.run),
     startPersistent: async () => undefined,
     runInteractive: async () => 0,
     sleep: async () => undefined,

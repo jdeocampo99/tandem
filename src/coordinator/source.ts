@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { readCheckpoint } from "../adapters/git.ts";
 import type { CommandRunner } from "../contracts.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import { saveCoordinatorRecord } from "./registry.ts";
@@ -23,6 +24,7 @@ export type CoordinatorSourceRefreshInput = Readonly<{
   readonly repoPath: string;
   readonly sourceRepoPath: string;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
 }>;
 
 async function gitText(
@@ -89,7 +91,7 @@ async function refreshOwnedCheckout(
   source: CoordinatorSourceHead,
 ): Promise<CoordinatorSourceRefreshResult> {
   const repo = resolve(input.repoPath);
-  const running = await findRunningCoordinator(input.run, {
+  const running = await findRunningCoordinator(input.run, input.terminal, {
     home: input.home,
     sessionId: input.sessionId,
     repoPath: repo,

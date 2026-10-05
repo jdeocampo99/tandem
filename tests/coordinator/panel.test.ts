@@ -3,11 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
-import {
-  isCoordinatorPanel,
-  openPanelBeside,
-  readPanelPaneId,
-} from "../../src/coordinator/panel.ts";
+import { openPanelBeside, readPanelPaneId } from "../../src/coordinator/panel.ts";
 import type { CoordinatorRecord } from "../../src/coordinator/record.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import {
@@ -16,6 +12,7 @@ import {
   saveCoordinatorRecord,
 } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 async function fixture(): Promise<{ root: string; home: string; record: CoordinatorRecord }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-coordinator-panel-")));
@@ -69,7 +66,7 @@ test("opens the panel right of the coordinator and records it", async () => {
       throw new Error(`unexpected ${command}`);
     };
 
-    expect(await openPanelBeside(run, home, record)).toBeUndefined();
+    expect(await openPanelBeside(terminalBackend(run), home, record)).toBeUndefined();
 
     expect(calls.map((call) => call.argv.slice(3))).toEqual([
       [
@@ -104,16 +101,6 @@ test("opens the panel right of the coordinator and records it", async () => {
   }
 });
 
-test("only a pane in the coordinator's workspace with the panel's title counts as its panel", () => {
-  const pane = (fields: Record<string, unknown>) => ({
-    result: { pane: { pane_id: "w1:p2", workspace_id: "w1", label: "Tandem panel", ...fields } },
-  });
-  expect(isCoordinatorPanel(pane({}), "w1", "w1:p2")).toBe(true);
-  expect(isCoordinatorPanel(pane({ workspace_id: "w2" }), "w1", "w1:p2")).toBe(false);
-  expect(isCoordinatorPanel(pane({ label: "notes" }), "w1", "w1:p2")).toBe(false);
-  expect(isCoordinatorPanel(pane({ pane_id: "w1:p3" }), "w1", "w1:p2")).toBe(false);
-});
-
 const notFound = (code: string): CommandResult => ({
   code: 1,
   stdout: "",
@@ -124,17 +111,18 @@ test("keeps a recorded panel that is still open, and reports a failed open witho
   const { root, home, record } = await fixture();
   try {
     await openPanelBeside(
-      async (request) =>
+      terminalBackend(async (request: CommandRequest) =>
         request.argv[3] === "plugin" ? ok({ plugin_pane: { pane: { pane_id: "w1:p2" } } }) : ok({}),
+      ),
       home,
       record,
     );
     const calls: string[] = [];
     const stillOpen = await openPanelBeside(
-      async (request) => {
+      terminalBackend(async (request: CommandRequest) => {
         calls.push(request.argv.slice(3).join(" "));
         return ok({ pane: { pane_id: "w1:p2", workspace_id: "w1", label: "Tandem panel" } });
-      },
+      }),
       home,
       record,
     );
@@ -142,8 +130,9 @@ test("keeps a recorded panel that is still open, and reports a failed open witho
     expect(calls).toEqual(["pane get w1:p2"]);
 
     const failure = await openPanelBeside(
-      async (request) =>
+      terminalBackend(async (request: CommandRequest) =>
         request.argv[4] === "get" ? notFound("pane_not_found") : notFound("plugin_not_found"),
+      ),
       home,
       record,
     );

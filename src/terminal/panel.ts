@@ -1,7 +1,7 @@
 import {
   focusedProject,
-  type HerdrFocus,
   type PanelActivity,
+  type PanelFocus,
   type PanelRow,
   type PanelStep,
   type PanelTarget,
@@ -11,7 +11,7 @@ import {
 import type { BoardSnapshot, PanelCoordinator } from "../board/snapshot.ts";
 import { draw, fit, fitStart, type Line, lineWidth, span, type Tone } from "../board/terminal.ts";
 import type { CommandRunner } from "../contracts.ts";
-import { isRecord } from "../coordinator/record.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 
 export type PanelInput =
   | Readonly<{ kind: "up" | "down" | "enter" | "escape" | "backspace" | "interrupt" }>
@@ -53,8 +53,13 @@ export type PanelEffect =
   | Readonly<{ kind: "switch"; repoPath: string }>
   | Readonly<{ kind: "close" }>;
 
-/** One command; when it fails and has a `failure`, the effect stops there and says so. */
-export type HerdrStep = Readonly<{ readonly argv: readonly string[]; readonly failure?: string }>;
+/** One move toward a target; when it fails and has a `failure`, the effect stops there and says so. */
+export type NavigationStep = Readonly<{ readonly failure?: string }> &
+  (
+    | Readonly<{ readonly kind: "workspace"; readonly workspaceId: string }>
+    | Readonly<{ readonly kind: "agent"; readonly paneId: string }>
+    | Readonly<{ readonly kind: "url"; readonly url: string }>
+  );
 
 const DOUBLE_CLICK_MS = 400;
 const REFRESH_MS = 1_000;
@@ -201,118 +206,19 @@ function toggleSteps(state: PanelState, row: PanelRow | undefined): PanelState {
   return { ...state, expanded };
 }
 
-/** A move of the border left of the panel, as a fraction of the split's width. */
-export type PanelResize = Readonly<{
-  /** The window width this fit is for; the panel refits only once it changes. */
-  readonly areaWidth: number;
-  readonly direction: "left" | "right";
-  /** 0 when the panel already fits. */
-  readonly amount: number;
-}>;
-
-type Rect = Readonly<{ x: number; y: number; width: number; height: number }>;
-
-function rect(value: unknown): Rect | undefined {
-  if (!isRecord(value)) return undefined;
-  const { x, y, width, height } = value;
-  return typeof x === "number" &&
-    typeof y === "number" &&
-    typeof width === "number" &&
-    typeof height === "number"
-    ? { x, y, width, height }
-    : undefined;
-}
-
-function records(value: unknown): readonly Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
 /**
- * How to bring the panel back to `PANEL_WIDTH` columns, from `herdr pane layout`, or undefined to
- * leave it alone. Herdr splits keep a ratio, so the panel refits whenever the window width
- * changes (a client attaches or the terminal resizes) and never when only the border moved, which
- * is the user dragging it. It never takes more than half its split.
- */
-export function panelResize(
-  layout: unknown,
-  paneId: string,
-  fittedAreaWidth: number | undefined,
-): PanelResize | undefined {
-  const fields =
-    isRecord(layout) && isRecord(layout.result) && isRecord(layout.result.layout)
-      ? layout.result.layout
-      : undefined;
-  const areaWidth = rect(fields?.area)?.width;
-  if (areaWidth === undefined || areaWidth === fittedAreaWidth) return undefined;
-  const own = rect(records(fields?.panes).find((pane) => pane.pane_id === paneId)?.rect);
-  if (own === undefined) return undefined;
-  const split = records(fields?.splits)
-    .flatMap((entry) => {
-      const bounds = rect(entry.rect);
-      return entry.direction === "right" && bounds !== undefined ? [bounds] : [];
-    })
-    .filter(
-      (bounds) =>
-        bounds.x < own.x &&
-        bounds.x + bounds.width === own.x + own.width &&
-        bounds.y <= own.y &&
-        own.y + own.height <= bounds.y + bounds.height,
-    )
-    .sort((a, b) => b.x - a.x)[0];
-  if (split === undefined) return undefined;
-  const target = Math.min(PANEL_WIDTH, Math.floor(split.width / 2));
-  return {
-    areaWidth,
-    direction: own.width > target ? "right" : "left",
-    amount: Math.abs(own.width - target) / split.width,
-  };
-}
-
-/** Fits the panel's pane once for the current window width; the width it fitted for. */
-async function fitPanelPane(
-  deps: Pick<PanelDeps, "run" | "sessionId" | "cwd">,
-  paneId: string,
-  fittedAreaWidth: number | undefined,
-): Promise<number | undefined> {
-  const herdr = (...args: string[]) => ({
-    argv: ["herdr", "--session", deps.sessionId, ...args],
-    cwd: deps.cwd,
-  });
-  const layout = await deps.run(herdr("pane", "layout", "--pane", paneId));
-  if (layout.code !== 0) return fittedAreaWidth;
-  const resize = panelResize(JSON.parse(layout.stdout), paneId, fittedAreaWidth);
-  if (resize === undefined) return fittedAreaWidth;
-  if (resize.amount === 0) return resize.areaWidth;
-  const resized = await deps.run(
-    herdr(
-      "pane",
-      "resize",
-      "--pane",
-      paneId,
-      "--direction",
-      resize.direction,
-      "--amount",
-      resize.amount.toFixed(4),
-    ),
-  );
-  return resized.code === 0 ? resize.areaWidth : fittedAreaWidth;
-}
-
-/**
- * The commands for an effect, in order. Focusing the workspace lands on its active pane;
- * `agent focus` then picks the exact pane, which Herdr allows only for panes it knows run an
- * agent, so it may fail without failing the effect. Switching project lands in its coordinator's
- * chat, the same as going there. No steps means there is nowhere to go.
+ * The steps for an effect, in order. Focusing the workspace lands on its active pane; focusing
+ * the agent then picks the exact pane, which the terminal may refuse for a pane it does not know
+ * runs an agent, so that may fail without failing the effect. Switching project lands in its
+ * coordinator's chat, the same as going there. No steps means there is nowhere to go.
  */
 export function navigationSteps(
   effect: Exclude<PanelEffect, { kind: "close" }>,
-  sessionId: string,
   coordinators: readonly PanelCoordinator[],
-): readonly HerdrStep[] {
-  const herdr = (...args: string[]) => ["herdr", "--session", sessionId, ...args];
-  const focus = (workspaceId: string, paneId?: string): HerdrStep[] => [
-    { argv: herdr("workspace", "focus", workspaceId), failure: "⚠ Herdr couldn't focus it" },
-    ...(paneId === undefined ? [] : [{ argv: herdr("agent", "focus", paneId) }]),
+): readonly NavigationStep[] {
+  const focus = (workspaceId: string, paneId?: string): NavigationStep[] => [
+    { kind: "workspace", workspaceId, failure: "⚠ Herdr couldn't focus it" },
+    ...(paneId === undefined ? [] : [{ kind: "agent" as const, paneId }]),
   ];
   const chat = (repoPath: string) => {
     const found = coordinators.find((candidate) => candidate.repoPath === repoPath);
@@ -321,32 +227,30 @@ export function navigationSteps(
   if (effect.kind === "switch") return chat(effect.repoPath);
   const { target } = effect;
   if (target.kind === "url") {
-    return [{ argv: ["open", target.url], failure: "⚠ couldn't open the link" }];
+    return [{ kind: "url", url: target.url, failure: "⚠ couldn't open the link" }];
   }
   if (target.kind === "pane") return focus(target.workspaceId, target.paneId);
   if (target.kind === "chat") return chat(target.repoPath);
   return [];
 }
 
-/** What a Herdr key bound to one of the panel's plugin actions does, from anywhere. */
+/** What a terminal key bound to one of the panel's actions does, from anywhere. */
 export type PanelAction = "home" | "prev" | "next";
 
 /**
- * The Herdr commands for a panel action key: home goes to the focused project's chat; prev and
+ * The steps for a panel action key: home goes to the focused project's chat; prev and
  * next go to the neighboring project with an open coordinator, wrapping around.
  */
 export function panelActionSteps(
   action: PanelAction,
   snapshot: BoardSnapshot,
-  focus: HerdrFocus,
-  sessionId: string,
-): readonly HerdrStep[] {
+  focus: PanelFocus,
+): readonly NavigationStep[] {
   const project = focusedProject(snapshot, focus);
   if (project === undefined) return [];
   if (action === "home") {
     return navigationSteps(
       { kind: "go", target: { kind: "chat", repoPath: project } },
-      sessionId,
       snapshot.coordinators,
     );
   }
@@ -364,16 +268,33 @@ export function panelActionSteps(
       : online[(at + by + online.length) % online.length];
   return neighbor === undefined
     ? []
-    : navigationSteps({ kind: "switch", repoPath: neighbor }, sessionId, snapshot.coordinators);
+    : navigationSteps({ kind: "switch", repoPath: neighbor }, snapshot.coordinators);
 }
 
-export type PanelActionDeps = Readonly<{
-  readonly readSnapshot: () => Promise<BoardSnapshot | undefined>;
+type StepDeps = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly sessionId: string;
-  readonly focus: HerdrFocus;
   readonly cwd: string;
 }>;
+
+/** Takes one step; whether it got there. */
+async function takeStep(step: NavigationStep, deps: StepDeps): Promise<boolean> {
+  const { sessionId, cwd } = deps;
+  if (step.kind === "workspace") {
+    return (await deps.terminal.focusWorkspace({ sessionId, cwd, workspaceId: step.workspaceId }))
+      .focused;
+  }
+  if (step.kind === "agent")
+    return deps.terminal.focusAgent({ sessionId, cwd, paneId: step.paneId });
+  return (await deps.run({ argv: ["open", step.url], cwd })).code === 0;
+}
+
+export type PanelActionDeps = StepDeps &
+  Readonly<{
+    readonly readSnapshot: () => Promise<BoardSnapshot | undefined>;
+    readonly focus: PanelFocus;
+  }>;
 
 /** Runs a panel action key; the reason it went nowhere, or undefined when it went. */
 export async function runPanelAction(
@@ -381,12 +302,10 @@ export async function runPanelAction(
   deps: PanelActionDeps,
 ): Promise<string | undefined> {
   const snapshot = await deps.readSnapshot();
-  const steps =
-    snapshot === undefined ? [] : panelActionSteps(action, snapshot, deps.focus, deps.sessionId);
+  const steps = snapshot === undefined ? [] : panelActionSteps(action, snapshot, deps.focus);
   if (steps.length === 0) return "no open coordinator to go to";
   for (const step of steps) {
-    const result = await deps.run({ argv: step.argv, cwd: deps.cwd });
-    if (result.code !== 0 && step.failure !== undefined) return step.failure;
+    if (!(await takeStep(step, deps)) && step.failure !== undefined) return step.failure;
   }
   return undefined;
 }
@@ -528,9 +447,10 @@ export type PanelDeps = Readonly<{
   /** The snapshot, undefined when there is none yet; throws when it cannot be read. */
   readonly readSnapshot: () => Promise<BoardSnapshot | undefined>;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly sessionId: string;
-  /** Where Herdr's focus was when the panel opened; its project is the one shown first. */
-  readonly focus: HerdrFocus;
+  /** Where the terminal's focus was when the panel opened; its project is the one shown first. */
+  readonly focus: PanelFocus;
   readonly cwd: string;
   readonly popup: boolean;
   /** Whether the first-run key help still shows, and how to remember that it was used. */
@@ -622,11 +542,11 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
     }
   };
   const navigate = async (effect: Exclude<PanelEffect, { kind: "close" }>) => {
-    const steps = navigationSteps(effect, deps.sessionId, snapshot?.coordinators ?? []);
+    const steps = navigationSteps(effect, snapshot?.coordinators ?? []);
     let notice = steps.length === 0 ? NO_COORDINATOR : undefined;
     for (const step of steps) {
-      const result = await deps.run({ argv: step.argv, cwd: deps.cwd }).catch(() => undefined);
-      if (result?.code !== 0 && step.failure !== undefined) {
+      const arrived = await takeStep(step, deps).catch(() => false);
+      if (!arrived && step.failure !== undefined) {
         notice = step.failure;
         break;
       }
@@ -681,7 +601,13 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
     if (paneId === undefined) return;
     fitting = fitting
       .then(async () => {
-        fittedAreaWidth = await fitPanelPane(deps, paneId, fittedAreaWidth);
+        fittedAreaWidth = await deps.terminal.fitPanel({
+          sessionId: deps.sessionId,
+          cwd: deps.cwd,
+          paneId,
+          columns: PANEL_WIDTH,
+          fittedWidth: fittedAreaWidth,
+        });
       })
       .catch(() => undefined);
   };

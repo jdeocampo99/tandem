@@ -2,15 +2,7 @@ import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readCheckpoint } from "../adapters/git.ts";
-import { type HerdrPaneInspection, inspectEndpoint, interruptEndpoint } from "../adapters/herdr.ts";
-import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
-import type {
-  CommandRequest,
-  CommandResult,
-  CommandRunner,
-  Endpoint,
-  TaskRecord,
-} from "../contracts.ts";
+import type { CommandRunner, Endpoint, TaskRecord } from "../contracts.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import { withPresentationLock } from "../presentations/lock.ts";
 import { readPresentationRecord } from "../presentations/records.ts";
@@ -31,24 +23,24 @@ import { replaceRuntimePresentation, replaceRuntimeTask } from "../service/recor
 import { recoverEndpointFromLaunch } from "../tasks/endpoint-launch.ts";
 import { transitionTask } from "../tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore, type TaskStoreTransaction } from "../tasks/store.ts";
+import type {
+  EndpointInspection,
+  SessionPane,
+  TerminalBackend,
+} from "../terminal-backend/contract.ts";
 import { liveWorkerTerminal } from "../workers/terminal.ts";
 import { workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { withCoordinatorLaunchLock } from "./lock.ts";
-import type { SnapshotPane } from "./ownership.ts";
 import {
   assertIdleCoordinatorPane,
   assertStoppedCoordinatorShell,
-  commandErrorCode,
   findResetCoordinator,
-  parseJson,
-  readSessionSnapshot,
   snapshotPaneForEndpoint,
 } from "./ownership.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
   canonicalPath,
-  isRecord,
   ownershipFailure,
   pathIsWithin,
   sessionText,
@@ -125,13 +117,6 @@ function assertSafeTaskState(task: TaskRecord, runtime: RuntimeTaskState | undef
   }
 }
 
-function isMissingPaneResult(result: CommandResult): boolean {
-  if (result.code === 0) return false;
-  if (commandErrorCode(result.stdout, result.stderr) === "pane_not_found") return true;
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  return /no such pane/.test(output) || /pane.*(?:not found|does not exist|missing)/.test(output);
-}
-
 function sameCoordinatorIdentity(left: CoordinatorRecord, right: CoordinatorRecord): boolean {
   return (
     left.repoPath === right.repoPath &&
@@ -152,23 +137,12 @@ function sameCoordinatorIdentity(left: CoordinatorRecord, right: CoordinatorReco
   );
 }
 
-function assertCloseAcknowledgement(result: CommandResult): void {
-  const output = result.stdout.trim();
-  if (output.length === 0) {
-    throw new Error("herdr pane close returned an unknown acknowledgement");
-  }
-  const value = parseJson(output, "herdr pane close");
-  if (!isRecord(value) || !isRecord(value.result) || value.result.type !== "ok") {
-    throw new Error("herdr pane close returned an unknown acknowledgement");
-  }
-}
-
 async function assertIdleResetCoordinator(
-  run: CommandRunner,
-  panes: readonly SnapshotPane[],
+  terminal: TerminalBackend,
+  panes: readonly SessionPane[],
   record: CoordinatorRecord,
 ): Promise<void> {
-  const inspection = await inspectEndpoint(run, {
+  const inspection = await terminal.inspect({
     endpoint: record.endpoint,
     cwd: record.worktree.path,
   });
@@ -193,49 +167,10 @@ async function assertIdleResetCoordinator(
   }
 }
 
-function paneCloseRequest(endpoint: Endpoint, cwd: string): CommandRequest {
-  return {
-    argv: ["herdr", "--session", endpoint.sessionId, "pane", "close", endpoint.paneId],
-    cwd,
-  };
-}
-
-async function verifyPaneClosed(
-  run: CommandRunner,
-  endpoint: Endpoint,
-  cwd: string,
-  remainsMessage: string,
-): Promise<void> {
-  const request: CommandRequest = {
-    argv: ["herdr", "--session", endpoint.sessionId, "pane", "get", endpoint.paneId],
-    cwd,
-  };
-  const result = await run(request);
-  if (result.code === 0) throw new Error(remainsMessage);
-  if (!isMissingPaneResult(result)) {
-    throw new AdapterCommandError("herdr pane close verification", request, result);
-  }
-}
-
-async function closeCoordinatorPane(run: CommandRunner, record: CoordinatorRecord): Promise<void> {
-  const request = paneCloseRequest(record.endpoint, record.worktree.path);
-  const result = await run(request);
-  if (result.code !== 0) {
-    throw new AdapterCommandError("herdr pane close", request, result);
-  }
-  assertCloseAcknowledgement(result);
-  await verifyPaneClosed(
-    run,
-    record.endpoint,
-    record.worktree.path,
-    `Herdr pane close returned success but coordinator pane ${JSON.stringify(record.endpoint.paneId)} remains present`,
-  );
-}
-
 function assertNoLiveSelectedEndpoint(
   endpoint: Endpoint,
   sessionId: string,
-  panes: readonly SnapshotPane[] | undefined,
+  panes: readonly SessionPane[] | undefined,
   description: string,
 ): void {
   if (endpoint.sessionId !== sessionId) return;
@@ -282,16 +217,15 @@ function activeJobEndpoint(
   return endpoint;
 }
 
-async function proveForceEndpoint(run: CommandRunner, entry: ForceEndpoint): Promise<boolean> {
-  let inspection: HerdrPaneInspection;
+async function proveForceEndpoint(
+  terminal: TerminalBackend,
+  entry: ForceEndpoint,
+): Promise<boolean> {
+  let inspection: EndpointInspection;
   try {
-    inspection = await inspectEndpoint(run, { endpoint: entry.endpoint, cwd: entry.cwd });
+    inspection = await terminal.inspect({ endpoint: entry.endpoint, cwd: entry.cwd });
   } catch (error) {
-    if (
-      (error instanceof EndpointOwnershipError && error.reason === "missing") ||
-      (error instanceof AdapterCommandError && isMissingPaneResult(error.result))
-    )
-      return false;
+    if (terminal.isPaneGone(error)) return false;
     throw error;
   }
   if (
@@ -339,23 +273,17 @@ async function proveForceEndpoint(run: CommandRunner, entry: ForceEndpoint): Pro
   return true;
 }
 
-async function forceCloseEndpoint(run: CommandRunner, entry: ForceEndpoint): Promise<void> {
-  if (!(await proveForceEndpoint(run, entry))) return;
+async function forceCloseEndpoint(terminal: TerminalBackend, entry: ForceEndpoint): Promise<void> {
+  if (!(await proveForceEndpoint(terminal, entry))) return;
   if (entry.job?.kind === "validation") {
     // The validation runner owns detached command groups and reaps them on interrupt.
-    await interruptEndpoint(run, { endpoint: entry.endpoint, cwd: entry.cwd });
+    await terminal.interrupt({ endpoint: entry.endpoint, cwd: entry.cwd });
   }
-  const request = paneCloseRequest(entry.endpoint, entry.cwd);
-  const result = await run(request);
-  if (isMissingPaneResult(result)) return;
-  if (result.code !== 0) throw new AdapterCommandError("herdr pane close", request, result);
-  assertCloseAcknowledgement(result);
-  await verifyPaneClosed(
-    run,
-    entry.endpoint,
-    entry.cwd,
-    `force reset closed pane ${JSON.stringify(entry.endpoint.paneId)} but it remains present`,
-  );
+  try {
+    await terminal.closeOwned({ endpoint: entry.endpoint, cwd: entry.cwd });
+  } catch (error) {
+    if (!terminal.isPaneGone(error)) throw error;
+  }
 }
 
 function markForceTaskRuntime(
@@ -435,11 +363,12 @@ function selectedTasks(selection: ResetSelection): readonly TaskRecord[] {
 
 async function findLiveCoordinators(
   run: CommandRunner,
+  terminal: TerminalBackend,
   scope: ResetScope,
 ): Promise<CoordinatorRecord[]> {
   const records: CoordinatorRecord[] = [];
   for (const repoPath of scope.repoPaths) {
-    const record = await findResetCoordinator(run, {
+    const record = await findResetCoordinator(run, terminal, {
       home: scope.home,
       sessionId: scope.sessionId,
       repoPath,
@@ -569,7 +498,7 @@ function addForceEndpoint(
 
 /** Collects every endpoint a force reset must close, recovering endpoints of pending launches. */
 async function collectForceEndpoints(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   sessionId: string,
   selection: ResetSelection,
   presentations: readonly RuntimePresentation[],
@@ -601,7 +530,7 @@ async function collectForceEndpoints(
       if (runtime.reservation !== undefined && runtime.reservation.ownerSessionId !== sessionId) {
         throw ownershipFailure(`task ${JSON.stringify(task.id)} has a foreign endpoint launch`);
       }
-      const recovered = await recoverEndpointFromLaunch(run, runtime.endpointLaunch);
+      const recovered = await recoverEndpointFromLaunch(terminal, runtime.endpointLaunch);
       if (recovered.status !== "recovered") {
         throw ownershipFailure(
           `task ${JSON.stringify(task.id)} endpoint launch could not be recovered: ${recovered.detail}`,
@@ -637,7 +566,7 @@ async function collectForceEndpoints(
       add(endpoint, job.cwd, job, "presentation");
     }
     if (presentation.endpoint === undefined && presentation.endpointLaunch !== undefined) {
-      const recovered = await recoverEndpointFromLaunch(run, presentation.endpointLaunch);
+      const recovered = await recoverEndpointFromLaunch(terminal, presentation.endpointLaunch);
       if (recovered.status !== "recovered") {
         throw ownershipFailure(
           `presentation ${JSON.stringify(presentation.id)} endpoint launch could not be recovered: ${recovered.detail}`,
@@ -652,6 +581,7 @@ async function collectForceEndpoints(
 /** Proves ownership of everything a force reset will touch before it changes anything. */
 async function planForceReset(
   run: CommandRunner,
+  terminal: TerminalBackend,
   scope: ResetScope,
   selection: ResetSelection,
   lockedPresentationPaths: ReadonlySet<string>,
@@ -661,15 +591,20 @@ async function planForceReset(
     scope.sessionId,
     lockedPresentationPaths,
   );
-  const liveRecords = await findLiveCoordinators(run, scope);
+  const liveRecords = await findLiveCoordinators(run, terminal, scope);
   for (const record of liveRecords) await assertCleanCoordinatorSource(run, record);
-  const endpoints = await collectForceEndpoints(run, scope.sessionId, selection, presentations);
+  const endpoints = await collectForceEndpoints(
+    terminal,
+    scope.sessionId,
+    selection,
+    presentations,
+  );
   const taskIdsToCancel = new Set(
     selectedTasks(selection)
       .filter((task) => forceCancelsTask(task, selection.runtimeByTaskId.get(task.id)))
       .map((task) => task.id),
   );
-  for (const entry of endpoints.values()) await proveForceEndpoint(run, entry);
+  for (const entry of endpoints.values()) await proveForceEndpoint(terminal, entry);
   return { presentations, liveRecords, endpoints, taskIdsToCancel };
 }
 
@@ -762,7 +697,7 @@ async function failPresentationRecord(recordPath: string, clock: () => string): 
 
 /** Closes each planned endpoint, saving runtime state after every close. */
 async function closeForceEndpoints(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   home: string,
   selection: ResetSelection,
   plan: ForceResetPlan,
@@ -771,7 +706,7 @@ async function closeForceEndpoints(
 ): Promise<RuntimeState> {
   let state = initialState;
   for (const entry of plan.endpoints.values()) {
-    await forceCloseEndpoint(run, entry);
+    await forceCloseEndpoint(terminal, entry);
     const key = endpointKey(entry.endpoint);
     progress.stoppedEndpointKeys.add(key);
     const taskId = entry.job?.taskId;
@@ -823,18 +758,22 @@ async function settleForceResetRecords(
 
 async function closeForceCoordinators(
   run: CommandRunner,
+  terminal: TerminalBackend,
   scope: ResetScope,
   liveRecords: readonly CoordinatorRecord[],
   stopped: RetiredCoordinator[],
 ): Promise<void> {
   for (const record of liveRecords) {
-    const latest = await findResetCoordinator(run, {
+    const latest = await findResetCoordinator(run, terminal, {
       home: scope.home,
       sessionId: scope.sessionId,
       repoPath: record.repoPath,
     });
     if (latest === undefined) {
-      const snapshot = await readSessionSnapshot(run, scope.sessionId, record.worktree.path);
+      const snapshot = await terminal.snapshot({
+        sessionId: scope.sessionId,
+        cwd: record.worktree.path,
+      });
       if (snapshotPaneForEndpoint(snapshot, record.endpoint, "coordinator") !== undefined) {
         throw ownershipFailure(
           `coordinator ${JSON.stringify(record.repoPath)} lost its recorded identity`,
@@ -847,8 +786,8 @@ async function closeForceCoordinators(
         `coordinator record for ${JSON.stringify(record.repoPath)} changed before force reset`,
       );
     }
-    await closeCoordinatorPane(run, latest);
-    const workspaceRetirement = await retireCoordinatorWorkspace(run, scope.home, latest);
+    await terminal.closeOwned({ endpoint: latest.endpoint, cwd: latest.worktree.path });
+    const workspaceRetirement = await retireCoordinatorWorkspace(terminal, scope.home, latest);
     stopped.push({ ...latest, workspaceRetirement });
   }
 }
@@ -876,12 +815,13 @@ function forcePartialFailure(
 
 async function forceResetCoordinators(
   run: CommandRunner,
+  terminal: TerminalBackend,
   scope: ResetScope,
   store: TaskStore,
   selection: ResetSelection,
   lockedPresentationPaths: ReadonlySet<string>,
 ): Promise<readonly RetiredCoordinator[]> {
-  const plan = await planForceReset(run, scope, selection, lockedPresentationPaths);
+  const plan = await planForceReset(run, terminal, scope, selection, lockedPresentationPaths);
   const cancelRequested = requestForceCancellation(
     selection,
     plan.taskIdsToCancel,
@@ -896,7 +836,7 @@ async function forceResetCoordinators(
   };
   try {
     const endpointsClosed = await closeForceEndpoints(
-      run,
+      terminal,
       scope.home,
       selection,
       plan,
@@ -906,7 +846,7 @@ async function forceResetCoordinators(
     await store.exclusive((transaction) =>
       settleForceResetRecords(transaction, scope.home, selection, plan, endpointsClosed, progress),
     );
-    await closeForceCoordinators(run, scope, plan.liveRecords, progress.stopped);
+    await closeForceCoordinators(run, terminal, scope, plan.liveRecords, progress.stopped);
   } catch (error) {
     throw forcePartialFailure(error, plan, progress);
   }
@@ -968,14 +908,15 @@ function selectedWorkerEndpoints(selection: ResetSelection): Endpoint[] {
 /** Proves each live coordinator is idle with a clean source, returning the snapshot used. */
 async function readIdleCoordinatorSnapshot(
   run: CommandRunner,
+  terminal: TerminalBackend,
   sessionId: string,
   liveRecords: readonly CoordinatorRecord[],
-): Promise<readonly SnapshotPane[] | undefined> {
+): Promise<readonly SessionPane[] | undefined> {
   const first = liveRecords[0];
   if (first === undefined) return undefined;
-  const snapshot = await readSessionSnapshot(run, sessionId, first.worktree.path);
+  const snapshot = await terminal.snapshot({ sessionId, cwd: first.worktree.path });
   for (const record of liveRecords) {
-    await assertIdleResetCoordinator(run, snapshot, record);
+    await assertIdleResetCoordinator(terminal, snapshot, record);
     await assertCleanCoordinatorSource(run, record);
   }
   return snapshot;
@@ -983,23 +924,23 @@ async function readIdleCoordinatorSnapshot(
 
 async function closeIdleCoordinators(
   run: CommandRunner,
+  terminal: TerminalBackend,
   scope: ResetScope,
   liveRecords: readonly CoordinatorRecord[],
 ): Promise<readonly RetiredCoordinator[]> {
   const stopped: RetiredCoordinator[] = [];
   for (const record of liveRecords) {
     try {
-      const latest = await findResetCoordinator(run, {
+      const latest = await findResetCoordinator(run, terminal, {
         home: scope.home,
         sessionId: scope.sessionId,
         repoPath: record.repoPath,
       });
       if (latest === undefined) {
-        const latestSnapshot = await readSessionSnapshot(
-          run,
-          scope.sessionId,
-          record.worktree.path,
-        );
+        const latestSnapshot = await terminal.snapshot({
+          sessionId: scope.sessionId,
+          cwd: record.worktree.path,
+        });
         const pane = snapshotPaneForEndpoint(latestSnapshot, record.endpoint, "coordinator");
         if (pane === undefined) continue;
         throw ownershipFailure(
@@ -1011,10 +952,13 @@ async function closeIdleCoordinators(
           `coordinator record for ${JSON.stringify(record.repoPath)} changed before reset`,
         );
       }
-      const latestSnapshot = await readSessionSnapshot(run, scope.sessionId, latest.worktree.path);
-      await assertIdleResetCoordinator(run, latestSnapshot, latest);
-      await closeCoordinatorPane(run, latest);
-      const workspaceRetirement = await retireCoordinatorWorkspace(run, scope.home, latest);
+      const latestSnapshot = await terminal.snapshot({
+        sessionId: scope.sessionId,
+        cwd: latest.worktree.path,
+      });
+      await assertIdleResetCoordinator(terminal, latestSnapshot, latest);
+      await terminal.closeOwned({ endpoint: latest.endpoint, cwd: latest.worktree.path });
+      const workspaceRetirement = await retireCoordinatorWorkspace(terminal, scope.home, latest);
       stopped.push({ ...latest, workspaceRetirement });
     } catch (error) {
       if (stopped.length === 0) throw error;
@@ -1033,6 +977,7 @@ async function closeIdleCoordinators(
 
 async function resetIdleCoordinators(
   run: CommandRunner,
+  terminal: TerminalBackend,
   scope: ResetScope,
   selection: ResetSelection,
 ): Promise<readonly RetiredCoordinator[]> {
@@ -1040,8 +985,8 @@ async function resetIdleCoordinators(
     assertSafeTaskState(task, selection.runtimeByTaskId.get(task.id));
   }
   const presentations = selectIdlePresentations(selection, scope.sessionId);
-  const liveRecords = await findLiveCoordinators(run, scope);
-  let snapshot = await readIdleCoordinatorSnapshot(run, scope.sessionId, liveRecords);
+  const liveRecords = await findLiveCoordinators(run, terminal, scope);
+  let snapshot = await readIdleCoordinatorSnapshot(run, terminal, scope.sessionId, liveRecords);
 
   const workerEndpoints = selectedWorkerEndpoints(selection);
   const presentationEndpoints = presentations
@@ -1053,12 +998,11 @@ async function resetIdleCoordinators(
       (endpoint) => endpoint.sessionId === scope.sessionId,
     )
   ) {
-    snapshot = await readSessionSnapshot(
-      run,
-      scope.sessionId,
-      scope.repoPaths[0] ?? scope.home,
-      true,
-    );
+    snapshot = await terminal.snapshot({
+      sessionId: scope.sessionId,
+      cwd: scope.repoPaths[0] ?? scope.home,
+      allowMissingSession: true,
+    });
   }
   for (const endpoint of workerEndpoints) {
     assertNoLiveSelectedEndpoint(endpoint, scope.sessionId, snapshot, "worker");
@@ -1066,7 +1010,7 @@ async function resetIdleCoordinators(
   for (const endpoint of presentationEndpoints) {
     assertNoLiveSelectedEndpoint(endpoint, scope.sessionId, snapshot, "presentation");
   }
-  return closeIdleCoordinators(run, scope, liveRecords);
+  return closeIdleCoordinators(run, terminal, scope, liveRecords);
 }
 
 async function withForcePresentationLocks<Result>(
@@ -1103,6 +1047,7 @@ async function withForcePresentationLocks<Result>(
 
 export async function resetCoordinators(
   run: CommandRunner,
+  terminal: TerminalBackend,
   input: Readonly<{
     readonly home: string;
     readonly sessionId: string;
@@ -1141,6 +1086,7 @@ export async function resetCoordinators(
         store.serialized(async (transaction) =>
           forceResetCoordinators(
             run,
+            terminal,
             scope,
             store,
             await readResetSelection(scope, transaction),
@@ -1150,7 +1096,7 @@ export async function resetCoordinators(
       );
     }
     return store.serialized(async (transaction) =>
-      resetIdleCoordinators(run, scope, await readResetSelection(scope, transaction)),
+      resetIdleCoordinators(run, terminal, scope, await readResetSelection(scope, transaction)),
     );
   });
 }

@@ -1,0 +1,1598 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`herdr conversation: inspect an idle shell pane 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "activeWorker": false,
+      "endpoint": {
+        "generation": 2,
+        "paneId": "p1",
+        "role": "implementer",
+        "sessionId": "pin",
+        "tabId": "t1",
+        "workspaceId": "w1",
+      },
+      "pane": {
+        "foregroundCwd": "/work/repo",
+        "paneId": "p1",
+        "tabId": "t1",
+        "workspaceId": "w1",
+      },
+      "processInfo": {
+        "foregroundProcessGroupId": 41,
+        "foregroundProcesses": [
+          {
+            "argv": [
+              "-zsh",
+            ],
+            "argv0": "-zsh",
+            "name": "zsh",
+            "pid": 41,
+          },
+        ],
+        "paneId": "p1",
+        "shellPid": 41,
+      },
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: inspect a pane running a worker 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "activeWorker": true,
+      "endpoint": {
+        "generation": 2,
+        "paneId": "p1",
+        "role": "implementer",
+        "sessionId": "pin",
+        "tabId": "t1",
+        "workspaceId": "w1",
+      },
+      "pane": {
+        "foregroundCwd": "/work/repo",
+        "paneId": "p1",
+        "tabId": "t1",
+        "workspaceId": "w1",
+      },
+      "processInfo": {
+        "foregroundProcessGroupId": 41,
+        "foregroundProcesses": [
+          {
+            "argv": [
+              "omp",
+              "--mode",
+              "worker",
+            ],
+            "argv0": "omp",
+            "commandLine": "omp --mode worker",
+            "name": "omp",
+            "pid": 42,
+          },
+        ],
+        "paneId": "p1",
+        "shellPid": 41,
+      },
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: inspect a missing pane 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "error": {
+      "message": "endpoint ownership refused for pane p1: pane is no longer present in the recorded session",
+      "name": "EndpointOwnershipError",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: inspect a pane that moved to another workspace 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "error": {
+      "message": "endpoint ownership refused for pane p1: Herdr returned pane="p1", tab="t1", workspace="w9"",
+      "name": "EndpointOwnershipError",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: close an idle pane 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "close",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "closed",
+  },
+}
+`;
+
+exports[`herdr conversation: close a pane that is already gone 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "closed",
+  },
+}
+`;
+
+exports[`herdr conversation: close refuses a busy pane 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "error": {
+      "message": "endpoint p1 still has an active foreground worker; interrupt it before closing",
+      "name": "EndpointBusyError",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: close a busy pane the user chose to discard 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "close",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "closed",
+  },
+}
+`;
+
+exports[`herdr conversation: close fails when the pane stays open 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "close",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "error": {
+      "message": "Herdr pane close returned success but the exact pane remains present",
+      "name": "AdapterError",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: interrupt an idle pane sends nothing 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": false,
+  },
+}
+`;
+
+exports[`herdr conversation: interrupt a worker and wait for it to stop 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "send-keys",
+        "p1",
+        "ctrl+c",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": true,
+  },
+}
+`;
+
+exports[`herdr conversation: send exit keys 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "send-keys",
+        "p1",
+        "ctrl+d",
+        "ctrl+d",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "sent",
+  },
+}
+`;
+
+exports[`herdr conversation: run a command in a proven pane 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "run",
+        "p1",
+        "'bun' '/work/worker.ts' '/work/job one.json'",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "sent",
+  },
+}
+`;
+
+exports[`herdr conversation: create a task workspace 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "create",
+        "--cwd",
+        "/work/repo",
+        "--label",
+        "└ Fix the build",
+        "--no-focus",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "endpoint": {
+        "generation": 1,
+        "paneId": "p7",
+        "role": "implementer",
+        "sessionId": "pin",
+        "tabId": "t7",
+        "workspaceId": "w7",
+      },
+      "warnings": [],
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: create a task workspace nested under its coordinator 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "create",
+        "--cwd",
+        "/work/repo",
+        "--label",
+        "└ Fix the build",
+        "--no-focus",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "status",
+        "--json",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "list",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "created": {
+        "endpoint": {
+          "generation": 1,
+          "paneId": "p7",
+          "role": "implementer",
+          "sessionId": "pin",
+          "tabId": "t7",
+          "workspaceId": "w7",
+        },
+        "warnings": [],
+      },
+      "moves": [
+        {
+          "insertIndex": 1,
+          "socketPath": "/tmp/herdr-pin.sock",
+          "workspaceId": "w7",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: order a workspace after its parent 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "status",
+        "--json",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "list",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "moves": [
+        {
+          "insertIndex": 1,
+          "socketPath": "/tmp/herdr-pin.sock",
+          "workspaceId": "w7",
+        },
+      ],
+      "warnings": [],
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: open a reviewer pane beside a stopped writer 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "p1",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "split",
+        "p1",
+        "--direction",
+        "right",
+        "--cwd",
+        "/work/repo",
+        "--no-focus",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "generation": 3,
+      "paneId": "p2",
+      "role": "reviewer",
+      "sessionId": "pin",
+      "tabId": "t1",
+      "workspaceId": "w1",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: split beside a pane known only by id 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "cp",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "split",
+        "cp",
+        "--direction",
+        "right",
+        "--cwd",
+        "/work/repo",
+        "--no-focus",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "generation": 0,
+      "paneId": "rp",
+      "role": "reviewer",
+      "sessionId": "pin",
+      "tabId": "ct",
+      "workspaceId": "cw",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: list workspaces in sidebar order 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "list",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": [
+      {
+        "label": "◆ repo",
+        "workspaceId": "cw",
+      },
+      {
+        "workspaceId": "w2",
+      },
+    ],
+  },
+}
+`;
+
+exports[`herdr conversation: read whether the session's server runs 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "status",
+        "--json",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": false,
+  },
+}
+`;
+
+exports[`herdr conversation: show a notification 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "notification",
+        "show",
+        "2 need you",
+        "--body",
+        "Fix the build: review",
+        "--sound",
+        "request",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "shown",
+  },
+}
+`;
+
+exports[`herdr conversation: open the welcome popup 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "plugin",
+        "pane",
+        "open",
+        "--plugin",
+        "tandem.ui",
+        "--entrypoint",
+        "welcome",
+        "--env",
+        "TANDEM_WELCOME_PANE=cp",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "opened",
+  },
+}
+`;
+
+exports[`herdr conversation: prompt an agent Herdr recognizes 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "agent",
+        "prompt",
+        "cp",
+        "Hello",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "prompted",
+  },
+}
+`;
+
+exports[`herdr conversation: prompt a pane Herdr sees no agent in 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "agent",
+        "prompt",
+        "cp",
+        "Hello",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "send-text",
+        "cp",
+        "Hello",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "send-keys",
+        "cp",
+        "enter",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": "prompted",
+  },
+}
+`;
+
+exports[`herdr conversation: read the session snapshot 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "api",
+        "snapshot",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": [
+      {
+        "agentStatus": "idle",
+        "paneId": "cp",
+        "tabId": "ct",
+        "workspaceId": "cw",
+      },
+      {
+        "paneId": "p1",
+        "tabId": "t1",
+        "workspaceId": "w1",
+      },
+    ],
+  },
+}
+`;
+
+exports[`herdr conversation: read the snapshot of a session that is not running 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "api",
+        "snapshot",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": [],
+  },
+}
+`;
+
+exports[`herdr conversation: report and release agent status 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "report-agent",
+        "cp",
+        "--source",
+        "tandem:<source>",
+        "--agent",
+        "tandem-coordinator",
+        "--seq",
+        "1",
+        "--state",
+        "working",
+        "--message",
+        "Fixing the build",
+      ],
+      "cwd": "/work/repo",
+      "timeoutMs": 1500,
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "report-agent",
+        "cp",
+        "--source",
+        "tandem:<source>",
+        "--agent",
+        "tandem-coordinator",
+        "--seq",
+        "2",
+        "--state",
+        "working",
+        "--message",
+        "Fixing the build",
+      ],
+      "cwd": "/work/repo",
+      "timeoutMs": 1500,
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "report-agent",
+        "cp",
+        "--source",
+        "tandem:<source>",
+        "--agent",
+        "tandem-coordinator",
+        "--seq",
+        "3",
+        "--state",
+        "blocked",
+      ],
+      "cwd": "/work/repo",
+      "timeoutMs": 1500,
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "release-agent",
+        "cp",
+        "--source",
+        "tandem:<source>",
+        "--agent",
+        "tandem-coordinator",
+        "--seq",
+        "4",
+      ],
+      "cwd": "/work/repo",
+      "timeoutMs": 1500,
+    },
+  ],
+  "outcome": {
+    "value": "reported",
+  },
+}
+`;
+
+exports[`herdr conversation: no agent status outside an active pane 1`] = `
+{
+  "calls": [],
+  "outcome": {
+    "value": "absent",
+  },
+}
+`;
+
+exports[`herdr conversation: recover a task pane from its launch intent 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "list",
+      ],
+      "cwd": "<tmp>/task",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "list",
+        "--workspace",
+        "w7",
+      ],
+      "cwd": "<tmp>/task",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "endpoint": {
+        "generation": 1,
+        "paneId": "p7",
+        "role": "implementer",
+        "sessionId": "pin",
+        "tabId": "t7",
+        "workspaceId": "w7",
+      },
+      "status": "recovered",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: find coordinator panes Herdr restored 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "list",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "list",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+  ],
+  "outcome": {
+    "value": [
+      {
+        "endpoint": {
+          "generation": 0,
+          "paneId": "cp",
+          "role": "coordinator",
+          "sessionId": "pin",
+          "tabId": "ct",
+          "workspaceId": "cw",
+        },
+        "repoPath": "<tmp>/repo",
+        "worktree": {
+          "baseHead": "1111111111111111111111111111111111111111",
+          "branch": "tandem/coordinator-a",
+          "leaseHolder": "coordinator:a",
+          "leaseId": "lease-a",
+          "leasedAt": "2030-01-02T03:04:05.000Z",
+          "name": "coordinator-a",
+          "path": "<tmp>/pool/coordinator-a",
+          "root": "<tmp>/pool",
+        },
+      },
+    ],
+  },
+}
+`;
+
+exports[`herdr conversation: retire a stopped coordinator workspace 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "get",
+        "cw",
+      ],
+      "cwd": "<tmp>/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "cp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "cp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "api",
+        "snapshot",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "cp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "cp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "close",
+        "cp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "cp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "outcome": "closed",
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: open the panel beside a coordinator, then close it 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "plugin",
+        "pane",
+        "open",
+        "--plugin",
+        "tandem.ui",
+        "--entrypoint",
+        "panel",
+        "--placement",
+        "split",
+        "--target-pane",
+        "cp",
+        "--direction",
+        "right",
+        "--no-focus",
+        "--env",
+        "TANDEM_PANEL_PROJECT=<tmp>/repo",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "pp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "pp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "plugin",
+        "pane",
+        "close",
+        "pp",
+      ],
+      "cwd": "<tmp>/pool/coordinator-a",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "again": {
+        "outcome": "none",
+      },
+      "closed": {
+        "outcome": "closed",
+        "paneId": "pp",
+      },
+    },
+  },
+}
+`;
+
+exports[`herdr conversation: check Herdr for onboarding 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--version",
+      ],
+      "cwd": "/work/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "plugin",
+        "list",
+      ],
+      "cwd": "/work/repo",
+    },
+  ],
+  "outcome": {
+    "value": [
+      {
+        "detail": "0.9.1",
+        "name": "Herdr",
+        "ok": true,
+      },
+      {
+        "detail": "not linked",
+        "fix": "./setup.sh",
+        "name": "Tandem's welcome popup in Herdr",
+        "ok": false,
+        "optional": true,
+      },
+      {
+        "detail": "not found",
+        "fix": "bun install -g @oh-my-pi/pi-coding-agent",
+        "name": "OMP",
+        "ok": false,
+      },
+      {
+        "detail": "not found",
+        "fix": "xcode-select --install",
+        "name": "Git",
+        "ok": false,
+      },
+      {
+        "detail": "not signed in",
+        "fix": "gh auth login",
+        "name": "GitHub CLI, signed in (for pull requests and PR watch)",
+        "ok": false,
+        "optional": true,
+      },
+    ],
+  },
+}
+`;
+
+exports[`herdr conversation: launch a headless coordinator in a new workspace 1`] = `
+{
+  "calls": [
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "api",
+        "snapshot",
+      ],
+      "cwd": "<tmp>/repo",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "status",
+        "--json",
+      ],
+      "cwd": "<tmp>/pool/worktree-2",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "list",
+      ],
+      "cwd": "<tmp>/pool/worktree-2",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "workspace",
+        "create",
+        "--cwd",
+        "<tmp>/pool/worktree-2",
+        "--label",
+        "◆ repo",
+        "--no-focus",
+      ],
+      "cwd": "<tmp>/pool/worktree-2",
+      "env": {
+        "TANDEM_HOME": "<tmp>/home",
+        "TANDEM_POOL_ROOT": "<tmp>/pool",
+        "TANDEM_REPO": "<tmp>/repo",
+        "TANDEM_SESSION": "pin",
+        "TANDEM_SOURCE_REPO": "<tmp>/pool/worktree-2",
+      },
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "run",
+        "pane-2",
+        "'/bin/sh' '<tmp>/home/coordinator-scripts/coordinator-<script>.sh'",
+      ],
+      "cwd": "<tmp>/pool/worktree-2",
+      "env": {
+        "TANDEM_HOME": "<tmp>/home",
+        "TANDEM_PARENT_WORKSPACE": "workspace-2",
+        "TANDEM_POOL_ROOT": "<tmp>/pool",
+        "TANDEM_REPO": "<tmp>/repo",
+        "TANDEM_SESSION": "pin",
+        "TANDEM_SOURCE_REPO": "<tmp>/pool/worktree-2",
+      },
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "get",
+        "pane-2",
+      ],
+      "cwd": "<tmp>/pool/worktree-2",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "pane",
+        "process-info",
+        "--pane",
+        "pane-2",
+      ],
+      "cwd": "<tmp>/pool/worktree-2",
+    },
+    {
+      "argv": [
+        "herdr",
+        "--session",
+        "pin",
+        "plugin",
+        "pane",
+        "open",
+        "--plugin",
+        "tandem.ui",
+        "--entrypoint",
+        "panel",
+        "--placement",
+        "split",
+        "--target-pane",
+        "pane-2",
+        "--direction",
+        "right",
+        "--no-focus",
+        "--env",
+        "TANDEM_PANEL_PROJECT=<tmp>/repo",
+      ],
+      "cwd": "<tmp>/pool/worktree-2",
+    },
+  ],
+  "outcome": {
+    "value": {
+      "paneId": "pane-2",
+      "panelFailure": "unexpected herdr command herdr --session pin plugin pane open --plugin tandem.ui --entrypoint panel --placement split --target-pane pane-2 --direction right --no-focus --env TANDEM_PANEL_PROJECT=<tmp>/repo",
+      "started": [],
+      "tabId": "tab-2",
+      "workspaceId": "workspace-2",
+    },
+  },
+}
+`;

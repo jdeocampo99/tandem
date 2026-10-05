@@ -20,7 +20,6 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint, inspectEndpoint, interruptEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
   BlockCause,
@@ -48,6 +47,7 @@ import { formatDecisionQuestion } from "../tasks/question.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
 import { recordTimelineEvents } from "../tasks/timeline-store.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { ReservationRefusal } from "../workers/admission.ts";
 import { readWorkerTerminal, type WorkerTerminalJob } from "../workers/terminal.ts";
 import { pauseWorkerTerminal } from "../workers/terminal-control.ts";
@@ -140,6 +140,7 @@ export type CentralRecoveryDependencies = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   readonly idFactory: IdFactory;
   readonly store: TaskStore;
@@ -445,12 +446,12 @@ function workerProveDeathTarget(task: TaskRecord): ProveDeathTarget {
 type PaneState = "alive" | "gone" | "foreign" | "unknown";
 
 async function observePane(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   endpoint: Endpoint,
   cwd: string,
 ): Promise<PaneState> {
   try {
-    const inspection = await inspectEndpoint(run, { endpoint, cwd });
+    const inspection = await terminal.inspect({ endpoint, cwd });
     return inspection.activeWorker ? "alive" : "gone";
   } catch (error) {
     if (error instanceof EndpointOwnershipError) {
@@ -462,12 +463,12 @@ async function observePane(
 
 /** Closes a pane proven stopped; a pane already missing counts as closed. */
 async function closeStoppedPane(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   endpoint: Endpoint,
   cwd: string,
 ): Promise<boolean> {
   try {
-    await closeEndpoint(run, { endpoint, cwd });
+    await terminal.close({ endpoint, cwd });
     return true;
   } catch (error) {
     return error instanceof EndpointOwnershipError && error.reason === "missing";
@@ -1396,12 +1397,12 @@ export class CentralRecoveryWorkflow {
     cwd: string,
     terminalJob: WorkerTerminalJob | undefined,
   ): Promise<boolean> {
-    const run = this.#deps.run;
-    let state = await observePane(run, endpoint, cwd);
+    const { terminal } = this.#deps;
+    let state = await observePane(terminal, endpoint, cwd);
     if (state === "foreign" || state === "unknown") return false;
-    if (state === "gone") return closeStoppedPane(run, endpoint, cwd);
+    if (state === "gone") return closeStoppedPane(terminal, endpoint, cwd);
     try {
-      await pauseWorkerTerminal(run, {
+      await pauseWorkerTerminal(terminal, {
         endpoint,
         cwd,
         ...(terminalJob === undefined ? {} : { job: terminalJob }),
@@ -1409,17 +1410,17 @@ export class CentralRecoveryWorkflow {
     } catch {
       // Best effort; the interrupt and pid-signal steps below can still finish the job.
     }
-    state = await observePane(run, endpoint, cwd);
+    state = await observePane(terminal, endpoint, cwd);
     if (state === "foreign" || state === "unknown") return false;
-    if (state === "gone") return closeStoppedPane(run, endpoint, cwd);
+    if (state === "gone") return closeStoppedPane(terminal, endpoint, cwd);
     try {
-      await interruptEndpoint(run, {
+      await terminal.interrupt({
         endpoint,
         cwd,
         timeoutMs: INTERRUPT_PROOF_TIMEOUT_MS,
         pollIntervalMs: INTERRUPT_PROOF_POLL_MS,
       });
-      return closeStoppedPane(run, endpoint, cwd);
+      return closeStoppedPane(terminal, endpoint, cwd);
     } catch {
       // Interrupt could not prove the pane stopped within its own bound; fall through to a direct
       // signal, but only once the recorded pid is proven to be this pane's own foreground process.
@@ -1436,23 +1437,22 @@ export class CentralRecoveryWorkflow {
     terminalJob: WorkerTerminalJob,
   ): Promise<boolean> {
     const run = this.#deps.run;
-    const terminal = await readWorkerTerminal(terminalJob).catch(() => undefined);
-    if (terminal === undefined) return false;
-    const inspection = await inspectEndpoint(run, { endpoint, cwd }).catch(() => undefined);
+    const worker = await readWorkerTerminal(terminalJob).catch(() => undefined);
+    if (worker === undefined) return false;
+    const inspection = await this.#deps.terminal.inspect({ endpoint, cwd }).catch(() => undefined);
     const foreground =
-      inspection?.processInfo.foregroundProcesses.some(
-        (process) => process.pid === terminal.pid,
-      ) === true;
+      inspection?.processInfo.foregroundProcesses.some((process) => process.pid === worker.pid) ===
+      true;
     if (!foreground) return false;
     try {
-      await run({ argv: ["kill", "-TERM", String(terminal.pid)], cwd });
+      await run({ argv: ["kill", "-TERM", String(worker.pid)], cwd });
     } catch {
       // Best effort; the exit-proof poll below decides the outcome either way.
     }
     const deadline = Date.now() + KILL_PROOF_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      const state = await observePane(run, endpoint, cwd);
-      if (state === "gone") return closeStoppedPane(run, endpoint, cwd);
+      const state = await observePane(this.#deps.terminal, endpoint, cwd);
+      if (state === "gone") return closeStoppedPane(this.#deps.terminal, endpoint, cwd);
       if (state === "foreign" || state === "unknown") return false;
       await sleep(KILL_PROOF_POLL_MS);
     }

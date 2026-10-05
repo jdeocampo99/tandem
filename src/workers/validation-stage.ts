@@ -1,4 +1,3 @@
-import { createReviewerEndpoint } from "../adapters/herdr.ts";
 import type {
   BlockCause,
   Clock,
@@ -22,6 +21,7 @@ import {
   finalAcceptanceContract,
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { ValidationJob } from "../validation-worker.ts";
 import type { ReservationRefusal, ReservationResult } from "./admission.ts";
 import { type CurrentCheckout, isCleanAt, readWorkerCheckout } from "./checkout.ts";
@@ -29,7 +29,7 @@ import type { JobLauncher } from "./job-launch.ts";
 import { claimOf, executionIdentity, type OperationClaim } from "./operation-claim.ts";
 import type { OperationRecords } from "./operation-records.ts";
 import type { TaskReservations } from "./reservation.ts";
-import { workerJobForEndpoint } from "./terminal-control.ts";
+import { openReviewerEndpoint, workerJobForEndpoint } from "./terminal-control.ts";
 
 /** The pane id an endpoint effect's receipt names, when the receipt is readable. */
 function endpointReceiptPaneId(receipt: string | undefined): string | undefined {
@@ -46,6 +46,7 @@ export type ValidationStageDependencies = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   readonly idFactory: IdFactory;
   readonly validationWorkerPath: string;
@@ -360,7 +361,7 @@ export class ValidationStage {
       "intent",
       identity,
     );
-    const result = await createReviewerEndpoint(this.#deps.run, {
+    const endpoint = await openReviewerEndpoint(this.#deps.terminal, {
       sessionId: this.#deps.sessionId,
       cwd: runtime.worktree?.path ?? validationCwd,
       writer,
@@ -374,9 +375,9 @@ export class ValidationStage {
       "endpoint",
       "succeeded",
       identity,
-      JSON.stringify(result.endpoint),
+      JSON.stringify(endpoint),
     );
-    await this.#deps.records.saveEndpoint(task.id, result.endpoint, claim);
-    return result.endpoint;
+    await this.#deps.records.saveEndpoint(task.id, endpoint, claim);
+    return endpoint;
   }
 }

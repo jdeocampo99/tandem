@@ -24,6 +24,7 @@ import {
   createCliApplication,
 } from "../../src/terminal/cli-application.ts";
 import { parseCliArgs } from "../../src/terminal/cli-arguments.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 async function writeOmpProbe(root: string, exitCode = 0): Promise<string> {
   const outputPath = join(root, "omp-probe-output.txt");
@@ -975,6 +976,7 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
       async () => {
         const dependencies = {
           run,
+          terminal: terminalBackend(run),
           startPersistent: async (spec: Readonly<{ cwd: string }>) => {
             startPersistentCalls += 1;
             serverDirectories.push(spec.cwd);
@@ -1083,6 +1085,7 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     });
     const first = await launchCoordinator(request, {
       run: firstRunner.run,
+      terminal: terminalBackend(firstRunner.run),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("first launch should use a Herdr workspace");
@@ -1105,6 +1108,7 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     });
     const second = await launchCoordinator(request, {
       run: secondRunner.run,
+      terminal: terminalBackend(secondRunner.run),
       startPersistent: async () => {
         throw new Error("reconnect must not start another Herdr server");
       },
@@ -1175,8 +1179,10 @@ async function withRunningOmpCoordinator(
       headless: true,
       noAttach: false,
     };
+    const firstRunner = coordinatorRunner({ ...runnerInput, startServer: true });
     await launchCoordinator(request, {
-      run: coordinatorRunner({ ...runnerInput, startServer: true }).run,
+      run: firstRunner.run,
+      terminal: terminalBackend(firstRunner.run),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("the first launch uses a Herdr workspace");
@@ -1257,6 +1263,7 @@ test("restartCoordinator checks a Claude Code replacement before closing the run
           { ...request, model: CLAUDE_CODE_COORDINATOR },
           {
             run: observed.run,
+            terminal: terminalBackend(observed.run),
             startPersistent: async () => {
               throw new Error("a refused restart starts nothing");
             },
@@ -1317,8 +1324,10 @@ test("launchCoordinator retires the old generated workspace label before replaci
         recordedCommand,
         herdrEnvironment: { PATH: `${root}:/usr/bin:/bin` },
       });
+    const firstRunner = inner();
     const first = await launchCoordinator(request, {
-      run: inner().run,
+      run: firstRunner.run,
+      terminal: terminalBackend(firstRunner.run),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("launch should use a Herdr workspace");
@@ -1462,6 +1471,7 @@ test("launchCoordinator retires the old generated workspace label before replaci
     };
     const dependencies = {
       run,
+      terminal: terminalBackend(run),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("launch should use a Herdr workspace");
@@ -1529,6 +1539,7 @@ test("launchCoordinator rejects an unsafe reused coordinator lease without clean
         },
         {
           run: runner.run,
+          terminal: terminalBackend(runner.run),
           startPersistent: async () => undefined,
           runInteractive: async () => {
             throw new Error("unsafe reuse must fail before launching");

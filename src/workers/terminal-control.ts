@@ -1,15 +1,21 @@
-import { readFile } from "node:fs/promises";
-import { inspectEndpoint, interruptEndpoint, sendExitKeys } from "../adapters/herdr.ts";
-import { EndpointBusyError } from "../adapters/primitives.ts";
-import type { CommandRunner, Endpoint } from "../contracts.ts";
+import { realpath as defaultRealpath, readFile } from "node:fs/promises";
+import {
+  checkedPath,
+  EndpointBusyError,
+  EndpointOwnershipError,
+  type WorktreeAdapterOptions,
+} from "../adapters/primitives.ts";
+import type { Endpoint } from "../contracts.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import type { DurableJob } from "../runtime/schema.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { parseWorkerJob } from "./jobs.ts";
 import {
   liveWorkerTerminal,
   readWorkerTerminal,
   requestWorkerTerminalCommand,
   type WorkerTerminalJob,
+  workerDelegationStopped,
 } from "./terminal.ts";
 
 const FRESH_PANE_SETTLE_MS = 5_000;
@@ -88,37 +94,37 @@ async function exitKeys(job: WorkerTerminalJob): Promise<readonly string[]> {
 }
 
 export async function prepareWorkerTerminal(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   input: WorkerTerminalInput,
   timing: ExitWaitTiming = {},
 ): Promise<void> {
-  let inspection = await inspectEndpoint(run, input);
+  let inspection = await terminal.inspect(input);
   // A fresh pane has no prior job; its shell startup can briefly hold the foreground.
   if (input.job === undefined) {
     const deadline = Date.now() + FRESH_PANE_SETTLE_MS;
     while (inspection.activeWorker && Date.now() < deadline) {
       await Bun.sleep(50);
-      inspection = await inspectEndpoint(run, input);
+      inspection = await terminal.inspect(input);
     }
   }
   if (!inspection.activeWorker) return;
-  const terminal =
+  const worker =
     input.job === undefined ? undefined : await liveWorkerTerminal(inspection, input.job);
   if (
     input.job === undefined ||
-    terminal === undefined ||
-    (!terminal.completed && terminal.phase !== "paused") ||
-    (terminal.phase !== "idle" && terminal.phase !== "paused")
+    worker === undefined ||
+    (!worker.completed && worker.phase !== "paused") ||
+    (worker.phase !== "idle" && worker.phase !== "paused")
   ) {
     throw new EndpointBusyError(input.endpoint);
   }
   await requestWorkerTerminalCommand(input.job, "close");
-  const closingInspection = await inspectEndpoint(run, input);
+  const closingInspection = await terminal.inspect(input);
   if (!closingInspection.activeWorker) return;
   const closingTerminal = await liveWorkerTerminal(closingInspection, input.job);
   if (closingTerminal?.phase !== "closing") throw new EndpointBusyError(input.endpoint);
   const keys = await exitKeys(input.job);
-  await sendExitKeys(run, input, keys);
+  await terminal.sendKeys({ ...input, keys });
   const now = timing.now ?? Date.now;
   const sleep = timing.sleep ?? ((ms: number) => Bun.sleep(ms));
   const waitMs = timing.waitMs ?? EXIT_WAIT_MS;
@@ -126,33 +132,83 @@ export async function prepareWorkerTerminal(
   const pollMs = timing.pollMs ?? EXIT_POLL_MS;
   const startedAt = now();
   let resent = false;
-  while ((await inspectEndpoint(run, input)).activeWorker) {
+  while ((await terminal.inspect(input)).activeWorker) {
     const waited = now() - startedAt;
     if (waited >= waitMs) {
       throw new Error("interactive worker acknowledged close but its process has not exited");
     }
     if (!resent && waited >= resendAfterMs) {
       resent = true;
-      await sendExitKeys(run, input, keys);
+      await terminal.sendKeys({ ...input, keys });
     }
     await sleep(pollMs);
   }
 }
 
 export async function pauseWorkerTerminal(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   input: WorkerTerminalInput,
 ): Promise<void> {
-  const inspection = await inspectEndpoint(run, input);
+  const inspection = await terminal.inspect(input);
   if (!inspection.activeWorker) return;
-  const terminal =
+  const worker =
     input.job === undefined ? undefined : await liveWorkerTerminal(inspection, input.job);
-  if (input.job !== undefined && terminal !== undefined) {
-    if (terminal.phase !== "paused") await requestWorkerTerminalCommand(input.job, "pause");
+  if (input.job !== undefined && worker !== undefined) {
+    if (worker.phase !== "paused") await requestWorkerTerminalCommand(input.job, "pause");
     return;
   }
   if (input.job !== undefined && (await readWorkerTerminal(input.job)) !== undefined) {
     throw new EndpointBusyError(input.endpoint);
   }
-  await interruptEndpoint(run, input);
+  await terminal.interrupt(input);
+}
+
+/**
+ * Opens a fresh reviewer pane beside its writer, only once the writer has stopped and its pane
+ * still works in the reviewer's directory, so the reviewer reads exactly the writer's tree.
+ */
+export async function openReviewerEndpoint(
+  terminal: TerminalBackend,
+  input: Readonly<{
+    sessionId: string;
+    cwd: string;
+    writer: Endpoint;
+    generation: number;
+    writerJob?: WorkerTerminalJob;
+  }>,
+  options: WorktreeAdapterOptions = {},
+): Promise<Endpoint> {
+  if (input.sessionId !== input.writer.sessionId) {
+    throw new EndpointOwnershipError(
+      input.writer,
+      "reviewer session does not match writer session",
+    );
+  }
+  const writerInspection = await terminal.inspect({ endpoint: input.writer, cwd: input.cwd });
+  const writerStopped =
+    input.writerJob === undefined
+      ? !writerInspection.activeWorker
+      : await workerDelegationStopped(writerInspection, input.writerJob);
+  if (!writerStopped) throw new EndpointBusyError(input.writer);
+  const writerPane = writerInspection.pane;
+  if (writerPane.foregroundCwd === undefined) {
+    throw new EndpointOwnershipError(input.writer, "writer working directory is unavailable");
+  }
+  const resolvePhysicalPath = options.realpath ?? defaultRealpath;
+  const [writerDirectory, reviewerDirectory] = await Promise.all([
+    resolvePhysicalPath(writerPane.foregroundCwd),
+    resolvePhysicalPath(checkedPath(input.cwd, "cwd")),
+  ]);
+  if (writerDirectory !== reviewerDirectory) {
+    throw new EndpointOwnershipError(
+      input.writer,
+      `writer cwd ${JSON.stringify(writerPane.foregroundCwd)} does not match reviewer cwd ${JSON.stringify(input.cwd)}`,
+    );
+  }
+  return terminal.splitBeside({
+    anchor: input.writer,
+    cwd: input.cwd,
+    role: "reviewer",
+    generation: input.generation,
+  });
 }

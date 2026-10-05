@@ -1,5 +1,5 @@
 import type { TandemBoundaryEnvironment, TandemEnvironmentSource } from "../config/environment.ts";
-import type { CommandRequest, CommandResult, CommandRunner, ModelSpec } from "../contracts.ts";
+import type { CommandRunner, ModelSpec } from "../contracts.ts";
 import {
   type CoordinatorLaunchDependencies,
   type CoordinatorLaunchRequest,
@@ -13,6 +13,7 @@ import type { CoordinatorFile } from "../harness/contract.ts";
 import { harnessOf } from "../harness/contract.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import type { TandemService } from "../service/controller.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import {
   type CliCommand,
   CliConsentError,
@@ -49,6 +50,7 @@ const DEFAULT_WATCH_INTERVAL_MS = 2_000;
 /** Process capabilities the command handlers may use; each is injectable by the application. */
 export type CliCapabilities = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly statPath: (path: string) => Promise<PathStat>;
   readonly startPersistent: StartPersistent;
   readonly runInteractive: RunInteractive;
@@ -73,13 +75,6 @@ type CliCommandHandler = (context: CliCommandContext) => Promise<CliCommandOutco
 
 function requireYes(invocation: CliInvocation, message: string): void {
   if (!invocation.options.yes) throw new CliConsentError(`${message} requires explicit --yes`);
-}
-
-function externalError(argv: readonly string[], result: CommandResult): Error {
-  const details = result.stderr.trim() || result.stdout.trim();
-  return new Error(
-    `${argv[0] ?? "command"} ${argv.slice(1).join(" ")} failed with exit code ${result.code}${details.length === 0 ? "" : `: ${details}`}`,
-  );
 }
 
 function reasonFor(invocation: CliInvocation): string | undefined {
@@ -109,7 +104,7 @@ async function onboardWithConsent(context: CliCommandContext): Promise<CliComman
 
 async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
   const { invocation, environment, capabilities } = context;
-  const { run, statPath } = capabilities;
+  const { run, terminal, statPath } = capabilities;
   const onboarded = await context.service().onboard(environment.repo, false);
   // The Tandem coordinator is where models get chosen, so until then it runs OMP's own default.
   const ompDefault =
@@ -122,6 +117,7 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
     : modelForPolicy(onboarded.policy.models.coordinator, invocation.options);
   const launchDependencies: CoordinatorLaunchDependencies = {
     run,
+    terminal,
     checkNewCoordinator: async (harness, newModel) => {
       for (const file of coordinatorFiles(harness, invocation.options)) {
         await verifyCoordinatorFile(statPath, file);
@@ -133,7 +129,7 @@ async function launch(context: CliCommandContext): Promise<CliCommandOutcome> {
     sleep: capabilities.sleep,
     processEnvironment: capabilities.processEnvironment(),
     rehomeTaskWorkspaces: async (input) =>
-      (await renestWorkspaces(run, { ...input, apply: true })).warnings,
+      (await renestWorkspaces(terminal, { ...input, apply: true })).warnings,
   };
   const request: CoordinatorLaunchRequest = {
     cwd: environment.repo,
@@ -171,7 +167,7 @@ async function runDoctorCheck(
 
 async function doctor(context: CliCommandContext): Promise<CliCommandOutcome> {
   const { invocation, environment } = context;
-  const { run, statPath } = context.capabilities;
+  const { run, terminal, statPath } = context.capabilities;
   const service = context.service();
   let policyModel: ModelSpec | undefined;
   const policyCheck = await runDoctorCheck("policy", async () => {
@@ -211,15 +207,9 @@ async function doctor(context: CliCommandContext): Promise<CliCommandOutcome> {
     }),
   );
   checks.push(
-    await runDoctorCheck("herdr", async () => {
-      const request: CommandRequest = {
-        argv: ["herdr", "--session", environment.sessionId, "status", "--json"],
-        cwd: environment.repo,
-      };
-      const result = await run(request);
-      if (result.code !== 0) throw externalError(request.argv, result);
-      return result.stdout.trim() || "session status available";
-    }),
+    await runDoctorCheck(terminal.name, () =>
+      terminal.sessionDetail({ sessionId: environment.sessionId, cwd: environment.repo }),
+    ),
   );
   return { value: { ok: checks.every((entry) => entry.ok), checks } };
 }

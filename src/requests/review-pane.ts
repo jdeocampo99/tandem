@@ -1,38 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import {
-  closeEndpoint,
-  createTaskEndpoint,
-  type HerdrPaneInspection,
-  inspectEndpoint,
-  interruptEndpoint,
-  isWorkerProcess,
-  sendCommand,
-  splitBesidePane,
-} from "../adapters/herdr.ts";
 import { EndpointBusyError } from "../adapters/primitives.ts";
-import type {
-  Clock,
-  CommandRunner,
-  Endpoint,
-  RequestBriefRecord,
-  RequestReviewPane,
-} from "../contracts.ts";
+import type { Clock, Endpoint, RequestBriefRecord, RequestReviewPane } from "../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../coordinator/lock.ts";
-import {
-  isMissingEndpointError,
-  readSessionSnapshot,
-  snapshotPaneForEndpoint,
-} from "../coordinator/ownership.ts";
+import { snapshotPaneForEndpoint } from "../coordinator/ownership.ts";
 import { canonicalPath } from "../coordinator/record.ts";
+import {
+  type EndpointInspection,
+  isWorkerProcess,
+  type TerminalBackend,
+} from "../terminal-backend/contract.ts";
 import { renderRequestBriefMarkdown } from "./markdown.ts";
 
 /** Directory under the Tandem home holding the rendered read-only brief projections. */
 export const REQUEST_BRIEF_DIRECTORY = "request-briefs";
 
 export type RequestReviewPaneDependencies = Readonly<{
-  readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly home: string;
   readonly sessionId: string;
   readonly parentWorkspaceId: string | undefined;
@@ -131,7 +116,7 @@ export async function closeRequestBriefPane(
   if (ownership.kind === "busy") return settled("retained", ownership.reason);
   if (ownership.kind === "unowned") return settled("quarantined", ownership.reason);
   try {
-    await closeEndpoint(deps.run, { endpoint: pane.endpoint, cwd: record.repoPath });
+    await deps.terminal.close({ endpoint: pane.endpoint, cwd: record.repoPath });
   } catch (error) {
     if (error instanceof EndpointBusyError) return settled("retained", error.message);
     return settled("quarantined", `review pane could not be closed: ${describeFailure(error)}`);
@@ -180,30 +165,34 @@ async function proveOwnedPane(
   endpoint: Endpoint,
   repoPath: string,
 ): Promise<PaneOwnership> {
-  const run = deps.run;
+  const { terminal } = deps;
   if (endpoint.paneId === deps.coordinatorPaneId) {
     return {
       kind: "unowned",
       reason: `review pane record names the coordinator's own pane ${JSON.stringify(endpoint.paneId)}`,
     };
   }
-  let inspection: HerdrPaneInspection;
+  let inspection: EndpointInspection;
   try {
-    const panes = await readSessionSnapshot(run, endpoint.sessionId, repoPath, true);
+    const panes = await terminal.snapshot({
+      sessionId: endpoint.sessionId,
+      cwd: repoPath,
+      allowMissingSession: true,
+    });
     const pane = snapshotPaneForEndpoint(panes, endpoint, "request brief review");
     if (pane === undefined) return { kind: "missing" };
-    inspection = await inspectEndpoint(run, { endpoint, cwd: repoPath });
+    inspection = await terminal.inspect({ endpoint, cwd: repoPath });
     if (inspection.activeWorker && showsOnlyBriefPager(inspection)) {
-      await interruptEndpoint(run, {
+      await terminal.interrupt({
         endpoint,
         cwd: repoPath,
         key: "q",
         timeoutMs: BRIEF_PAGER_QUIT_TIMEOUT_MS,
       });
-      inspection = await inspectEndpoint(run, { endpoint, cwd: repoPath });
+      inspection = await terminal.inspect({ endpoint, cwd: repoPath });
     }
   } catch (error) {
-    if (isMissingEndpointError(error)) return { kind: "missing" };
+    if (terminal.isEndpointGone(error)) return { kind: "missing" };
     if (error instanceof EndpointBusyError) return { kind: "busy", reason: error.message };
     return { kind: "unowned", reason: describeFailure(error) };
   }
@@ -231,7 +220,7 @@ async function proveOwnedPane(
   return { kind: "owned" };
 }
 
-function showsOnlyBriefPager(inspection: HerdrPaneInspection): boolean {
+function showsOnlyBriefPager(inspection: EndpointInspection): boolean {
   return inspection.processInfo.foregroundProcesses.every(
     (process) =>
       !isWorkerProcess(process) || BRIEF_PAGER_PROCESSES[basename(process.name)] === true,
@@ -248,20 +237,18 @@ async function openReviewPane(
   record: RequestBriefRecord,
 ): Promise<Endpoint> {
   if (deps.coordinatorPaneId !== undefined) {
-    const split = await splitBesidePane(deps.run, {
+    return deps.terminal.splitBeside({
       sessionId: deps.sessionId,
       cwd: record.repoPath,
       anchorPaneId: deps.coordinatorPaneId,
       role: "coordinator",
       generation: 0,
     });
-    return split.endpoint;
   }
-  const created = await createTaskEndpoint(deps.run, {
+  const created = await deps.terminal.createWorkspace({
     sessionId: deps.sessionId,
     cwd: record.repoPath,
-    taskName: record.id,
-    workspaceLabel: requestBriefWorkspaceLabel(record.repoPath),
+    label: requestBriefWorkspaceLabel(record.repoPath),
     role: "coordinator",
     generation: 0,
     ...(deps.parentWorkspaceId === undefined ? {} : { parentWorkspaceId: deps.parentWorkspaceId }),
@@ -277,7 +264,8 @@ async function renderInto(
 ): Promise<RequestReviewPane> {
   const observedAt = deps.clock();
   try {
-    await sendCommand(deps.run, {
+    await deps.terminal.inspect({ endpoint, cwd: record.repoPath });
+    await deps.terminal.runCommand({
       endpoint,
       cwd: record.repoPath,
       command: briefViewerCommand(renderedPath),

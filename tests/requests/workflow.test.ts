@@ -6,6 +6,7 @@ import type { RequestBriefContent, TaskRecord } from "../../src/contracts.ts";
 import { RequestBriefError } from "../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { RequestBriefWorkflow } from "../../src/requests/workflow.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { expectNoIdentifiers } from "../tasks/question.test.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
@@ -51,9 +52,9 @@ async function fixture(): Promise<Fixture> {
     sessionId: "session-1",
     parentWorkspaceId: undefined,
     coordinatorPaneId: undefined,
-    run: () => {
+    terminal: terminalBackend(() => {
       throw new Error("run must not be called when no review pane is open");
-    },
+    }),
     clock: () => NOW,
     store,
     listTasks: async () => tasks,

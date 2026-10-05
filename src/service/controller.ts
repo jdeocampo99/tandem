@@ -4,7 +4,6 @@ import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint, showNotification } from "../adapters/herdr.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
 import { readBoard } from "../board/read.ts";
@@ -201,6 +200,8 @@ import {
   taskRollup,
 } from "../tasks/trace.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
+import { terminalBackend } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
@@ -564,6 +565,7 @@ type ServiceDependencies = Readonly<{
   refreshSource: (() => Promise<SourceRefreshResult>) | undefined;
   workerTimeoutMs: number | undefined;
   run: CommandRunner;
+  terminal: TerminalBackend;
   clock: Clock;
   idFactory: IdFactory;
   classifyResearchContinuation: ResearchContinuationClassifier;
@@ -803,6 +805,7 @@ class TandemController {
       poolRoot: deps.poolRoot,
       workerTimeoutMs: deps.workerTimeoutMs,
       run: deps.run,
+      terminal: deps.terminal,
       clock: deps.clock,
       idFactory: deps.idFactory,
       store: deps.store,
@@ -832,6 +835,7 @@ class TandemController {
       runtimePath: deps.runtimePath,
       sessionId: deps.sessionId,
       run: deps.run,
+      terminal: deps.terminal,
       clock: deps.clock,
       idFactory: deps.idFactory,
       getTask: (taskId) => this.get(taskId),
@@ -852,7 +856,7 @@ class TandemController {
       sessionId: deps.sessionId,
       parentWorkspaceId: deps.parentWorkspaceId,
       coordinatorPaneId: deps.coordinatorPaneId,
-      run: deps.run,
+      terminal: deps.terminal,
       clock: deps.clock,
       store: deps.requestStore,
       listTasks: () => this.list(),
@@ -865,6 +869,7 @@ class TandemController {
       home: deps.home,
       sessionId: deps.sessionId,
       run: deps.run,
+      terminal: deps.terminal,
       clock: deps.clock,
       idFactory: deps.idFactory,
       store: deps.store,
@@ -914,7 +919,10 @@ class TandemController {
         ),
       saveSelfImprovement: (mode) => saveSelfImprovement(this.#deps.home, mode),
       checkTools: () =>
-        checkTools(this.#deps.run, { cwd: this.#deps.home, sessionId: this.#deps.sessionId }),
+        checkTools(this.#deps.run, this.#deps.terminal, {
+          cwd: this.#deps.home,
+          sessionId: this.#deps.sessionId,
+        }),
       onboardingFacts: (repoPath) => this.onboardingFacts(repoPath),
       openSetupPage: (repoPath) => this.#setupPage.open(repoPath),
       awaitSetupAnswer: (repoPath, signal, reply) =>
@@ -1111,7 +1119,7 @@ class TandemController {
     if (!onboarded.modelSettings.configured) {
       throw new Error("no model choices are saved yet; save them first");
     }
-    const { focused } = await openProject(this.#deps.run, {
+    const { focused } = await openProject(this.#deps.run, this.#deps.terminal, {
       repoPath: onboarded.repoPath,
       home: this.#deps.home,
       sessionId: this.#deps.sessionId,
@@ -1464,12 +1472,11 @@ class TandemController {
   /** Outside Herdr there is no coordinator pane, and nowhere to notify. */
   async notifyNeedsYou(repoPath: string, rows: readonly BoardRow[]): Promise<void> {
     if (this.#deps.coordinatorPaneId === undefined || rows.length === 0) return;
-    await showNotification(
-      this.#deps.run,
-      this.#deps.sessionId,
-      absoluteDirectory(repoPath, "repoPath"),
-      needsYouNotice(rows),
-    );
+    await this.#deps.terminal.notify({
+      sessionId: this.#deps.sessionId,
+      cwd: absoluteDirectory(repoPath, "repoPath"),
+      ...needsYouNotice(rows),
+    });
   }
 
   async get(id: string): Promise<TaskRecord> {
@@ -1924,7 +1931,7 @@ class TandemController {
     for (const endpoint of runtime.endpoints) {
       try {
         const job = workerJobForEndpoint(runtime.jobs, endpoint);
-        await prepareWorkerTerminal(this.#deps.run, {
+        await prepareWorkerTerminal(this.#deps.terminal, {
           endpoint,
           cwd,
           ...(job === undefined ? {} : { job }),
@@ -1949,7 +1956,7 @@ class TandemController {
       ...presentationPanes,
     ]) {
       try {
-        await closeEndpoint(this.#deps.run, pane);
+        await this.#deps.terminal.close(pane);
       } catch (error) {
         if (!isMissingEndpoint(error)) throw error;
       }
@@ -2636,6 +2643,7 @@ class TandemController {
         store: this.#deps.store,
         runtimePath: this.#deps.runtimePath,
         run: this.#deps.run,
+        terminal: this.#deps.terminal,
         clock: this.#deps.clock,
         cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home: this.#deps.home }),
       },
@@ -2838,6 +2846,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     refreshSource,
     workerTimeoutMs,
     run,
+    terminal: terminalBackend(run),
     clock,
     idFactory,
     classifyResearchContinuation,

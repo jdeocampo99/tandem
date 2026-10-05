@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { interruptEndpoint } from "../../src/adapters/herdr.ts";
 import type { Endpoint, ResolvedPolicy } from "../../src/contracts.ts";
 import { MANUAL_VERIFICATION_REVIEWER } from "../../src/instructions.ts";
 import { readRuntimeState, runtimeFile } from "../../src/runtime/persistence.ts";
@@ -11,6 +10,7 @@ import {
   workerReceiptPath,
   writeWorkerReceipt,
 } from "../../src/tasks/communication-persistence.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
 import {
   SCENARIO_HEAD,
@@ -95,7 +95,7 @@ test("a manual verification item never reaches review as something to judge, and
 
     // The reviewer passes with no finding about the smoke test, and the task comes back clean.
     const endpoint = review.endpoint as Endpoint;
-    await interruptEndpoint(world.run, { endpoint, cwd: lease.path });
+    await terminalBackend(world.run).interrupt({ endpoint, cwd: lease.path });
     await writeWorkerReceipt(workerReceiptPath(review.jobPath), {
       schemaVersion: 1,
       jobId: review.id,

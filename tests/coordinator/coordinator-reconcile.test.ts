@@ -31,6 +31,7 @@ import { runTerminal } from "../../src/main.ts";
 import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { FIRST_HEAD, fakePool, type Pool, TASK_LEASE_ID } from "./fake-pool.ts";
 
 const FIRST_SESSION = "tandem";
@@ -79,6 +80,7 @@ async function fixture(): Promise<Fixture> {
   });
   const dependencies: CoordinatorLaunchDependencies = {
     run: pool.run,
+    terminal: terminalBackend(pool.run),
     startPersistent: async () => undefined,
     runInteractive: async () => {
       throw new Error("headless launches never attach interactively");
@@ -103,6 +105,7 @@ async function fixture(): Promise<Fixture> {
     reconcile: async (apply, discard = false, freeSuperseded = false) =>
       reconcileTandemResources({
         run: pool.run,
+        terminal: terminalBackend(pool.run),
         home,
         poolRoot,
         repoPaths: [repo],
@@ -1011,6 +1014,7 @@ test("the scan reads every session under the home, not just one", async () => {
 
     const observation = await scanTandemResources({
       run: test.pool.run,
+      terminal: terminalBackend(test.pool.run),
       home: test.home,
       poolRoot: test.poolRoot,
       repoPaths: [test.repo],

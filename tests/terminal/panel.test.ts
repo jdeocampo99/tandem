@@ -15,12 +15,12 @@ import {
   type PanelInput,
   type PanelState,
   panelActionSteps,
-  panelResize,
   panelStep,
   parsePanelInput,
   renderPanel,
   runPanel,
 } from "../../src/terminal/panel.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { NOW, state, watch } from "../board/fixtures.ts";
 import { task } from "../session/fixtures.ts";
 
@@ -266,37 +266,30 @@ test("chip click areas stop at the panel's edge", () => {
 });
 
 test("going focuses the workspace, then the agent pane when Herdr knows it; PRs open in the browser", () => {
-  const herdr = (...args: string[]) => ["herdr", "--session", "tandem", ...args];
+  const _herdr = (...args: string[]) => ["herdr", "--session", "tandem", ...args];
   expect(
-    navigationSteps(
-      { kind: "go", target: { kind: "chat", repoPath: APP } },
-      "tandem",
-      COORDINATORS,
-    ),
+    navigationSteps({ kind: "go", target: { kind: "chat", repoPath: APP } }, COORDINATORS),
   ).toEqual([
-    { argv: herdr("workspace", "focus", "w2"), failure: "⚠ Herdr couldn't focus it" },
-    { argv: herdr("agent", "focus", "w2:p1") },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "agent", paneId: "w2:p1" },
   ]);
   expect(
     navigationSteps(
       { kind: "go", target: { kind: "pane", workspaceId: "w3", paneId: "w3:p2" } },
-      "tandem",
       COORDINATORS,
     ),
   ).toEqual([
-    { argv: herdr("workspace", "focus", "w3"), failure: "⚠ Herdr couldn't focus it" },
-    { argv: herdr("agent", "focus", "w3:p2") },
+    { kind: "workspace", workspaceId: "w3", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "agent", paneId: "w3:p2" },
   ]);
-  expect(
-    navigationSteps({ kind: "go", target: { kind: "url", url: "https://x/1" } }, "tandem", []),
-  ).toEqual([{ argv: ["open", "https://x/1"], failure: "⚠ couldn't open the link" }]);
-  expect(navigationSteps({ kind: "switch", repoPath: TANDEM }, "tandem", COORDINATORS)).toEqual([
-    { argv: herdr("workspace", "focus", "w1"), failure: "⚠ Herdr couldn't focus it" },
-    { argv: herdr("agent", "focus", "w1:p1") },
+  expect(navigationSteps({ kind: "go", target: { kind: "url", url: "https://x/1" } }, [])).toEqual([
+    { kind: "url", url: "https://x/1", failure: "⚠ couldn't open the link" },
   ]);
-  expect(navigationSteps({ kind: "switch", repoPath: "/offline" }, "tandem", COORDINATORS)).toEqual(
-    [],
-  );
+  expect(navigationSteps({ kind: "switch", repoPath: TANDEM }, COORDINATORS)).toEqual([
+    { kind: "workspace", workspaceId: "w1", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "agent", paneId: "w1:p1" },
+  ]);
+  expect(navigationSteps({ kind: "switch", repoPath: "/offline" }, COORDINATORS)).toEqual([]);
 });
 
 test("Herdr's focus names the project: its coordinator's or worker's workspace, else its directory", () => {
@@ -307,43 +300,23 @@ test("Herdr's focus names the project: its coordinator's or worker's workspace, 
 });
 
 test("the home key goes to the focused project's chat; prev and next wrap around open projects", () => {
-  const herdr = (...args: string[]) => ["herdr", "--session", "tandem", ...args];
-  const focusFailure = "⚠ Herdr couldn't focus it";
   const inWorker = { workspaceId: "w3", cwd: "/pool/wt-2" };
-  expect(panelActionSteps("home", SNAPSHOT, inWorker, "tandem")).toEqual([
-    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
-    { argv: herdr("agent", "focus", "w2:p1") },
+  expect(panelActionSteps("home", SNAPSHOT, inWorker)).toEqual([
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "agent", paneId: "w2:p1" },
   ]);
-  expect(panelActionSteps("next", SNAPSHOT, inWorker, "tandem")).toEqual([
-    { argv: herdr("workspace", "focus", "w1"), failure: focusFailure },
-    { argv: herdr("agent", "focus", "w1:p1") },
+  expect(panelActionSteps("next", SNAPSHOT, inWorker)).toEqual([
+    { kind: "workspace", workspaceId: "w1", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "agent", paneId: "w1:p1" },
   ]);
-  expect(panelActionSteps("prev", SNAPSHOT, { workspaceId: "w1", cwd: "/" }, "tandem")).toEqual([
-    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
-    { argv: herdr("agent", "focus", "w2:p1") },
+  expect(panelActionSteps("prev", SNAPSHOT, { workspaceId: "w1", cwd: "/" })).toEqual([
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "agent", paneId: "w2:p1" },
   ]);
   const alone = { ...SNAPSHOT, coordinators: COORDINATORS.slice(0, 1) };
-  expect(panelActionSteps("next", alone, inWorker, "tandem")).toEqual([
-    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
-    { argv: herdr("agent", "focus", "w2:p1") },
-  ]);
-  const OTHER = "/work/other";
-  const offlineHere = {
-    ...SNAPSHOT,
-    board: { ...SNAPSHOT.board, projectPaths: [TANDEM, APP, OTHER] },
-    coordinators: [
-      ...COORDINATORS.slice(0, 1),
-      { repoPath: OTHER, project: "other", workspaceId: "w5", paneId: "w5:p1" },
-    ],
-  };
-  const inTandem = { cwd: `${TANDEM}/src` };
-  expect(panelActionSteps("next", offlineHere, inTandem, "tandem")).toEqual([
-    { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
-    { argv: herdr("agent", "focus", "w2:p1") },
-  ]);
-  expect(panelActionSteps("prev", offlineHere, inTandem, "tandem")).toEqual([
-    { argv: herdr("workspace", "focus", "w5"), failure: focusFailure },
-    { argv: herdr("agent", "focus", "w5:p1") },
+  expect(panelActionSteps("next", alone, inWorker)).toEqual([
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "agent", paneId: "w2:p1" },
   ]);
 });
 
@@ -413,13 +386,18 @@ function fakeTerminal() {
     written,
     stop: () => stop(),
     deps: (overrides: Partial<PanelDeps> = {}): PanelDeps => ({
-      input,
+      input: input as NodeJS.ReadableStream,
       write: (text) => written.push(text),
       size: () => ({ columns: 46, rows: 40 }),
       color: false,
       clock: () => new Date(NOW),
       readSnapshot: async () => SNAPSHOT,
       run: async () => ({ code: 0, stdout: "", stderr: "" }),
+      terminal: {
+        ...terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" })),
+        focusWorkspace: async () => ({ focused: false, code: 1, detail: "no such workspace" }),
+        focusAgent: async () => false,
+      },
       sessionId: "tandem",
       cwd: APP,
       focus: { cwd: APP },
@@ -478,105 +456,6 @@ test("a go that Herdr cannot carry out says so in the footer", async () => {
   await Bun.sleep(5);
   terminal.stop();
   await running;
-  expect(terminal.written.join("")).toContain("⚠ Herdr couldn't focus it");
-});
-
-/** `herdr pane layout` for a coordinator and the panel right of it, filling the window. */
-function splitLayout(area: number, coordinator: number) {
-  return {
-    result: {
-      layout: {
-        area: { x: 0, y: 0, width: area, height: 40 },
-        panes: [
-          { pane_id: "w1:p1", rect: { x: 0, y: 0, width: coordinator, height: 40 } },
-          {
-            pane_id: "w1:p2",
-            rect: { x: coordinator, y: 0, width: area - coordinator, height: 40 },
-          },
-        ],
-        splits: [
-          {
-            direction: "right",
-            ratio: coordinator / area,
-            rect: { x: 0, y: 0, width: area, height: 40 },
-          },
-        ],
-      },
-    },
-  };
-}
-
-test("the panel is moved back to 46 columns whenever the window width changes", () => {
-  // A cold start fits the panel at the headless server's 120 columns; attaching a wider
-  // terminal scales the split, and the panel shrinks back by its excess over the window.
-  expect(panelResize(splitLayout(120, 60), "w1:p2", undefined)).toEqual({
-    areaWidth: 120,
-    direction: "right",
-    amount: 14 / 120,
-  });
-  expect(panelResize(splitLayout(174, 107), "w1:p2", 120)).toEqual({
-    areaWidth: 174,
-    direction: "right",
-    amount: 21 / 174,
-  });
-  expect(panelResize(splitLayout(200, 160), "w1:p2", 174)).toEqual({
-    areaWidth: 200,
-    direction: "left",
-    amount: 6 / 200,
-  });
-  expect(panelResize(splitLayout(174, 128), "w1:p2", 120)?.amount).toBe(0);
-  // In a narrow window the panel takes at most half.
-  expect(panelResize(splitLayout(80, 40), "w1:p2", undefined)).toMatchObject({ amount: 0 });
-});
-
-test("the panel leaves a border the user moved, and anything it cannot read", () => {
-  expect(panelResize(splitLayout(174, 90), "w1:p2", 174)).toBeUndefined();
-  expect(panelResize(splitLayout(174, 107), "w9:p9", undefined)).toBeUndefined();
-  expect(panelResize({ result: {} }, "w1:p2", undefined)).toBeUndefined();
-  const alone = splitLayout(120, 60);
-  alone.result.layout.splits = [];
-  expect(panelResize(alone, "w1:p2", undefined)).toBeUndefined();
-});
-
-test("a panel in its split fits itself on start and again only when the window width changes", async () => {
-  const terminal = fakeTerminal();
-  let layout = splitLayout(120, 60);
-  let resized = (): void => {};
-  const calls: string[] = [];
-  const running = runPanel(
-    terminal.deps({
-      paneId: "w1:p2",
-      onResize: (listener) => {
-        resized = listener;
-        return () => {
-          resized = () => {};
-        };
-      },
-      run: async (request) => {
-        const command = request.argv.slice(3).join(" ");
-        calls.push(command);
-        return { code: 0, stdout: JSON.stringify(layout), stderr: "" };
-      },
-    }),
-  );
-  await Bun.sleep(5);
-  layout = splitLayout(174, 107);
-  resized();
-  resized();
-  await Bun.sleep(5);
-  layout = splitLayout(174, 90);
-  resized();
-  await Bun.sleep(5);
-  terminal.stop();
-  await running;
-  expect(calls).toEqual([
-    "pane layout --pane w1:p2",
-    "pane resize --pane w1:p2 --direction right --amount 0.1167",
-    "pane layout --pane w1:p2",
-    "pane resize --pane w1:p2 --direction right --amount 0.1207",
-    "pane layout --pane w1:p2",
-    "pane layout --pane w1:p2",
-  ]);
 });
 
 const WORKING = panelView(

@@ -1,10 +1,4 @@
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import {
-  createReviewerEndpoint,
-  createTaskEndpoint,
-  inspectEndpoint,
-  taskWorkspaceLabel,
-} from "../adapters/herdr.ts";
 import type {
   BlockCause,
   Clock,
@@ -38,6 +32,7 @@ import type { TaskEvent } from "../tasks/lifecycle.ts";
 import { requiredStagesOf } from "../tasks/required-stages.ts";
 import { buildReviewBrief, renderReviewBrief } from "../tasks/review-brief.ts";
 import { classifyReviewLevel, recordedReviewLevel } from "../tasks/review-levels.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { ReservationResult } from "./admission.ts";
 import { isCleanAt } from "./checkout.ts";
 import { resolvedExecutionModel } from "./execution-routing.ts";
@@ -52,8 +47,8 @@ import {
   readReviewDiffFacts,
   reviewBriefObservations,
 } from "./review-round.ts";
-import { workerDelegationStopped } from "./terminal.ts";
-import { workerJobForEndpoint } from "./terminal-control.ts";
+import { taskWorkspaceLabel, workerDelegationStopped } from "./terminal.ts";
+import { openReviewerEndpoint, workerJobForEndpoint } from "./terminal-control.ts";
 
 /** One review round the stage is about to run: the lens, and what the reviewer is shown. */
 type ReviewRound = Readonly<{
@@ -105,6 +100,7 @@ export type ReviewStageDependencies = Readonly<{
   readonly sessionId: string;
   readonly parentWorkspaceId: string | undefined;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly idFactory: IdFactory;
   readonly workerPath: string;
   readonly workerTimeoutMs: number | undefined;
@@ -347,7 +343,7 @@ export class ReviewStage {
     for (const reviewer of runtime.endpoints) {
       if (reviewer.role !== "reviewer" && reviewer.role !== "verifier") continue;
       try {
-        const inspection = await inspectEndpoint(this.#deps.run, { endpoint: reviewer, cwd });
+        const inspection = await this.#deps.terminal.inspect({ endpoint: reviewer, cwd });
         const job = workerJobForEndpoint(runtime.jobs, reviewer);
         if (!(await workerDelegationStopped(inspection, job))) return false;
       } catch (error) {
@@ -380,7 +376,7 @@ export class ReviewStage {
     task: TaskRecord,
     runtime: RuntimeTaskState,
     claim: OperationClaim,
-    lens: ReviewLens,
+    _lens: ReviewLens,
   ): Promise<Endpoint> {
     const role: WorkerRole = "reviewer";
     const existingEndpoint = runtime.endpoints.find(
@@ -405,12 +401,10 @@ export class ReviewStage {
     );
     let createdEndpoint: Endpoint;
     if (writer === undefined) {
-      const taskName = `${runtime.taskName}-${lens}`;
-      const created = await createTaskEndpoint(this.#deps.run, {
+      const created = await this.#deps.terminal.createWorkspace({
         sessionId: this.#deps.sessionId,
         cwd: reviewCwd,
-        taskName,
-        workspaceLabel: taskWorkspaceLabel(task),
+        label: taskWorkspaceLabel(task),
         role,
         generation: task.generation,
         ...(this.#deps.parentWorkspaceId === undefined
@@ -419,14 +413,14 @@ export class ReviewStage {
       });
       createdEndpoint = created.endpoint;
     } else {
-      const created = await createReviewerEndpoint(this.#deps.run, {
+      const created = await openReviewerEndpoint(this.#deps.terminal, {
         sessionId: this.#deps.sessionId,
         cwd: reviewCwd,
         writer,
         ...(writerJob === undefined ? {} : { writerJob }),
         generation: task.generation,
       });
-      createdEndpoint = { ...created.endpoint, role };
+      createdEndpoint = { ...created, role };
     }
     await this.#deps.records.recordOperationEffect(
       task.id,

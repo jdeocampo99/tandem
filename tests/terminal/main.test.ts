@@ -1034,7 +1034,7 @@ test("reset cancels work in saved projects and the Tandem coordinator, then laun
       },
       shutdown: async () => undefined,
     },
-    resetCoordinators: async (_run, input) => {
+    resetCoordinators: async (_run, _terminal, input) => {
       events.push("reset");
       resetPaths.push([...input.repoPaths]);
       forced.push(input.force);
@@ -1116,7 +1116,7 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
     run: runCommand,
     service: fake.service,
     application: fakeApplication(invocations),
-    resetCoordinators: async (_run, input) => {
+    resetCoordinators: async (_run, _terminal, input) => {
       return input.repoPaths.map((repoPath) => ({
         schemaVersion: 1 as const,
         repoPath,
@@ -1757,7 +1757,7 @@ test("reset --hard stops Tandem, then deletes its home, pool, and remembered set
       cwd: root,
       processEnvironment: { XDG_CONFIG_HOME: config, TANDEM_POOL_ROOT: pool },
       run: runCommand,
-      resetCoordinators: async (_run, input) => {
+      resetCoordinators: async (_run, _terminal, input) => {
         stops.push(input.force);
         throw new Error("state is too broken to stop cleanly");
       },

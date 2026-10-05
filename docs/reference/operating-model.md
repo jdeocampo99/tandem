@@ -77,7 +77,7 @@ assigned to new work.
 
 - Everything runs on the local machine: orchestration, durable state, workers, Herdr workspaces,
   Treehouse pool, Lavish control. No remote fleets, harnesses other than OMP and Claude Code
-  ([harness.md](harness.md)), alternate terminal backends, relays, or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
+  ([harness.md](harness.md)), alternate terminal backends beyond the Herdr implementation of the terminal port, relays, or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
   implementer's follow-up push to its own open PR touch the remote, through local `gh` and Git.
 - macOS only. The task-store lock is a Darwin native `O_EXLOCK` lock on the task-store directory
   with a 5-second default acquisition timeout (`DEFAULT_LOCK_TIMEOUT_MS`). Coordinator locks under

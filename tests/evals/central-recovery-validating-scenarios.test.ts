@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { interruptEndpoint } from "../../src/adapters/herdr.ts";
 import type { Endpoint, ResolvedPolicy } from "../../src/contracts.ts";
 import { VALIDATION_RETRY_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
@@ -13,6 +12,7 @@ import {
 import type { DurableJob } from "../../src/runtime/schema.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { policyIdentity } from "../../src/tasks/acceptance.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { ValidationResult } from "../../src/validation-worker.ts";
 import {
   SCENARIO_NOW,
@@ -146,7 +146,7 @@ test("a stuck validation job reruns at the same reviewed HEAD and passes", async
     if (newEndpoint === undefined) throw new Error("replacement validation job has no endpoint");
 
     // --- The new validation run "finishes": its pane returns to shell and it writes a passing result. ---
-    await interruptEndpoint(world.run, { endpoint: newEndpoint, cwd: lease.path });
+    await terminalBackend(world.run).interrupt({ endpoint: newEndpoint, cwd: lease.path });
     const result: ValidationResult = {
       schemaVersion: 1,
       id: newJob.id,
@@ -279,7 +279,7 @@ test("a genuine task-code validation failure still moves to awaiting-fixes, not 
     );
     // The pane's process already returned to shell before this tick, matching a validation run that
     // finished (successfully or not) rather than one whose process is still live.
-    await interruptEndpoint(world.run, { endpoint: validationEndpoint, cwd: lease.path });
+    await terminalBackend(world.run).interrupt({ endpoint: validationEndpoint, cwd: lease.path });
     const result: ValidationResult = {
       schemaVersion: 1,
       id: job.id,

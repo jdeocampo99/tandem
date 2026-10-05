@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import type { HerdrAgentState, HerdrStatusReporter } from "../../src/adapters/herdr-status.ts";
 import type { BoardRow } from "../../src/board/view.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
 import { TANDEM_COORDINATOR_INSTRUCTIONS } from "../../src/instructions.ts";
@@ -13,6 +12,7 @@ import {
 } from "../../src/session/coordinator.ts";
 import type { SessionHost } from "../../src/session/events.ts";
 import { WELCOME_TEXT } from "../../src/terminal/welcome.ts";
+import type { AgentState, AgentStatusReporter } from "../../src/terminal-backend/contract.ts";
 import { fakeSessionTime, recordingSessionHost } from "../evals/scenario.ts";
 import { task } from "./fixtures.ts";
 
@@ -65,9 +65,9 @@ function coordinatorDeps(
 function recordingReporter(
   reports: string[],
   released: { count: number } = { count: 0 },
-): HerdrStatusReporter {
+): AgentStatusReporter {
   return {
-    report: async (state: HerdrAgentState, message?: string) => {
+    report: async (state: AgentState, message?: string) => {
       reports.push(`${state}: ${message ?? ""}`);
     },
     release: async () => {

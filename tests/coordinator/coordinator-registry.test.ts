@@ -25,6 +25,7 @@ import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type { RuntimeTaskState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { writeWorkerTerminal } from "../../src/workers/terminal.ts";
 
 function result(stdout = "", code = 0, stderr = ""): CommandResult {
@@ -485,7 +486,7 @@ test("reuses a coordinator only after pane, cwd, and native OMP command proof", 
     ]);
 
     await expect(
-      findRunningCoordinator(runner.run, {
+      findRunningCoordinator(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -543,7 +544,7 @@ test("reconnects to a coordinator whose record predates harness choice as OMP", 
       ),
     ]);
 
-    const found = await findRunningCoordinator(runner.run, {
+    const found = await findRunningCoordinator(runner.run, terminalBackend(runner.run), {
       home: values.home,
       sessionId: "tandem",
       repoPath: values.repoA,
@@ -561,13 +562,21 @@ test("refuses a coordinator record naming an unknown harness or another harness'
     await saveCoordinatorRecord(values.home, values.recordA);
     const lookup = { home: values.home, sessionId: "tandem", repoPath: values.repoA };
     await rewriteRecordHarness(values.home, values.recordA, "codex");
-    await expect(findRunningCoordinator(scriptedRunner([]).run, lookup)).rejects.toThrow(
-      /harness must be "omp" or "claude-code", not "codex"/u,
-    );
+    await expect(
+      findRunningCoordinator(
+        scriptedRunner([]).run,
+        terminalBackend(scriptedRunner([]).run),
+        lookup,
+      ),
+    ).rejects.toThrow(/harness must be "omp" or "claude-code", not "codex"/u);
     await rewriteRecordHarness(values.home, values.recordA, "claude-code");
-    await expect(findRunningCoordinator(scriptedRunner([]).run, lookup)).rejects.toThrow(
-      'command[0] must be "claude"',
-    );
+    await expect(
+      findRunningCoordinator(
+        scriptedRunner([]).run,
+        terminalBackend(scriptedRunner([]).run),
+        lookup,
+      ),
+    ).rejects.toThrow('command[0] must be "claude"');
   } finally {
     await cleanup(values.root);
   }
@@ -583,7 +592,7 @@ test("treats shell-only or missing panes as stale without deleting the stored le
       result(snapshotPayload()),
     ]);
     await expect(
-      findRunningCoordinator(shellOnly.run, {
+      findRunningCoordinator(shellOnly.run, terminalBackend(shellOnly.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -595,7 +604,7 @@ test("treats shell-only or missing panes as stale without deleting the stored le
       result(snapshotPayload()),
     ]);
     await expect(
-      findRunningCoordinator(missingPane.run, {
+      findRunningCoordinator(missingPane.run, terminalBackend(missingPane.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -618,7 +627,7 @@ test("treats the native inactive-server response as stale without probing or rep
   try {
     const noRecord = scriptedRunner([result(inactiveServer, 1)]);
     await expect(
-      findRunningCoordinator(noRecord.run, {
+      findRunningCoordinator(noRecord.run, terminalBackend(noRecord.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -629,7 +638,7 @@ test("treats the native inactive-server response as stale without probing or rep
     await saveCoordinatorRecord(values.home, values.recordA);
     const staleRecord = scriptedRunner([result(inactiveServer, 1), result(inactiveServer, 1)]);
     await expect(
-      findRunningCoordinator(staleRecord.run, {
+      findRunningCoordinator(staleRecord.run, terminalBackend(staleRecord.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -652,7 +661,7 @@ test("keeps different canonical repositories independent and rejects corrupt rec
 
     const noProbe = scriptedRunner([result(snapshotPayload())]);
     await expect(
-      findRunningCoordinator(noProbe.run, {
+      findRunningCoordinator(noProbe.run, terminalBackend(noProbe.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: repoC,
@@ -662,7 +671,7 @@ test("keeps different canonical repositories independent and rejects corrupt rec
 
     await writeFile(recordFile(values.home, "tandem", values.repoA), "not-json\n", "utf8");
     await expect(
-      findRunningCoordinator(noProbe.run, {
+      findRunningCoordinator(noProbe.run, terminalBackend(noProbe.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -720,7 +729,7 @@ test("still owns a coordinator recorded and launched from the pre-harness extens
     ]);
 
     await expect(
-      findRunningCoordinator(runner.run, {
+      findRunningCoordinator(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -770,7 +779,7 @@ for (const [location, extensionPath] of Object.entries(EXTENSION_PATHS)) {
       ]);
 
       await expect(
-        findRunningCoordinator(runner.run, {
+        findRunningCoordinator(runner.run, terminalBackend(runner.run), {
           home: values.home,
           sessionId: "tandem",
           repoPath: values.repoA,
@@ -804,7 +813,7 @@ test("fails closed on a live foreign process and leaves the record untouched", a
       ),
     ]);
     await expect(
-      findRunningCoordinator(runner.run, {
+      findRunningCoordinator(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -817,7 +826,7 @@ test("fails closed on a live foreign process and leaves the record untouched", a
       result(processPayload(values.recordA)),
     ]);
     await expect(
-      findRunningCoordinator(cwdMismatch.run, {
+      findRunningCoordinator(cwdMismatch.run, terminalBackend(cwdMismatch.run), {
         home: values.home,
         sessionId: "tandem",
         repoPath: values.repoA,
@@ -846,7 +855,7 @@ test("resets selected owned idle and done coordinators without touching unrelate
       { record: unrelated, agentStatus: "working" },
     ]);
 
-    const stopped = await resetCoordinators(runner.run, {
+    const stopped = await resetCoordinators(runner.run, terminalBackend(runner.run), {
       home: values.home,
       sessionId: "tandem",
       repoPaths: [values.repoA, values.repoB],
@@ -888,12 +897,14 @@ for (const force of [false, true]) {
       const request = { home: values.home, sessionId: "tandem", repoPaths: [values.repoA], force };
 
       expect(
-        (await resetCoordinators(runner.run, request)).map((record) => record.repoPath),
+        (await resetCoordinators(runner.run, terminalBackend(runner.run), request)).map(
+          (record) => record.repoPath,
+        ),
       ).toEqual([values.repoA]);
       expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
       expect(runner.workspaces.has(values.recordA.endpoint.workspaceId)).toBe(false);
       expect(runner.panes.get(unrelated.endpoint.paneId)?.present).toBe(true);
-      expect(await resetCoordinators(runner.run, request)).toEqual([]);
+      expect(await resetCoordinators(runner.run, terminalBackend(runner.run), request)).toEqual([]);
       expect([...runner.workspaces.keys()]).toEqual([unrelated.endpoint.workspaceId]);
     } finally {
       await cleanup(values.root);
@@ -916,7 +927,7 @@ for (const label of ["◆ repo-a", "Tandem coordinator · repo-a", "My scratch t
         { record: extra, agentStatus: "working", workspaceLabel: label },
       ]);
 
-      await resetCoordinators(runner.run, {
+      await resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -946,7 +957,7 @@ test("force reset refuses a stopped recorded pane that has moved outside its coo
       },
     ]);
     await expect(
-      resetCoordinators(runner.run, {
+      resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -979,7 +990,7 @@ test("force reset does not mistake another foreground shell process for the stop
       },
     ]);
     await expect(
-      resetCoordinators(runner.run, {
+      resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -1007,7 +1018,7 @@ test("allows reset when historical worker endpoints are no longer live", async (
     await seedTask(values.home, values.repoA, "implementation", [historicalEndpoint]);
     const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "idle" }]);
 
-    const stopped = await resetCoordinators(runner.run, {
+    const stopped = await resetCoordinators(runner.run, terminalBackend(runner.run), {
       home: values.home,
       sessionId: "tandem",
       repoPaths: [values.repoA],
@@ -1078,7 +1089,7 @@ test("allows reset past a settled terminal stop intent but refuses a quarantined
         presentations: [],
       });
       const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "idle" }]);
-      const reset = resetCoordinators(runner.run, {
+      const reset = resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -1107,7 +1118,7 @@ test("refuses a busy selected coordinator before closing any idle coordinator", 
     ]);
 
     await expect(
-      resetCoordinators(runner.run, {
+      resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA, values.repoB],
@@ -1163,7 +1174,7 @@ test("refuses active durable workers, tasks, and reservations before closing", a
       const runtimeBefore = await readRuntimeState(runtimeFile(values.home));
 
       await expect(
-        resetCoordinators(runner.run, {
+        resetCoordinators(runner.run, terminalBackend(runner.run), {
           home: values.home,
           sessionId: "tandem",
           repoPaths: [values.repoA],
@@ -1186,7 +1197,7 @@ test("treats stale and missing selected coordinators as no-ops", async () => {
     const runner = nativeResetRunner([]);
 
     await expect(
-      resetCoordinators(runner.run, {
+      resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA, values.repoB],
@@ -1229,7 +1240,7 @@ test("reports a partial close instead of hiding it when a later coordinator turn
 
     let caught: unknown;
     try {
-      await resetCoordinators(run, {
+      await resetCoordinators(run, terminalBackend(run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA, values.repoB],
@@ -1272,7 +1283,7 @@ test("surfaces a native coordinator close failure without mutating the registry"
     ]);
 
     await expect(
-      resetCoordinators(runner.run, {
+      resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -1350,7 +1361,7 @@ test("force reset cancels stale scouting work while preserving files and unselec
       { record: values.recordB, agentStatus: "working" },
     ]);
 
-    await resetCoordinators(runner.run, {
+    await resetCoordinators(runner.run, terminalBackend(runner.run), {
       home: values.home,
       sessionId: "tandem",
       repoPaths: [values.repoA],
@@ -1401,7 +1412,7 @@ test("force reset refuses a foreign coordinator before cancelling tasks or closi
         : runner.run(request);
 
     await expect(
-      resetCoordinators(run, {
+      resetCoordinators(run, terminalBackend(run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA, values.repoB],
@@ -1457,7 +1468,7 @@ test("force reset refuses a foreign process in a recorded worker pane", async ()
         : runner.run(request);
 
     await expect(
-      resetCoordinators(run, {
+      resetCoordinators(run, terminalBackend(run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -1499,7 +1510,9 @@ test("force reset can retry a partial coordinator close without reviving cancell
       force: true,
     };
 
-    await expect(resetCoordinators(runner.run, input)).rejects.toThrow();
+    await expect(
+      resetCoordinators(runner.run, terminalBackend(runner.run), input),
+    ).rejects.toThrow();
     expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
     expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(true);
     runner.panes.set(values.recordB.endpoint.paneId, {
@@ -1507,7 +1520,7 @@ test("force reset can retry a partial coordinator close without reviving cancell
       agentStatus: "working",
       present: true,
     });
-    await resetCoordinators(runner.run, input);
+    await resetCoordinators(runner.run, terminalBackend(runner.run), input);
 
     expect(runner.panes.get(values.recordB.endpoint.paneId)?.present).toBe(false);
     expect((await store.read("reset-task"))?.stage).toBe("cancelled");
@@ -1548,7 +1561,7 @@ test("force reset refuses work reserved by a different session", async () => {
     const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "working" }]);
 
     await expect(
-      resetCoordinators(runner.run, {
+      resetCoordinators(runner.run, terminalBackend(runner.run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -1628,7 +1641,7 @@ test("force reset closes the latest retained worker generation without cancellin
       { record: worker, agentStatus: "working" },
     ]);
 
-    await resetCoordinators(runner.run, {
+    await resetCoordinators(runner.run, terminalBackend(runner.run), {
       home: values.home,
       sessionId: "tandem",
       repoPaths: [values.repoA],
@@ -1677,7 +1690,7 @@ test("force reset does not treat a job path argument as validation process owner
         : runner.run(request);
 
     await expect(
-      resetCoordinators(run, {
+      resetCoordinators(run, terminalBackend(run), {
         home: values.home,
         sessionId: "tandem",
         repoPaths: [values.repoA],
@@ -1746,7 +1759,7 @@ test("force reset ends stale presentations while preserving their artifacts", as
     });
     const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "working" }]);
 
-    await resetCoordinators(runner.run, {
+    await resetCoordinators(runner.run, terminalBackend(runner.run), {
       home: values.home,
       sessionId: "tandem",
       repoPaths: [values.repoA],
@@ -1892,7 +1905,7 @@ test("force reset reaps detached validation commands before closing their pane",
       return runner.run(request);
     };
 
-    await resetCoordinators(run, {
+    await resetCoordinators(run, terminalBackend(run), {
       home: values.home,
       sessionId: "tandem",
       repoPaths: [values.repoA],
@@ -2000,6 +2013,7 @@ test("persists source refresh intent before switching and recovers an interrupte
       repoPath: values.repoA,
       sourceRepoPath: values.worktreeA,
       run: runner.run,
+      terminal: terminalBackend(runner.run),
     };
 
     await expect(refreshCoordinatorSource(input)).rejects.toThrow(
@@ -2056,6 +2070,7 @@ test("refuses a dirty owned source checkout without discarding its file or lease
         repoPath: values.repoA,
         sourceRepoPath: values.worktreeA,
         run: runner.run,
+        terminal: terminalBackend(runner.run),
       }),
     ).rejects.toThrow("is dirty or has unmerged paths");
     expect(await readFile(dirtyFile, "utf8")).toBe("do not discard\n");
@@ -2080,6 +2095,7 @@ test("refuses a clean owned checkout when the requested source path mismatches i
         repoPath: values.repoA,
         sourceRepoPath: values.worktreeB,
         run: runner.run,
+        terminal: terminalBackend(runner.run),
       }),
     ).rejects.toThrow("does not match expected source checkout");
     expect(await runGitFixtureCommand(values.worktreeA, ["rev-parse", "HEAD"])).toBe(sourceHeadA);

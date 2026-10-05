@@ -1,8 +1,7 @@
 import { realpath } from "node:fs/promises";
-import { type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
-import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
-import type { CommandRequest, CommandRunner } from "../contracts.ts";
+import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import { harnessFor } from "../harness/resolve.ts";
+import type { EndpointInspection, TerminalBackend } from "../terminal-backend/contract.ts";
 import {
   type CoordinatorLaunchDependencies,
   type CoordinatorLaunchRequest,
@@ -13,10 +12,8 @@ import {
 } from "./launch.ts";
 import {
   assertStoppedCoordinatorShell,
-  commandErrorCode,
   findRestartCoordinator,
   findRunningCoordinator,
-  parseJson,
 } from "./ownership.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import { resolveCoordinatorSourceHead } from "./source.ts";
@@ -29,12 +26,15 @@ export type CoordinatorRestartResult = CoordinatorLaunchResult &
     renestWarnings?: readonly string[];
   }>;
 
-async function closeSupersededPane(run: CommandRunner, prior: CoordinatorRecord): Promise<void> {
+async function closeSupersededPane(
+  terminal: TerminalBackend,
+  prior: CoordinatorRecord,
+): Promise<void> {
   const { endpoint } = prior;
   const cwd = prior.worktree.path;
-  let inspection: HerdrPaneInspection;
+  let inspection: EndpointInspection;
   try {
-    inspection = await inspectEndpoint(run, { endpoint, cwd });
+    inspection = await terminal.inspect({ endpoint, cwd });
   } catch (error) {
     if (error instanceof EndpointOwnershipError && error.reason === "missing") return;
     throw error;
@@ -63,41 +63,7 @@ async function closeSupersededPane(run: CommandRunner, prior: CoordinatorRecord)
   } else {
     assertStoppedCoordinatorShell(inspection);
   }
-  const request: CommandRequest = {
-    argv: ["herdr", "--session", endpoint.sessionId, "pane", "close", endpoint.paneId],
-    cwd,
-  };
-  const result = await run(request);
-  if (result.code !== 0)
-    throw new AdapterCommandError("herdr coordinator restart close", request, result);
-  const acknowledgement = parseJson(result.stdout, "herdr coordinator restart close");
-  if (
-    typeof acknowledgement !== "object" ||
-    acknowledgement === null ||
-    Array.isArray(acknowledgement) ||
-    typeof (acknowledgement as Record<string, unknown>).result !== "object" ||
-    ((acknowledgement as Record<string, unknown>).result as Record<string, unknown> | null)
-      ?.type !== "ok"
-  ) {
-    throw new Error("herdr coordinator restart close returned an unknown acknowledgement");
-  }
-  const verifyRequest: CommandRequest = {
-    argv: ["herdr", "--session", endpoint.sessionId, "pane", "get", endpoint.paneId],
-    cwd,
-  };
-  const verification = await run(verifyRequest);
-  if (verification.code === 0) {
-    throw new Error(
-      `coordinator pane ${JSON.stringify(endpoint.paneId)} remains present after restart close`,
-    );
-  }
-  if (commandErrorCode(verification.stdout, verification.stderr) !== "pane_not_found") {
-    throw new AdapterCommandError(
-      "herdr coordinator restart close verification",
-      verifyRequest,
-      verification,
-    );
-  }
+  await terminal.closeOwned({ endpoint, cwd, strictProof: true });
 }
 
 /** Replaces an owned coordinator without touching managed worker panes or task state. */
@@ -106,14 +72,14 @@ export async function restartCoordinator(
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorRestartResult> {
   return withClaimedCoordinatorRepository(request, dependencies, async (reconciliations) => {
-    const previous = await findRunningCoordinator(dependencies.run, {
+    const previous = await findRunningCoordinator(dependencies.run, dependencies.terminal, {
       home: request.home,
       sessionId: request.sessionId,
       repoPath: request.repo,
     });
     const stopped =
       previous === undefined
-        ? await findRestartCoordinator(dependencies.run, {
+        ? await findRestartCoordinator(dependencies.run, dependencies.terminal, {
             home: request.home,
             sessionId: request.sessionId,
             repoPath: request.repo,
@@ -123,7 +89,7 @@ export async function restartCoordinator(
     await checkNewCoordinator(request, dependencies);
     const sourceHead = await resolveCoordinatorSourceHead(dependencies.run, request.repo);
     if (prior !== undefined) {
-      await closeSupersededPane(dependencies.run, prior);
+      await closeSupersededPane(dependencies.terminal, prior);
     }
     const launch = await launchCoordinatorUnlocked(
       {

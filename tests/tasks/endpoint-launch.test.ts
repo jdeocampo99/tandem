@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
 import type { DurableEndpointLaunch } from "../../src/runtime/schema.ts";
 import { recoverEndpointFromLaunch } from "../../src/tasks/endpoint-launch.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 const LABEL = "└ fix paid access";
 
@@ -74,7 +75,7 @@ test("launch recovery tells same-titled workspaces apart by their worktree", asy
       { id: "workspace-mine", cwd: mine },
     ]);
 
-    const recovery = await recoverEndpointFromLaunch(run, launchAt(mine));
+    const recovery = await recoverEndpointFromLaunch(terminalBackend(run), launchAt(mine));
 
     expect(recovery).toMatchObject({
       status: "recovered",
@@ -90,7 +91,7 @@ test("launch recovery stays ambiguous when same-titled workspaces share the work
       { id: "workspace-b", cwd: mine },
     ]);
 
-    const recovery = await recoverEndpointFromLaunch(run, launchAt(mine));
+    const recovery = await recoverEndpointFromLaunch(terminalBackend(run), launchAt(mine));
 
     expect(recovery.status).toBe("ambiguous");
   });

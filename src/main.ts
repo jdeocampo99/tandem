@@ -1,14 +1,12 @@
 #!/usr/bin/env bun
 import { basename, join } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
-import type { HerdrAdapterOptions } from "./adapters/herdr.ts";
-import type { HerdrFocus } from "./board/panel.ts";
+import type { PanelFocus } from "./board/panel.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
 import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
-import { PANEL_ENTRYPOINT } from "./coordinator/panel.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
@@ -39,7 +37,6 @@ import {
 } from "./terminal/fix-report.ts";
 import { applyHardReset, planHardReset, renderHardResetPlan } from "./terminal/hard-reset.ts";
 import {
-  hasActiveHerdrContext,
   launchProjects,
   otherSessionReconciliationNotices,
   panelFailureNotice,
@@ -74,6 +71,8 @@ import {
 } from "./terminal/projects.ts";
 import { readTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
 import { runWelcome } from "./terminal/welcome.ts";
+import { terminalBackend, terminalContext } from "./terminal-backend/compose.ts";
+import type { TerminalBackend, WorkspaceMover } from "./terminal-backend/contract.ts";
 
 const HELP_TEXT = `Tandem
 
@@ -132,8 +131,10 @@ export type TerminalMainDependencies = Readonly<{
   readonly resetCoordinators?: typeof resetCoordinators;
   /** The Tandem checkout, whose coordinator always opens; tests inject a temporary one. */
   readonly tandemCheckout?: string;
-  /** Sends Herdr's `workspace.move`; tests inject one so they never reach a live socket. */
-  readonly moveWorkspace?: HerdrAdapterOptions["moveWorkspace"];
+  /** Sends workspace.move; tests inject one so they never reach a live socket. */
+  readonly moveWorkspace?: WorkspaceMover;
+  /** The terminal Tandem drives; built from `run` when absent. */
+  readonly terminal?: TerminalBackend;
 }>;
 
 type TerminalOutput = Readonly<{
@@ -152,6 +153,7 @@ type ProjectFlowInputs = Readonly<{
   readonly environment: TerminalEnvironment;
   readonly dependencies: TerminalMainDependencies;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly interactive: boolean;
   readonly prompter: TerminalPrompter | undefined;
   readonly stdout: (text: string) => void;
@@ -204,8 +206,9 @@ async function assertNotInCoordinatorPane(
   environment: TerminalEnvironment,
 ): Promise<void> {
   if (invocation.command !== "update" && invocation.command !== "reset") return;
-  if (!hasActiveHerdrContext(environment.source)) return;
-  const paneId = environment.source.HERDR_PANE_ID;
+  const inherited = terminalContext.inheritedPane(environment.source);
+  if (inherited.status !== "inside") return;
+  const { paneId } = inherited;
   const records = await listCoordinatorRecords(environment.home, environment.sessionId);
   if (records.some((record) => record.endpoint.paneId === paneId)) {
     throw new Error(
@@ -531,34 +534,29 @@ async function watchStatus(
  */
 /** Re-nests task workspaces under their coordinators; display-only, so it needs no consent. */
 function renest(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   environment: TerminalEnvironment,
-  dependencies: TerminalMainDependencies,
 ): Promise<RenestReport> {
-  return renestWorkspaces(
-    run,
-    {
-      home: environment.home,
-      sessionId: environment.sessionId,
-      cwd: environment.cwd,
-      apply: true,
-    },
-    dependencies.moveWorkspace === undefined ? {} : { moveWorkspace: dependencies.moveWorkspace },
-  );
+  return renestWorkspaces(terminal, {
+    home: environment.home,
+    sessionId: environment.sessionId,
+    cwd: environment.cwd,
+    apply: true,
+  });
 }
 
 async function handleFix({
   invocation,
   environment,
-  dependencies,
   run,
+  terminal,
   interaction,
   stdout,
 }: Readonly<{
   readonly invocation: TerminalInvocation;
   readonly environment: TerminalEnvironment;
-  readonly dependencies: TerminalMainDependencies;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly interaction: TerminalInteraction;
   readonly stdout: (text: string) => void;
 }>): Promise<TerminalRunResult> {
@@ -566,6 +564,7 @@ async function handleFix({
     readRegisteredProjects(environment.home).then((repoPaths) =>
       reconcileTandemResources({
         run,
+        terminal,
         home: environment.home,
         poolRoot: environment.poolRoot,
         repoPaths,
@@ -580,7 +579,7 @@ async function handleFix({
     stdout(invocation.verbose ? renderFixReportVerbose(shown) : renderFixReport(shown, details));
   };
   // Re-nesting only reorders Tandem's own workspaces in the sidebar, so it runs before any question.
-  const renested = await renest(run, environment, dependencies);
+  const renested = await renest(terminal, environment);
   let report = await reconcile(invocation.yes, invocation.yes && invocation.freeSuperseded);
   show(report);
   if (!invocation.json) stdout(renderRenest(renested, details));
@@ -618,6 +617,7 @@ async function handleHardReset({
   environment,
   dependencies,
   run,
+  terminal,
   interaction,
   stdout,
 }: Readonly<{
@@ -625,6 +625,7 @@ async function handleHardReset({
   readonly environment: TerminalEnvironment;
   readonly dependencies: TerminalMainDependencies;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly interaction: TerminalInteraction;
   readonly stdout: (text: string) => void;
 }>): Promise<TerminalRunResult> {
@@ -634,7 +635,7 @@ async function handleHardReset({
     stdout("Tandem reset cancelled; nothing was deleted.\n");
     return { exitCode: 0, status: "cancelled" };
   }
-  await applyHardReset(plan, environment, run, stdout, dependencies.resetCoordinators);
+  await applyHardReset(plan, environment, run, terminal, stdout, dependencies.resetCoordinators);
   return { exitCode: 0, status: "reset" };
 }
 
@@ -653,6 +654,7 @@ async function runProjectFlow({
   environment,
   dependencies,
   run,
+  terminal,
   interactive,
   prompter,
   stdout,
@@ -718,7 +720,7 @@ async function runProjectFlow({
   }
   closeInteraction();
   if (invocation.command === "reset") {
-    const stopped = await (dependencies.resetCoordinators ?? resetCoordinators)(run, {
+    const stopped = await (dependencies.resetCoordinators ?? resetCoordinators)(run, terminal, {
       home: environment.home,
       sessionId: environment.sessionId,
       repoPaths: roots,
@@ -735,7 +737,7 @@ async function runProjectFlow({
   // A new coordinator workspace lands at the end of the sidebar, so put each project's tasks back
   // under it, and say why whenever that could not happen. This runs before Herdr is attached.
   const renestAfterLaunches = async (launched: readonly unknown[]) => {
-    const final = await renest(run, environment, dependencies);
+    const final = await renest(terminal, environment);
     const warnings = new Set([...launched.flatMap(renestWarningsFromLaunch), ...final.warnings]);
     for (const warning of warnings) {
       stdout(`Tandem left some task workspaces where they were: ${warning}\n`);
@@ -748,6 +750,7 @@ async function runProjectFlow({
     dependencies,
     service,
     run,
+    terminal,
     renestAfterLaunches,
   );
   stdout(
@@ -785,28 +788,14 @@ function isPanelAction(value: string): value is PanelAction {
 }
 
 /**
- * Where Herdr's focus is, from what Herdr hands a plugin pane, plugin action, or popup command.
- * `TANDEM_PANEL_PROJECT` names the project a coordinator opened its panel for. `TANDEM_REPO` and
- * `HERDR_WORKSPACE_ID` are not used: the Herdr server inherits the first coordinator's.
+ * Where the terminal's focus is, from what it hands a panel, plugin action, or popup command.
+ * `TANDEM_PANEL_PROJECT` names the project a coordinator opened its panel for.
  */
-function herdrFocus(environment: TerminalEnvironment): HerdrFocus {
-  const source = environment.source;
-  let context: Record<string, unknown> = {};
-  try {
-    const parsed: unknown = JSON.parse(source.HERDR_PLUGIN_CONTEXT_JSON ?? "{}");
-    if (typeof parsed === "object" && parsed !== null) context = parsed as Record<string, unknown>;
-  } catch {
-    // No context; the active-pane variables or the directory decide.
-  }
-  const text = (value: unknown) => (typeof value === "string" ? value : undefined);
-  const workspaceId = source.HERDR_ACTIVE_WORKSPACE_ID ?? text(context.workspace_id);
+function panelFocus(environment: TerminalEnvironment): PanelFocus {
+  const focus = terminalContext.focus(environment.source);
   return {
-    ...(workspaceId === undefined ? {} : { workspaceId }),
-    cwd:
-      source.TANDEM_PANEL_PROJECT ??
-      text(context.focused_pane_cwd) ??
-      source.HERDR_ACTIVE_PANE_CWD ??
-      environment.cwd,
+    ...(focus.workspaceId === undefined ? {} : { workspaceId: focus.workspaceId }),
+    cwd: environment.source.TANDEM_PANEL_PROJECT ?? focus.cwd ?? environment.cwd,
   };
 }
 
@@ -824,6 +813,14 @@ export async function runTerminal(
     }
     const environment = resolveTerminalEnvironment(invocation, dependencies);
     const run = dependencies.run ?? runCommand;
+    const terminal =
+      dependencies.terminal ??
+      terminalBackend(
+        run,
+        dependencies.moveWorkspace === undefined
+          ? {}
+          : { moveWorkspace: dependencies.moveWorkspace },
+      );
     if (invocation.command === "status") {
       return await handleStatus({ invocation, environment, dependencies, run, stdout });
     }
@@ -849,8 +846,9 @@ export async function runTerminal(
         const failure = await runPanelAction(action, {
           readSnapshot: () => readBoardSnapshot(environment.home),
           run,
+          terminal,
           sessionId: environment.sessionId,
-          focus: herdrFocus(environment),
+          focus: panelFocus(environment),
           cwd: environment.cwd,
         });
         if (failure !== undefined) stderr(`${failure}\n`);
@@ -866,9 +864,10 @@ export async function runTerminal(
         clock: () => new Date(),
         readSnapshot: () => readBoardSnapshot(environment.home),
         run,
+        terminal,
         sessionId: environment.sessionId,
         cwd: environment.cwd,
-        focus: herdrFocus(environment),
+        focus: panelFocus(environment),
         popup: invocation.popup,
         helpUnseen: !(await Bun.file(keysSeen).exists()),
         rememberHelpSeen: () => Bun.write(keysSeen, "").then(() => undefined),
@@ -880,10 +879,7 @@ export async function runTerminal(
             process.off("SIGHUP", stop);
           };
         },
-        paneId:
-          !invocation.popup && environment.source.HERDR_PLUGIN_ENTRYPOINT_ID === PANEL_ENTRYPOINT
-            ? environment.source.HERDR_PANE_ID
-            : undefined,
+        paneId: invocation.popup ? undefined : terminalContext.panelPaneId(environment.source),
         onResize: (resized) => {
           output.on("resize", resized);
           return () => output.off("resize", resized);
@@ -895,7 +891,7 @@ export async function runTerminal(
       await runWelcome({
         input: dependencies.input ?? process.stdin,
         stdout,
-        run,
+        terminal,
         environment: environment.source,
         cwd: environment.cwd,
       });
@@ -908,8 +904,8 @@ export async function runTerminal(
         return await handleFix({
           invocation,
           environment,
-          dependencies,
           run,
+          terminal,
           interaction,
           stdout,
         });
@@ -920,6 +916,7 @@ export async function runTerminal(
           environment,
           dependencies,
           run,
+          terminal,
           interaction,
           stdout,
         });
@@ -940,6 +937,7 @@ export async function runTerminal(
         environment,
         dependencies,
         run,
+        terminal,
         interactive: interaction.interactive,
         prompter: interaction.prompter,
         stdout,

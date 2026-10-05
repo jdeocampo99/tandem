@@ -16,6 +16,7 @@ import {
   projectRequestBriefPane,
   type RequestReviewPaneDependencies,
 } from "../../src/requests/review-pane.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { type ScenarioWorld, withScenario } from "../evals/scenario.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
@@ -42,7 +43,7 @@ function dependencies(
   run: CommandRunner = world.run,
 ): RequestReviewPaneDependencies {
   return {
-    run,
+    terminal: terminalBackend(run),
     home: world.home,
     sessionId: world.sessionId,
     parentWorkspaceId: undefined,

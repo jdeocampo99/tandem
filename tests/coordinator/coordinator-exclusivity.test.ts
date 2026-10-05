@@ -27,6 +27,7 @@ import {
 } from "../../src/coordinator/registry.ts";
 import { listCoordinatorQuarantineRecords } from "../../src/coordinator/resources.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { FIRST_HEAD, fakePool, type Pool, TASK_LEASE_ID } from "./fake-pool.ts";
 
 const FIRST_SESSION = "tandem";
@@ -83,6 +84,7 @@ async function fixture(): Promise<Fixture> {
     }),
     dependencies: (processEnvironment = {}) => ({
       run: pool.run,
+      terminal: terminalBackend(pool.run),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("headless launches never attach interactively");

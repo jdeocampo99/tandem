@@ -1,11 +1,6 @@
 import { realpath } from "node:fs/promises";
-import type {
-  Clock,
-  CommandRunner,
-  RequestBriefContent,
-  RequestBriefRecord,
-  TaskRecord,
-} from "../contracts.ts";
+import type { Clock, RequestBriefContent, RequestBriefRecord, TaskRecord } from "../contracts.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import {
   abandonRequestBriefRecord,
   approveRequestBriefRecord,
@@ -38,7 +33,7 @@ export type RequestBriefWorkflowDependencies = Readonly<{
   readonly parentWorkspaceId: string | undefined;
   /** The Herdr pane the coordinator runs in; the review pane splits beside it when known. */
   readonly coordinatorPaneId: string | undefined;
-  readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   readonly store: RequestBriefStore;
   readonly listTasks: () => Promise<readonly TaskRecord[]>;
@@ -250,7 +245,7 @@ export class RequestBriefWorkflow {
 
   #paneDependencies(): RequestReviewPaneDependencies {
     return {
-      run: this.#deps.run,
+      terminal: this.#deps.terminal,
       home: this.#deps.home,
       sessionId: this.#deps.sessionId,
       parentWorkspaceId: this.#deps.parentWorkspaceId,
