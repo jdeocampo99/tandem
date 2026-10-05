@@ -4,16 +4,21 @@ local function run(cx: WindowCx, args: { string })
  local argv = { "/bin/sh", "tandem.sh", "native" }
  for _, arg in args do table.insert(argv, arg) end
  local pane = cx.session:focused()
- if pane then table.insert(argv, "--pane"); table.insert(argv, string.format("%.0f", pane)) end
  local info = if pane then cx.session:pane(pane) else nil
- if info and info.cwd and info.cwd ~= "" then table.insert(argv, "--cwd"); table.insert(argv, info.cwd) end
+ if not pane or not info or not info.cwd or string.sub(info.cwd, 1, 1) ~= "/" then
+  cx:toast("error", "Tandem couldn't run that action", "The originating pane and its absolute cwd are required.")
+  return
+ end
+ table.insert(argv, "--pane"); table.insert(argv, string.format("%.0f", pane))
+ table.insert(argv, "--cwd"); table.insert(argv, info.cwd)
  local window = tern.getenv("TERN_WINDOW_KEY")
  if window and window ~= "" then table.insert(argv, "--window"); table.insert(argv, window) end
- tern.process.run(argv, { cwd = "." }, function(result, callbackCx)
+ local ok, problem = pcall(function() tern.process.run(argv, { cwd = "." }, function(result, callbackCx)
   if result.status ~= 0 and callbackCx then
    callbackCx:toast("error", "Tandem couldn't run that action", result.stderr)
   end
- end)
+ end) end)
+ if not ok then cx:toast("error", "Tandem couldn't start that action", tostring(problem)) end
 end
 
 local function command(id: string, title: string, args: { string }, keys: { string }?)

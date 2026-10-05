@@ -84,11 +84,34 @@ identify the file, side and line stably; actions carry the same anchor in their 
 The linked package registers ⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘1–9 and ⌘⇧[ / ⌘⇧], the five Tandem palette
 entries, and task/brief/PR links. Arguments pass through an argv array and `tandem.sh`, with the
 originating pane id and cwd; no user text is interpolated into a shell command.
-The open route contract is `tandem native open task|brief|pr ID --pane ID --cwd PATH
-[--window KEY]`. Pane ids come from the current `WindowCx`, formatted as exact decimal strings.
-The window key is included only when `TERN_WINDOW_KEY` is known; WindowCx has no documented key
-accessor. Without one, the backend must refuse ambiguous targeting instead of choosing a first
-window. The subsequent action PR owns the native dispatcher.
+Every window action uses the following CLI surface:
+
+```text
+tandem native board|prs|usage|new-request|open-task CONTEXT
+tandem native open task|brief|pr ID CONTEXT
+tandem native project 1..9|prev|next CONTEXT
+CONTEXT = --pane ID --cwd PATH [--window KEY]
+```
+
+`--pane` and `--cwd` are required. Pane ids come from the current `WindowCx`, formatted as exact
+decimal strings; cwd is that pane's absolute directory, passed as one argv element. The plugin
+shows an error without spawning when either is unavailable. No context comes from
+`TANDEM_NATIVE_CWD` or a guessed first pane. Task/brief ids contain letters, digits, `_` and `-`;
+PR ids are decimal numbers. The native file route calls `native view-file PATH` with the same
+context, for renderer registration.
+
+The optional window key is an opaque Tern control-window key, never a pane, tab or session id.
+It is included only when `TERN_WINDOW_KEY` is known; WindowCx has no documented key accessor.
+The backend must prove that a supplied key owns the named pane. Without a key it derives the
+unique owning window from that exact pane and refuses ambiguous targeting. The action worker
+owns `native open`; renderer workers own board/PRs/usage/project. This layer owns the calling
+convention and plugin only, without a shared native dispatcher.
+
+Exit 0 means the action completed or the user cancelled a picker. Refusal, missing context,
+unavailable commands and effect failures exit nonzero with a useful diagnostic on stderr.
+The plugin shows nonzero stderr in an error toast and also reports synchronous spawn failure.
+Stdout is not an action protocol. A handled link stays handled on failure; the plugin never
+retries an action, including an operation whose outcome is uncertain.
 
 `ensureTernPlugin` checks the catalog and asks before linking a missing package. A failed or
 malformed catalog fails closed. The same consent adds explicit `settings.json` keybind overrides:
