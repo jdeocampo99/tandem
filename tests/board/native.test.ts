@@ -1,9 +1,11 @@
 import { expect, test } from "bun:test";
+import { z } from "zod";
 import { nativeBoardView } from "../../src/board/native.ts";
 import {
   nativeChangeSignature,
   nativePrFile,
   nativeSummaryProjects,
+  nativeViewText,
 } from "../../src/board/native-views.ts";
 import {
   type NativeTaskSummary,
@@ -17,6 +19,33 @@ import { task } from "../session/fixtures.ts";
 import { content, NOW, state, watch } from "./fixtures.ts";
 
 const PROJECT = "/work/app";
+
+test("native envelope revisions change with model content and stay stable across key order and kinds", () => {
+  const schema = z
+    .object({ version: z.literal(1), kind: z.string(), revision: z.string(), model: z.unknown() })
+    .strict();
+  const first = schema.parse(
+    JSON.parse(nativeViewText("task", { header: { title: "Before", id: "task-1" }, rows: [1, 2] })),
+  );
+  const reordered = schema.parse(
+    JSON.parse(nativeViewText("task", { rows: [1, 2], header: { id: "task-1", title: "Before" } })),
+  );
+  expect(reordered).toEqual(first);
+  const changed = schema.parse(
+    JSON.parse(nativeViewText("task", { header: { title: "After", id: "task-1" }, rows: [1, 2] })),
+  );
+  expect(changed.revision).not.toBe(first.revision);
+  const movedRow = schema.parse(
+    JSON.parse(nativeViewText("task", { header: { title: "Before", id: "task-1" }, rows: [2, 1] })),
+  );
+  expect(movedRow.revision).not.toBe(first.revision);
+  for (const kind of ["panel", "task", "brief", "pr"] as const) {
+    const file = schema.parse(JSON.parse(nativeViewText(kind, first.model)));
+    expect(file.kind).toBe(kind);
+    expect(file.revision).toBe(first.revision);
+  }
+  expect(() => nativeViewText("task", { invalid: Number.NaN })).toThrow("finite JSON");
+});
 
 test("published summaries keep stale project counts visible but never expose a stale focus session", () => {
   const summary = {

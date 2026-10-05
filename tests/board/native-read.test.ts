@@ -43,8 +43,10 @@ test("serialized brief detail exposes the exact native approval input for its di
     if (entry === undefined) throw new Error("Expected brief index");
     const detail = z
       .object({
+        version: z.literal(1),
         kind: z.literal("brief"),
-        data: z.object({
+        revision: z.string().regex(/^[a-f0-9]{64}$/),
+        model: z.object({
           requestId: z.string(),
           revision: z.number(),
           lines: z.array(z.object({ text: z.string() })),
@@ -57,22 +59,23 @@ test("serialized brief detail exposes the exact native approval input for its di
             .strict(),
         }),
       })
+      .strict()
       .parse(
         JSON.parse(
           await readFile(nativeDetailPath(world.home, world.repoPath, entry.detailFile), "utf8"),
         ),
       );
     expect(detail.kind).toBe("brief");
-    expect(detail.data.requestId).toBe(first.id);
-    expect(detail.data.revision).toBe(2);
-    expect(detail.data.lines.some((line) => line.text === "Approve the revised scope")).toBe(true);
-    expect(detail.data.approval).toEqual({
+    expect(detail.model.requestId).toBe(first.id);
+    expect(detail.model.revision).toBe(2);
+    expect(detail.model.lines.some((line) => line.text === "Approve the revised scope")).toBe(true);
+    expect(detail.model.approval).toEqual({
       briefRevision: revised.draft.revision,
       contentDigest: revised.draft.contentDigest,
       agreementDigest: revised.draft.agreementDigest,
     });
-    expect(detail.data.approval.contentDigest).not.toBe(first.draft.contentDigest);
-    expect(detail.data.approval.agreementDigest).not.toBe(first.draft.agreementDigest);
+    expect(detail.model.approval.contentDigest).not.toBe(first.draft.contentDigest);
+    expect(detail.model.approval.agreementDigest).not.toBe(first.draft.agreementDigest);
     await reader.settle();
   });
 });
@@ -122,10 +125,20 @@ test("native bundle reads saved task inspection/timeline and writes an atomic pr
     expect(first.bundle.changeSignature).toBe(second.bundle.changeSignature);
     await writeNativeViews(world.home, first);
     const path = nativeViewsPath(world.home, world.repoPath);
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual(first.bundle);
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      version: 1,
+      kind: "panel",
+      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      model: first.bundle,
+    });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
     const detailPath = nativeDetailPath(world.home, world.repoPath, detail.file);
-    expect(JSON.parse(await readFile(detailPath, "utf8"))).toEqual(detail.view);
+    expect(JSON.parse(await readFile(detailPath, "utf8"))).toEqual({
+      version: 1,
+      kind: "task",
+      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      model: detail.view.data,
+    });
     expect((await stat(detailPath)).mode & 0o777).toBe(0o600);
     expect((await readdir(join(world.home, "native-views"))).toSorted()).toEqual(
       [repositoryKey(world.repoPath), `${repositoryKey(world.repoPath)}.json`].toSorted(),

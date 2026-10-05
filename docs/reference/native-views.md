@@ -46,7 +46,32 @@ and fills in subsequent reconciliations. No empty or failing read means zero usa
 
 ## JSON schema (version 1)
 
-The authoritative, readonly TypeScript schema is `NativeViews` in
+Every native index and per-entity file matches the Luau hosting foundation's
+`NativeViewFile<Model>` from `src/tern-view/file.ts` in PR #286 (`tern/host-plugin`):
+
+```ts
+{
+  version: 1,
+  kind: "panel" | "task" | "brief" | "pr",
+  revision: string,
+  model: Model
+}
+```
+
+The index has `kind:"panel"` and `model:NativeViews`. Detail kinds are `task`, `brief`, `pr`,
+with `model:TaskPageView`, `model:BriefView`, `model:PrPaneView` respectively. There are exactly
+four envelope fields; project ownership metadata stays in the in-process publication.
+These field names and string revision type match the host's `tern-plugin/view-file.luau` loader.
+
+`revision` is the lowercase SHA-256 digest of canonical JSON **model content only**. Object keys
+sort recursively; array order remains significant, omitted object properties remain omitted, and
+non-JSON/non-finite values are refused. Identical models retain the same bytes and revision across
+writer restarts and object construction order. A changed model gets a different revision. The
+writer compares the complete canonical envelope before replacing a file; unchanged files do not
+trigger loader repaints. The presentation revision never authorizes an action and is distinct from
+the numeric brief revision at `file.model.revision` and the reviewed HEAD in a PR model.
+
+The authoritative, readonly TypeScript model schema is `NativeViews` in
 `src/board/native-views.ts`, with the domain schemas linked below. Every field here is JSON,
 including timeline events and cost receipts. No Maps, Sets, undefined values, credential data,
 provider raw payloads, validation stdout/stderr, or HTML are written. Optional fields are omitted.
@@ -72,7 +97,7 @@ All timestamps are ISO strings, milliseconds are numbers, costs are integer USD 
 }
 ```
 
-### Index summaries and detail envelopes
+### Index summaries and publication ownership
 
 Schemas: `src/board/native-views.ts`, `NativeProjectSummary`, `NativeTaskIndex`,
 `NativeBriefIndex`, `NativePrIndex`, `NativeDetail`, `NativeViewsPublication`.
@@ -89,6 +114,7 @@ NativeBriefIndex = {
   commentCount:number, detailFile:string
 }
 NativePrIndex = {header:PrPaneView["header"], readAt:string, detailFile:string}
+// In-process publication metadata, never the file envelope:
 NativeDetail =
   {version:1, project:string, kind:"task", data:TaskPageView} |
   {version:1, project:string, kind:"brief", data:BriefView} |
@@ -99,11 +125,12 @@ NativeDetail =
 harness?,branch?,costMicros?,unpricedSamples,pullRequest?}`. No timeline, findings, brief lines,
 conversation, patch or tour is embedded in these index entries. `NativeViewsPublication` is the
 in-process `{bundle:NativeViews,details:{file,view:NativeDetail}[]}` returned by `NativeViewsReader`;
-it is not a file schema. The writer refuses detail paths that escape the project directory or
-detail envelopes belonging to another project.
+it is not a file schema. The writer uses each detail's `data` as the file envelope's `model`.
+It refuses detail paths that escape the project directory or publication metadata belonging to
+another project.
 
-Each coordinator publishes only its own `summary`. At write time it reads the other root bundles'
-version-1 summaries, validating project identity, filename and heartbeat. The switcher is computed
+Each coordinator publishes only its own `model.summary`. At write time it reads the other root
+bundles' version-1 `panel` envelopes and their `model.summary` fields, validating project identity, filename and heartbeat. The switcher is computed
 from these published summaries, with no foreign task-store projection or coordinator record writes.
 Only projects with a valid published native summary appear. A summary more than ten seconds old
 shows offline, retains its last known counts and omits its stale focus session. Missing or malformed
@@ -155,7 +182,7 @@ The compact meter uses the lowest known remaining percentage among the account 5
 Schema: `src/tasks/page-view.ts`, `TaskPageView`; pure builder `taskPageView`.
 Input: `TaskRecord`, matching task/generation `TaskInspection`, `StoredTimelineEvent[]`,
 worker activity, the actual routed model when available, and `TaskCostView`.
-This model is the `data` inside the task detail envelope.
+This model is the `model` inside the task file envelope.
 
 - `header`: `{id,title,stage,elapsed,returnLabel,model?,harness?,branch?}`.
 - `rightNow`: `{text,since?,age?}` using the shared panel tool vocabulary.
@@ -176,7 +203,7 @@ This model is the `data` inside the task detail envelope.
 ### Brief pane
 
 Schema: `src/requests/native-view.ts`, `BriefView`; pure builder `briefView`.
-This model is the `data` inside the brief detail envelope.
+This model is the `model` inside the brief file envelope.
 
 ```ts
 {
@@ -196,9 +223,9 @@ the larger of added/removed line counts, so deletions count too; first drafts ha
 changes. Comments must match request, revision, content digest and line id. Old comments never
 reattach to a different revision. The approval payload identifies exactly the visible draft;
 the action handler must still recheck the authoritative revision and both digests.
-`detail.data.approval` is exactly the JSON input for
+`file.model.approval` is exactly the JSON input for
 `tandem native brief-approve REQUEST_ID --input FILE`. Write those three values to the input
-file untouched; use `detail.data.requestId` as the positional request id. All three values come
+file untouched; use `file.model.requestId` as the positional request id. All three values come
 from the same draft used to produce the visible lines, including its agreement digest.
 The builder accepts comments and a browser URL; their collection and CLI actions belong to the
 annotation/action integration, which can supply them when opening the pane.
@@ -206,7 +233,7 @@ annotation/action integration, which can supply them when opening the pane.
 ### PR pane and diff/tour
 
 Schema: `src/pr-review/native-view.ts`, `PrPaneView`. Input schema: `CachedPullRequest`.
-This model is the `data` inside the PR detail envelope.
+This model is the `model` inside the PR file envelope.
 Pure builder: `prPaneView`; effectful cache read: `src/pr-watch/native-cache.ts`.
 Tour chapters/stops reuse `ChapterInput` and `TourStopInput` from `src/pr-review/page.ts`.
 The existing HTML review page and native view share `parsePatch` in `src/pr-review/patch.ts`.

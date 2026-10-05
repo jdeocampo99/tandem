@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { z } from "zod";
 import { repositoryKey } from "../config/repositories.ts";
 import type { IsoTimestamp } from "../contracts.ts";
-import type { NativeProjectSummary, NativeViewsPublication } from "./native-views.ts";
+import {
+  type NativeProjectSummary,
+  type NativeViewsPublication,
+  nativeViewText,
+} from "./native-views.ts";
 import { type BoardView, isBoardView } from "./view.ts";
 
 /** A project's open coordinator chat, so the panel can focus it. */
@@ -118,12 +122,14 @@ export async function writeNativeViews(
       mode: 0o700,
     });
   for (const detail of details)
-    await writeNativeFile(nativeDetailPath(home, bundle.project, detail.file), detail.view);
-  await writeNativeFile(nativeViewsPath(home, bundle.project), bundle);
+    await writeNativeFile(
+      nativeDetailPath(home, bundle.project, detail.file),
+      nativeViewText(detail.view.kind, detail.view.data),
+    );
+  await writeNativeFile(nativeViewsPath(home, bundle.project), nativeViewText("panel", bundle));
 }
 
-async function writeNativeFile(path: string, value: unknown): Promise<void> {
-  const text = `${JSON.stringify(value)}\n`;
+async function writeNativeFile(path: string, text: string): Promise<void> {
   try {
     if ((await readFile(path, "utf8")) === text) return;
   } catch (error) {
@@ -138,8 +144,7 @@ async function writeNativeFile(path: string, value: unknown): Promise<void> {
   }
 }
 
-const projectSummarySchema = z.object({
-  version: z.literal(1),
+const projectSummaryModelSchema = z.object({
   project: z.string().min(1),
   writtenAt: z.string().datetime(),
   summary: z.object({
@@ -152,6 +157,12 @@ const projectSummarySchema = z.object({
     done: z.number().int().nonnegative(),
     sessionId: z.string().optional(),
   }),
+});
+const projectSummarySchema = z.object({
+  version: z.literal(1),
+  kind: z.literal("panel"),
+  revision: z.string().min(1),
+  model: projectSummaryModelSchema,
 });
 
 /** Read only summaries already published by their owners. No task store or coordinator state is consulted. */
@@ -176,7 +187,7 @@ export async function readNativeProjectSummaries(
       if (!entry.isFile()) throw new TypeError("Native summary must be a regular file");
       const parsed = projectSummarySchema.parse(
         JSON.parse(await readFile(join(directory, file), "utf8")),
-      );
+      ).model;
       if (
         parsed.project !== parsed.summary.repoPath ||
         parsed.writtenAt !== parsed.summary.writtenAt ||
