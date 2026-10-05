@@ -65,6 +65,12 @@ export type FocusResult =
   | Readonly<{ focused: true }>
   | Readonly<{ focused: false; code: number; detail: string }>;
 
+/** The last proven window width, and any limitation that prevented fitting the panel. */
+export type PanelFitResult = Readonly<{
+  fittedWidth: number | undefined;
+  warnings: readonly string[];
+}>;
+
 export type AgentState = "idle" | "working" | "blocked" | "unknown";
 
 /** Presentation-only lifecycle state for the pane an agent runs in; it never grants ownership. */
@@ -227,13 +233,13 @@ export type TerminalBackend = Readonly<{
   /** Closes a panel; one already gone counts as closed. */
   closePanel(target: SessionTarget & Readonly<{ panelPaneId: string }>): Promise<void>;
   /**
-   * Brings the panel back to `columns` wide, once per window width: returns the window width it
-   * fitted for, or `fittedWidth` unchanged when there was nothing to do or the terminal refused.
+   * Brings the panel back to `columns` wide, once per window width. Retains `fittedWidth` when
+   * nothing changed or fitting was refused; terminals can report a limitation as a warning.
    */
   fitPanel(
     target: SessionTarget &
       Readonly<{ paneId: string; columns: number; fittedWidth: number | undefined }>,
-  ): Promise<number | undefined>;
+  ): Promise<PanelFitResult>;
   /** Publishes the agent's state on the pane this process inherited, or undefined outside one. */
   agentStatusReporter(
     input: Readonly<{

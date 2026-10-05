@@ -428,6 +428,34 @@ test("a signal closes the panel and puts the terminal back", async () => {
   expect(terminal.written.at(-1)).toContain("\x1b[?1049l");
 });
 
+test("a terminal that cannot resize the panel explains the limitation in its footer", async () => {
+  const terminal = fakeTerminal();
+  const deps = terminal.deps();
+  const { promise: warned, resolve: warningShown } = Promise.withResolvers<void>();
+  const running = runPanel({
+    ...deps,
+    paneId: "panel",
+    terminal: {
+      ...deps.terminal,
+      fitPanel: async (input) => ({
+        fittedWidth: input.fittedWidth,
+        warnings: ["Cannot resize this pane."],
+      }),
+    },
+    write: (text) => {
+      deps.write(text);
+      if (text.includes("Cannot resize this pane.")) warningShown();
+    },
+  });
+  try {
+    await warned;
+    expect(terminal.written.join("")).toContain("Cannot resize this pane.");
+  } finally {
+    terminal.stop();
+    await running;
+  }
+});
+
 test("a drawing failure still puts the terminal back before it surfaces", async () => {
   const terminal = fakeTerminal();
   let calls = 0;

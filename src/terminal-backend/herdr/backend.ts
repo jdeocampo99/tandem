@@ -74,7 +74,10 @@ export function herdrBackend(
     openPanel: (input) => openPanel(run, input),
     isPanelOpen: (input) => isPanelOpen(run, input),
     closePanel: (target) => closePanel(run, target),
-    fitPanel: (target) => fitPanel(run, target),
+    fitPanel: async (target) => ({
+      fittedWidth: await fitPanel(run, target),
+      warnings: [],
+    }),
     agentStatusReporter: (input) => agentStatusReporter(run, input),
   };
 }
