@@ -123,6 +123,10 @@ tandem native open task|brief|pr ID CONTEXT
 tandem native project 1..9|prev|next CONTEXT
 tandem native brief-comment|brief-request-changes|brief-approve REQUEST_ID --input FILE CONTEXT
 tandem native pr-comment TASK_ID --text TEXT CONTEXT
+tandem native pr-comment TASK_ID --input FILE CONTEXT
+tandem native review-submit TASK_ID --input FILE CONTEXT
+tandem native restart TASK_ID CONTEXT
+tandem native steer TASK_ID --text TEXT CONTEXT
 CONTEXT = --pane ID --cwd PATH [--window KEY]
 ```
 
@@ -142,7 +146,7 @@ convention and plugin only, without a shared native dispatcher.
 
 ### JSON action input
 
-Brief actions pass `--input` and an absolute file path as separate argv elements. Renderers
+JSON actions pass `--input` and an absolute file path as separate argv elements. Renderers
 finish writing one UTF-8 JSON object before spawning the CLI, with a new file for each action
 in a private Tandem-owned directory supplied by the TypeScript view producer. The directory
 uses `0700`; TypeScript-created input files use `0600`. Never put action input in the plugin
@@ -176,17 +180,36 @@ native brief-request-changes REQUEST_ID --input /absolute/private/action.json
   --pane ID --cwd /absolute/project/path [--window KEY]
 ```
 
-`pr-comment` takes `--text` and the user's complete text as separate argv elements, with the
-same context. The action worker owns all brief and PR mutation handlers alongside `native open`;
-renderer workers own collecting input, writing the action file, invoking the CLI and cleanup.
+`pr-comment` accepts either `--text TEXT` or `--input FILE`, never both. Its JSON object has
+optional `text` and `comments: [{ "file": "src/file.ts", "line": 12, "text": "Feedback" }]`.
+The path and positive one-based line are the displayed diff anchor. With `--text`, the complete
+user text is one argv element, including spaces and newlines.
+
+`review-submit` uses the existing `ReviewSubmission` object from `src/pr-review/page.ts`:
+`tandemPrReview: 1`, `verdict: "comment" | "approve" | "request-changes"`, `summary`,
+`drafts: [{ id, decision: "post" | "drop" | "undecided", body? }]`, and
+`yours: [{ file, line, body }]`. The CLI reuses the pinned-HEAD and no-double-post checks of
+the review page; the renderer does not publish directly.
+
+`restart` names the task and goes through central recovery. `steer` also requires the user's
+direction as one `--text` argv value. Both carry the same explicit pane/cwd/window context.
+The action worker owns these handlers alongside brief/PR mutations and `native open`;
+renderers own collecting input, writing the action file, invoking the CLI and cleanup.
 
 ### Completion and installation
 
 Exit 0 means the action completed or the user cancelled a picker. Refusal, missing context,
 unavailable commands and effect failures exit nonzero with a useful diagnostic on stderr.
 The plugin shows nonzero stderr in an error toast and also reports synchronous spawn failure.
-Stdout is not an action protocol. A handled link stays handled on failure; the plugin never
-retries an action, including an operation whose outcome is uncertain.
+Renderers may add `--json` to consume the CLI's structured result on stdout, including warnings;
+that output does not authorize subsequent mutations. A handled link stays handled on failure;
+the plugin never retries an action, including an operation whose outcome is uncertain.
+
+The terminal port's `openView` returns `{ opened: boolean, warnings: readonly string[],
+fallback?: "brief-review" }`. The action handler carries warnings in its result and fails
+when no view opened. The `brief-review` fallback tells the action handler to use the existing
+request-brief review workflow and verify that its pane opened. Callers do not create a second
+view or retry an open merely because warnings or a fallback are present.
 
 `ensureTernPlugin` checks the catalog and asks before linking a missing package. A failed or
 malformed catalog fails closed. The same consent adds explicit `settings.json` keybind overrides:
