@@ -278,6 +278,11 @@ export async function openView(context: CliCommandContext): Promise<CliCommandOu
   });
   if (result.fallback === "brief-review" && view.kind === "brief") {
     const brief = await service.reviewRequestBrief(view.requestId);
+    if (brief.record.reviewPane?.status !== "open") {
+      throw new Error(
+        brief.record.reviewPane?.reason ?? "The request brief review pane could not be opened",
+      );
+    }
     return {
       value: {
         opened: brief.record.reviewPane?.status === "open",
@@ -285,6 +290,9 @@ export async function openView(context: CliCommandContext): Promise<CliCommandOu
         brief,
       },
     };
+  }
+  if (!result.opened) {
+    throw new Error(result.warnings.join("; ") || `The terminal could not open the ${kind} view`);
   }
   return { value: result };
 }

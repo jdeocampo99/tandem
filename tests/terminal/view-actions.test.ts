@@ -40,7 +40,7 @@ async function fixture() {
     sessionId: "isolated",
     workspaceId: "workspace",
     tabId: "tab",
-    paneId: "coordinator",
+    paneId: "101",
     role: "coordinator",
     generation: 0,
   } as const;
@@ -363,16 +363,34 @@ test("Herdr reports unsupported native views and uses its existing review pane f
       ...f.deps,
       terminal: { ...f.deps.terminal, openView: herdr.openView },
     });
-    expect(result.result?.value).toMatchObject({ opened: false });
-    expect(JSON.stringify(result.result?.value)).toContain(
-      "Herdr cannot display a native task view",
-    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.error?.message).toContain("Herdr cannot display a native task view");
     const reviews: string[] = [];
     const service = {
       ...f.service,
       reviewRequestBrief: async (id: string) => {
         reviews.push(id);
-        return f.service.requestBrief(id);
+        const brief = await f.service.requestBrief(id);
+        return {
+          ...brief,
+          record: {
+            ...brief.record,
+            reviewPane: {
+              status: "open" as const,
+              endpoint: {
+                sessionId: "isolated",
+                workspaceId: "workspace",
+                tabId: "tab",
+                paneId: "review",
+                role: "coordinator" as const,
+                generation: 0,
+              },
+              renderedRevision: brief.record.draft.revision,
+              renderedPath: join(f.home, "brief.md"),
+              observedAt: NOW,
+            },
+          },
+        };
       },
     };
     const brief = await runCli(["open", "brief", f.record.id], {
@@ -382,6 +400,24 @@ test("Herdr reports unsupported native views and uses its existing review pane f
     });
     expect(brief.exitCode).toBe(0);
     expect(reviews).toEqual([f.record.id]);
+    const refused = await runCli(
+      ["open", "brief", f.record.id, "--pane", "101", "--cwd", f.repo, "--window", "opaque"],
+      {
+        ...f.deps,
+        service,
+        terminal: { ...f.deps.terminal, openView: herdr.openView },
+      },
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.error?.message).toContain("Herdr cannot target an opaque Tern control window");
+    expect(reviews).toEqual([f.record.id]);
+    const unopened = await runCli(["open", "brief", f.record.id], {
+      ...f.deps,
+      service: { ...f.service, reviewRequestBrief: f.service.requestBrief },
+      terminal: { ...f.deps.terminal, openView: herdr.openView },
+    });
+    expect(unopened.exitCode).not.toBe(0);
+    expect(unopened.error?.message).toContain("could not be opened");
   } finally {
     await f.close();
   }
@@ -556,8 +592,8 @@ test("a numeric PR route resolves its durable task and refuses an ambiguous PR n
   }
 });
 
-for (const contextSource of ["flags", "environment"] as const) {
-  test(`native open selects the project and carries the plugin context from ${contextSource}`, async () => {
+for (const windowKey of [undefined, "opaque-control-window"] as const) {
+  test(`native open carries exact pane/cwd context with window key ${windowKey ?? "absent"}`, async () => {
     const f = await fixture();
     try {
       const task = await createPrTask(f);
@@ -578,8 +614,10 @@ for (const contextSource of ["flags", "environment"] as const) {
           "pr",
           "42",
           "--pane",
-          "coordinator",
-          ...(contextSource === "flags" ? ["--cwd", f.clean, "--window", "own-window"] : []),
+          "101",
+          "--cwd",
+          f.clean,
+          ...(windowKey === undefined ? [] : ["--window", windowKey]),
         ],
         {
           ...dependencies,
@@ -596,7 +634,6 @@ for (const contextSource of ["flags", "environment"] as const) {
           processEnvironment: {
             ...f.deps.processEnvironment,
             TANDEM_SESSION: "another-session",
-            TANDEM_NATIVE_CWD: contextSource === "environment" ? f.clean : "/unrelated/project",
           },
         },
       );
@@ -605,12 +642,86 @@ for (const contextSource of ["flags", "environment"] as const) {
       expect(scopes).toEqual([{ repoPath: f.repo, path: f.clean }]);
       expect(origins).toEqual([
         {
-          paneId: "coordinator",
+          paneId: "101",
           cwd: f.clean,
-          ...(contextSource === "flags" ? { windowId: "own-window" } : {}),
+          ...(windowKey === undefined ? {} : { windowId: windowKey }),
         },
       ]);
       expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test("native open refuses missing or invalid origin context before reading panes or opening", async () => {
+  const f = await fixture();
+  try {
+    const invalidContexts = [
+      [],
+      ["--cwd", f.repo],
+      ["--pane", "101"],
+      ["--pane", "1.5", "--cwd", f.repo],
+      ["--pane", " 101 ", "--cwd", f.repo],
+      ["--pane", "-1", "--cwd", f.repo],
+      ["--pane", "0101", "--cwd", f.repo],
+      ["--pane", "9007199254740992", "--cwd", f.repo],
+      ["--pane", "101", "--cwd", "relative/path"],
+    ];
+    let reads = 0;
+    for (const flags of invalidContexts) {
+      const errors: string[] = [];
+      const result = await runTerminal(["native", "open", "brief", f.record.id, ...flags], {
+        ...f.deps,
+        terminal: {
+          ...f.deps.terminal,
+          listPanes: async (input) => {
+            reads += 1;
+            return f.deps.terminal.listPanes(input);
+          },
+        },
+        processEnvironment: { ...f.deps.processEnvironment, TANDEM_NATIVE_CWD: f.repo },
+        stderr: (message) => errors.push(message),
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.error?.message).toContain("native open requires");
+      expect(errors.join("")).toContain(result.error?.message ?? "missing error");
+    }
+    expect(reads).toBe(0);
+    expect(f.opened).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const outcome of ["refusal", "failure"] as const) {
+  test(`native open reports backend ${outcome} on stderr and never retries`, async () => {
+    const f = await fixture();
+    try {
+      let attempts = 0;
+      const errors: string[] = [];
+      const reason =
+        outcome === "refusal" ? "Ambiguous control window for pane 101" : "Tern control failed";
+      const result = await runTerminal(
+        ["native", "open", "brief", f.record.id, "--pane", "101", "--cwd", f.repo],
+        {
+          ...f.deps,
+          terminal: {
+            ...f.deps.terminal,
+            openView: async () => {
+              attempts += 1;
+              if (outcome === "failure") throw new Error(reason);
+              return { opened: false, warnings: [reason] };
+            },
+          },
+          stderr: (message) => errors.push(message),
+        },
+      );
+      expect(result.exitCode).not.toBe(0);
+      expect(result.error?.message).toBe(reason);
+      expect(errors.join("")).toContain(reason);
+      expect(attempts).toBe(1);
+      expect(f.opened).toEqual([]);
     } finally {
       await f.close();
     }
@@ -627,7 +738,7 @@ test("native open refuses conflicting project and pane context before opening a 
         "brief",
         f.record.id,
         "--pane",
-        "unrelated",
+        "999",
         "--cwd",
         f.repo,
         "--window",

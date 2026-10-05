@@ -143,12 +143,17 @@ commands are also available in the advanced action CLI (`bun src/cli.ts`).
   For `pr`, ID is the linked task id (including a `pr-review` task) or a PR number. A number
   resolves only within the selected project and is refused when ambiguous. Herdr opens briefs through the
   existing review workflow and returns explicit warnings for unsupported native task/PR views.
-  Plugin context uses `--pane PANE_ID` and `TANDEM_NATIVE_CWD` from the focused pane.
-  Explicit `--cwd PATH` overrides that environment value; `--window WINDOW_KEY` is optional.
+  Native open requires `--pane PANE_ID` (the exact decimal integer pane id) and `--cwd PATH`
+  (the absolute originating pane cwd). `--window WINDOW_KEY` is optional and carries an opaque
+  Tern control window key, never a pane/tab/session id. Without a known window key, the backend
+  must derive the unique owning control window from the exact pane or refuse ambiguous mutation.
+  Missing or invalid pane/cwd is refused; inherited process cwd never substitutes for it.
   The pane and cwd must select exactly one recorded project/session before the scoped service is
   created. Context never grants ownership; the coordinator is proven separately. The backend
   receives that origin and must honor the supplied window/pane or return a refusal, rather than
   opening in an unrelated window.
+  Successful opens exit 0; refusal or failure exits nonzero with the reason on stderr. Opens are
+  attempted once, with no automatic retry.
 - Brief comment, request-changes, and approval use the revision-bound paths in
   [request-briefs.md](request-briefs.md#native-brief-feedback).
 - `pr-comment TASK_ID --text TEXT` sends an in-scope fix request to the implementation task's

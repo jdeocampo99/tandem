@@ -26,7 +26,9 @@ import {
   type TerminalRunResult,
 } from "./terminal/arguments.ts";
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
+import { parseCliArgs } from "./terminal/cli-arguments.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
+import { validateNativeOpenContext } from "./terminal/cli-view-context.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
 import {
   fixCleanupCount,
@@ -824,6 +826,7 @@ export async function runTerminal(
           "tandem native requires open, brief-comment, brief-request-changes, brief-approve, pr-comment, restart, steer, or review-submit",
         );
       }
+      if (action === "open") validateNativeOpenContext(parseCliArgs(argv.slice(1)));
       const result = await runCli(argv.slice(1), {
         ...(dependencies.cwd === undefined ? {} : { cwd: dependencies.cwd }),
         ...(dependencies.processEnvironment === undefined

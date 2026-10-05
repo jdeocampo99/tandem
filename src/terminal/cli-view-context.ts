@@ -1,8 +1,25 @@
+import { isAbsolute } from "node:path";
 import type { TandemBoundaryEnvironment } from "../config/environment.ts";
 import { canonicalPath, pathIsWithin } from "../coordinator/record.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import type { PaneListing, TerminalBackend, ViewOrigin } from "../terminal-backend/contract.ts";
-import type { CliInvocation } from "./cli-arguments.ts";
+import { type CliInvocation, CliUsageError } from "./cli-arguments.ts";
+
+/** Native plugin opens require the exact pane and cwd, never inherited process context. */
+export function validateNativeOpenContext(invocation: CliInvocation): void {
+  if (invocation.options.help) return;
+  const { viewPaneId, viewCwd } = invocation.options;
+  if (
+    viewPaneId === undefined ||
+    !/^(?:0|[1-9][0-9]*)$/u.test(viewPaneId) ||
+    !Number.isSafeInteger(Number(viewPaneId))
+  ) {
+    throw new CliUsageError("native open requires --pane with an exact decimal integer pane ID");
+  }
+  if (viewCwd === undefined || !isAbsolute(viewCwd)) {
+    throw new CliUsageError("native open requires --cwd with the absolute originating pane cwd");
+  }
+}
 
 export function viewOriginFrom(invocation: CliInvocation): ViewOrigin | undefined {
   const { viewPaneId, viewWindowId, viewCwd } = invocation.options;

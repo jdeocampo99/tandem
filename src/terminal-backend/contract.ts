@@ -216,6 +216,8 @@ export type TerminalBackend = Readonly<{
 
   /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
    * Supplied origin window/pane context must be honored or refused; never target another window.
+   * A windowId is an opaque control window key. Without it, derive the unique owning control
+   * window from the exact origin pane or refuse ambiguous mutation; never select the first window.
    * Unsupported presentations return an explicit warning and never type into the conversation.
    */
   openView(

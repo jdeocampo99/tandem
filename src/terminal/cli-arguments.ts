@@ -1,10 +1,13 @@
 import type { CreatableTaskKind, ThinkingLevel } from "../contracts.ts";
 
-const PATH_OPTIONS: Readonly<Record<string, true>> = {
+/** Paths and opaque native identifiers preserve their literal argv spelling. */
+const LITERAL_OPTIONS: Readonly<Record<string, true>> = {
   "--home": true,
   "--pool-root": true,
   "--repo": true,
   "--cwd": true,
+  "--pane": true,
+  "--window": true,
   "--extension": true,
   "--input": true,
   "--config": true,
@@ -269,7 +272,7 @@ function optionValue(
 ): Readonly<{ value: string; nextIndex: number }> {
   const token = argv[index];
   if (token === undefined) throw new CliUsageError(`${name} requires a value`);
-  const readValue = PATH_OPTIONS[name] === true ? pathText : text;
+  const readValue = LITERAL_OPTIONS[name] === true ? pathText : text;
   const equalsIndex = token.indexOf("=");
   if (equalsIndex >= 0) {
     const value = token.slice(equalsIndex + 1);
