@@ -73,7 +73,7 @@ import {
 import { readTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
 import { runWelcome } from "./terminal/welcome.ts";
 import { terminalBackend, terminalContext } from "./terminal-backend/compose.ts";
-import type { TerminalBackend, WorkspaceMover } from "./terminal-backend/contract.ts";
+import type { TerminalBackend } from "./terminal-backend/contract.ts";
 
 const HELP_TEXT = `Tandem
 
@@ -132,8 +132,6 @@ export type TerminalMainDependencies = Readonly<{
   readonly resetCoordinators?: typeof resetCoordinators;
   /** The Tandem checkout, whose coordinator always opens; tests inject a temporary one. */
   readonly tandemCheckout?: string;
-  /** Sends workspace.move; tests inject one so they never reach a live socket. */
-  readonly moveWorkspace?: WorkspaceMover;
   /** The terminal Tandem drives; built from `run` when absent. */
   readonly terminal?: TerminalBackend;
 }>;
@@ -853,14 +851,7 @@ export async function runTerminal(
     }
     const environment = resolveTerminalEnvironment(invocation, dependencies);
     const run = dependencies.run ?? runCommand;
-    const terminal =
-      dependencies.terminal ??
-      terminalBackend(
-        run,
-        dependencies.moveWorkspace === undefined
-          ? {}
-          : { moveWorkspace: dependencies.moveWorkspace },
-      );
+    const terminal = dependencies.terminal ?? terminalBackend(run);
     if (invocation.command === "status") {
       return await handleStatus({ invocation, environment, dependencies, run, stdout });
     }

@@ -18,10 +18,17 @@ import type {
   SessionPane,
   SessionTarget,
   WorkspaceListing,
-  WorkspaceMoveRequest,
-  WorkspaceMover,
 } from "../contract.ts";
 import { errorCode, herdrRequest, isSessionMissing, parseAnswer } from "./protocol.ts";
+
+/** Herdr's socket effect, injected for isolated composition and tests. */
+export type WorkspaceMoveRequest = Readonly<{
+  socketPath: string;
+  workspaceId: string;
+  insertIndex: number;
+}>;
+
+export type WorkspaceMover = (request: WorkspaceMoveRequest) => Promise<unknown>;
 
 const SOCKET_RESPONSE_LIMIT = 4 * 1024 * 1024;
 

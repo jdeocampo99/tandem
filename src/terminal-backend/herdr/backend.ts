@@ -1,5 +1,5 @@
 import type { CommandRunner } from "../../contracts.ts";
-import type { TerminalBackend, TerminalBackendOptions } from "../contract.ts";
+import type { TerminalBackend } from "../contract.ts";
 import {
   close,
   closeOwned,
@@ -32,10 +32,11 @@ import {
   sessionDetail,
   sessionRunning,
   snapshot,
+  type WorkspaceMover,
   workspaceLabel,
 } from "./workspaces.ts";
 
-export type HerdrBackendOptions = TerminalBackendOptions;
+export type HerdrBackendOptions = Readonly<{ moveWorkspace?: WorkspaceMover }>;
 
 /** The terminal port over `herdr --session <session>` commands sent through `run`. */
 export function herdrBackend(
