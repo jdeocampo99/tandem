@@ -71,7 +71,12 @@ import {
 } from "./terminal/projects.ts";
 import { readTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
 import { runWelcome } from "./terminal/welcome.ts";
-import { terminalBackend, terminalContext } from "./terminal-backend/compose.ts";
+import {
+  installTerminalPlugin,
+  reloadTerminalPlugin,
+  terminalBackend,
+  terminalContext,
+} from "./terminal-backend/compose.ts";
 import type { TerminalBackend } from "./terminal-backend/contract.ts";
 
 const HELP_TEXT = `Tandem
@@ -716,6 +721,35 @@ async function runProjectFlow({
       sessionId: environment.sessionId,
     };
   }
+  const pluginDependencies = {
+    run,
+    cwd: environment.cwd,
+    print: stdout,
+    env: {
+      ...(environment.source.TERN_CONFIG_DIR === undefined
+        ? {}
+        : { TERN_CONFIG_DIR: environment.source.TERN_CONFIG_DIR }),
+      ...(environment.source.TERN_DAEMON_SOCKET === undefined
+        ? {}
+        : { TERN_DAEMON_SOCKET: environment.source.TERN_DAEMON_SOCKET }),
+    },
+    ...(interactive && prompter !== undefined
+      ? {
+          confirm: async (question: string) =>
+            (await prompter.ask(question, {
+              choices: [
+                { name: "Yes", value: "yes" },
+                { name: "Not now", value: "not-now" },
+              ],
+              default: "not-now",
+            })) === "yes",
+        }
+      : {}),
+  };
+  if (invocation.command !== "update") {
+    if (!(await installTerminalPlugin(environment.home, pluginDependencies)))
+      stdout("Tandem left Tern's views and shortcuts unchanged. Run setup.sh to add them later.\n");
+  }
   closeInteraction();
   if (invocation.command === "reset") {
     const stopped = await (dependencies.resetCoordinators ?? resetCoordinators)(run, terminal, {
@@ -755,6 +789,7 @@ async function runProjectFlow({
     `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
   );
   if (invocation.command === "update") {
+    await reloadTerminalPlugin(environment.home, pluginDependencies);
     stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_CHECKOUT)}.\n`);
   }
   for (const [index, launch] of launches.entries()) {

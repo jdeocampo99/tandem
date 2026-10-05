@@ -207,7 +207,7 @@ import {
   terminalBackend,
   ternAvailability,
 } from "../terminal-backend/compose.ts";
-import type { TerminalBackend } from "../terminal-backend/contract.ts";
+import type { TerminalAvailability, TerminalBackend } from "../terminal-backend/contract.ts";
 import {
   assertTerminalSwitch,
   type TerminalChoiceResult,
@@ -325,6 +325,8 @@ export type TandemServiceOptions = Readonly<{
   }>;
   /** Callback runs under coordinator launch-lock then task-store serialization; it must not reacquire the launch lock. */
   readonly refreshSource?: () => Promise<SourceRefreshResult>;
+  /** Coordinator host offers separate plugin consent after a Tern choice is saved. */
+  readonly installTerminalPlugin?: (readiness: TerminalAvailability) => Promise<boolean>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
   readonly clock?: Clock;
@@ -576,6 +578,7 @@ type ServiceDependencies = Readonly<{
       }>
     | undefined;
   refreshSource: (() => Promise<SourceRefreshResult>) | undefined;
+  installTerminalPlugin: ((readiness: TerminalAvailability) => Promise<boolean>) | undefined;
   workerTimeoutMs: number | undefined;
   run: CommandRunner;
   terminal: TerminalBackend;
@@ -1124,7 +1127,7 @@ class TandemController {
     if (requested === "tern") this.#onboardingTern = Promise.resolve(available);
     const reason = ternFallbackReason(available);
     const terminal = available.status === "ready" ? requested : "herdr";
-    return this.#deps.store.exclusive(async () => {
+    const selected = await this.#deps.store.exclusive(async () => {
       const tasks = await this.#deps.store.list();
       const state = await readRuntimeState(this.#deps.runtimePath);
       assertTerminalSwitch(this.#deps.terminal.name, requested, tasks, state);
@@ -1132,6 +1135,18 @@ class TandemController {
       await saveTerminalChoice(this.#deps.home, terminal);
       return { requested, terminal, ...(reason === undefined ? {} : { reason }) };
     });
+    if (
+      selected.terminal === "tern" &&
+      this.#deps.installTerminalPlugin !== undefined &&
+      !(await this.#deps.installTerminalPlugin(available))
+    ) {
+      return {
+        ...selected,
+        reason:
+          "Tern selected. Tandem's views and shortcuts were left unchanged; run setup.sh to add them later.",
+      };
+    }
+    return selected;
   }
 
   private async onboardingFacts(repoPath: string): Promise<OnboardingFacts> {
@@ -2893,6 +2908,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     poolRoot,
     sourceWorkspace,
     refreshSource,
+    installTerminalPlugin: options.installTerminalPlugin,
     workerTimeoutMs,
     run,
     terminal: terminalBackend(run, { home }),

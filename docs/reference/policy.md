@@ -299,6 +299,13 @@ and probes again when reopened. The `terminal-setting` action rechecks availabil
 Tern. The probe reads the executable and account gate in a temporary, isolated daemon and window,
 closes its own resources, and changes no settings in the user's Tern configuration.
 
+After a ready Tern choice is saved, onboarding runs the injected plugin installer outside the state
+lock. Its separate consent prompt approves linking Tandem's views and adding its shortcuts; declining
+leaves them unchanged. Composition calls `ensureTernPlugin` only for ready Tern, while Herdr and
+unconfirmed availability never reach plugin commands. A saved Tern choice outside that onboarding
+flow is probed again before plugin installation. `tandem update` reloads an existing selected Tern
+plugin and never installs one without consent.
+
 Switching is refused under the state lock while tasks are queued or running, jobs are active, or
 reservations or launch outcomes retain uncertain ownership, including presentations. Availability
 is checked outside the lock; the switch is checked again under the lock immediately before saving.
