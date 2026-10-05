@@ -574,11 +574,14 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
   }
   assertExactKeys(
     value,
-    ["sessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
+    ["sessionId", "terminalSessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
     source,
   );
   return {
     sessionId: requiredText(value, "sessionId", source),
+    ...(value.terminalSessionId === undefined
+      ? {}
+      : { terminalSessionId: requiredText(value, "terminalSessionId", source) }),
     workspaceId: requiredText(value, "workspaceId", source),
     tabId: requiredText(value, "tabId", source),
     paneId: requiredText(value, "paneId", source),

@@ -1014,6 +1014,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       role: "coordinator",
       generation: 0,
       env: serverEnvironment,
+      ...(previous === undefined ? {} : { previousEndpoint: previous.endpoint }),
     }),
   );
   startup.onEndpointCreated(endpoint);

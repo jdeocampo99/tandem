@@ -111,10 +111,22 @@ nativeTest(
       const shown = JSON.parse(listed.stdout) as { sessions: { tabs: { shown: boolean }[] }[] };
       expect(shown.sessions[0]?.tabs.map((tab) => tab.shown)).toEqual([true, false]);
       await terminal.close({ endpoint: worker.endpoint, cwd: root });
-      await terminal.notify({ ...session, title: "Done", body: "Tandem isolated native check" });
+      await ternBackend(run, {
+        binary: TERN_BINARY,
+        notificationEndpoint: async () => created.endpoint,
+      }).notify({ ...session, title: "Done", body: "Tandem isolated native check" });
       await terminal.close(target);
       expect(await terminal.listPanes(session)).toEqual([]);
       expect(await terminal.listWorkspaces(session)).toEqual([]);
+      const relaunched = await ternBackend(run, { binary: TERN_BINARY }).createWorkspace({
+        ...session,
+        label: "coordinator relaunched",
+        role: "coordinator",
+        generation: 0,
+        previousEndpoint: created.endpoint,
+      });
+      expect(relaunched.endpoint.terminalSessionId).toBe(created.endpoint.terminalSessionId);
+      await terminal.close({ endpoint: relaunched.endpoint, cwd: root });
     } finally {
       daemon.kill("SIGTERM");
       await daemon.exited;

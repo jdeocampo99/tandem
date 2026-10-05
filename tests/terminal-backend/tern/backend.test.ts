@@ -2,12 +2,22 @@ import { expect, test } from "bun:test";
 import { EndpointOwnershipError } from "../../../src/adapters/primitives.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
 import { assertStoppedCoordinatorShell } from "../../../src/coordinator/ownership.ts";
+import { recordPath } from "../../../src/coordinator/record.ts";
+import { readCoordinatorRecord, saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
+import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import {
+  Created,
+  decode,
   TernOutcomeUnknownError,
   TernUnsupportedOperationError,
 } from "../../../src/terminal-backend/tern/protocol.ts";
-import { withScenario } from "../../evals/scenario.ts";
+import {
+  scenarioRuntimeTask,
+  seedScenarioRuntime,
+  seedScenarioTask,
+  withScenario,
+} from "../../evals/scenario.ts";
 
 test("Tern port pins identity and observable outcomes through a pane lifecycle", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
@@ -101,6 +111,125 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
   });
 });
 
+test("a relaunched backend reuses the exact session from durable coordinator, task and runtime records", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const calls: CommandRequest[] = [];
+    const run: CommandRunner = async (request) => {
+      calls.push(request);
+      return world.run(request);
+    };
+    const target = {
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      label: "coordinator",
+      role: "coordinator" as const,
+      generation: 0,
+    };
+    const first = await ternBackend(run).createWorkspace(target);
+    const worktree = await world.grantLease({ name: "coordinator", holder: "coordinator" });
+    await saveCoordinatorRecord(world.home, {
+      schemaVersion: 1,
+      repoPath: world.repoPath,
+      endpoint: first.endpoint,
+      worktree,
+      command: ["omp"],
+      harness: DEFAULT_HARNESS,
+    });
+    await seedScenarioTask(world, {
+      kind: "implementation",
+      endpoints: [first.endpoint],
+      stage: "paused",
+    });
+    await seedScenarioRuntime(world, scenarioRuntimeTask({ endpoints: [first.endpoint] }));
+    const snapshot = await world.snapshot();
+    expect(snapshot.tasks[0]?.endpoints?.[0]?.terminalSessionId).toBe(
+      first.endpoint.terminalSessionId,
+    );
+    expect(snapshot.runtime.tasks[0]?.endpoints[0]?.terminalSessionId).toBe(
+      first.endpoint.terminalSessionId,
+    );
+    const recorded = await readCoordinatorRecord(
+      recordPath(world.home, world.sessionId, world.repoPath),
+    );
+    if (recorded === undefined) throw new Error("missing durable coordinator");
+    expect(recorded.endpoint.terminalSessionId).toBe(first.endpoint.terminalSessionId);
+    // An empty native session may survive terminal restoration or Tern's acknowledged last close.
+    world.removePane(first.endpoint.paneId);
+    const relaunched = await ternBackend(run).createWorkspace({
+      ...target,
+      previousEndpoint: recorded.endpoint,
+    });
+    expect(relaunched.endpoint.terminalSessionId).toBe(recorded.endpoint.terminalSessionId);
+    expect(relaunched.endpoint.paneId).not.toBe(recorded.endpoint.paneId);
+    const nativeCreates = calls.filter((request) => request.argv[1] === "new");
+    expect(nativeCreates.map((request) => request.argv[2])).toEqual(["session", "tab"]);
+    const index = calls.findLastIndex((request) => request.argv[1] === "new");
+    expect(calls[index - 1]?.argv[1]).toBe("ls");
+    expect(calls[index]?.argv[3]).toBe(recorded.endpoint.terminalSessionId);
+  });
+});
+
+test("an absent stored session creates a new session without adopting a matching name", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const calls: CommandRequest[] = [];
+    const run: CommandRunner = async (request) => {
+      calls.push(request);
+      return world.run(request);
+    };
+    const target = {
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      label: "coordinator",
+      role: "coordinator" as const,
+      generation: 0,
+    };
+    const first = await ternBackend(run).createWorkspace(target);
+    const name = calls.find((request) => request.argv[1] === "new")?.argv[3];
+    if (name === undefined) throw new Error("missing native session name");
+    await ternBackend(run).close({ endpoint: first.endpoint, cwd: world.repoPath });
+    const impostor = decode(
+      (
+        await world.run({
+          argv: ["tern", "new", "session", name, "--cwd", world.repoPath, "--json"],
+          cwd: world.repoPath,
+        })
+      ).stdout,
+      Created,
+      "test session",
+    );
+    const relaunched = await ternBackend(run).createWorkspace({
+      ...target,
+      previousEndpoint: first.endpoint,
+    });
+    expect(relaunched.endpoint.terminalSessionId).not.toBe(first.endpoint.terminalSessionId);
+    expect(relaunched.endpoint.terminalSessionId).not.toBe(impostor.session);
+    expect(
+      calls.filter((request) => request.argv[1] === "new").map((request) => request.argv[2]),
+    ).toEqual(["session", "session"]);
+    expect(world.paneIsPresent(impostor.block)).toBe(true);
+  });
+});
+
+test("notifications require the injected durable endpoint even after a backend created a coordinator", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const session = { sessionId: world.sessionId, cwd: world.repoPath };
+    const terminal = ternBackend(world.run);
+    const created = await terminal.createWorkspace({
+      ...session,
+      label: "coordinator",
+      role: "coordinator",
+      generation: 0,
+    });
+    const alert = { ...session, title: "Done", body: "Task complete" };
+    await expect(terminal.notify(alert)).rejects.toThrow("recorded Tandem-owned pane");
+    world.removePane(created.endpoint.paneId);
+    await expect(
+      ternBackend(world.run, { notificationEndpoint: async () => created.endpoint }).notify(alert),
+    ).rejects.toBeInstanceOf(EndpointOwnershipError);
+    expect(world.trace().some((event) => event.action === "tern close")).toBe(false);
+  });
+});
+
 test("wrong block acknowledgement quarantines resources and prevents blind retries", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "90071992547409933", cwd: world.repoPath });
@@ -125,7 +254,7 @@ test("wrong block acknowledgement quarantines resources and prevents blind retri
   });
 });
 
-test("u64 identity parsing preserves exact ids and refuses a changed tab", async () => {
+test("u64 identity parsing preserves exact ids and refuses a changed tab or native session", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "18446744073709551614", cwd: world.repoPath });
     const run: CommandRunner = async (request) => {
@@ -146,6 +275,9 @@ test("u64 identity parsing preserves exact ids and refuses a changed tab", async
     );
     await expect(
       terminal.close({ endpoint: { ...endpoint, tabId: "999" }, cwd: world.repoPath }),
+    ).rejects.toBeInstanceOf(EndpointOwnershipError);
+    await expect(
+      terminal.close({ endpoint: { ...endpoint, terminalSessionId: "999" }, cwd: world.repoPath }),
     ).rejects.toBeInstanceOf(EndpointOwnershipError);
     expect(world.paneIsPresent(endpoint.paneId)).toBe(true);
     expect(world.trace().some((event) => event.action === "tern close")).toBe(false);

@@ -102,9 +102,12 @@ Unknown outcomes keep resources and quarantine the effect rather than retrying i
 
 Closing the last pane also sends `tern kill session` for its exact empty session. Tern 0.4.5 keeps
 its sole empty session after acknowledging that kill; Tandem preserves it and verifies no panes
-remain. A later launch creates a uniquely named session without adopting that empty one. Tern
+remain. The durable endpoint retains the native project session id. A coordinator relaunch reuses
+that exact session after checking its id, including an empty session retained by Tern. It creates
+a new session only when the stored id is absent; matching names never authorize reuse. Tern
 cannot reorder tabs or resize panes, so those operations return warnings. Native welcome and
 panel operations currently raise typed unavailable errors until the native view host ships.
 Alerts print OSC 777 to the tty of a recorded Tandem-owned pane, with exact pane and process
-checks. Worker OMP completion, error and ask notifications are off; coordinator ask notifications
+checks. Composition injects the durable pane selector; without a proven record, alerts are refused.
+Worker OMP completion, error and ask notifications are off; coordinator ask notifications
 stay on through its separate config overlay.

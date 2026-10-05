@@ -40,6 +40,8 @@ export async function exactPane(
       "detached Tern blocks leave the pane's placement ambiguous",
     );
   if (found === undefined) throw missing(endpoint);
+  if (endpoint.terminalSessionId !== undefined && found.session.id !== endpoint.terminalSessionId)
+    throw new EndpointOwnershipError(endpoint, "Tern session identity changed");
   if (found.tab.id !== endpoint.workspaceId || found.tab.id !== endpoint.tabId) {
     throw new EndpointOwnershipError(endpoint, "Tern tab identity changed");
   }

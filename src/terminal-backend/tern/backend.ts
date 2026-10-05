@@ -13,6 +13,7 @@ import { close, exactPane, inspect, missing, paneMutation, runCommand } from "./
 import {
   blocks,
   Created,
+  Id,
   isDaemonGone,
   type LocatedBlock,
   type TernOptions,
@@ -34,7 +35,6 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   const commands = ternCommands(run, options);
   const clock = options.clock ?? Date.now;
   const wait = options.wait ?? Bun.sleep;
-  const owned = new Map<string, Endpoint>();
   // Durable runtime quarantines a rejected effect; this guard also prevents local blind retries.
   const quarantined = new Set<string>();
   const guard = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
@@ -47,13 +47,10 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       throw error;
     }
   };
-  const check = async (target: EndpointTarget) => {
-    const result = await inspect(commands, target);
-    owned.set(target.endpoint.paneId, target.endpoint);
-    return result;
-  };
+  const check = (target: EndpointTarget) => inspect(commands, target);
   const endpointFor = (target: SessionTarget, entry: LocatedBlock): Endpoint => ({
     sessionId: target.sessionId,
+    terminalSessionId: entry.session.id,
     workspaceId: entry.tab.id,
     tabId: entry.tab.id,
     paneId: entry.block.id,
@@ -129,11 +126,9 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     },
     close: async (target) => {
       await guard(target.endpoint.paneId, () => close(commands, target));
-      owned.delete(target.endpoint.paneId);
     },
     closeOwned: async (target) => {
       await guard(target.endpoint.paneId, () => close(commands, { ...target, force: true }, true));
-      owned.delete(target.endpoint.paneId);
     },
     isPaneGone: (error) => error instanceof EndpointOwnershipError && error.reason === "missing",
     isEndpointGone: (error) =>
@@ -165,27 +160,62 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           if (created.session !== parent.session.id)
             throw new TernOutcomeUnknownError("tern new tab", "new tab belongs to another session");
         } else {
+          const previous = target.previousEndpoint;
+          if (previous !== undefined && previous.sessionId !== target.sessionId)
+            throw new EndpointOwnershipError(
+              previous,
+              "previous endpoint belongs to another daemon namespace",
+            );
+          const storedSession = previous?.terminalSessionId;
+          if (
+            previous !== undefined &&
+            storedSession !== undefined &&
+            !Id.safeParse(storedSession).success
+          )
+            throw new EndpointOwnershipError(previous, "stored Tern session id is invalid");
           const suffix = createHash("sha256")
             .update(`${target.sessionId}\0${target.cwd}`)
             .digest("hex")
             .slice(0, 12);
           const baseName = `tandem-${basename(target.cwd)}-${suffix}`;
           const existing = await commands.ls(target.cwd);
-          let name = baseName;
-          let collision = 0;
-          // Names prevent collisions only. Never adopt a pane or an empty retained session by title.
-          while (existing.sessions.some((entry) => entry.name === name)) {
-            collision += 1;
-            name = `${baseName}-${collision}`;
+          if (
+            storedSession !== undefined &&
+            existing.sessions.some((entry) => entry.id === storedSession)
+          ) {
+            // Never look up the old project by name. This read is the final call before the effect.
+            if (
+              !(await commands.ls(target.cwd)).sessions.some((entry) => entry.id === storedSession)
+            )
+              throw new AdapterError("stored Tern session changed", "tern new tab");
+            created = await commands.mutate(
+              target.cwd,
+              ["new", "tab", storedSession, "--cwd", target.cwd],
+              Created,
+            );
+            if (created.session !== storedSession)
+              throw new TernOutcomeUnknownError(
+                "tern new tab",
+                "new tab belongs to another session",
+              );
+          } else {
+            let name = baseName;
+            let collision = 0;
+            // Names prevent collisions only. Never adopt a pane or an empty retained session by title.
+            while (existing.sessions.some((entry) => entry.name === name)) {
+              collision += 1;
+              name = `${baseName}-${collision}`;
+            }
+            created = await commands.mutate(
+              target.cwd,
+              ["new", "session", name, "--cwd", target.cwd],
+              Created,
+            );
           }
-          created = await commands.mutate(
-            target.cwd,
-            ["new", "session", name, "--cwd", target.cwd],
-            Created,
-          );
         }
         const endpoint: Endpoint = {
           sessionId: target.sessionId,
+          terminalSessionId: created.session,
           workspaceId: created.tab,
           tabId: created.tab,
           paneId: created.block,
@@ -199,7 +229,6 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         } catch (cause) {
           throw new TernOutcomeUnknownError("tern new verification", cause);
         }
-        owned.set(endpoint.paneId, endpoint);
         await rename({ ...target, workspaceId: endpoint.workspaceId });
         if (target.env !== undefined && Object.keys(target.env).length > 0) {
           // Environment belongs to the shell running the eventual command, not the CLI client.
@@ -242,6 +271,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           );
         const endpoint: Endpoint = {
           ...anchor,
+          terminalSessionId: created.session,
           paneId: created.block,
           role: input.role,
           generation: input.generation,
@@ -251,7 +281,6 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         } catch (cause) {
           throw new TernOutcomeUnknownError("tern split verification", cause);
         }
-        owned.set(endpoint.paneId, endpoint);
         return endpoint;
       }),
     listWorkspaces: async (target) =>
@@ -337,11 +366,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       }
     },
     notify: async (target) => {
-      const endpoint =
-        (await options.notificationEndpoint?.(target)) ??
-        [...owned.values()].find(
-          (entry) => entry.sessionId === target.sessionId && entry.role === "coordinator",
-        );
+      const endpoint = await options.notificationEndpoint?.(target);
       if (endpoint === undefined)
         throw new AdapterError("Tern alert requires a recorded Tandem-owned pane", "tern notify");
       if (endpoint.sessionId !== target.sessionId)

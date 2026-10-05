@@ -127,7 +127,15 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   ensureExactKeys(
     value,
-    ["sessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
+    [
+      "sessionId",
+      "workspaceId",
+      "tabId",
+      "paneId",
+      "role",
+      "generation",
+      ...(Object.hasOwn(value, "terminalSessionId") ? ["terminalSessionId"] : []),
+    ],
     field,
   );
   const sessionId = sessionText(value.sessionId);
@@ -137,7 +145,17 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   if (value.role !== "coordinator") throw new TypeError(`${field}.role must be "coordinator"`);
   const generation = positiveInteger(value.generation, `${field}.generation`);
   if (generation !== 0) throw new TypeError(`${field}.generation must be 0 for a coordinator`);
-  return { sessionId, workspaceId, tabId, paneId, role: "coordinator", generation };
+  return {
+    sessionId,
+    ...(value.terminalSessionId === undefined
+      ? {}
+      : { terminalSessionId: text(value.terminalSessionId, `${field}.terminalSessionId`) }),
+    workspaceId,
+    tabId,
+    paneId,
+    role: "coordinator",
+    generation,
+  };
 }
 
 export function parseWorktree(value: unknown, field: string): WorktreeLease {

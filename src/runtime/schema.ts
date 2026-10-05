@@ -734,6 +734,9 @@ function endpoint(value: unknown, field: string): Endpoint {
   return {
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
+    ...(value.terminalSessionId === undefined
+      ? {}
+      : { terminalSessionId: singleLine(value.terminalSessionId, `${field}.terminalSessionId`) }),
     tabId: singleLine(value.tabId, `${field}.tabId`),
     paneId: singleLine(value.paneId, `${field}.paneId`),
     role,

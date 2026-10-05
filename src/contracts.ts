@@ -212,6 +212,8 @@ export const LEGACY_ENDPOINT_ROLES = [...MODEL_ROLE_ORDER, "verifier"] as const;
 
 export type Endpoint = {
   readonly sessionId: string;
+  /** Native project session inside a terminal daemon, when the backend has one. */
+  readonly terminalSessionId?: string;
   readonly workspaceId: string;
   readonly tabId: string;
   readonly paneId: string;

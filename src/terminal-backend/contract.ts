@@ -152,6 +152,8 @@ export type TerminalBackend = Readonly<{
         generation: number;
         env?: Readonly<Record<string, string>>;
         parentWorkspaceId?: string;
+        /** Durable previous ownership, for exact native session reuse on coordinator relaunch. */
+        previousEndpoint?: Endpoint;
         insertIndex?: number;
       }>,
   ): Promise<Readonly<{ endpoint: Endpoint; warnings: readonly string[] }>>;
