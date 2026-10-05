@@ -135,21 +135,37 @@ export async function paneMutation(
   if (ack.block !== target.endpoint.paneId)
     throw new TernOutcomeUnknownError(`tern ${args[0]}`, "acknowledgement names another block");
 }
-export async function runCommand(
-  commands: TernCommands,
-  target: EndpointTarget &
-    Readonly<{ command: readonly string[]; env?: Readonly<Record<string, string>> }>,
-): Promise<void> {
-  const assignments = Object.entries({
-    ...target.env,
-    TANDEM_SESSION: target.endpoint.sessionId,
-    TANDEM_TERN_WORKSPACE_ID: target.endpoint.workspaceId,
-    TERN_PANE: target.endpoint.paneId,
+function environmentAssignments(endpoint: Endpoint, env?: Readonly<Record<string, string>>) {
+  return Object.entries({
+    ...env,
+    TANDEM_SESSION: endpoint.sessionId,
+    TANDEM_TERN_WORKSPACE_ID: endpoint.workspaceId,
+    TERN_PANE: endpoint.paneId,
   }).map(([key, value]) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key))
       throw new TypeError(`invalid environment key ${key}`);
     return `${key}=${value}`;
   });
+}
+
+/** Initialize the created shell after Tern acknowledges its actual tab and block ids. */
+export async function initializeShell(
+  commands: TernCommands,
+  target: EndpointTarget & Readonly<{ env?: Readonly<Record<string, string>> }>,
+): Promise<void> {
+  const command = quoteShellCommand([
+    "export",
+    ...environmentAssignments(target.endpoint, target.env),
+  ]);
+  await paneMutation(commands, target, ["run", target.endpoint.paneId, command]);
+}
+
+export async function runCommand(
+  commands: TernCommands,
+  target: EndpointTarget &
+    Readonly<{ command: readonly string[]; env?: Readonly<Record<string, string>> }>,
+): Promise<void> {
+  const assignments = environmentAssignments(target.endpoint, target.env);
   const command = quoteShellCommand(
     assignments.length === 0 ? target.command : ["env", ...assignments, ...target.command],
   );

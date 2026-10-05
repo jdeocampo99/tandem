@@ -45,6 +45,15 @@ export function herdrBackend(
 ): TerminalBackend {
   return {
     name: "herdr",
+    openView: async ({ view }) => ({
+      opened: false,
+      ...(view.kind === "brief" ? { fallback: "brief-review" as const } : {}),
+      warnings: [
+        view.kind === "brief"
+          ? "Opening Tandem's existing request review pane in Herdr."
+          : `Herdr cannot display a native ${view.kind} view. Use the conversation or tandem status instead.`,
+      ],
+    }),
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),
     sendKeys: (target) => sendKeys(run, target),

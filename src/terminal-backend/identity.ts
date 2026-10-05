@@ -64,5 +64,9 @@ export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend
       check(input.coordinator);
       return backend.isPanelOpen(input);
     },
+    openView: async (input) => {
+      check(input.coordinator);
+      return backend.openView(input);
+    },
   };
 }

@@ -1,8 +1,7 @@
-import { AdapterError } from "../adapters/primitives.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { type HomeSettings, readHomeSettingsSync } from "../config/home-settings.ts";
 import type { CommandRunner, TerminalName } from "../contracts.ts";
-import type { SessionTarget, TerminalBackend, TerminalContext } from "./contract.ts";
+import type { TerminalBackend, TerminalContext } from "./contract.ts";
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
 import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
@@ -18,24 +17,6 @@ export type TerminalComposition = Readonly<{
   /** Tests can replace the adapter factory while retaining selection and identity guards. */
   createTern?: typeof ternBackend;
 }>;
-
-/** A notification may only target the one recorded coordinator for this exact repository. */
-async function notificationEndpoint(home: string, target: SessionTarget) {
-  // Validation and worker startup must not load coordinator harnesses just to compose a port.
-  const [{ canonicalPath }, { listCoordinatorRecords }] = await Promise.all([
-    import("../coordinator/record.ts"),
-    import("../coordinator/registry.ts"),
-  ]);
-  const cwd = await canonicalPath(target.cwd, "notification cwd");
-  const records = (await listCoordinatorRecords(home, target.sessionId)).filter(
-    (record) => record.repoPath === cwd || record.worktree.path === cwd,
-  );
-  if (records.length > 1)
-    throw new AdapterError("Tern alert coordinator is ambiguous", "tern notify");
-  const endpoint = records[0]?.endpoint;
-  if (endpoint !== undefined) assertTerminalEndpoint("tern", endpoint);
-  return endpoint;
-}
 
 /** The saved choice shown by onboarding; an absent preference keeps Herdr until confirmed. */
 export function savedTerminalPreference(settings: HomeSettings) {
@@ -56,17 +37,20 @@ export function terminalBackend(
         : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal;
     const cached = backends.get(chosen);
     if (cached !== undefined) return cached;
-    const home = options.home;
+    const notificationEndpoint = options.tern?.notificationEndpoint;
     const backend =
       chosen === "herdr"
         ? herdrBackend(run, options.herdr)
         : (options.createTern ?? ternBackend)(run, {
             ...options.tern,
-            ...(home === undefined || options.tern?.notificationEndpoint !== undefined
+            ...(notificationEndpoint === undefined
               ? {}
               : {
-                  notificationEndpoint: (target: SessionTarget) =>
-                    notificationEndpoint(home, target),
+                  notificationEndpoint: async (target) => {
+                    const endpoint = await notificationEndpoint(target);
+                    if (endpoint !== undefined) assertTerminalEndpoint("tern", endpoint);
+                    return endpoint;
+                  },
                 }),
           });
     if (backend.name !== chosen)
@@ -79,6 +63,7 @@ export function terminalBackend(
     get name() {
       return select().name;
     },
+    openView: (input) => select().openView(input),
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),

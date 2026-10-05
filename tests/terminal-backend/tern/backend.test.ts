@@ -5,6 +5,7 @@ import { assertStoppedCoordinatorShell } from "../../../src/coordinator/ownershi
 import { recordPath } from "../../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import type { TerminalView } from "../../../src/terminal-backend/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import {
   Created,
@@ -32,6 +33,11 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
       label: "coordinator",
       role: "coordinator",
       generation: 2,
+      env: {
+        TANDEM_SESSION: "stale-daemon",
+        TANDEM_TERN_WORKSPACE_ID: "stale-tab",
+        TERN_PANE: "stale-pane",
+      },
     });
     const target = { endpoint: root.endpoint, cwd: world.repoPath };
     expect(root.endpoint.role).toBe("coordinator");
@@ -83,6 +89,18 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
     ).toHaveLength(1);
     expect(await terminal.snapshot(session)).toHaveLength(3);
     expect(await terminal.listWorkspaces({ ...session, complete: true })).toHaveLength(2);
+    for (const endpoint of [root.endpoint, split, worker.endpoint]) {
+      const initialization = calls.find(
+        (request) =>
+          request.argv[1] === "run" &&
+          request.argv[2] === endpoint.paneId &&
+          request.argv[3]?.startsWith("'export'"),
+      )?.argv[3];
+      expect(initialization).toContain(`TANDEM_SESSION=${endpoint.sessionId}`);
+      expect(initialization).toContain(`TANDEM_TERN_WORKSPACE_ID=${endpoint.workspaceId}`);
+      expect(initialization).toContain(`TERN_PANE=${endpoint.paneId}`);
+      expect(initialization).not.toContain("stale-");
+    }
     expect(
       (
         await terminal.fitPanel({
@@ -227,6 +245,94 @@ test("notifications require the injected durable endpoint even after a backend c
       ternBackend(world.run, { notificationEndpoint: async () => created.endpoint }).notify(alert),
     ).rejects.toBeInstanceOf(EndpointOwnershipError);
     expect(world.trace().some((event) => event.action === "tern close")).toBe(false);
+  });
+});
+
+test("native views report unavailable without opening anything or typing into a pane", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const coordinator = world.openPane({ paneId: "46", cwd: world.repoPath });
+    const terminal = ternBackend(world.run);
+    const views: readonly TerminalView[] = [
+      { kind: "task", taskId: "task-1" },
+      { kind: "brief", requestId: "request-1" },
+      { kind: "pr", taskId: "task-1" },
+    ];
+    for (const view of views) {
+      const result = await terminal.openView({
+        coordinator,
+        cwd: world.repoPath,
+        home: world.home,
+        view,
+      });
+      expect(result.opened).toBe(false);
+      expect(result.warnings.length).toBeGreaterThan(0);
+    }
+    expect(world.trace()).toEqual([]);
+    expect(world.paneIsPresent(coordinator.paneId)).toBe(true);
+  });
+});
+
+test("project switching focuses exact blocks across native sessions with a final id recheck", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const calls: CommandRequest[] = [];
+    const terminal = ternBackend(async (request) => {
+      calls.push(request);
+      return world.run(request);
+    });
+    const session = {
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      role: "coordinator" as const,
+      generation: 0,
+    };
+    const a = await terminal.createWorkspace({ ...session, label: "Project A" });
+    const worktree = await world.grantLease({ name: "project-b", holder: "coordinator" });
+    const b = await terminal.createWorkspace({
+      ...session,
+      cwd: worktree.path,
+      label: "Project B",
+    });
+    expect(a.endpoint.terminalSessionId).not.toBe(b.endpoint.terminalSessionId);
+    for (const endpoint of [a.endpoint, b.endpoint, a.endpoint]) {
+      expect(
+        await terminal.focusWorkspace({ ...session, workspaceId: endpoint.workspaceId }),
+      ).toEqual({ focused: true });
+    }
+    expect(
+      calls
+        .filter((request) => request.argv[1] === "focus")
+        .map((request) => request.argv.slice(1)),
+    ).toEqual([
+      ["focus", a.endpoint.paneId, "--json"],
+      ["focus", b.endpoint.paneId, "--json"],
+      ["focus", a.endpoint.paneId, "--json"],
+    ]);
+    for (let index = 0; index < calls.length; index += 1)
+      if (calls[index]?.argv[1] === "focus") expect(calls[index - 1]?.argv[1]).toBe("ls");
+  });
+});
+
+test("workspace focus refuses a native session change between selection and the final id check", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const endpoint = world.openPane({ paneId: "47", cwd: world.repoPath });
+    let listings = 0;
+    const terminal = ternBackend(async (request) => {
+      const result = await world.run(request);
+      if (request.argv[1] === "ls") {
+        listings += 1;
+        if (listings === 2)
+          return { ...result, stdout: result.stdout.replace('"id":"100"', '"id":"101"') };
+      }
+      return result;
+    });
+    const result = await terminal.focusWorkspace({
+      sessionId: world.sessionId,
+      cwd: world.repoPath,
+      workspaceId: endpoint.workspaceId,
+    });
+    expect(result.focused).toBe(false);
+    expect(world.trace().some((event) => event.action === "tern focus")).toBe(false);
+    expect(world.paneIsPresent(endpoint.paneId)).toBe(true);
   });
 });
 

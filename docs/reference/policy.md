@@ -308,9 +308,9 @@ that field are Herdr records. A record from the other terminal is quarantined be
 close, recovery, or navigation: its ids never authorize an operation in the selected terminal.
 Derived board navigation retains the terminal tag; an older untagged snapshot is treated as Herdr.
 
-Tern composition uses `ternBackend` and `TERN_CONTEXT`. Alerts resolve an exact repository or
-worktree path to its durable coordinator record in the requested Tandem session. Missing, ambiguous,
-or foreign-terminal records refuse the alert before reaching the terminal.
+Tern composition uses `ternBackend` and `TERN_CONTEXT`. Alerts require a recorded per-project
+Tandem helper-pane endpoint. A coordinator record never authorizes the alert. Without an owned
+helper-pane lookup, the backend refuses the alert before reaching the terminal.
 
 Every coordinator and worker launch into Tern sets `TANDEM_SESSION` and
 `TANDEM_TERN_WORKSPACE_ID` from the owned endpoint. Coordinator bootstrap and direct launch keep

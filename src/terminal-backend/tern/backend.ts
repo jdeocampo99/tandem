@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import type { z } from "zod";
-import { quoteShellCommand } from "../../adapters/commands.ts";
 import {
   AdapterError,
   EndpointBusyError,
@@ -9,7 +8,15 @@ import {
 } from "../../adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../contracts.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
-import { close, exactPane, inspect, missing, paneMutation, runCommand } from "./endpoints.ts";
+import {
+  close,
+  exactPane,
+  initializeShell,
+  inspect,
+  missing,
+  paneMutation,
+  runCommand,
+} from "./endpoints.ts";
 import {
   blocks,
   Created,
@@ -90,12 +97,9 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       throw new TernOutcomeUnknownError("tern rename verification", cause);
     }
   };
-  const focus = async (target: SessionTarget, paneId: string) => {
+  const focus = async (target: EndpointTarget) => {
     try {
-      await paneEffect({ endpoint: await byId(target, paneId), cwd: target.cwd }, [
-        "focus",
-        paneId,
-      ]);
+      await paneEffect(target, ["focus", target.endpoint.paneId]);
       return { focused: true as const };
     } catch (error) {
       return { focused: false as const, code: 1, detail: String(error) };
@@ -103,6 +107,12 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   };
   return {
     name: "tern",
+    openView: async ({ view }) => ({
+      opened: false,
+      warnings: [
+        `Tern ${view.kind} view is unavailable until Tandem's native views are installed.`,
+      ],
+    }),
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>
@@ -233,19 +243,11 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           throw new TernOutcomeUnknownError("tern new verification", cause);
         }
         await rename({ ...target, workspaceId: endpoint.workspaceId });
-        if (target.env !== undefined && Object.keys(target.env).length > 0) {
-          // Environment belongs to the shell running the eventual command, not the CLI client.
-          const exports = Object.entries(target.env).map(([key, value]) => {
-            if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key))
-              throw new TypeError(`invalid environment key ${key}`);
-            return `${key}=${value}`;
-          });
-          await paneMutation(commands, { endpoint, cwd: target.cwd }, [
-            "run",
-            endpoint.paneId,
-            quoteShellCommand(["export", ...exports]),
-          ]);
-        }
+        await initializeShell(commands, {
+          endpoint,
+          cwd: target.cwd,
+          ...(target.env === undefined ? {} : { env: target.env }),
+        });
         return {
           endpoint,
           warnings:
@@ -284,6 +286,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         } catch (cause) {
           throw new TernOutcomeUnknownError("tern split verification", cause);
         }
+        await initializeShell(commands, { endpoint, cwd: input.cwd });
         return endpoint;
       }),
     listWorkspaces: async (target) =>
@@ -329,9 +332,16 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       );
       return entry === undefined
         ? { focused: false, code: 1, detail: "exact Tern tab is absent" }
-        : focus(target, entry.block.id);
+        : focus({ endpoint: endpointFor(target, entry), cwd: target.cwd });
     },
-    focusAgent: async (target) => (await focus(target, target.paneId)).focused,
+    focusAgent: async (target) => {
+      try {
+        return (await focus({ endpoint: await byId(target, target.paneId), cwd: target.cwd }))
+          .focused;
+      } catch {
+        return false;
+      }
+    },
     sessionRunning: async (target) => {
       try {
         await commands.ls(target.cwd);

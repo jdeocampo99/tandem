@@ -60,6 +60,13 @@ for (const chosen of ["herdr", "tern"] as const) {
           terminal.splitBeside({ anchor: endpoint, cwd: home, role: "reviewer", generation: 0 }),
         () => terminal.openPanel({ coordinator: endpoint, cwd: home, project: home }),
         () => terminal.isPanelOpen({ coordinator: endpoint, cwd: home, panelPaneId: "same" }),
+        () =>
+          terminal.openView({
+            coordinator: endpoint,
+            cwd: home,
+            home,
+            view: { kind: "task", taskId: "task" },
+          }),
       ])
         await expect(operation()).rejects.toBeInstanceOf(EndpointOwnershipError);
       const recovery = await recoverEndpointFromLaunch(terminal, {

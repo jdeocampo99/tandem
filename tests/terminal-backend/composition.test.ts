@@ -14,7 +14,7 @@ import {
 } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "../evals/scenario.ts";
 
-test("Tern alerts use the durable coordinator and refuse missing or foreign records before effects", async () => {
+test("a coordinator record never authorizes Tern helper-pane alerts", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
     const writes: CommandRequest[] = [];
@@ -56,15 +56,30 @@ test("Tern alerts use the durable coordinator and refuse missing or foreign reco
       harness: DEFAULT_HARNESS,
     };
     await saveCoordinatorRecord(world.home, record);
-    await alert();
-    expect(writes).toHaveLength(1);
-    expect(writes[0]?.argv[4]).toBe("\x1b]777;notify;Needs you;Review ready\x07");
+    const beforeCoordinatorAlert = calls.length;
+    await expect(alert()).rejects.toThrow("requires a recorded Tandem-owned pane");
+    expect(calls).toHaveLength(beforeCoordinatorAlert);
+    expect(writes).toHaveLength(0);
     await saveCoordinatorRecord(world.home, {
       ...record,
       endpoint: { ...endpoint, terminal: "herdr" },
     });
     const before = calls.length;
-    await expect(alert()).rejects.toThrow("quarantined herdr endpoint under tern");
+    await expect(alert()).rejects.toThrow("requires a recorded Tandem-owned pane");
+    const foreignHelper = terminalBackend(run, {
+      home: world.home,
+      tern: {
+        notificationEndpoint: async () => ({ ...endpoint, terminal: "herdr" }),
+      },
+    });
+    await expect(
+      foreignHelper.notify({
+        sessionId: world.sessionId,
+        cwd: world.repoPath,
+        title: "Needs you",
+        body: "Review ready",
+      }),
+    ).rejects.toThrow("quarantined herdr endpoint under tern");
     await expect(
       openProject(async () => ({ code: 0, stdout: "", stderr: "" }), terminal, {
         repoPath: world.repoPath,
@@ -74,7 +89,7 @@ test("Tern alerts use the durable coordinator and refuse missing or foreign reco
       }),
     ).rejects.toThrow("quarantined herdr endpoint under tern");
     expect(calls).toHaveLength(before);
-    expect(writes).toHaveLength(1);
+    expect(writes).toHaveLength(0);
     const path = recordPath(world.home, world.sessionId, world.repoPath);
     await writeFile(
       path,
@@ -142,9 +157,13 @@ test("a worker launch gets its own Tern workspace even when the parent context i
       command: ["bun", "worker.ts", "job.json"],
       env: { TANDEM_SESSION: "foreign", TANDEM_TERN_WORKSPACE_ID: parent.endpoint.workspaceId },
     });
-    expect(commands).toHaveLength(1);
-    expect(commands[0]).toContain(`'TANDEM_SESSION=${world.sessionId}'`);
-    expect(commands[0]).toContain(`'TANDEM_TERN_WORKSPACE_ID=${worker.endpoint.workspaceId}'`);
-    expect(commands[0]).not.toContain(`'TANDEM_TERN_WORKSPACE_ID=${parent.endpoint.workspaceId}'`);
+    const launch = commands.find((command) => command.includes("'worker.ts'"));
+    expect(launch).toBeDefined();
+    expect(launch).toContain(`'TANDEM_SESSION=${world.sessionId}'`);
+    expect(launch).toContain(`'TANDEM_TERN_WORKSPACE_ID=${worker.endpoint.workspaceId}'`);
+    expect(launch).not.toContain(`'TANDEM_TERN_WORKSPACE_ID=${parent.endpoint.workspaceId}'`);
+    expect(commands).toContain(
+      `'export' 'TANDEM_SESSION=${world.sessionId}' 'TANDEM_TERN_WORKSPACE_ID=${worker.endpoint.workspaceId}' 'TERN_PANE=${worker.endpoint.paneId}'`,
+    );
   });
 });
