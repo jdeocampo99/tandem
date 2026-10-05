@@ -1,10 +1,10 @@
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { TANDEM_HERDR_PLUGIN } from "../adapters/herdr.ts";
+import { closeEndpoint, inspectEndpoint, TANDEM_HERDR_PLUGIN } from "../adapters/herdr.ts";
 import { AdapterCommandError } from "../adapters/primitives.ts";
-import type { CommandRequest, CommandResult, CommandRunner } from "../contracts.ts";
+import type { CommandRequest, CommandResult, CommandRunner, Endpoint } from "../contracts.ts";
 import { ensurePrivateDirectoryTree } from "./lock.ts";
-import { commandErrorCode, parseJson } from "./ownership.ts";
+import { assertStoppedCoordinatorShell, commandErrorCode, parseJson } from "./ownership.ts";
 import {
   type CoordinatorRecord,
   canonicalHome,
@@ -19,11 +19,24 @@ export const PANEL_TITLE = "Tandem panel";
 
 type PanelRecord = Pick<CoordinatorRecord, "repoPath" | "endpoint" | "worktree">;
 
-/** What closing a coordinator's panel did; `failed` leaves the panel and its workspace alone. */
+/**
+ * What closing a coordinator's panel did. `busy` and `failed` leave the pane alone; `busy` is a
+ * shell Herdr restored in the panel's place that is still running something, such as its startup.
+ */
 export type PanelClosing =
   | Readonly<{ readonly outcome: "none" }>
   | Readonly<{ readonly outcome: "closed"; readonly paneId: string }>
+  | Readonly<{ readonly outcome: "busy"; readonly reason: string }>
   | Readonly<{ readonly outcome: "failed"; readonly reason: string }>;
+
+/**
+ * The recorded panel pane as it is now. After a server restart Herdr reopens a plugin pane as a
+ * plain shell with the same title and no plugin behind it; only its processes tell them apart.
+ */
+type RecordedPanel =
+  | Readonly<{ readonly kind: "gone" }>
+  | Readonly<{ readonly kind: "running" }>
+  | Readonly<{ readonly kind: "idle-shell"; readonly endpoint: Endpoint }>;
 
 /**
  * Whether Herdr's `pane get` answer is the panel pane in the coordinator's workspace, carrying the
@@ -87,7 +100,12 @@ export async function openPanelBeside(
 ): Promise<string | undefined> {
   try {
     const recorded = await readPanelPaneId(home, record);
-    if (recorded !== undefined && (await panelStillOpen(run, record, recorded))) return undefined;
+    const panel: RecordedPanel =
+      recorded === undefined ? { kind: "gone" } : await readRecordedPanel(run, record, recorded);
+    if (panel.kind === "running") return undefined;
+    if (panel.kind === "idle-shell") {
+      await closeEndpoint(run, { endpoint: panel.endpoint, cwd: record.worktree.path });
+    }
     const panelPaneId = await openPanelPane(run, record);
     await savePanelPaneId(home, record, panelPaneId);
     return undefined;
@@ -98,7 +116,9 @@ export async function openPanelBeside(
 
 /**
  * Closes a coordinator's recorded panel, so a lone panel never keeps a retired workspace alive.
- * `plugin pane close` refuses panes no plugin owns, which backs up the title check. Never throws.
+ * A shell Herdr restored in the panel's place closes only once it is proven an idle shell, the
+ * proof the coordinator's own pane gets; `plugin pane close` refuses any other pane no plugin
+ * owns. Never throws.
  */
 export async function closeCoordinatorPanel(
   run: CommandRunner,
@@ -108,11 +128,22 @@ export async function closeCoordinatorPanel(
   const paneId = await readPanelPaneId(home, record);
   if (paneId === undefined) return { outcome: "none" };
   try {
-    if (!(await panelStillOpen(run, record, paneId))) return { outcome: "none" };
-    const request = herdr(record, ["plugin", "pane", "close", paneId]);
-    const closed = await run(request);
-    if (closed.code !== 0 && errorCode(closed) !== "plugin_pane_not_found") {
-      throw new AdapterCommandError("herdr plugin pane close", request, closed);
+    const panel = await readRecordedPanel(run, record, paneId);
+    if (panel.kind === "gone") return { outcome: "none" };
+    if (panel.kind === "idle-shell") {
+      await closeEndpoint(run, { endpoint: panel.endpoint, cwd: record.worktree.path });
+    } else {
+      const request = herdr(record, ["plugin", "pane", "close", paneId]);
+      const closed = await run(request);
+      if (closed.code !== 0 && errorCode(closed) === "plugin_pane_not_found") {
+        return {
+          outcome: "busy",
+          reason: `panel pane ${JSON.stringify(paneId)} is a restored shell still running a program`,
+        };
+      }
+      if (closed.code !== 0) {
+        throw new AdapterCommandError("herdr plugin pane close", request, closed);
+      }
     }
     await rm(await panelFile(home, record), { force: true });
     return { outcome: "closed", paneId };
@@ -142,22 +173,32 @@ async function checked(
   return parseJson(result.stdout, operation);
 }
 
-async function panelStillOpen(
+async function readRecordedPanel(
   run: CommandRunner,
   record: PanelRecord,
   panelPaneId: string,
-): Promise<boolean> {
+): Promise<RecordedPanel> {
   const request = herdr(record, ["pane", "get", panelPaneId]);
   const result = await run(request);
   if (result.code !== 0) {
-    if (errorCode(result) === "pane_not_found") return false;
+    if (errorCode(result) === "pane_not_found") return { kind: "gone" };
     throw new AdapterCommandError("herdr pane get", request, result);
   }
-  return isCoordinatorPanel(
-    parseJson(result.stdout, "herdr pane get"),
-    record.endpoint.workspaceId,
-    panelPaneId,
-  );
+  const paneGet = parseJson(result.stdout, "herdr pane get");
+  if (!isCoordinatorPanel(paneGet, record.endpoint.workspaceId, panelPaneId)) {
+    return { kind: "gone" };
+  }
+  const pane = isRecord(paneGet) && isRecord(paneGet.result) ? paneGet.result.pane : undefined;
+  const tabId = isRecord(pane) && typeof pane.tab_id === "string" ? pane.tab_id : undefined;
+  if (tabId === undefined) throw new Error("herdr pane get returned no tab for the panel");
+  const endpoint: Endpoint = { ...record.endpoint, tabId, paneId: panelPaneId };
+  const inspection = await inspectEndpoint(run, { endpoint, cwd: record.worktree.path });
+  try {
+    assertStoppedCoordinatorShell(inspection);
+  } catch {
+    return { kind: "running" };
+  }
+  return { kind: "idle-shell", endpoint };
 }
 
 /** Herdr refuses `--workspace` together with `--target-pane`; the pane names the workspace. */

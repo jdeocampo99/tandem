@@ -120,6 +120,9 @@ const notFound = (code: string): CommandResult => ({
   stderr: JSON.stringify({ error: { code } }),
 });
 
+const panelPane = { pane_id: "w1:p2", tab_id: "w1:t1", workspace_id: "w1", label: "Tandem panel" };
+const panelProcess = { pid: 300, name: "bun", argv: ["bun", "src/main.ts", "panel"] };
+
 test("keeps a recorded panel that is still open, and reports a failed open without throwing", async () => {
   const { root, home, record } = await fixture();
   try {
@@ -133,13 +136,15 @@ test("keeps a recorded panel that is still open, and reports a failed open witho
     const stillOpen = await openPanelBeside(
       async (request) => {
         calls.push(request.argv.slice(3).join(" "));
-        return ok({ pane: { pane_id: "w1:p2", workspace_id: "w1", label: "Tandem panel" } });
+        return request.argv[4] === "process-info"
+          ? ok({ process_info: { pane_id: "w1:p2", foreground_processes: [panelProcess] } })
+          : ok({ pane: panelPane });
       },
       home,
       record,
     );
     expect(stillOpen).toBeUndefined();
-    expect(calls).toEqual(["pane get w1:p2"]);
+    expect(calls.some((call) => call.startsWith("plugin") || call.includes("close"))).toBe(false);
 
     const failure = await openPanelBeside(
       async (request) =>
@@ -148,6 +153,57 @@ test("keeps a recorded panel that is still open, and reports a failed open witho
       record,
     );
     expect(failure).toContain("herdr plugin pane open");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a shell Herdr restored in the panel's place is closed and a real panel opens", async () => {
+  const { root, home, record } = await fixture();
+  try {
+    await openPanelBeside(
+      async () => ok({ plugin_pane: { pane: { pane_id: "w1:p2" } } }),
+      home,
+      record,
+    );
+    let restoredOpen = true;
+    const calls: string[] = [];
+    const failure = await openPanelBeside(
+      async (request) => {
+        const command = request.argv.slice(3).join(" ");
+        calls.push(command);
+        if (command === "pane get w1:p2") {
+          return restoredOpen ? ok({ pane: panelPane }) : notFound("pane_not_found");
+        }
+        if (command === "pane process-info --pane w1:p2") {
+          return ok({
+            process_info: {
+              pane_id: "w1:p2",
+              shell_pid: 100,
+              foreground_processes: [{ pid: 100, name: "zsh", argv: ["-zsh"], argv0: "-zsh" }],
+            },
+          });
+        }
+        if (command === "pane close w1:p2") {
+          restoredOpen = false;
+          return ok({ type: "ok" });
+        }
+        if (command.startsWith("plugin pane open")) {
+          return ok({ plugin_pane: { pane: { pane_id: "w1:p3" } } });
+        }
+        throw new Error(`unexpected ${command}`);
+      },
+      home,
+      record,
+    );
+
+    expect(failure).toBeUndefined();
+    expect(restoredOpen).toBe(false);
+    expect(calls.filter((call) => call.includes("close") || call.includes("open"))).toEqual([
+      "pane close w1:p2",
+      expect.stringMatching(/^plugin pane open /u),
+    ]);
+    expect(await readPanelPaneId(home, record)).toBe("w1:p3");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -204,6 +204,7 @@ export async function retireCoordinatorWorkspace(
     return { outcome: "quarantined", reason: proof.reason };
   }
   const panel = await closeCoordinatorPanel(run, home, record);
+  if (panel.outcome === "busy") return { outcome: "quarantined", reason: panel.reason };
   const extraPaneIds = (await siblingPaneIds(run, record)).filter(
     (paneId) => panel.outcome !== "closed" || paneId !== panel.paneId,
   );

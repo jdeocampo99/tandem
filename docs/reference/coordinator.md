@@ -243,11 +243,16 @@ Code: src/coordinator/panel.ts. Tests: tests/coordinator/panel.test.ts.
   record itself is unchanged, so an older Tandem still reads it, and registry discovery reads only
   `.json` files. The file is display state: missing or unreadable means no recorded panel. The
   recorded pane counts as the panel only while `herdr pane get` shows it in the coordinator's
-  workspace with the title `Tandem panel`.
+  workspace with the title `Tandem panel` and it is not an idle shell.
+- When its server restarts, Herdr reopens the panel pane as a plain shell with the same id and
+  title but no plugin behind it, so `herdr plugin pane close` answers `plugin_pane_not_found`
+  while the shell stays. Herdr's pane API cannot tell plugin panes apart, so Tandem goes by the
+  pane's processes: a recorded panel pane that passes the stopped-shell proof the coordinator's own
+  pane gets (one foreground process, the shell itself) is that restored shell, and Tandem closes it
+  with `herdr pane close`.
 - Every `tandem` run (reconnect) and every restart opens the panel again when the recorded one is
-  gone, on purpose: closing it loses nothing and running `tandem` brings it back. Nothing else
-  reopens it. Herdr does not restore plugin panes after a server restart, so the next `tandem`
-  brings it back too.
+  gone or is a restored shell, on purpose: closing it loses nothing and running `tandem` brings it
+  back. Nothing else reopens it.
 - A panel that cannot open (plugin not linked, Herdr refused) never blocks the coordinator; launch
   prints `Tandem's panel did not open beside <repo> (<reason>); tandem panel --popup shows it
   anywhere.`.
@@ -263,8 +268,11 @@ Applies when launch replaces a stopped coordinator and during reset.
 - Herdr removes a workspace when its last pane closes. Retirement closes the coordinator's own
   pane only once exact ownership and a stopped process are proven.
 - After that proof, and before counting the panes left, it closes the recorded panel with
-  `herdr plugin pane close`, which refuses panes no plugin owns. A lone panel would otherwise keep
-  the workspace alive, renamed `◇ <repo> (old)`. A closed panel is left out of that count even
+  `herdr plugin pane close`, which refuses panes no plugin owns, or, when it is an idle restored
+  shell, with `herdr pane close`. A lone panel would otherwise keep the workspace alive, renamed
+  `◇ <repo> (old)`. A restored shell still running something (its startup, or anything the user
+  started) is never closed: retirement is quarantined before any pane closes, so launch's retry
+  below waits for a shell that is still starting. A closed panel is left out of that count even
   while Herdr still lists it. A panel that cannot be closed never fails retirement: the coordinator's
   pane still closes and the workspace is retained with "panel could not be closed". Restart closes
   the coordinator's pane first; the retirement that follows still closes the panel.

@@ -430,6 +430,62 @@ test("a recorded panel id that now names another pane is left open and reported"
   }
 });
 
+/** What Herdr reopens in the panel's place after a server restart: a plain shell, same title. */
+function restoredPanelShell(processes: readonly FakeProcess[] = stoppedShell): FakePane {
+  return panelPane({ plugin: false, foregroundCwd: "/tmp", shellPid: 100, processes });
+}
+
+test("closes an idle shell Herdr restored in the panel's place, so the workspace goes", async () => {
+  const { root, repoPath, worktree } = await fixture();
+  try {
+    const record = { repoPath, endpoint: endpoint(), worktree };
+    await recordPanel(root, repoPath, "panel-a");
+    const runner = fakeRunner(
+      {
+        "pane-a": { ...ownedStoppedPane, foregroundCwd: worktree.path },
+        "panel-a": restoredPanelShell(),
+      },
+      { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
+    );
+
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+
+    expect(result).toEqual({ outcome: "closed" });
+    expect(runner.panes.get("panel-a")?.present).toBe(false);
+    expect(runner.panes.get("pane-a")?.present).toBe(false);
+    expect(runner.workspaceLabel.get("workspace-a")).toBe(coordinatorWorkspaceLabel(repoPath));
+  } finally {
+    await cleanup(root);
+  }
+});
+
+test("a restored panel shell still running a program quarantines retirement and closes nothing", async () => {
+  const { root, repoPath, worktree } = await fixture();
+  try {
+    const record = { repoPath, endpoint: endpoint(), worktree };
+    await recordPanel(root, repoPath, "panel-a");
+    const runner = fakeRunner(
+      {
+        "pane-a": { ...ownedStoppedPane, foregroundCwd: worktree.path },
+        "panel-a": restoredPanelShell([
+          { pid: 100, name: "zsh", argv: ["-zsh"], argv0: "-zsh" },
+          { pid: 101, name: "fastfetch", argv: ["fastfetch"] },
+        ]),
+      },
+      { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
+    );
+
+    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+
+    expect(result).toMatchObject({ outcome: "quarantined" });
+    expect(runner.panes.get("panel-a")?.present).toBe(true);
+    expect(runner.panes.get("pane-a")?.present).toBe(true);
+    expect(runner.workspaceLabel.get("workspace-a")).toBe(coordinatorWorkspaceLabel(repoPath));
+  } finally {
+    await cleanup(root);
+  }
+});
+
 test("leaves a custom-labeled workspace and its pane completely untouched", async () => {
   const { root, repoPath, worktree } = await fixture();
   try {
