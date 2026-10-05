@@ -109,7 +109,7 @@ test("every row kind lands in its section with its stage, color, second line, an
     ]),
   );
   expect(rows).toEqual({
-    "Needs you": [
+    "NEEDS YOU": [
       [
         "Dark mode",
         "brief to approve",
@@ -133,7 +133,7 @@ test("every row kind lands in its section with its stage, color, second line, an
         { kind: "url", url: "https://github.com/acme/app/pull/409" },
       ],
     ],
-    Running: [
+    RUNNING: [
       [
         "Fix login",
         "implementing",
@@ -151,7 +151,7 @@ test("every row kind lands in its section with its stage, color, second line, an
       ],
       ["Paused work", "paused", "yellow", "paused by you", { kind: "none" }],
     ],
-    "Pull requests": [
+    "PULL REQUESTS": [
       [
         "#412 branch-412",
         "review",
@@ -160,7 +160,7 @@ test("every row kind lands in its section with its stage, color, second line, an
         { kind: "url", url: "https://github.com/acme/app/pull/412" },
       ],
     ],
-    "Done today": [["Shipped", "done", "green", "merged", { kind: "chat", repoPath: APP }]],
+    "DONE TODAY": [["Shipped", "done", "green", "merged", { kind: "chat", repoPath: APP }]],
   });
   expect(view.summary).toBe("4 need you · 3 running");
   expect(view.footer).toBeUndefined();
@@ -296,7 +296,7 @@ test("a merged task with a finished pull request shows only under Done today", (
   const view = panelView(merged, { project: APP, query: "", now: NOW, readFailed: false });
   expect(
     view.sections.map((section) => [section.title, section.rows.map((row) => row.name)]),
-  ).toEqual([["Done today", ["Shipped"]]]);
+  ).toEqual([["DONE TODAY", ["Shipped"]]]);
 });
 
 test("the panel's project is the longest project path holding the directory", () => {
@@ -341,7 +341,7 @@ test("running rows show the current step, then the tool, its target, and how lon
     { project: APP, query: "", now: NOW, readFailed: false },
   );
   const rows = Object.fromEntries(
-    (view.sections.find((section) => section.title === "Running")?.rows ?? []).map((row) => [
+    (view.sections.find((section) => section.title === "RUNNING")?.rows ?? []).map((row) => [
       row.name,
       { lines: row.lines, activity: row.activity, steps: row.steps?.map((step) => step.status) },
     ]),
@@ -366,10 +366,52 @@ test("running rows show the current step, then the tool, its target, and how lon
     "research-thinking": { lines: ["for 12m"], activity: undefined, steps: undefined },
     "review-search": {
       lines: [],
-      activity: { verb: "mcp__docs__lookup", target: "auth", age: "4s" },
+      activity: { verb: "lookup", target: "auth", age: "4s" },
       steps: undefined,
     },
   });
+});
+
+test("tool lines use plain verbs for both harnesses' tool names and hide to-do updates", () => {
+  const tools = [
+    "task",
+    "Agent",
+    "bash",
+    "Read",
+    "Write",
+    "MultiEdit",
+    "find",
+    "WebFetch",
+    "web_search",
+    "mcp__plugin_tandem_tandem__submit_report",
+    "todo",
+    "TaskUpdate",
+  ];
+  const view = panelView(
+    snapshot({
+      tasks: tools.map((name) =>
+        task({ id: name, repoPath: APP, stage: "scouting", objective: name }),
+      ),
+      activities: new Map(tools.map((name) => [name, { tool: name }])),
+    }),
+    { project: APP, query: "", now: NOW, readFailed: false },
+  );
+  expect(
+    view.sections.flatMap((section) => section.rows).map((row) => [row.name, row.activity]),
+  ).toEqual([
+    ["task", { verb: "delegate" }],
+    ["Agent", { verb: "delegate" }],
+    ["bash", { verb: "run" }],
+    ["Read", { verb: "read" }],
+    ["Write", { verb: "edit" }],
+    ["MultiEdit", { verb: "edit" }],
+    ["find", { verb: "search" }],
+    ["WebFetch", { verb: "browse" }],
+    ["web_search", { verb: "browse" }],
+    ["mcp__plugin_tandem_tandem__submit_report", { verb: "report" }],
+    ["todo", undefined],
+    ["TaskUpdate", undefined],
+  ]);
 });
 
 test("each row's second line says what Tandem recorded, and falls back to the row's words without it", () => {

@@ -60,11 +60,7 @@ const REFRESH_MS = 1_000;
 /** How long a lone Esc waits for the rest of an escape sequence split across reads. */
 const ESCAPE_WAIT_MS = 50;
 const PANEL_WIDTH = 46;
-const HELP = [
-  "j k ↑ ↓ move · Enter go · / search",
-  "Space steps · 1-9 [ ] project",
-  "Esc close · x hide",
-];
+const HELP = ["j k ↑ ↓ move · Enter go · / search", "Space steps · 1-9 [ ] project"];
 const NO_COORDINATOR = "⚠ no coordinator is open for that project";
 const STEP_MARKS: Readonly<Record<PanelStep["status"], string>> = {
   done: "☑",
@@ -132,15 +128,18 @@ export function panelStep(
   const move = (by: number) => ({
     state: { ...state, selected: rows[Math.min(rows.length - 1, Math.max(0, index + by))]?.key },
   });
-  const go = (row: PanelRow | undefined) =>
+  const go = (row: PanelRow | undefined, from: PanelState = state) =>
     row === undefined || row.target.kind === "none"
-      ? { state }
-      : { state, effect: { kind: "go", target: row.target } as const };
+      ? { state: from }
+      : {
+          state: { ...from, query: undefined },
+          effect: { kind: "go", target: row.target } as const,
+        };
   const switchTo = (repoPath: string | undefined) =>
     repoPath === undefined
       ? { state }
       : {
-          state: { ...state, project: repoPath, selected: undefined },
+          state: { ...state, project: repoPath, query: undefined, selected: undefined },
           effect: { kind: "switch", repoPath } as const,
         };
   const chips = frame.view.chips;
@@ -161,7 +160,10 @@ export function panelStep(
       state.lastClick?.key === hit.key && frame.now - state.lastClick.at <= DOUBLE_CLICK_MS;
     const clicked = { ...state, selected: hit.key, lastClick: { key: hit.key, at: frame.now } };
     return double
-      ? { ...go(rows.find((row) => row.key === hit.key)), state: clicked }
+      ? go(
+          rows.find((row) => row.key === hit.key),
+          clicked,
+        )
       : { state: clicked };
   }
   const step = ((): Readonly<{ state: PanelState; effect?: PanelEffect }> => {
@@ -201,7 +203,8 @@ function toggleSteps(state: PanelState, row: PanelRow | undefined): PanelState {
 /**
  * The commands for an effect, in order. Focusing the workspace lands on its active pane;
  * `agent focus` then picks the exact pane, which Herdr allows only for panes it knows run an
- * agent, so it may fail without failing the effect. No steps means there is nowhere to go.
+ * agent, so it may fail without failing the effect. Switching project lands in its coordinator's
+ * chat, the same as going there. No steps means there is nowhere to go.
  */
 export function navigationSteps(
   effect: Exclude<PanelEffect, { kind: "close" }>,
@@ -213,21 +216,17 @@ export function navigationSteps(
     { argv: herdr("workspace", "focus", workspaceId), failure: "⚠ Herdr couldn't focus it" },
     ...(paneId === undefined ? [] : [{ argv: herdr("agent", "focus", paneId) }]),
   ];
-  const coordinator = (repoPath: string) =>
-    coordinators.find((candidate) => candidate.repoPath === repoPath);
-  if (effect.kind === "switch") {
-    const found = coordinator(effect.repoPath);
-    return found === undefined ? [] : focus(found.workspaceId);
-  }
+  const chat = (repoPath: string) => {
+    const found = coordinators.find((candidate) => candidate.repoPath === repoPath);
+    return found === undefined ? [] : focus(found.workspaceId, found.paneId);
+  };
+  if (effect.kind === "switch") return chat(effect.repoPath);
   const { target } = effect;
   if (target.kind === "url") {
     return [{ argv: ["open", target.url], failure: "⚠ couldn't open the link" }];
   }
   if (target.kind === "pane") return focus(target.workspaceId, target.paneId);
-  if (target.kind === "chat") {
-    const found = coordinator(target.repoPath);
-    return found === undefined ? [] : focus(found.workspaceId, found.paneId);
-  }
+  if (target.kind === "chat") return chat(target.repoPath);
   return [];
 }
 
@@ -301,7 +300,7 @@ export async function runPanelAction(
 export function renderPanel(
   view: PanelView,
   state: PanelState,
-  style: Readonly<{ width: number; height?: number; color: boolean }>,
+  style: Readonly<{ width: number; height?: number; color: boolean; popup: boolean }>,
 ): Readonly<{ lines: readonly string[]; hits: readonly PanelHit[] }> {
   const hits: PanelHit[] = [];
   let x = 1;
@@ -323,10 +322,11 @@ export function renderPanel(
       : [span("/ ", "cyan"), span(`${state.query}▏`)],
   ];
   if (state.help) {
-    const inner = Math.max(...HELP.map((line) => lineWidth([span(line)])));
+    const help = [...HELP, style.popup ? "Esc close · x hide" : "x hide"];
+    const inner = Math.max(...help.map((line) => lineWidth([span(line)])));
     top.push([span(`╭${"─".repeat(inner + 2)}╮`, "dim")]);
-    for (const help of HELP) {
-      top.push([span("│ ", "dim"), span(help.padEnd(inner)), span(" │", "dim")]);
+    for (const line of help) {
+      top.push([span("│ ", "dim"), span(line.padEnd(inner)), span(" │", "dim")]);
     }
     top.push([span(`╰${"─".repeat(inner + 2)}╯`, "dim")]);
   }
@@ -334,11 +334,14 @@ export function renderPanel(
   if (view.quiet && state.query === undefined && view.chips.length > 0) {
     body.push([span("✓ All quiet.", "green")], []);
   }
+  if ((state.query ?? "").trim() !== "" && view.sections.length === 0) {
+    body.push([span("no matches", "dim")], []);
+  }
   const rows = view.sections.flatMap((section) => section.rows);
   const selected = rows.find((row) => row.key === state.selected)?.key ?? rows[0]?.key;
   const spans: { key: string; first: number; last: number }[] = [];
   for (const section of view.sections) {
-    body.push([span(section.title.toUpperCase(), "bold")]);
+    body.push([span(section.title, "bold")]);
     for (const row of section.rows) {
       const first = body.length;
       body.push(rowLine(row, row.key === selected, style.width));
@@ -484,6 +487,7 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
       width: columns ?? PANEL_WIDTH,
       ...(rows === undefined ? {} : { height: rows }),
       color: deps.color,
+      popup: deps.popup,
     });
   };
   await refresh();

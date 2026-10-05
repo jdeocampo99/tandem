@@ -57,7 +57,12 @@ const START: PanelState = {
 };
 
 function frame(view: PanelView = VIEW, popup = false): PanelFrame {
-  return { view, hits: renderPanel(view, START, { width: 46, color: false }).hits, popup, now: 0 };
+  return {
+    view,
+    hits: renderPanel(view, START, { width: 46, color: false, popup: false }).hits,
+    popup,
+    now: 0,
+  };
 }
 
 /** Feeds keys in order and returns the state and every effect they asked for. */
@@ -146,6 +151,44 @@ test("search takes every key as text until Esc clears it; arrows still move and 
   ]);
 });
 
+test("going or switching closes the search, so the panel is not left swallowing keys", () => {
+  const searching = { ...START, query: "" };
+  const went = press(keys("\r"), { from: searching });
+  expect(went.effects).toHaveLength(1);
+  expect(went.state.query).toBeUndefined();
+  const { hits } = frame();
+  const tandemChip = hits.find((hit) => hit.kind === "chip" && hit.repoPath === TANDEM);
+  if (tandemChip === undefined) throw new Error("missing chip");
+  const switched = press([{ kind: "click", x: tandemChip.from, y: tandemChip.y }], {
+    from: searching,
+  });
+  expect(switched.effects).toEqual([{ kind: "switch", repoPath: TANDEM }]);
+  expect(switched.state.query).toBeUndefined();
+  const nowhere = press(keys("\x1b[B\x1b[B\r"), { from: searching });
+  expect(nowhere.state.query).toBe("");
+});
+
+test("a search with no results says so, and project headings keep their own case", () => {
+  const draw = (query: string) => {
+    const view = panelView(SNAPSHOT, { project: APP, query, now: NOW, readFailed: false });
+    return renderPanel(view, { ...START, query }, { width: 46, color: false, popup: false }).lines;
+  };
+  expect(draw("zzz")).toContain("no matches");
+  expect(draw("")).not.toContain("no matches");
+  expect(draw("working")).toContain("app");
+  expect(draw("")).toContain("NEEDS YOU");
+});
+
+test("the key help offers Esc close only in a popup", () => {
+  const help = (popup: boolean) =>
+    renderPanel(VIEW, { ...START, help: true }, { width: 46, color: false, popup }).lines.join(
+      "\n",
+    );
+  expect(help(true)).toContain("Esc close · x hide");
+  expect(help(false)).not.toContain("Esc");
+  expect(help(false)).toContain("x hide");
+});
+
 test("a click on a chip switches, a click on a row selects it, and a double-click goes", () => {
   const { hits } = frame();
   const tandemChip = hits.find((hit) => hit.kind === "chip" && hit.repoPath === TANDEM);
@@ -206,6 +249,7 @@ test("rows taller than the terminal scroll to keep the selection in sight, with 
       width: 46,
       height: 6,
       color: false,
+      popup: false,
     },
   );
   expect(rendered.lines).toHaveLength(6);
@@ -216,7 +260,7 @@ test("rows taller than the terminal scroll to keep the selection in sight, with 
 });
 
 test("chip click areas stop at the panel's edge", () => {
-  const hits = renderPanel(VIEW, START, { width: 10, color: false }).hits;
+  const hits = renderPanel(VIEW, START, { width: 10, color: false, popup: false }).hits;
   expect(hits.filter((hit) => hit.kind === "chip").every((hit) => hit.to <= 10)).toBe(true);
 });
 
@@ -247,6 +291,7 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
   ).toEqual([{ argv: ["open", "https://x/1"], failure: "⚠ couldn't open the link" }]);
   expect(navigationSteps({ kind: "switch", repoPath: TANDEM }, "tandem", COORDINATORS)).toEqual([
     { argv: herdr("workspace", "focus", "w1"), failure: "⚠ Herdr couldn't focus it" },
+    { argv: herdr("agent", "focus", "w1:p1") },
   ]);
   expect(navigationSteps({ kind: "switch", repoPath: "/offline" }, "tandem", COORDINATORS)).toEqual(
     [],
@@ -270,13 +315,16 @@ test("the home key goes to the focused project's chat; prev and next wrap around
   ]);
   expect(panelActionSteps("next", SNAPSHOT, inWorker, "tandem")).toEqual([
     { argv: herdr("workspace", "focus", "w1"), failure: focusFailure },
+    { argv: herdr("agent", "focus", "w1:p1") },
   ]);
   expect(panelActionSteps("prev", SNAPSHOT, { workspaceId: "w1", cwd: "/" }, "tandem")).toEqual([
     { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
+    { argv: herdr("agent", "focus", "w2:p1") },
   ]);
   const alone = { ...SNAPSHOT, coordinators: COORDINATORS.slice(0, 1) };
   expect(panelActionSteps("next", alone, inWorker, "tandem")).toEqual([
     { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
+    { argv: herdr("agent", "focus", "w2:p1") },
   ]);
   const OTHER = "/work/other";
   const offlineHere = {
@@ -290,9 +338,11 @@ test("the home key goes to the focused project's chat; prev and next wrap around
   const inTandem = { cwd: `${TANDEM}/src` };
   expect(panelActionSteps("next", offlineHere, inTandem, "tandem")).toEqual([
     { argv: herdr("workspace", "focus", "w2"), failure: focusFailure },
+    { argv: herdr("agent", "focus", "w2:p1") },
   ]);
   expect(panelActionSteps("prev", offlineHere, inTandem, "tandem")).toEqual([
     { argv: herdr("workspace", "focus", "w5"), failure: focusFailure },
+    { argv: herdr("agent", "focus", "w5:p1") },
   ]);
 });
 
@@ -462,7 +512,7 @@ const WORKING = panelView(
 test("Space shows and hides the selected running row's steps; rows without steps ignore it", () => {
   const working = { ...frame(WORKING), view: WORKING };
   const draw = (from: PanelState) =>
-    renderPanel(WORKING, from, { width: 46, color: false }).lines.join("\n");
+    renderPanel(WORKING, from, { width: 46, color: false, popup: false }).lines.join("\n");
   const shown = panelStep(START, { kind: "char", char: " " }, working).state;
   expect(draw(shown)).toContain(
     ["      ☑ Read the brief", "      ▸ Write the test", "      ☐ Make it pass"].join("\n"),
@@ -477,7 +527,7 @@ test("Space shows and hides the selected running row's steps; rows without steps
 });
 
 test("the tool line cuts its target from the left, keeping the file name, to fit the width", () => {
-  const { lines } = renderPanel(WORKING, START, { width: 46, color: false });
+  const { lines } = renderPanel(WORKING, START, { width: 46, color: false, popup: false });
   const at = lines.findIndex((line) => line.includes("▸ edit"));
   expect(lines[at]).toBe("    ▸ edit …/directory/session-handler.ts · 4s");
   expect(Bun.stringWidth(lines[at] ?? "")).toBe(46);

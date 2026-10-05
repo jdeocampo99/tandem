@@ -140,20 +140,35 @@ const RUNNING_COLORS: Readonly<Record<RunningStage, PanelColor>> = {
   reviewing: "magenta",
 };
 
-const TOOL_VERBS: ReadonlyMap<string, string> = new Map([
+/** OMP's and Claude Code's tool names, lowercased, as plain verbs; `undefined` hides the line. */
+const TOOL_VERBS: ReadonlyMap<string, string | undefined> = new Map([
   ["read", "read"],
   ["notebookread", "read"],
-  ["webfetch", "read"],
   ["edit", "edit"],
   ["multiedit", "edit"],
   ["notebookedit", "edit"],
-  ["write", "write"],
+  ["write", "edit"],
   ["bash", "run"],
   ["grep", "search"],
   ["glob", "search"],
+  ["find", "search"],
   ["ls", "search"],
-  ["web_search", "search"],
-  ["websearch", "search"],
+  ["web_search", "browse"],
+  ["websearch", "browse"],
+  ["webfetch", "browse"],
+  ["fetch", "browse"],
+  ["task", "delegate"],
+  ["agent", "delegate"],
+  ["ask", "ask"],
+  ["askuserquestion", "ask"],
+  ["submit_report", "report"],
+  ["copy_asset", "copy"],
+  ["todo", undefined],
+  ["todowrite", undefined],
+  ["taskcreate", undefined],
+  ["taskupdate", undefined],
+  ["tasklist", undefined],
+  ["taskget", undefined],
 ]);
 
 const STEP_STATUSES: Readonly<Record<string, PanelStep["status"]>> = {
@@ -239,7 +254,7 @@ export function panelView(snapshot: BoardSnapshot | undefined, options: PanelOpt
   const sections =
     words.length === 0
       ? SECTION_ORDER.map((title) => ({
-          title,
+          title: title.toUpperCase(),
           rows: mine
             .filter((entry) => entry.section === title)
             .map((entry) => panelRow(entry, options.seen)),
@@ -451,8 +466,11 @@ function currentStep(todos: readonly TodoItem[] | undefined): string | undefined
 function toolActivity(row: RunningBoardRow, now: string): PanelActivity | undefined {
   const { tool, toolTarget, toolStartedAt } = row.activity ?? {};
   if (tool === undefined) return undefined;
+  const name = tool.toLowerCase().replace(/^mcp__.+?__/u, "");
+  const verb = TOOL_VERBS.has(name) ? TOOL_VERBS.get(name) : name;
+  if (verb === undefined) return undefined;
   return {
-    verb: TOOL_VERBS.get(tool.toLowerCase()) ?? tool.toLowerCase(),
+    verb,
     ...(toolTarget === undefined ? {} : { target: toolTarget }),
     ...(toolStartedAt === undefined ? {} : { age: elapsed(toolStartedAt, now) }),
   };
