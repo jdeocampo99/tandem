@@ -1,0 +1,11 @@
+schema = 1
+id = "tandemprobe"
+name = "Tandem probe"
+version = "0.0.1"
+description = "Throwaway plugin for spikes/tern-probe/probe.ts"
+host = "host.luau"
+window = "window.luau"
+
+[[blocks]]
+id = "panel"
+title = "Tandem probe panel"
