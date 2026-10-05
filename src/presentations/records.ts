@@ -410,6 +410,11 @@ export function parseEndpointValue(value: unknown, field: string): Endpoint {
   return {
     terminal: storedEndpointTerminal(value.terminal, field),
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
+    ...(value.terminalSessionId === undefined
+      ? {}
+      : {
+          terminalSessionId: singleLine(value.terminalSessionId, `${field}.terminalSessionId`),
+        }),
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
     tabId: singleLine(value.tabId, `${field}.tabId`),
     paneId: singleLine(value.paneId, `${field}.paneId`),

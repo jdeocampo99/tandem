@@ -43,6 +43,7 @@ async function machine(
     savedRoots?: (code: string, outside: string) => string[];
     availableModels?: readonly ModelRecord[];
     claudeCode?: ClaudeCodeAvailability;
+    tern?: import("../../src/terminal-backend/contract.ts").TerminalAvailability;
   }> = {},
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-setup-")));
@@ -121,6 +122,7 @@ async function machine(
     saveModels: async (input) => {
       saved.push(`models ${input.enabledProviders.join(",")}`);
     },
+    probeTern: async () => options.tern ?? { status: "ready" },
     configureTerminal: async (terminal) => {
       await record(`terminal ${terminal}`)();
       return { requested: terminal, terminal };
@@ -578,3 +580,23 @@ test("an answer that can't be saved comes back with every problem and stores not
   expect(await workflow.status()).toBe("done");
   await expect(readFile(join(home, "setup", "answer.json"))).rejects.toThrow();
 });
+
+for (const tern of [
+  { status: "ready" },
+  { status: "missing" },
+  { status: "signedOut" },
+  { status: "unknown", reason: "Tern could not start." },
+] as const) {
+  test(`setup gathers ${tern.status} Tern availability before offering a terminal`, async () => {
+    const { workflow } = await machine({ tern });
+    const opened = await workflow.open("/tandem");
+    const html = await readFile(opened.path, "utf8");
+    const data = /<script type="application\/json" id="setup-data">([\s\S]*?)<\/script>/.exec(html);
+    const view = JSON.parse(data?.[1] ?? "null");
+    expect(view.ternReady).toBe(tern.status === "ready");
+    if (tern.status !== "ready") {
+      expect(view.terminal).toBe("herdr");
+      expect(view.terminalReason).toContain("Using Herdr.");
+    }
+  });
+}

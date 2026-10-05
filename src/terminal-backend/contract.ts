@@ -65,6 +65,32 @@ export type FocusResult =
   | Readonly<{ focused: true }>
   | Readonly<{ focused: false; code: number; detail: string }>;
 
+/** A durable identity to show. The CLI validates it before asking a backend to present it. */
+export type TerminalView =
+  | Readonly<{ kind: "task"; taskId: string }>
+  | Readonly<{ kind: "brief"; requestId: string }>
+  | Readonly<{ kind: "pr"; taskId: string }>;
+
+/** Presentation context from the initiating view; it grants no pane ownership. */
+export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
+
+export type OpenViewResult = Readonly<{
+  opened: boolean;
+  warnings: readonly string[];
+  fallback?: "brief-review";
+}>;
+
+/** Installation and account readiness proved before offering a terminal in setup. */
+export type TerminalAvailability =
+  | Readonly<{ status: "missing" | "signedOut" | "ready" }>
+  | Readonly<{ status: "unknown"; reason: string }>;
+
+/** The last proven window width, and any limitation that prevented fitting the panel. */
+export type PanelFitResult = Readonly<{
+  fittedWidth: number | undefined;
+  warnings: readonly string[];
+}>;
+
 export type AgentState = "idle" | "working" | "blocked" | "unknown";
 
 /** Presentation-only lifecycle state for the pane an agent runs in; it never grants ownership. */
@@ -148,6 +174,8 @@ export type TerminalBackend = Readonly<{
         env?: Readonly<Record<string, string>>;
         parentWorkspaceId?: string;
         insertIndex?: number;
+        /** Previous durable identity, when reconnecting to a retained native project session. */
+        previousEndpoint?: Endpoint;
       }>,
   ): Promise<Readonly<{ endpoint: Endpoint; warnings: readonly string[] }>>;
   /**
@@ -199,6 +227,20 @@ export type TerminalBackend = Readonly<{
   /** Focuses the exact pane; false when the terminal would not, which callers may ignore. */
   focusAgent(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
 
+  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
+   * Supplied origin window/pane context must be honored or refused; never target another window.
+   * Unsupported presentations return an explicit warning and never type into the conversation.
+   */
+  openView(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      view: TerminalView;
+      origin?: ViewOrigin;
+    }>,
+  ): Promise<OpenViewResult>;
+
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;
   /** The terminal's own description of the session, for `doctor`. */
@@ -227,13 +269,13 @@ export type TerminalBackend = Readonly<{
   /** Closes a panel; one already gone counts as closed. */
   closePanel(target: SessionTarget & Readonly<{ panelPaneId: string }>): Promise<void>;
   /**
-   * Brings the panel back to `columns` wide, once per window width: returns the window width it
-   * fitted for, or `fittedWidth` unchanged when there was nothing to do or the terminal refused.
+   * Brings the panel back to `columns` wide, once per window width. Retains `fittedWidth` when
+   * nothing changed or fitting was refused; terminals can report a limitation as a warning.
    */
   fitPanel(
     target: SessionTarget &
       Readonly<{ paneId: string; columns: number; fittedWidth: number | undefined }>,
-  ): Promise<number | undefined>;
+  ): Promise<PanelFitResult>;
   /** Publishes the agent's state on the pane this process inherited, or undefined outside one. */
   agentStatusReporter(
     input: Readonly<{

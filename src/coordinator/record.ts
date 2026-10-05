@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
-import type { Endpoint, WorktreeLease } from "../contracts.ts";
+import type { Endpoint, TerminalPaneLocation, WorktreeLease } from "../contracts.ts";
 import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
@@ -124,11 +124,31 @@ function positiveInteger(value: unknown, field: string): number {
   return value as number;
 }
 
+function parseNotificationPane(value: unknown, field: string): TerminalPaneLocation {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  ensureExactKeys(value, ["workspaceId", "tabId", "paneId"], field);
+  return {
+    workspaceId: text(value.workspaceId, `${field}.workspaceId`),
+    tabId: text(value.tabId, `${field}.tabId`),
+    paneId: text(value.paneId, `${field}.paneId`),
+  };
+}
+
 export function parseEndpoint(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   ensureExactKeys(
     value,
-    ["terminal", "sessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
+    [
+      "sessionId",
+      "workspaceId",
+      "tabId",
+      "paneId",
+      "role",
+      "generation",
+      ...(Object.hasOwn(value, "terminal") ? ["terminal"] : []),
+      ...(Object.hasOwn(value, "terminalSessionId") ? ["terminalSessionId"] : []),
+      ...(Object.hasOwn(value, "notificationPane") ? ["notificationPane"] : []),
+    ],
     field,
   );
   const sessionId = sessionText(value.sessionId);
@@ -141,6 +161,17 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   return {
     terminal: storedEndpointTerminal(value.terminal, field),
     sessionId,
+    ...(value.notificationPane === undefined
+      ? {}
+      : {
+          notificationPane: parseNotificationPane(
+            value.notificationPane,
+            `${field}.notificationPane`,
+          ),
+        }),
+    ...(value.terminalSessionId === undefined
+      ? {}
+      : { terminalSessionId: text(value.terminalSessionId, `${field}.terminalSessionId`) }),
     workspaceId,
     tabId,
     paneId,

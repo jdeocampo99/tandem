@@ -3,7 +3,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { resolveTandemEnvironment } from "../config/environment.ts";
 import { readHomeSettings } from "../config/home-settings.ts";
 import { DEFAULT_TERMINAL_SESSION_ID } from "../terminal/environment.ts";
-import { installTerminalPlugin } from "./compose.ts";
+import { installTerminalPlugin, savedTerminalPreference } from "./compose.ts";
 import { setUpHerdrIntegration } from "./herdr/setup.ts";
 
 async function main(): Promise<void> {
@@ -12,7 +12,7 @@ async function main(): Promise<void> {
     cwd,
     sessionId: DEFAULT_TERMINAL_SESSION_ID,
   });
-  if ((await readHomeSettings(environment.home)).terminal !== "tern") {
+  if (savedTerminalPreference(await readHomeSettings(environment.home)).terminal !== "tern") {
     await setUpHerdrIntegration();
     return;
   }

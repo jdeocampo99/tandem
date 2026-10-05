@@ -48,6 +48,10 @@ export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend
       check(target.endpoint);
       return backend.closeOwned(target);
     },
+    createWorkspace: async (target) => {
+      if (target.previousEndpoint !== undefined) check(target.previousEndpoint);
+      return backend.createWorkspace(target);
+    },
     splitBeside: async (input) => {
       if ("anchor" in input) check(input.anchor);
       return backend.splitBeside(input);
@@ -59,6 +63,10 @@ export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend
     isPanelOpen: async (input) => {
       check(input.coordinator);
       return backend.isPanelOpen(input);
+    },
+    openView: async (input) => {
+      check(input.coordinator);
+      return backend.openView(input);
     },
   };
 }

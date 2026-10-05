@@ -55,6 +55,7 @@ const PANE_KEYS = [
 ] as const;
 
 const ENDPOINT_KEYS = [
+  "terminalSessionId",
   "terminal",
   "sessionId",
   "workspaceId",
@@ -244,6 +245,11 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
   return {
     terminal: storedEndpointTerminal(record.terminal, source),
     sessionId: requiredText(record, "sessionId", source),
+    ...(record.terminalSessionId === undefined
+      ? {}
+      : {
+          terminalSessionId: requiredText(record, "terminalSessionId", source),
+        }),
     workspaceId: requiredText(record, "workspaceId", source),
     tabId: requiredText(record, "tabId", source),
     paneId: requiredText(record, "paneId", source),

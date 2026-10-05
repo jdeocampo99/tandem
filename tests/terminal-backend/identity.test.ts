@@ -9,8 +9,13 @@ import { recoverEndpointFromLaunch } from "../../src/tasks/endpoint-launch.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { storedEndpointTerminal } from "../../src/terminal-backend/identity.ts";
 
-for (const chosen of ["herdr", "tern"] as const) {
-  test(`${chosen} quarantines the other terminal's identical ids without contacting it`, async () => {
+for (const [chosen, selection] of [
+  ["herdr", "saved"],
+  ["herdr", "explicit"],
+  ["tern", "saved"],
+  ["tern", "explicit"],
+] as const) {
+  test(`${selection} ${chosen} quarantines the other terminal's identical ids without contacting it`, async () => {
     const home = await mkdtemp(join(tmpdir(), "tandem-terminal-"));
     const calls: unknown[] = [];
     const forbidden: CommandRunner = async (request) => {
@@ -37,10 +42,12 @@ for (const chosen of ["herdr", "tern"] as const) {
       leasedAt: "2026-10-06T00:00:00.000Z",
     };
     try {
-      await writeFile(join(home, "settings.toml"), `terminal = "${chosen}"\n`);
+      const saved = selection === "saved" ? chosen : endpoint.terminal;
+      await writeFile(join(home, "settings.toml"), `terminal = "${saved}"\n`);
       const terminal = terminalBackend(forbidden, {
+        ...(selection === "explicit" ? { terminal: chosen } : {}),
         home,
-        tern: () => ({ ...terminalBackend(forbidden), name: "tern" }),
+        createTern: () => ({ ...terminalBackend(forbidden), name: "tern" }),
       });
       const result = await retireCoordinatorWorkspace(terminal, home, {
         repoPath: home,
@@ -60,6 +67,13 @@ for (const chosen of ["herdr", "tern"] as const) {
           terminal.splitBeside({ anchor: endpoint, cwd: home, role: "reviewer", generation: 0 }),
         () => terminal.openPanel({ coordinator: endpoint, cwd: home, project: home }),
         () => terminal.isPanelOpen({ coordinator: endpoint, cwd: home, panelPaneId: "same" }),
+        () =>
+          terminal.openView({
+            coordinator: endpoint,
+            cwd: home,
+            home,
+            view: { kind: "task", taskId: "task" },
+          }),
       ])
         await expect(operation()).rejects.toBeInstanceOf(EndpointOwnershipError);
       const recovery = await recoverEndpointFromLaunch(terminal, {
@@ -109,7 +123,7 @@ test("an uncertain adapter effect remains quarantined after later calls and term
     await writeFile(join(home, "settings.toml"), 'terminal = "tern"\n');
     const terminal = terminalBackend(forbidden, {
       home,
-      tern: () => {
+      createTern: () => {
         let quarantined = false;
         return {
           ...terminalBackend(forbidden),

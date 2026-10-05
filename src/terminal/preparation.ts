@@ -6,6 +6,7 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import { ternFallbackReason } from "../terminal-backend/setting.ts";
 import type { TerminalRunResult } from "./arguments.ts";
 import type { RunInteractive } from "./cli-process.ts";
 import type { TerminalEnvironment } from "./environment.ts";
@@ -190,14 +191,16 @@ export async function prepareProjects(
   ) {
     const facts = await service.onboardingFacts(anchor.repoPath);
     if (!facts.terminalChosen) {
+      const reason = ternFallbackReason(
+        facts.tern ?? { status: "unknown", reason: "Tern has not been checked." },
+      );
+      if (reason !== undefined) prompter.write(`${reason}\n`);
       const terminal = await prompter.ask("Which terminal should Tandem use?", {
         choices: [
           { name: "Herdr", value: "herdr" },
-          {
-            name: "Tern",
-            value: "tern",
-            description: "Requires Tern and a signed-in Stencil account",
-          },
+          ...(facts.tern?.status === "ready"
+            ? [{ name: "Tern", value: "tern", description: "Signed in and ready" }]
+            : []),
           { name: "Not now", value: "not-now" },
         ],
         default: "herdr",

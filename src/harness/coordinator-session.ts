@@ -63,20 +63,24 @@ function createCoordinatorService(
   return createService({
     home: environment.home,
     sessionId: environment.sessionId,
-    installTerminalPlugin: () =>
-      installTerminalPlugin(environment.home, {
-        run: options.run ?? runCommand,
-        cwd: environment.repo,
-        confirm: (question) => host.confirm("Tandem's Tern integration", question),
-        env: {
-          ...(environmentSnapshot.TERN_CONFIG_DIR === undefined
-            ? {}
-            : { TERN_CONFIG_DIR: environmentSnapshot.TERN_CONFIG_DIR }),
-          ...(environmentSnapshot.TERN_DAEMON_SOCKET === undefined
-            ? {}
-            : { TERN_DAEMON_SOCKET: environmentSnapshot.TERN_DAEMON_SOCKET }),
+    installTerminalPlugin: (readiness) =>
+      installTerminalPlugin(
+        environment.home,
+        {
+          run: options.run ?? runCommand,
+          cwd: environment.repo,
+          confirm: (question) => host.confirm("Tandem's Tern integration", question),
+          env: {
+            ...(environmentSnapshot.TERN_CONFIG_DIR === undefined
+              ? {}
+              : { TERN_CONFIG_DIR: environmentSnapshot.TERN_CONFIG_DIR }),
+            ...(environmentSnapshot.TERN_DAEMON_SOCKET === undefined
+              ? {}
+              : { TERN_DAEMON_SOCKET: environmentSnapshot.TERN_DAEMON_SOCKET }),
+          },
         },
-      }),
+        readiness,
+      ),
     ...(environment.parentWorkspaceId === undefined
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),

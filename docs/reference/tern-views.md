@@ -249,8 +249,12 @@ setup opens projects. A declined global-settings prompt retains the plugin and p
 its palette commands and panel buttons.
 Both composition helpers read `readHomeSettingsSync(home).terminal`. An explicit Herdr choice
 restores recorded Tern preferences without daemon calls; an unset choice performs no effects.
-`installTerminalPlugin(home, dependencies)` returns `Promise<boolean>` for package readiness.
+`installTerminalPlugin(home, dependencies, readiness?: TerminalAvailability)` returns
+`Promise<boolean>` for package readiness. A supplied readiness result avoids another probe;
+otherwise it checks availability before linking or asking about global settings. Missing,
+signed-out and unknown readiness refuse installation without plugin or setting effects.
 `reloadTerminalPlugin(home, dependencies)` returns `Promise<boolean>` for whether a package reloaded.
-These signatures remain unchanged. Update reloads after successful coordinator updates without a
+The two-argument callers remain valid. Update reloads after successful coordinator updates without a
 prompt. On switching to Herdr, the shared configure callback restores preferences after saving the
-choice, preserving the existing Herdr integration path. The Tern package stays linked for later use.
+choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
+plugin consent. The Tern package stays linked for later use.

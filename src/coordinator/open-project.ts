@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
 import { terminalContext } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
+import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
 import { listCoordinatorRecords } from "./registry.ts";
 import { TANDEM_CHECKOUT } from "./tandem-checkout.ts";
 
@@ -66,6 +67,7 @@ export async function openProject(
   const records = await listCoordinatorRecords(input.home, input.sessionId);
   const record = records.find((candidate) => candidate.repoPath === input.repoPath);
   if (record === undefined) return { focused: false };
+  assertTerminalEndpoint(terminal.name, record.endpoint);
   const focus = await terminal.focusWorkspace({
     sessionId: input.sessionId,
     cwd: input.repoPath,

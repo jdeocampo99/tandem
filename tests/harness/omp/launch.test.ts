@@ -26,6 +26,8 @@ test("the coordinator runs only read, ask and tandem with Tandem's extension and
     "high",
     "--config",
     CONFIG,
+    "--config",
+    join(SOURCE, "harness/omp/coordinator-config.yml"),
     "--no-extensions",
     "--extension",
     EXTENSION,

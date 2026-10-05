@@ -34,6 +34,10 @@
                 "message": "Only the terminal-backend Herdr implementation may import Herdr modules. Use the backend-neutral terminal port."
               },
               {
+                "group": ["**/terminal-backend/tern/**"],
+                "message": "Only the terminal-backend Tern implementation and its tests may import Tern modules. Use the backend-neutral terminal port."
+              },
+              {
                 "group": ["**/harness/omp/launch.ts", "**/harness/claude-code/launch.ts"],
                 "message": "Resolve a harness with harnessFor in src/harness/resolve.ts instead of importing it."
               }
@@ -57,7 +61,17 @@
       "linter": {
         "rules": {
           "style": {
-            "noRestrictedImports": "off"
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/terminal-backend/herdr/**", "**/terminal-backend/tern/**"],
+                    "message": "Use the harness and terminal ports; backend imports stay in their implementation."
+                  }
+                ]
+              }
+            }
           }
         }
       }
@@ -67,7 +81,37 @@
       "linter": {
         "rules": {
           "style": {
-            "noRestrictedImports": "off"
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@oh-my-pi/**", "**/terminal-backend/tern/**"],
+                    "message": "Use the harness and terminal ports; backend imports stay in their implementation."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/terminal-backend/tern/**", "tests/terminal-backend/tern/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@oh-my-pi/**", "**/terminal-backend/herdr/**"],
+                    "message": "Use the harness and terminal ports."
+                  }
+                ]
+              }
+            }
           }
         }
       }
@@ -88,6 +132,30 @@
                   {
                     "group": ["@oh-my-pi/**"],
                     "message": "Only src/harness/omp/ and its tests may import OMP. Go through the launch port in src/harness/contract.ts."
+                  },
+                  {
+                    "group": ["**/terminal-backend/herdr/**", "**/terminal-backend/tern/**"],
+                    "message": "Use the terminal port."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/terminal-backend/compose.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@oh-my-pi/**"],
+                    "message": "Use the harness port."
                   }
                 ]
               }

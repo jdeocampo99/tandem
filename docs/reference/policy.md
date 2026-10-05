@@ -291,13 +291,27 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 The home setting `terminal = "herdr"` or `terminal = "tern"` applies across projects. An absent
 setting keeps Herdr. Only `src/terminal-backend/compose.ts` selects an implementation from it;
 composition reads the setting again before terminal operations, including after onboarding saves.
+`terminalBackend(run, { terminal, home, ... })` also accepts an explicit fixed choice for composed
+callers and scenario boundaries; that choice retains the same endpoint identity guards.
 
-The setup page offers both terminals in its first step and shows the choice on Review. In chat,
-the `terminal-setting` action confirms the choice; direct interactive repository onboarding asks
-when the home has no saved terminal. Choosing Tern checks its installed executable and account gate
-in a temporary, isolated daemon and window. A missing app, signed-out account, or unconfirmed gate
-saves Herdr instead and explains why. The probe closes its own window and daemon and changes no
-settings in the user's Tern configuration.
+The setup page, chat, and direct interactive onboarding offer Tern only when `probeTern` reports
+`ready`. Its other outcomes are `missing`, `signedOut`, or `unknown` with a reason; each shows a
+one-line explanation and selects Herdr. Page discovery keeps the probe result for that open page
+and probes again when reopened. The `terminal-setting` action rechecks availability before saving
+Tern. The probe reads the executable and account gate in a temporary, isolated daemon and window,
+closes its own resources, and changes no settings in the user's Tern configuration. The entire probe
+has an eight-second budget; shutdown gets one second for the owned control endpoint before both
+owned process groups are aborted and awaited, then temporary files are removed. Timeouts return
+`unknown`. Tern v0.4.5 needs a native window to prove the real account gate: its headless mode uses
+synthetic accounts. The isolated control window may briefly appear in front during onboarding; it
+is closed before the probe returns. Tandem never hides the Tern app or alters other windows.
+
+After a ready Tern choice is saved, onboarding runs the injected plugin installer outside the state
+lock. Its separate consent prompt approves linking Tandem's views and adding its shortcuts; declining
+leaves them unchanged. Composition calls `ensureTernPlugin` only for ready Tern, while Herdr and
+unconfirmed availability never reach plugin commands. A saved Tern choice outside that onboarding
+flow is probed again before plugin installation. `tandem update` reloads an existing selected Tern
+plugin and never installs one without consent.
 
 Switching is refused under the state lock while tasks are queued or running, jobs are active, or
 reservations or launch outcomes retain uncertain ownership, including presentations. Availability
@@ -307,3 +321,14 @@ Endpoints and pending launch intents record their creating terminal. Historical 
 that field are Herdr records. A record from the other terminal is quarantined before inspection,
 close, recovery, or navigation: its ids never authorize an operation in the selected terminal.
 Derived board navigation retains the terminal tag; an older untagged snapshot is treated as Herdr.
+
+Tern composition uses `ternBackend` and `TERN_CONTEXT`. Alerts require a recorded per-project
+Tandem helper-pane endpoint. Composition resolves the exact repository or worktree owner in the
+requested Tandem session, then uses `ternNotificationEndpoint` to derive its recorded helper identity.
+Missing, ambiguous, or foreign-terminal records refuse the alert before reaching the terminal; the
+coordinator pane itself never receives the alert.
+
+Every coordinator and worker launch into Tern sets `TANDEM_SESSION` and
+`TANDEM_TERN_WORKSPACE_ID` from the owned endpoint. Coordinator bootstrap and direct launch keep
+these explicit; the backend's command launcher supplies them for workers. Foreign terminal context
+is removed from launch environments, and inherited context detection refuses mixed identities.

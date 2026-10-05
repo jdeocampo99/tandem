@@ -17,6 +17,7 @@ import { describeLavishFailure, type LavishOpenFailure } from "../report/publish
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
 import { savedTerminalPreference } from "../terminal-backend/compose.ts";
+import type { TerminalAvailability } from "../terminal-backend/contract.ts";
 import type { TerminalChoiceResult } from "../terminal-backend/setting.ts";
 import {
   checkSetupAnswer,
@@ -75,6 +76,7 @@ export type SetupPageDependencies = Readonly<{
       enabledProviders: readonly string[];
     }>,
   ) => Promise<unknown>;
+  probeTern: () => Promise<TerminalAvailability>;
   configureTerminal: (terminal: TerminalName) => Promise<TerminalChoiceResult>;
   saveSelfImprovement: (mode: SelfImprovementMode) => Promise<unknown>;
   saveCodeFolders: (folders: readonly string[]) => Promise<unknown>;
@@ -124,6 +126,7 @@ type SetupFacts = Readonly<{
   catalogue: readonly ModelRecord[];
   modelSettings: ModelSettings;
   settings: HomeSettings;
+  tern: TerminalAvailability;
   roots: readonly string[];
   checkouts: readonly Readonly<{ path: string; repo?: string }>[];
   registered: ReadonlySet<string>;
@@ -133,6 +136,7 @@ export class SetupPageWorkflow {
   readonly #deps: SetupPageDependencies;
   #status: "ready" | "open" | "done" = "ready";
   #lavish: Promise<boolean> | undefined;
+  #tern: Promise<TerminalAvailability> | undefined;
   #explicitRoots: string[] = [];
   #draft: SetupPageDraft | undefined;
   readonly #repoDetails = new Map<string, SetupRepoDetails>();
@@ -167,11 +171,13 @@ export class SetupPageWorkflow {
     repoPath: string,
     extraRoots: readonly string[] = this.#explicitRoots,
   ): Promise<SetupFacts> {
-    const [models, settings, roots, registered] = await Promise.all([
+    this.#tern ??= this.#deps.probeTern();
+    const [models, settings, roots, registered, tern] = await Promise.all([
       this.#deps.models(repoPath),
       this.#deps.homeSettings(),
       this.#deps.roots(),
       this.#deps.registeredProjects(),
+      this.#tern,
     ]);
     const searchedRoots = [...new Set([...roots, ...extraRoots])];
     return {
@@ -180,6 +186,7 @@ export class SetupPageWorkflow {
       catalogue: setupCatalogue(models.availableModels, models.claudeCode),
       modelSettings: models.modelSettings,
       settings,
+      tern,
       roots: searchedRoots,
       checkouts: await listCheckouts(searchedRoots, this.#deps.run),
       registered: new Set(registered),
@@ -224,6 +231,7 @@ export class SetupPageWorkflow {
       pendingFolders: this.#explicitRoots,
       repos,
       terminal: savedTerminalPreference(data.settings).terminal,
+      tern: data.tern,
       ...(data.settings.selfImprovementChosen
         ? { selfImprovement: data.settings.selfImprovement }
         : {}),
@@ -239,6 +247,7 @@ export class SetupPageWorkflow {
   /** Builds the page from saved state and discovery, writes it, and opens it in Lavish. */
   async open(repoPath: string): Promise<SetupPageOpened> {
     this.#explicitRoots = [];
+    this.#tern = undefined;
     this.#lastFacts = undefined;
     this.#repoDetails.clear();
     this.#draft = undefined;

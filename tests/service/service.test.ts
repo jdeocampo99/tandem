@@ -308,7 +308,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
     }
     if (
       options.projectLaunchResponse !== undefined &&
-      argv.length === 27 &&
+      argv.length === 37 &&
       argv[0] === "env" &&
       argv[1] === "-u" &&
       argv[2] === "TANDEM_REPO" &&
@@ -326,12 +326,12 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
       argv[14] === "HERDR_WORKSPACE_ID" &&
       argv[15] === "-u" &&
       argv[16] === "HERDR_PANE_ID" &&
-      argv[17] === "bun" &&
-      argv[18]?.endsWith("/src/main.ts") === true &&
-      argv[20] === "--home" &&
-      argv[22] === "--session" &&
-      argv[24] === "--pool-root" &&
-      argv[26] === "--no-attach"
+      argv[27] === "bun" &&
+      argv[28]?.endsWith("/src/main.ts") === true &&
+      argv[30] === "--home" &&
+      argv[32] === "--session" &&
+      argv[34] === "--pool-root" &&
+      argv[36] === "--no-attach"
     ) {
       return options.projectLaunchResponse;
     }
@@ -971,13 +971,13 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         ({ argv, cwd }) =>
           cwd === foreignPath &&
           argv[0] === "env" &&
-          argv.length === 27 &&
-          argv[19] === foreignPath &&
-          argv[26] === "--no-attach",
+          argv.length === 37 &&
+          argv[29] === foreignPath &&
+          argv[36] === "--no-attach",
       );
       expect(foreignLaunch).toBeDefined();
       if (foreignLaunch === undefined) throw new Error("foreign project launch was not attempted");
-      expect(foreignLaunch.argv.slice(0, 17)).toEqual([
+      expect(foreignLaunch.argv.slice(0, 27)).toEqual([
         "env",
         "-u",
         "TANDEM_REPO",
@@ -995,10 +995,20 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         "HERDR_WORKSPACE_ID",
         "-u",
         "HERDR_PANE_ID",
+        "-u",
+        "TERN_PANE",
+        "-u",
+        "TERN_PANE_SOCKET",
+        "-u",
+        "TERN_WINDOW_KEY",
+        "-u",
+        "TERN_WINDOW_SOCKET",
+        "-u",
+        "TANDEM_TERN_WORKSPACE_ID",
       ]);
-      expect(foreignLaunch.argv[17]).toBe("bun");
-      expect(foreignLaunch.argv[18]).toMatch(/\/src\/main\.ts$/u);
-      expect(foreignLaunch.argv.slice(19)).toEqual([
+      expect(foreignLaunch.argv[27]).toBe("bun");
+      expect(foreignLaunch.argv[28]).toMatch(/\/src\/main\.ts$/u);
+      expect(foreignLaunch.argv.slice(29)).toEqual([
         foreignPath,
         "--home",
         home,

@@ -105,11 +105,11 @@ test("installer and update read the saved choice without contacting unselected t
     confirm: async () => true,
   };
   try {
-    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    expect(await installTerminalPlugin(home, deps, { status: "ready" })).toBe(true);
     expect(await reloadTerminalPlugin(home, deps)).toBe(false);
     expect(selected.calls).toHaveLength(0);
     await saveTerminalChoice(home, "tern");
-    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    expect(await installTerminalPlugin(home, deps, { status: "ready" })).toBe(true);
     expect(await reloadTerminalPlugin(home, deps)).toBe(true);
     expect(selected.calls.map((call) => call.argv[2])).toEqual([
       "list",
@@ -155,6 +155,61 @@ test("chat and setup terminal selection awaits plugin preferences after saving e
     expect(observed).toEqual(["herdr", "tern"]);
     expect(selected.terminal).toBe("tern");
     expect(selected.reason).toContain("left unchanged");
+  } finally {
+    await service.shutdown();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+for (const readiness of [
+  { status: "missing" },
+  { status: "signedOut" },
+  { status: "unknown", reason: "Tern could not start." },
+] as const) {
+  test(`${readiness.status} readiness refuses plugin linking before commands or consent`, async () => {
+    const home = await mkdtemp("/tmp/tandem-plugin-not-ready-");
+    const selected = runner([missing, ready]);
+    let consent = 0;
+    try {
+      await saveTerminalChoice(home, "tern");
+      expect(
+        await installTerminalPlugin(
+          home,
+          {
+            ...selected,
+            cwd: home,
+            settingsPath: join(home, "tern-settings.json"),
+            confirm: async () => {
+              consent += 1;
+              return true;
+            },
+          },
+          readiness,
+        ),
+      ).toBe(false);
+      expect(selected.calls).toHaveLength(0);
+      expect(consent).toBe(0);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+}
+
+test("missing Tern skips the onboarding plugin hook and saves Herdr", async () => {
+  const home = await mkdtemp("/tmp/tandem-plugin-fallback-");
+  let linked = false;
+  const service = createTandemService({
+    home,
+    sessionId: "test",
+    run: async () => ({ code: 127, stdout: "", stderr: "missing" }),
+    installTerminalPlugin: async () => {
+      linked = true;
+      return true;
+    },
+  });
+  try {
+    expect((await service.configureTerminal("tern")).terminal).toBe("herdr");
+    expect(linked).toBe(false);
   } finally {
     await service.shutdown();
     await rm(home, { recursive: true, force: true });

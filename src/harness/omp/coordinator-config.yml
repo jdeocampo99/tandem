@@ -1,0 +1,3 @@
+# The coordinator keeps the notification that means the user is being asked.
+ask:
+  notify: on

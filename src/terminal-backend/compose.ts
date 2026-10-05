@@ -1,10 +1,19 @@
+import { AdapterError } from "../adapters/primitives.ts";
+import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { type HomeSettings, readHomeSettingsSync } from "../config/home-settings.ts";
 import type { CommandRunner, TerminalName } from "../contracts.ts";
-import type { TerminalBackend, TerminalContext } from "./contract.ts";
+import type {
+  SessionTarget,
+  TerminalAvailability,
+  TerminalBackend,
+  TerminalContext,
+} from "./contract.ts";
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
-import { guardTerminalIdentity } from "./identity.ts";
+import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
 import { probeTern } from "./tern/availability.ts";
+import { type TernBackendOptions, ternBackend, ternNotificationEndpoint } from "./tern/backend.ts";
+import { TERN_CONTEXT } from "./tern/context.ts";
 import {
   ensureTernPlugin,
   reloadTernPlugin,
@@ -13,12 +22,34 @@ import {
 } from "./tern/plugin.ts";
 
 export type TerminalComposition = Readonly<{
-  /** Explicit Tandem home; omitted for isolated tests, which keep Herdr. */
+  /** A fixed selection supplied by the caller; otherwise read the saved home preference. */
+  terminal?: TerminalName;
+  /** Explicit Tandem home; without a home or fixed selection, use Herdr. */
   home?: string;
   herdr?: HerdrBackendOptions;
-  /** Filled by the stacked Tern adapter; absence refuses Tern before any terminal effect. */
-  tern?: (run: CommandRunner) => TerminalBackend;
+  tern?: TernBackendOptions;
+  /** Tests can replace the adapter factory while retaining selection and identity guards. */
+  createTern?: typeof ternBackend;
 }>;
+
+/** Resolve the dedicated helper from the one durable project owner, never a substitute pane. */
+async function notificationEndpointFor(home: string, target: SessionTarget) {
+  // Keep coordinator harness imports out of validation and worker startup.
+  const [{ canonicalPath }, { listCoordinatorRecords }] = await Promise.all([
+    import("../coordinator/record.ts"),
+    import("../coordinator/registry.ts"),
+  ]);
+  const cwd = await canonicalPath(target.cwd, "notification cwd");
+  const records = (await listCoordinatorRecords(home, target.sessionId)).filter(
+    (record) => record.repoPath === cwd || record.worktree.path === cwd,
+  );
+  if (records.length > 1)
+    throw new AdapterError("Tern alert project owner is ambiguous", "tern notify");
+  const owner = records[0]?.endpoint;
+  if (owner === undefined) return undefined;
+  assertTerminalEndpoint("tern", owner);
+  return ternNotificationEndpoint(owner);
+}
 
 /** The saved choice shown by onboarding; an absent preference keeps Herdr until confirmed. */
 export function savedTerminalPreference(settings: HomeSettings) {
@@ -34,14 +65,33 @@ export function terminalBackend(
   const backends = new Map<TerminalName, TerminalBackend>();
   const select = (): TerminalBackend => {
     const chosen =
-      options.home === undefined
+      options.terminal ??
+      (options.home === undefined
         ? "herdr"
-        : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal;
+        : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal);
     const cached = backends.get(chosen);
     if (cached !== undefined) return cached;
-    const backend = chosen === "herdr" ? herdrBackend(run, options.herdr) : options.tern?.(run);
-    if (backend === undefined)
-      throw new Error("Tern's terminal backend is unavailable in this build; choose Herdr.");
+    const home = options.home;
+    const notificationEndpoint =
+      options.tern?.notificationEndpoint ??
+      (home === undefined
+        ? undefined
+        : (target: SessionTarget) => notificationEndpointFor(home, target));
+    const backend =
+      chosen === "herdr"
+        ? herdrBackend(run, options.herdr)
+        : (options.createTern ?? ternBackend)(run, {
+            ...options.tern,
+            ...(notificationEndpoint === undefined
+              ? {}
+              : {
+                  notificationEndpoint: async (target) => {
+                    const endpoint = await notificationEndpoint(target);
+                    if (endpoint !== undefined) assertTerminalEndpoint("tern", endpoint);
+                    return endpoint;
+                  },
+                }),
+          });
     if (backend.name !== chosen)
       throw new Error(`terminal factory returned ${backend.name} for ${chosen}`);
     const guarded = guardTerminalIdentity(backend);
@@ -52,6 +102,7 @@ export function terminalBackend(
     get name() {
       return select().name;
     },
+    openView: (input) => select().openView(input),
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),
@@ -86,8 +137,44 @@ export function terminalBackend(
   };
 }
 
-/** How a process reads its inherited terminal pane from its environment; pure, so imported. */
-export const terminalContext: TerminalContext = HERDR_CONTEXT;
+/** A launch uses its selected backend's context, so foreign inherited ids are ignored. */
+export function terminalContextFor(terminal: TerminalName): TerminalContext {
+  return terminal === "tern" ? TERN_CONTEXT : HERDR_CONTEXT;
+}
+
+/** A newly launched terminal must not inherit the other terminal's pane identity. */
+export function terminalLaunchEnvironment(
+  terminal: TerminalName,
+  environment: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const foreign = terminalContextFor(terminal === "tern" ? "herdr" : "tern").variables;
+  return Object.fromEntries(
+    Object.entries(environment).filter(([name]) => !foreign.includes(name)),
+  );
+}
+
+function inheritedContext(source: TandemEnvironmentSource): TerminalContext | undefined {
+  const herdr = HERDR_CONTEXT.inheritedPane(source).status !== "outside";
+  const tern = TERN_CONTEXT.inheritedPane(source).status !== "outside";
+  if (herdr && tern) return undefined;
+  return tern ? TERN_CONTEXT : HERDR_CONTEXT;
+}
+
+/** Pure inherited context detection; mixed terminal identities never select a pane. */
+export const terminalContext: TerminalContext = {
+  variables: [...new Set([...HERDR_CONTEXT.variables, ...TERN_CONTEXT.variables])],
+  inheritedPane: (source) =>
+    inheritedContext(source)?.inheritedPane(source) ?? {
+      status: "invalid",
+      reason: "Both Herdr and Tern pane contexts are present; ownership is ambiguous",
+    },
+  sessionName: (source) => inheritedContext(source)?.sessionName(source),
+  workspaceId: (source) => inheritedContext(source)?.workspaceId(source),
+  paneInSession: (source, sessionId) => inheritedContext(source)?.paneInSession(source, sessionId),
+  focus: (source) => inheritedContext(source)?.focus(source) ?? {},
+  panelPaneId: (source) => inheritedContext(source)?.panelPaneId(source),
+  welcomePaneId: (source) => inheritedContext(source)?.welcomePaneId(source),
+};
 
 /** Onboarding checks availability through the same terminal composition boundary. */
 export const ternAvailability = probeTern;
@@ -96,11 +183,18 @@ export const ternAvailability = probeTern;
 export async function installTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
+  readiness?: TerminalAvailability,
 ): Promise<boolean> {
-  const selected = readHomeSettingsSync(home).terminal;
-  if (selected === "tern") return ensureTernPlugin(dependencies);
-  if (selected === "herdr") await restoreTernPluginPreferences(dependencies);
-  return true;
+  const selected = savedTerminalPreference(readHomeSettingsSync(home));
+  if (selected.terminal !== "tern") {
+    if (selected.chosen) await restoreTernPluginPreferences(dependencies);
+    return true;
+  }
+  const available = readiness ?? (await ternAvailability(dependencies.run));
+  if (available.status !== "ready") {
+    return false;
+  }
+  return ensureTernPlugin(dependencies);
 }
 
 /** Refresh window bindings only for the selected terminal, after a successful update. */
@@ -108,8 +202,8 @@ export async function reloadTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
 ): Promise<boolean> {
-  const selected = readHomeSettingsSync(home).terminal;
-  if (selected === "tern") return reloadTernPlugin(dependencies);
-  if (selected === "herdr") await restoreTernPluginPreferences(dependencies);
+  const selected = savedTerminalPreference(readHomeSettingsSync(home));
+  if (selected.terminal === "tern") return reloadTernPlugin(dependencies);
+  if (selected.chosen) await restoreTernPluginPreferences(dependencies);
   return false;
 }
