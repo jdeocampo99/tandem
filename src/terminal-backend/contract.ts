@@ -7,18 +7,6 @@ export type EndpointTarget = Readonly<{ endpoint: Endpoint; cwd: string }>;
 
 /** A session-wide request, and the directory the backend's commands run from. */
 export type SessionTarget = Readonly<{ sessionId: string; cwd: string }>;
-/** The socket request used to move a workspace; composition may replace the socket effect. */
-export type WorkspaceMoveRequest = Readonly<{
-  readonly socketPath: string;
-  readonly workspaceId: string;
-  readonly insertIndex: number;
-}>;
-
-/** Injected workspace movement, primarily for composition roots and tests. */
-export type WorkspaceMover = (request: WorkspaceMoveRequest) => Promise<unknown>;
-
-export type TerminalBackendOptions = Readonly<{ readonly moveWorkspace?: WorkspaceMover }>;
-
 export type ForegroundProcess = Readonly<{
   pid: number;
   name: string;
@@ -224,11 +212,11 @@ export type TerminalBackend = Readonly<{
 
   /** Tells the user something new needs them, through the terminal's notification settings. */
   notify(target: SessionTarget & Readonly<{ title: string; body: string }>): Promise<void>;
-  /** Opens the welcome popup over the session; Enter in it prompts the agent in `paneId`. */
+  /** Opens Tandem's welcome view; accepting it prompts the agent in `paneId`. */
   openWelcome(target: SessionTarget & Readonly<{ paneId: string }>): Promise<void>;
   /** Submits a prompt to the agent in a pane, or types it and presses Enter when none is known. */
   promptAgent(target: SessionTarget & Readonly<{ paneId: string; text: string }>): Promise<void>;
-  /** Opens Tandem's panel for `project` right of the coordinator, without focus; its pane id. */
+  /** Opens Tandem's panel beside the coordinator, without focus; its pane id. */
   openPanel(
     input: Readonly<{ coordinator: Endpoint; cwd: string; project: string }>,
   ): Promise<string>;

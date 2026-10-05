@@ -1,6 +1,6 @@
 import type { CommandRunner } from "../contracts.ts";
-import type { TerminalBackend, TerminalBackendOptions, TerminalContext } from "./contract.ts";
-import { herdrBackend } from "./herdr/backend.ts";
+import type { TerminalBackend, TerminalContext } from "./contract.ts";
+import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
 import { ensureTernPlugin, reloadTernPlugin, type TernPluginDependencies } from "./tern/plugin.ts";
 
@@ -10,9 +10,9 @@ import { ensureTernPlugin, reloadTernPlugin, type TernPluginDependencies } from 
  */
 export function terminalBackend(
   run: CommandRunner,
-  options: TerminalBackendOptions = {},
+  options: Readonly<{ herdr?: HerdrBackendOptions }> = {},
 ): TerminalBackend {
-  return herdrBackend(run, options);
+  return herdrBackend(run, options.herdr);
 }
 
 /** How a process reads its inherited terminal pane from its environment; pure, so imported. */
