@@ -115,7 +115,10 @@ export function workerSession(
     host: harness.host,
     clock: SYSTEM_CLOCK,
     timers: harness.timers,
-    status: terminalBackend(runCommand).agentStatusReporter({
+    status: terminalBackend(
+      runCommand,
+      job.execution === undefined ? {} : { home: job.execution.home },
+    ).agentStatusReporter({
       cwd: job.cwd,
       agentLabel: `tandem-${job.role}-${job.taskId.slice(0, 8)}`,
     }),

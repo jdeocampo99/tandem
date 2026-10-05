@@ -285,3 +285,36 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
   Readers must accept events recorded before usage existed.
 - Background: [prompt-routing PRD](../jev-prompt-routing-prd.md), [integration overview](../jev-prd.md),
   [evaluation plan](../jev-evaluation.md).
+
+## Choosing the terminal
+
+The home setting `terminal = "herdr"` or `terminal = "tern"` applies across projects. An absent
+setting keeps Herdr. Only `src/terminal-backend/compose.ts` selects an implementation from it;
+composition reads the setting again before terminal operations, including after onboarding saves.
+
+The setup page, chat, and direct interactive onboarding offer Tern only when `probeTern` reports
+`ready`. Its other outcomes are `missing`, `signedOut`, or `unknown` with a reason; each shows a
+one-line explanation and selects Herdr. Page discovery keeps the probe result for that open page
+and probes again when reopened. The `terminal-setting` action rechecks availability before saving
+Tern. The probe reads the executable and account gate in a temporary, isolated daemon and window,
+closes its own resources, and changes no settings in the user's Tern configuration.
+
+Switching is refused under the state lock while tasks are queued or running, jobs are active, or
+reservations or launch outcomes retain uncertain ownership, including presentations. Availability
+is checked outside the lock; the switch is checked again under the lock immediately before saving.
+
+Endpoints and pending launch intents record their creating terminal. Historical records without
+that field are Herdr records. A record from the other terminal is quarantined before inspection,
+close, recovery, or navigation: its ids never authorize an operation in the selected terminal.
+Derived board navigation retains the terminal tag; an older untagged snapshot is treated as Herdr.
+
+Tern composition uses `ternBackend` and `TERN_CONTEXT`. Alerts require a recorded per-project
+Tandem helper-pane endpoint. Composition resolves the exact repository or worktree owner in the
+requested Tandem session, then uses `ternNotificationEndpoint` to derive its recorded helper identity.
+Missing, ambiguous, or foreign-terminal records refuse the alert before reaching the terminal; the
+coordinator pane itself never receives the alert.
+
+Every coordinator and worker launch into Tern sets `TANDEM_SESSION` and
+`TANDEM_TERN_WORKSPACE_ID` from the owned endpoint. Coordinator bootstrap and direct launch keep
+these explicit; the backend's command launcher supplies them for workers. Foreign terminal context
+is removed from launch environments, and inherited context detection refuses mixed identities.

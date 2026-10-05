@@ -57,6 +57,7 @@ import {
 } from "../contracts.ts";
 import { PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import { type PrReviewState, parsePrReviewState } from "../pr-review/state.ts";
+import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
 import { isSafeTaskId } from "./lifecycle.ts";
@@ -575,6 +576,7 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
   assertExactKeys(
     value,
     [
+      "terminal",
       "sessionId",
       "terminalSessionId",
       "notificationPane",
@@ -587,6 +589,7 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
     source,
   );
   return {
+    terminal: storedEndpointTerminal(value.terminal, source),
     sessionId: requiredText(value, "sessionId", source),
     ...(value.notificationPane === undefined
       ? {}

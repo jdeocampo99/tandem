@@ -1,6 +1,12 @@
 import { feedbackMessages } from "../adapters/lavish.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
-import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
+import {
+  type AgentRole,
+  MODEL_ROLE_ORDER,
+  type ModelSpec,
+  type TerminalName,
+  THINKING_LEVELS,
+} from "../contracts.ts";
 import { CLAUDE_CODE_PROVIDER } from "../harness/claude-code/models.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import { SETUP_ROLE_COPY } from "./setup-view.ts";
@@ -13,6 +19,7 @@ export type SetupAnswer = Readonly<{
   models: Readonly<Record<AgentRole, ModelSpec>>;
   repositories: readonly SetupAnswerRepo[];
   selfImprovement: SelfImprovementMode;
+  terminal: TerminalName;
 }>;
 
 export type SetupPageDraft = Readonly<{
@@ -24,6 +31,7 @@ export type SetupPageDraft = Readonly<{
     pasted: boolean;
   }>[];
   selfImprovement: SelfImprovementMode;
+  terminal: TerminalName;
 }>;
 
 export type SetupSearchRequest = Readonly<{
@@ -65,11 +73,17 @@ export type ParsedSetupAnswer =
   | Readonly<{ ok: false; problems: readonly string[] }>;
 
 const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "report"];
-const ANSWER_KEYS = ["tandemSetup", "models", "repositories", "selfImprovement"] as const;
+const ANSWER_KEYS = [
+  "tandemSetup",
+  "models",
+  "repositories",
+  "selfImprovement",
+  "terminal",
+] as const;
 const REPO_KEYS = ["path", "validationCommands", "setupCommands"];
 const SEARCH_KEYS = ["tandemSearch", "folder", "draft"] as const;
 const CHOOSE_FOLDER_KEYS = ["tandemChooseFolder", "draft"] as const;
-const DRAFT_KEYS = ["picks", "repositories", "selfImprovement"] as const;
+const DRAFT_KEYS = ["picks", "repositories", "selfImprovement", "terminal"] as const;
 const DRAFT_REPO_KEYS = ["path", "checks", "install", "pasted"] as const;
 const MAX_SEARCH_TEXT = 256_000;
 const MAX_SEARCH_PATH = 4_096;
@@ -199,12 +213,16 @@ function parseSetupDraft(value: unknown, problems: string[]): SetupPageDraft | u
       });
     });
   }
+  const terminal =
+    value.terminal === "herdr" || value.terminal === "tern" ? value.terminal : undefined;
+  if (terminal === undefined) problems.push('terminal must be "herdr" or "tern".');
   const selfImprovement = SELF_IMPROVEMENT_MODES.find((mode) => mode === value.selfImprovement);
   if (selfImprovement === undefined) {
     problems.push('draft.selfImprovement must be "off", "fix", or "report".');
   }
-  if (problems.length > 0 || selfImprovement === undefined) return undefined;
-  return { picks, repositories, selfImprovement };
+  if (problems.length > 0 || selfImprovement === undefined || terminal === undefined)
+    return undefined;
+  return { picks, repositories, selfImprovement, terminal };
 }
 
 function boundedStringList(
@@ -343,16 +361,24 @@ export function parseSetupAnswer(text: string): ParsedSetupAnswer {
   unknownKeys(value, ANSWER_KEYS, "The answer", problems);
   const models = parseModels(value.models, problems);
   const repositories = parseRepositories(value.repositories, problems);
+  const terminal =
+    value.terminal === "herdr" || value.terminal === "tern" ? value.terminal : undefined;
+  if (terminal === undefined) problems.push('terminal must be "herdr" or "tern".');
   const selfImprovement = SELF_IMPROVEMENT_MODES.find((mode) => mode === value.selfImprovement);
   if (selfImprovement === undefined) {
     problems.push('selfImprovement must be "off", "fix", or "report".');
   }
-  if (problems.length > 0 || models === undefined || selfImprovement === undefined) {
+  if (
+    problems.length > 0 ||
+    models === undefined ||
+    selfImprovement === undefined ||
+    terminal === undefined
+  ) {
     return { ok: false, problems };
   }
   return {
     ok: true,
-    answer: { models, repositories, selfImprovement },
+    answer: { models, repositories, selfImprovement, terminal },
   };
 }
 

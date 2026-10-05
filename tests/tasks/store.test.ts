@@ -681,6 +681,7 @@ test("persists notification state before acknowledgement is observable after rel
           worktree,
           endpoints: [
             {
+              terminal: "herdr" as const,
               sessionId: "s",
               workspaceId: "w",
               tabId: "t",
@@ -773,6 +774,7 @@ test("persists an explicit scout disposition across restart and later transition
           worktree,
           endpoints: [
             {
+              terminal: "herdr" as const,
               sessionId: "session-1",
               workspaceId: "workspace-1",
               tabId: "tab-1",

@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { basename } from "node:path";
 import { EndpointBusyError } from "../adapters/primitives.ts";
 import type { EndpointInspection, TerminalBackend } from "../terminal-backend/contract.ts";
+import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
 import { assertStoppedCoordinatorShell } from "./ownership.ts";
 import { closeCoordinatorPanel } from "./panel.ts";
 import { type CoordinatorRecord, canonicalPath } from "./record.ts";
@@ -116,6 +117,14 @@ export async function retireCoordinatorWorkspace(
   home: string,
   record: RetiredRecord,
 ): Promise<CoordinatorWorkspaceRetirement> {
+  try {
+    assertTerminalEndpoint(terminal.name, record.endpoint);
+  } catch (error) {
+    return {
+      outcome: "quarantined",
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
   const label = await terminal.workspaceLabel({
     sessionId: record.endpoint.sessionId,
     cwd: record.repoPath,
@@ -199,6 +208,7 @@ export async function findRestoredCoordinatorPanes(
       repoPath,
       worktree,
       endpoint: {
+        terminal: terminal.name,
         sessionId,
         workspaceId: pane.workspaceId,
         tabId: pane.tabId,

@@ -29,7 +29,7 @@ import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
 import { mergeInheritedEnvironment } from "../terminal/cli-process.ts";
-import { terminalContext } from "../terminal-backend/compose.ts";
+import { terminalContextFor, terminalLaunchEnvironment } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import {
   type CoordinatorSessionReconciliation,
@@ -632,7 +632,9 @@ export async function launchCoordinatorUnlocked(
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorLaunchResult> {
   const paths = coordinatorPaths(request);
-  const inherited = terminalContext.inheritedPane(dependencies.processEnvironment);
+  const inherited = terminalContextFor(dependencies.terminal.name).inheritedPane(
+    dependencies.processEnvironment,
+  );
   if (inherited.status === "invalid") throw new Error(inherited.reason);
   const context: InsidePane | undefined =
     inherited.status === "inside"
@@ -935,11 +937,20 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       : {};
   if (context !== undefined && !headless) {
     const environment = withoutVariables(
-      mergeInheritedEnvironment(dependencies.processEnvironment, {
-        ...sourceEnvironment,
-        ...harness.launchEnvironment,
-        ...jevOverride,
-      }),
+      terminalLaunchEnvironment(
+        dependencies.terminal.name,
+        mergeInheritedEnvironment(dependencies.processEnvironment, {
+          ...sourceEnvironment,
+          ...(dependencies.terminal.name === "tern"
+            ? {
+                TANDEM_SESSION: request.sessionId,
+                TANDEM_TERN_WORKSPACE_ID: context.workspaceId,
+              }
+            : {}),
+          ...harness.launchEnvironment,
+          ...jevOverride,
+        }),
+      ),
       harness.clearedEnvironment,
     );
     const processExitCode = await runDirectCoordinator(dependencies, harness, started, {
@@ -960,9 +971,9 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   const terminalLauncher = headless
     ? dependencies.terminal.serverCommand(request.sessionId)
     : dependencies.terminal.clientCommand(request.sessionId);
-  const serverEnvironment = mergeInheritedEnvironment(
-    dependencies.processEnvironment,
-    sourceEnvironment,
+  const serverEnvironment = terminalLaunchEnvironment(
+    dependencies.terminal.name,
+    mergeInheritedEnvironment(dependencies.processEnvironment, sourceEnvironment),
   );
   if (
     context === undefined &&
@@ -1027,6 +1038,12 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     ),
     ...harness.launchEnvironment,
     ...jevOverride,
+    ...(endpoint.terminal === "tern"
+      ? {
+          TANDEM_SESSION: endpoint.sessionId,
+          TANDEM_TERN_WORKSPACE_ID: endpoint.workspaceId,
+        }
+      : {}),
   };
   const resumeArgv = argvFor(true, undefined);
   const bootstrapPath = await writeCoordinatorBootstrap(paths, request, argv, resumeArgv, {
@@ -1038,7 +1055,10 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       endpoint,
       cwd: coordinatorCwd,
       command: ["/bin/sh", bootstrapPath],
-      env: mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
+      env: terminalLaunchEnvironment(
+        dependencies.terminal.name,
+        mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
+      ),
     }),
   );
   await saveCoordinatorRecord(paths.home, {

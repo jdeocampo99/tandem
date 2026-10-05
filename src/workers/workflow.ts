@@ -1209,6 +1209,7 @@ export class WorkerWorkflow {
         const workspaceLabel = taskWorkspaceLabel(currentTask);
         const endpointLaunch = endpointLaunchFor(
           reservation,
+          this.#deps.terminal.name,
           this.#deps.sessionId,
           currentRuntime.taskName,
           workspaceLabel,

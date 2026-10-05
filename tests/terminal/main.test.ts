@@ -74,6 +74,7 @@ function onboardingService(
     : undefined;
   const enabledProviders = options.enabledProviders ?? [];
   const service = {
+    onboardingFacts: async () => ({ terminalChosen: true }),
     onboard: async (repoPath: string, write = false) => {
       if (write) writeCalls.push(repoPath);
       return {
@@ -1122,6 +1123,7 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
         schemaVersion: 1 as const,
         repoPath,
         endpoint: {
+          terminal: "herdr" as const,
           sessionId: "tandem",
           workspaceId: "workspace-a",
           tabId: "tab-a",
@@ -1659,6 +1661,7 @@ test("update refuses only from the coordinator pane it would close", async () =>
     schemaVersion: 1,
     repoPath: repo,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: "tandem",
       workspaceId: "workspace-coordinator",
       tabId: "tab-coordinator",

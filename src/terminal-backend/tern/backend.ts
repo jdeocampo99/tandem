@@ -102,6 +102,7 @@ export function ternNotificationEndpoint(owner: Endpoint): Endpoint | undefined 
       "recorded alert helper lacks an independent native identity",
     );
   return {
+    terminal: owner.terminal,
     sessionId: owner.sessionId,
     terminalSessionId: owner.terminalSessionId,
     ...owner.notificationPane,
@@ -129,6 +130,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   };
   const check = (target: EndpointTarget) => inspect(commands, target);
   const endpointFor = (target: SessionTarget, entry: LocatedBlock): Endpoint => ({
+    terminal: "tern",
     sessionId: target.sessionId,
     terminalSessionId: entry.session.id,
     workspaceId: entry.tab.id,
@@ -140,6 +142,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   const byId = async (target: SessionTarget, paneId: string): Promise<Endpoint> => {
     const found = blocks(await commands.ls(target.cwd)).find((entry) => entry.block.id === paneId);
     const endpoint: Endpoint = {
+      terminal: "tern",
       sessionId: target.sessionId,
       workspaceId: "unknown",
       tabId: "unknown",
@@ -208,6 +211,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         "helper creation acknowledged another placement",
       );
     const helper: Endpoint = {
+      terminal: "tern",
       sessionId: owner.endpoint.sessionId,
       terminalSessionId: created.session,
       workspaceId: created.tab,
@@ -376,6 +380,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           }
         }
         const endpoint: Endpoint = {
+          terminal: "tern",
           sessionId: target.sessionId,
           terminalSessionId: created.session,
           workspaceId: created.tab,
@@ -439,6 +444,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
             "split did not land beside the exact anchor",
           );
         const endpoint: Endpoint = {
+          terminal: "tern",
           sessionId: anchor.sessionId,
           workspaceId: anchor.workspaceId,
           tabId: anchor.tabId,

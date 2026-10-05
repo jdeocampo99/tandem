@@ -392,7 +392,13 @@ function persistentForeground(argv: readonly string[]): string | undefined {
 }
 
 async function bootstrapProcessArgv(command: string): Promise<readonly string[]> {
-  const tokens = parseQuotedCommand(command);
+  const quoted = parseQuotedCommand(command);
+  let commandStart = quoted[0] === "env" ? 1 : 0;
+  if (commandStart > 0) {
+    while (quoted[commandStart] === "-u") commandStart += 2;
+    while (quoted[commandStart]?.includes("=") === true) commandStart += 1;
+  }
+  const tokens = quoted.slice(commandStart);
   const scriptPath = tokens[1];
   if (tokens[0] !== "/bin/sh" || scriptPath === undefined) return tokens;
   const script = await readFile(scriptPath, "utf8");
@@ -477,7 +483,15 @@ export async function createScenarioWorld(
       processes: [{ pid: nextPid, name: "sh", argv: ["sh"] }],
     });
     workspaceLabels.set(workspaceId, `scenario ${input.paneId}`);
-    return { sessionId, workspaceId, tabId, paneId: input.paneId, role: "scout", generation: 0 };
+    return {
+      terminal: options.terminal ?? "herdr",
+      sessionId,
+      workspaceId,
+      tabId,
+      paneId: input.paneId,
+      role: "scout",
+      generation: 0,
+    };
   };
 
   const grantLease = async (

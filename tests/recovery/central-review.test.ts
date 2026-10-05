@@ -64,6 +64,7 @@ function lease(path: string): WorktreeLease {
 
 function endpoint(paneId: string, role: Endpoint["role"] = "verifier"): Endpoint {
   return {
+    terminal: "herdr" as const,
     sessionId: "session-1",
     workspaceId: "workspace-1",
     tabId: "tab-1",

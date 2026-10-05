@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Endpoint, TerminalPaneLocation, WorktreeLease } from "../contracts.ts";
 import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
 import { harnessFor } from "../harness/resolve.ts";
+import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 
 export const REGISTRY_DIRECTORY = "coordinator-registry";
 /** Prefix of every Treehouse lease holder Tandem uses for a coordinator, and for nothing else. */
@@ -144,6 +145,7 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
       "paneId",
       "role",
       "generation",
+      ...(Object.hasOwn(value, "terminal") ? ["terminal"] : []),
       ...(Object.hasOwn(value, "terminalSessionId") ? ["terminalSessionId"] : []),
       ...(Object.hasOwn(value, "notificationPane") ? ["notificationPane"] : []),
     ],
@@ -157,6 +159,7 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   const generation = positiveInteger(value.generation, `${field}.generation`);
   if (generation !== 0) throw new TypeError(`${field}.generation must be 0 for a coordinator`);
   return {
+    terminal: storedEndpointTerminal(value.terminal, field),
     sessionId,
     ...(value.notificationPane === undefined
       ? {}

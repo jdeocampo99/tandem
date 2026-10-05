@@ -9,6 +9,7 @@ import {
 
 const fresh: OnboardingFacts = {
   modelsChosen: false,
+  terminalChosen: true,
   codeFolders: [],
   projects: [],
   selfImprovementChosen: false,
@@ -17,6 +18,7 @@ const fresh: OnboardingFacts = {
 
 const done: OnboardingFacts = {
   modelsChosen: true,
+  terminalChosen: true,
   codeFolders: ["/Users/me/code"],
   projects: ["/Users/me/code/api"],
   selfImprovementChosen: true,
@@ -33,7 +35,12 @@ test("setup walks the fixed choices before repositories", () => {
 });
 
 test("the chat reads only the current step's guidance, and nothing once setup is done", () => {
-  const halfway = { ...fresh, modelsChosen: true, codeFolders: ["/Users/me/code"] };
+  const halfway = {
+    ...fresh,
+    modelsChosen: true,
+    terminalChosen: true,
+    codeFolders: ["/Users/me/code"],
+  };
   const context = onboardingContext(halfway) ?? "";
   expect(context).toContain("self-improvement");
   expect(context).toEndWith("Then: repositories.");
@@ -58,3 +65,25 @@ test("while Lavish is there, the setup page comes first and the chat keeps its s
   expect(chatAsksSetupQuestions({ ...fresh, setupPage: "done" })).toBe(true);
   expect(onboardingContext({ ...done, setupPage: "ready" })).toBeUndefined();
 });
+
+test("a saved model setup still asks for an explicit terminal choice", () => {
+  const facts = { ...done, terminalChosen: false, tern: { status: "ready" as const } };
+  expect(remainingOnboardingSteps(facts)).toEqual(["terminal"]);
+  expect(onboardingContext(facts)).toContain("terminal-setting");
+  expect(onboardingQuestion("terminal", facts)?.text).toContain("Herdr or Tern");
+});
+
+for (const tern of [
+  { status: "missing" },
+  { status: "signedOut" },
+  { status: "unknown", reason: "Tern could not start." },
+] as const) {
+  test(`${tern.status} Tern is never offered in chat setup`, () => {
+    const facts = { ...done, terminalChosen: false, tern };
+    const question = onboardingQuestion("terminal", facts);
+    expect(question?.text).toContain("Using Herdr.");
+    expect(question?.text).not.toContain("Herdr or Tern");
+    expect(question?.hidden).toContain("with herdr");
+    expect(onboardingContext(facts)).toContain(question?.text ?? "missing");
+  });
+}

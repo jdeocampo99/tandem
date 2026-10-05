@@ -19,6 +19,7 @@ import {
   parsePanelInput,
   renderPanel,
   runPanel,
+  runPanelAction,
 } from "../../src/terminal/panel.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { NOW, state, watch } from "../board/fixtures.ts";
@@ -541,3 +542,27 @@ test("the tool line cuts its target from the left, keeping the file name, to fit
   expect(Bun.stringWidth(lines[at] ?? "")).toBe(46);
   expect(lines[at - 1]).toBe("    Write the test");
 });
+
+for (const terminalName of ["herdr", "tern"] as const) {
+  test(`the ${terminalName} panel refuses the other terminal's coordinator navigation`, async () => {
+    const calls: unknown[] = [];
+    const run = async (request: unknown) => {
+      calls.push(request);
+      throw new Error("foreign navigation reached the runner");
+    };
+    const foreign = terminalName === "herdr" ? "tern" : "herdr";
+    const result = await runPanelAction("home", {
+      run,
+      terminal: { ...terminalBackend(run), name: terminalName },
+      sessionId: "test",
+      cwd: APP,
+      focus: { cwd: APP },
+      readSnapshot: async () => ({
+        ...SNAPSHOT,
+        coordinators: COORDINATORS.map((coordinator) => ({ ...coordinator, terminal: foreign })),
+      }),
+    });
+    expect(result).toContain("couldn't focus");
+    expect(calls).toEqual([]);
+  });
+}

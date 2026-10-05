@@ -8,6 +8,7 @@ import type {
   SessionPane,
   TerminalBackend,
 } from "../terminal-backend/contract.ts";
+import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
@@ -82,6 +83,7 @@ async function findUnrecordedCoordinator(
   const harnesses = coordinatorHarnesses();
   for (const pane of panes) {
     const endpoint: Endpoint = {
+      terminal: terminal.name,
       sessionId,
       workspaceId: pane.workspaceId,
       tabId: pane.tabId,
@@ -191,6 +193,7 @@ async function findOwnedCoordinator(
   const path = recordPath(home, sessionId, repoPath);
   const record = await readCoordinatorRecord(path);
   if (record === undefined) return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
+  assertTerminalEndpoint(terminal.name, record.endpoint);
   if (record.repoPath !== repoPath) {
     throw ownershipFailure(`record ${path} belongs to ${JSON.stringify(record.repoPath)}`);
   }

@@ -1,5 +1,5 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
-import type { AgentRole, Endpoint } from "../contracts.ts";
+import type { AgentRole, Endpoint, TerminalName } from "../contracts.ts";
 import type { ToolCheck } from "../onboarding/tools.ts";
 
 /** A pane Tandem owns, and the directory the backend's commands run from. */
@@ -80,6 +80,11 @@ export type OpenViewResult = Readonly<{
   fallback?: "brief-review";
 }>;
 
+/** Installation and account readiness proved before offering a terminal in setup. */
+export type TerminalAvailability =
+  | Readonly<{ status: "missing" | "signedOut" | "ready" }>
+  | Readonly<{ status: "unknown"; reason: string }>;
+
 /** The last proven window width, and any limitation that prevented fitting the panel. */
 export type PanelFitResult = Readonly<{
   fittedWidth: number | undefined;
@@ -117,7 +122,7 @@ export type SplitAnchor =
  */
 export type TerminalBackend = Readonly<{
   /** What doctor checks and messages call this terminal. */
-  name: string;
+  name: TerminalName;
 
   /** Reads the pane's identity and foreground processes, proving it is still `endpoint`. */
   inspect(target: EndpointTarget): Promise<EndpointInspection>;
@@ -168,9 +173,9 @@ export type TerminalBackend = Readonly<{
         generation: number;
         env?: Readonly<Record<string, string>>;
         parentWorkspaceId?: string;
-        /** Durable previous ownership, for exact native session reuse on coordinator relaunch. */
-        previousEndpoint?: Endpoint;
         insertIndex?: number;
+        /** Previous durable identity, when reconnecting to a retained native project session. */
+        previousEndpoint?: Endpoint;
       }>,
   ): Promise<Readonly<{ endpoint: Endpoint; warnings: readonly string[] }>>;
   /**

@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import type { TerminalName } from "../contracts.ts";
 import {
   type BlockCauseKind,
   type IsoTimestamp,
@@ -59,7 +60,11 @@ export type BoardState = Readonly<{
 }>;
 
 /** Where a task's worker runs in Herdr, so the panel can focus it. */
-export type WorkerPane = Readonly<{ readonly workspaceId: string; readonly paneId: string }>;
+export type WorkerPane = Readonly<{
+  readonly terminal?: TerminalName;
+  readonly workspaceId: string;
+  readonly paneId: string;
+}>;
 
 export type BoardView = Readonly<{
   readonly now: IsoTimestamp;
@@ -209,7 +214,10 @@ function isRunningBoardRow(value: unknown): value is RunningBoardRow {
 function isWorkerPane(value: unknown): value is WorkerPane {
   const pane = recordOf(value);
   return (
-    pane !== undefined && typeof pane.workspaceId === "string" && typeof pane.paneId === "string"
+    pane !== undefined &&
+    (pane.terminal === undefined || pane.terminal === "herdr" || pane.terminal === "tern") &&
+    typeof pane.workspaceId === "string" &&
+    typeof pane.paneId === "string"
   );
 }
 

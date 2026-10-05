@@ -210,6 +210,8 @@ export type ResolvedPolicy = {
  */
 export const LEGACY_ENDPOINT_ROLES = [...MODEL_ROLE_ORDER, "verifier"] as const;
 
+export type TerminalName = "herdr" | "tern";
+
 export type TerminalPaneLocation = Readonly<{
   workspaceId: string;
   tabId: string;
@@ -217,6 +219,7 @@ export type TerminalPaneLocation = Readonly<{
 }>;
 
 export type Endpoint = {
+  readonly terminal: TerminalName;
   readonly sessionId: string;
   /** Native project session inside a terminal daemon, when the backend has one. */
   readonly terminalSessionId?: string;

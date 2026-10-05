@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { EndpointBusyError } from "../../src/adapters/primitives.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import {
@@ -23,7 +25,8 @@ test("a stale Tern id never closes a different pane whose title equals that id",
       worktree: lease,
     });
     await seedScenarioRuntime(world, scenarioRuntimeTask({ endpoints: [stale], worktree: lease }));
-    const terminal = terminalBackend(world.run, { terminal: "tern" });
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    const terminal = terminalBackend(world.run, { home: world.home });
 
     await terminal.close({ endpoint: stale, cwd: world.repoPath });
     await expect(terminal.closeOwned({ endpoint: stale, cwd: world.repoPath })).rejects.toThrow(
@@ -58,7 +61,8 @@ test("busy Tern close preserves the worker, reservation, endpoint and lease", as
         reservation: scenarioReservation({ id: "r1" }),
       }),
     );
-    const terminal = terminalBackend(world.run, { terminal: "tern" });
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    const terminal = terminalBackend(world.run, { home: world.home });
 
     await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
       EndpointBusyError,
