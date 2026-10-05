@@ -11,6 +11,8 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import { terminalBackend, terminalContext } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { CliInvocation, CliResult } from "./cli-arguments.ts";
 import { type CliCapabilities, runCliCommand } from "./cli-commands.ts";
 import {
@@ -32,6 +34,7 @@ export type CliDependencies = Readonly<{
   readonly cwd?: string;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly run?: CommandRunner;
+  readonly terminal?: TerminalBackend;
   readonly service?: TandemService;
   readonly createService?: (options: TandemServiceOptions) => TandemService;
   readonly statPath?: (path: string) => Promise<PathStat>;
@@ -53,11 +56,7 @@ function environmentSource(): TandemEnvironmentSource {
     "TANDEM_REPO",
     "TANDEM_SOURCE_REPO",
     PARALLEL_COORDINATORS_VARIABLE,
-    "HERDR_ENV",
-    "HERDR_SESSION",
-    "HERDR_SESSION_NAME",
-    "HERDR_WORKSPACE_ID",
-    "HERDR_PANE_ID",
+    ...terminalContext.variables,
   ];
   const source: Record<string, string | undefined> = {};
   for (const key of keys) source[key] = process.env[key];
@@ -124,8 +123,10 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
   const serviceOwned = dependencies.service === undefined;
   let activeWatch: WatchControl | undefined;
   let shutdownPromise: Promise<void> | undefined;
+  const run = dependencies.run ?? runCommand;
   const capabilities: CliCapabilities = {
-    run: dependencies.run ?? runCommand,
+    run,
+    terminal: dependencies.terminal ?? terminalBackend(run),
     statPath: dependencies.statPath ?? defaultStatPath,
     startPersistent: dependencies.startPersistent ?? defaultStartPersistent,
     runInteractive: dependencies.runInteractive ?? defaultRunInteractive,

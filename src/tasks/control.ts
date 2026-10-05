@@ -1,5 +1,4 @@
 import { readCheckpoint } from "../adapters/git.ts";
-import { closeEndpoint, type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
   BlockCause,
@@ -31,6 +30,7 @@ import {
   text,
 } from "../service/records.ts";
 import { taskSourcePath } from "../service/source.ts";
+import type { EndpointInspection, TerminalBackend } from "../terminal-backend/contract.ts";
 import { readValidationResult } from "../validation-worker.ts";
 import { readWorkerResult } from "../workers/jobs.ts";
 import { claimOf, type OperationClaim, ownsOperation } from "../workers/operation-claim.ts";
@@ -92,6 +92,7 @@ export type TaskControlDependencies = Readonly<{
   readonly runtimePath: string;
   readonly sessionId: string;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   readonly idFactory: IdFactory;
   readonly getTask: (taskId: string) => Promise<TaskRecord>;
@@ -336,7 +337,7 @@ export class TaskControlWorkflow {
       return undefined;
     }
     return withStateLock(this.#deps.home, async () => {
-      const recovery = await recoverEndpointFromLaunch(this.#deps.run, launch);
+      const recovery = await recoverEndpointFromLaunch(this.#deps.terminal, launch);
       if (recovery.status !== "recovered") {
         const reason =
           recovery.status === "ambiguous"
@@ -484,12 +485,12 @@ export class TaskControlWorkflow {
     for (const endpoint of runtime.endpoints) {
       const job = await workerJobOccupyingEndpoint(runtime.jobs, endpoint);
       try {
-        await pauseWorkerTerminal(this.#deps.run, {
+        await pauseWorkerTerminal(this.#deps.terminal, {
           endpoint,
           cwd,
           ...(job === undefined ? {} : { job }),
         });
-        const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
+        const inspection = await this.#deps.terminal.inspect({ endpoint, cwd });
         if (!(await workerDelegationStopped(inspection, job))) {
           stopFailure = `pane ${endpoint.paneId} still has an active worker`;
         }
@@ -692,7 +693,7 @@ export class TaskControlWorkflow {
     job: DurableJob | undefined,
   ): Promise<OwnedEndpointProbe> {
     try {
-      const inspection: HerdrPaneInspection = await inspectEndpoint(this.#deps.run, {
+      const inspection: EndpointInspection = await this.#deps.terminal.inspect({
         endpoint,
         cwd,
       });
@@ -850,14 +851,14 @@ export class TaskControlWorkflow {
     jobs: readonly DurableJob[],
   ): Promise<boolean> {
     const job = await workerJobOccupyingEndpoint(jobs, endpoint);
-    const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
+    const inspection = await this.#deps.terminal.inspect({ endpoint, cwd });
     if (await workerDelegationStopped(inspection, job)) return true;
-    await pauseWorkerTerminal(this.#deps.run, {
+    await pauseWorkerTerminal(this.#deps.terminal, {
       endpoint,
       cwd,
       ...(job === undefined ? {} : { job }),
     });
-    return workerDelegationStopped(await inspectEndpoint(this.#deps.run, { endpoint, cwd }), job);
+    return workerDelegationStopped(await this.#deps.terminal.inspect({ endpoint, cwd }), job);
   }
 
   async reconcileStopRequest(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
@@ -1073,12 +1074,12 @@ export class TaskControlWorkflow {
     for (const endpoint of reviewers) {
       try {
         const job = workerJobForEndpoint(runtime.jobs, endpoint);
-        await prepareWorkerTerminal(this.#deps.run, {
+        await prepareWorkerTerminal(this.#deps.terminal, {
           endpoint,
           cwd,
           ...(job === undefined ? {} : { job }),
         });
-        await closeEndpoint(this.#deps.run, { endpoint, cwd });
+        await this.#deps.terminal.close({ endpoint, cwd });
       } catch (error) {
         if (isMissingEndpoint(error)) continue;
         const reason = `reviewer pane ${endpoint.paneId} could not close: ${describeError(error)}`;

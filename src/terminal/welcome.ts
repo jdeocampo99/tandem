@@ -1,6 +1,6 @@
-import { promptPane, WELCOME_PANE_VARIABLE } from "../adapters/herdr.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
-import type { CommandRunner } from "../contracts.ts";
+import { terminalContext } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { isCloseKey } from "./process.ts";
 
 /** The popup's frame shows this as its title (`herdr-plugin/herdr-plugin.toml`), so it prints once. */
@@ -58,18 +58,18 @@ export async function runWelcome(
   deps: Readonly<{
     readonly input: NodeJS.ReadableStream;
     readonly stdout: (text: string) => void;
-    readonly run: CommandRunner;
+    readonly terminal: TerminalBackend;
     readonly environment: TandemEnvironmentSource;
     readonly cwd: string;
   }>,
 ): Promise<void> {
-  const paneId = deps.environment[WELCOME_PANE_VARIABLE];
-  const sessionId = deps.environment.HERDR_SESSION ?? deps.environment.HERDR_SESSION_NAME;
+  const paneId = terminalContext.welcomePaneId(deps.environment);
+  const sessionId = terminalContext.sessionName(deps.environment);
   if (paneId === undefined || sessionId === undefined) {
     deps.stdout(`${WELCOME_TEXT}\n`);
     return;
   }
   deps.stdout(`${WELCOME_BODY}\n\nPress Enter to start, or Esc to close.`);
   if ((await readWelcomeKey(deps.input)) === "close") return;
-  await promptPane(deps.run, { sessionId, cwd: deps.cwd, paneId, text: WELCOME_PROMPT });
+  await deps.terminal.promptAgent({ sessionId, cwd: deps.cwd, paneId, text: WELCOME_PROMPT });
 }

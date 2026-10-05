@@ -1,111 +1,34 @@
 import { lstat } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
-import { AdapterCommandError, EndpointOwnershipError } from "../adapters/primitives.ts";
+import { AdapterCommandError } from "../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner, Endpoint } from "../contracts.ts";
 import { coordinatorHarnesses, harnessFor } from "../harness/resolve.ts";
+import type {
+  EndpointInspection,
+  SessionPane,
+  TerminalBackend,
+} from "../terminal-backend/contract.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
   canonicalPath,
   digest,
   isMissing,
-  isRecord,
   ownershipFailure,
   pathIsWithin,
   recordPath,
   sessionText,
-  text,
 } from "./record.ts";
 import { readCoordinatorRecord } from "./registry.ts";
 
 const LEGACY_COORDINATOR_SESSION_DIRECTORY = "coordinator-sessions";
 export const COORDINATOR_SCRIPT_DIRECTORY = "coordinator-scripts";
 const LEGACY_COORDINATOR_REPOSITORY_KEY_LENGTH = 24;
-export type SnapshotPane = Readonly<{
-  readonly workspaceId: string;
-  readonly tabId: string;
-  readonly paneId: string;
-  readonly agentStatus?: string;
-}>;
 export type FindRunningCoordinatorInput = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly repoPath: string;
 }>;
-function nativeErrorCode(value: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (!isRecord(parsed) || !isRecord(parsed.error) || typeof parsed.error.code !== "string") {
-      return undefined;
-    }
-    return parsed.error.code;
-  } catch {
-    return undefined;
-  }
-}
-
-export function commandErrorCode(stdout: string, stderr: string): string | undefined {
-  return nativeErrorCode(stdout) ?? nativeErrorCode(stderr);
-}
-
-export function isMissingEndpointError(error: unknown): boolean {
-  if (error instanceof EndpointOwnershipError) return error.reason === "missing";
-  if (!(error instanceof AdapterCommandError)) return false;
-  const code = commandErrorCode(error.result.stdout, error.result.stderr);
-  if (
-    code === "server_not_running" ||
-    code === "session_not_found" ||
-    code === "workspace_not_found" ||
-    code === "tab_not_found" ||
-    code === "pane_not_found"
-  ) {
-    return true;
-  }
-  const output = `${error.result.stdout}\n${error.result.stderr}`.toLowerCase();
-  return (
-    /(?:pane|session)[-_ ]?(?:not|does not exist|could not be found|unknown)[-_ ]?found/.test(
-      output,
-    ) ||
-    /no such (?:pane|session)/.test(output) ||
-    /(?:pane|session).*(?:not found|does not exist|missing)/.test(output)
-  );
-}
-
-export function parseJson(value: string, operation: string): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch (error) {
-    throw new Error(
-      `${operation} returned invalid JSON: ${error instanceof Error ? error.message : "parse failure"}`,
-    );
-  }
-}
-
-function parseSnapshotPanes(value: string): readonly SnapshotPane[] {
-  const root = parseJson(value, "herdr api snapshot");
-  if (!isRecord(root) || !isRecord(root.result) || root.result.type !== "session_snapshot") {
-    throw new Error("herdr api snapshot returned an unknown session snapshot protocol");
-  }
-  const snapshot = root.result.snapshot;
-  if (!isRecord(snapshot) || !Array.isArray(snapshot.panes)) {
-    throw new Error("herdr api snapshot omitted the session panes");
-  }
-  return snapshot.panes.map((value, index) => {
-    if (!isRecord(value)) throw new Error(`herdr api snapshot pane ${index} is malformed`);
-    const agentStatus =
-      value.agent_status === undefined
-        ? undefined
-        : text(value.agent_status, `snapshot.panes[${index}].agent_status`);
-    return {
-      workspaceId: text(value.workspace_id, `snapshot.panes[${index}].workspace_id`),
-      tabId: text(value.tab_id, `snapshot.panes[${index}].tab_id`),
-      paneId: text(value.pane_id, `snapshot.panes[${index}].pane_id`),
-      ...(agentStatus === undefined ? {} : { agentStatus }),
-    };
-  });
-}
-
 function basename(value: string): string {
   const slash = value.lastIndexOf("/");
   return (slash === -1 ? value : value.slice(slash + 1)).replace(/^-/, "").toLowerCase();
@@ -130,21 +53,6 @@ function legacySessionDirectory(home: string, repoPath: string): string {
   );
 }
 
-function missingSessionResult(
-  result: Readonly<{ readonly code: number; readonly stdout: string; readonly stderr: string }>,
-): boolean {
-  if (result.code === 0) return false;
-  const code = commandErrorCode(result.stdout, result.stderr);
-  if (code === "server_not_running" || code === "session_not_found") return true;
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  return (
-    /no such session/.test(output) ||
-    /session.*(?:not found|does not exist|not running|missing)/.test(output) ||
-    /server[_ -]?(?:not[_ -]?running|unavailable|not[_ -]?found)/.test(output) ||
-    /no herdr server is running/.test(output)
-  );
-}
-
 function legacyCoordinatorGuidance(sessionId: string, repoPath: string, paneId: string): Error {
   return new Error(
     `A pre-registry Tandem coordinator for ${JSON.stringify(repoPath)} is active in Herdr session ${JSON.stringify(sessionId)} (pane ${JSON.stringify(paneId)}), but no clean coordinator lease record proves ownership. Stop that coordinator manually, confirm its pane has exited, and relaunch tandem; Tandem will not adopt or duplicate it.`,
@@ -152,22 +60,21 @@ function legacyCoordinatorGuidance(sessionId: string, repoPath: string, paneId: 
 }
 
 async function findUnrecordedCoordinator(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   home: string,
   sessionId: string,
   repoPath: string,
 ): Promise<CoordinatorRecord | undefined> {
-  const snapshot = await run({
-    argv: ["herdr", "--session", sessionId, "api", "snapshot"],
-    cwd: repoPath,
-  });
-  if (snapshot.code !== 0) {
-    if (missingSessionResult(snapshot)) return undefined;
+  let panes: readonly SessionPane[];
+  try {
+    panes = await terminal.snapshot({ sessionId, cwd: repoPath, allowMissingSession: true });
+  } catch (error) {
+    if (!(error instanceof AdapterCommandError)) throw error;
+    const { result } = error;
     throw new Error(
-      `could not inspect Herdr session ${JSON.stringify(sessionId)} before coordinator launch: ${snapshot.stderr.trim() || snapshot.stdout.trim() || `exit code ${snapshot.code}`}`,
+      `could not inspect Herdr session ${JSON.stringify(sessionId)} before coordinator launch: ${result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`}`,
     );
   }
-  const panes = parseSnapshotPanes(snapshot.stdout);
   const sessionDirectory = await canonicalPath(
     legacySessionDirectory(home, repoPath),
     "coordinator session directory",
@@ -182,11 +89,11 @@ async function findUnrecordedCoordinator(
       role: "coordinator",
       generation: 0,
     };
-    let inspection: HerdrPaneInspection;
+    let inspection: EndpointInspection;
     try {
-      inspection = await inspectEndpoint(run, { endpoint, cwd: repoPath });
+      inspection = await terminal.inspect({ endpoint, cwd: repoPath });
     } catch (error) {
-      if (isMissingEndpointError(error)) continue;
+      if (terminal.isEndpointGone(error)) continue;
       throw error;
     }
     if (!inspection.activeWorker) continue;
@@ -219,17 +126,19 @@ async function findUnrecordedCoordinator(
  */
 export async function findRunningCoordinator(
   run: CommandRunner,
+  terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, input, false, true);
+  return findOwnedCoordinator(run, terminal, input, false, true);
 }
 
 /** Finds a running or cleanly stopped coordinator whose pane reset may close. */
 export async function findResetCoordinator(
   run: CommandRunner,
+  terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, input, true, false);
+  return findOwnedCoordinator(run, terminal, input, true, false);
 }
 
 /**
@@ -238,9 +147,10 @@ export async function findResetCoordinator(
  */
 export async function findRestartCoordinator(
   run: CommandRunner,
+  terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, input, true, true);
+  return findOwnedCoordinator(run, terminal, input, true, true);
 }
 
 /**
@@ -266,6 +176,7 @@ async function liveCoordinatorProcess(
 
 async function findOwnedCoordinator(
   run: CommandRunner,
+  terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
   includeStopped: boolean,
   includeAbandoned: boolean,
@@ -279,7 +190,7 @@ async function findOwnedCoordinator(
   }
   const path = recordPath(home, sessionId, repoPath);
   const record = await readCoordinatorRecord(path);
-  if (record === undefined) return findUnrecordedCoordinator(run, home, sessionId, repoPath);
+  if (record === undefined) return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
   if (record.repoPath !== repoPath) {
     throw ownershipFailure(`record ${path} belongs to ${JSON.stringify(record.repoPath)}`);
   }
@@ -298,20 +209,20 @@ async function findOwnedCoordinator(
     }
   } catch (error) {
     if (isMissing(error)) {
-      return findUnrecordedCoordinator(run, home, sessionId, repoPath);
+      return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
     }
     throw error;
   }
 
-  let inspection: HerdrPaneInspection;
+  let inspection: EndpointInspection;
   try {
-    inspection = await inspectEndpoint(run, {
+    inspection = await terminal.inspect({
       endpoint: record.endpoint,
       cwd: record.worktree.path,
     });
   } catch (error) {
-    if (isMissingEndpointError(error)) {
-      return findUnrecordedCoordinator(run, home, sessionId, repoPath);
+    if (terminal.isEndpointGone(error)) {
+      return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
     }
     throw error;
   }
@@ -343,7 +254,7 @@ async function findOwnedCoordinator(
       }
       return undefined;
     }
-    await findUnrecordedCoordinator(run, home, sessionId, repoPath);
+    await findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
     if (!includeStopped) return undefined;
     assertStoppedCoordinatorShell(inspection);
   }
@@ -365,7 +276,7 @@ async function findOwnedCoordinator(
  * Proves the pane holds only its own terminal shell, or Tandem's launch script waiting to
  * start the coordinator again after it exited.
  */
-export function assertStoppedCoordinatorShell(inspection: HerdrPaneInspection): void {
+export function assertStoppedCoordinatorShell(inspection: EndpointInspection): void {
   const { shellPid, foregroundProcesses } = inspection.processInfo;
   const only = foregroundProcesses.length === 1 ? foregroundProcesses[0] : undefined;
   if (
@@ -378,29 +289,11 @@ export function assertStoppedCoordinatorShell(inspection: HerdrPaneInspection): 
   }
 }
 
-export async function readSessionSnapshot(
-  run: CommandRunner,
-  sessionId: string,
-  cwd: string,
-  allowMissingSession = false,
-): Promise<readonly SnapshotPane[]> {
-  const request: CommandRequest = {
-    argv: ["herdr", "--session", sessionId, "api", "snapshot"],
-    cwd,
-  };
-  const result = await run(request);
-  if (result.code !== 0) {
-    if (allowMissingSession && missingSessionResult(result)) return [];
-    throw new AdapterCommandError("herdr api snapshot", request, result);
-  }
-  return parseSnapshotPanes(result.stdout);
-}
-
 export function snapshotPaneForEndpoint(
-  panes: readonly SnapshotPane[],
+  panes: readonly SessionPane[],
   endpoint: Endpoint,
   description: string,
-): SnapshotPane | undefined {
+): SessionPane | undefined {
   const matches = panes.filter((pane) => pane.paneId === endpoint.paneId);
   if (matches.length === 0) return undefined;
   if (matches.length !== 1) {
@@ -421,7 +314,7 @@ export function snapshotPaneForEndpoint(
 }
 
 export function assertIdleCoordinatorPane(
-  panes: readonly SnapshotPane[],
+  panes: readonly SessionPane[],
   record: CoordinatorRecord,
 ): void {
   const pane = snapshotPaneForEndpoint(panes, record.endpoint, "coordinator");

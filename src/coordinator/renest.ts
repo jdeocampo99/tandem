@@ -1,16 +1,11 @@
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  type HerdrAdapterOptions,
-  type HerdrWorkspace,
-  listWorkspaces,
-  moveWorkspaceAfterParent,
-} from "../adapters/herdr.ts";
-import type { CommandRunner, Endpoint, TaskRecord } from "../contracts.ts";
+import type { Endpoint, TaskRecord } from "../contracts.ts";
 import { databasePath, withStateLock } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
 import type { RuntimeState } from "../runtime/schema.ts";
 import { createTaskStore } from "../tasks/store.ts";
+import type { TerminalBackend, WorkspaceListing } from "../terminal-backend/contract.ts";
 import { type CoordinatorRecord, canonicalPath } from "./record.ts";
 import { listCoordinatorRecords } from "./registry.ts";
 
@@ -162,7 +157,7 @@ function launchingLabels({ state }: Durable): ReadonlySet<string> {
  * task's or presentation's endpoint, and not a worker launch still in flight under that label.
  */
 function leftoverWorkspaces(
-  live: readonly HerdrWorkspace[],
+  live: readonly WorkspaceListing[],
   coordinatorWorkspaceIds: Iterable<string>,
   owned: readonly TaskWorkspace[],
   launching: ReadonlySet<string>,
@@ -234,7 +229,7 @@ async function canonicalRepoPaths(
  * touches a workspace Tandem cannot prove is its own, and turns every failure into a warning.
  */
 export async function renestWorkspaces(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   input: Readonly<{
     readonly home: string;
     readonly sessionId: string;
@@ -244,7 +239,6 @@ export async function renestWorkspaces(
     /** How long to wait for the state lock; defaults to 30 seconds. */
     readonly lockWaitMs?: number;
   }>,
-  options: HerdrAdapterOptions = {},
 ): Promise<RenestReport> {
   const warnings: string[] = [];
   const failed = (what: string, error: unknown): RenestReport => ({
@@ -261,9 +255,9 @@ export async function renestWorkspaces(
   } catch (error) {
     return failed("Tandem's task records", error);
   }
-  let live: readonly HerdrWorkspace[];
+  let live: readonly WorkspaceListing[];
   try {
-    live = await listWorkspaces(run, input.sessionId, input.cwd);
+    live = await terminal.listWorkspaces({ sessionId: input.sessionId, cwd: input.cwd });
   } catch (error) {
     return failed("Herdr workspaces", error);
   }
@@ -292,16 +286,12 @@ export async function renestWorkspaces(
   if (!input.apply) return { planned, moved: 0, warnings, leftovers };
   let moved = 0;
   for (const move of planned) {
-    const failures = await moveWorkspaceAfterParent(
-      run,
-      {
-        sessionId: input.sessionId,
-        cwd: input.cwd,
-        workspaceId: move.workspaceId,
-        parentWorkspaceId: move.afterWorkspaceId,
-      },
-      options,
-    );
+    const failures = await terminal.orderWorkspaceAfter({
+      sessionId: input.sessionId,
+      cwd: input.cwd,
+      workspaceId: move.workspaceId,
+      parentWorkspaceId: move.afterWorkspaceId,
+    });
     if (failures.length === 0) moved += 1;
     else warnings.push(...failures);
   }

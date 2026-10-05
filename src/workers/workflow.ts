@@ -1,13 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
-import {
-  closeEndpoint,
-  createTaskEndpoint,
-  type HerdrPaneInspection,
-  inspectEndpoint,
-  taskWorkspaceLabel,
-} from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
   BlockCause,
@@ -69,6 +62,7 @@ import { type FixRoundGate, fixRoundGate } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
+import type { EndpointInspection, TerminalBackend } from "../terminal-backend/contract.ts";
 import { readValidationResult, type ValidationResult } from "../validation-worker.ts";
 import type { AdmissionRole, ReservationRefusal, ReservationResult } from "./admission.ts";
 import { type CurrentCheckout, isClean, isCleanAt, readWorkerCheckout } from "./checkout.ts";
@@ -85,7 +79,7 @@ import { claimOf, holdsClaim, type OperationClaim, operationSettled } from "./op
 import { OperationRecords } from "./operation-records.ts";
 import { TaskReservations } from "./reservation.ts";
 import { ReviewStage } from "./review-stage.ts";
-import { liveWorkerTerminal } from "./terminal.ts";
+import { liveWorkerTerminal, taskWorkspaceLabel } from "./terminal.ts";
 import { ValidationStage } from "./validation-stage.ts";
 import { WorktreeLeases } from "./worktree-lease.ts";
 
@@ -162,6 +156,7 @@ export type WorkerWorkflowDependencies = Readonly<{
   readonly poolRoot: string;
   readonly workerTimeoutMs: number | undefined;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   readonly idFactory: IdFactory;
   readonly store: TaskStore;
@@ -322,9 +317,9 @@ export class WorkerWorkflow {
     endpoint: Endpoint,
     claim: OperationClaim,
   ): Promise<JobStop | undefined> {
-    let inspection: HerdrPaneInspection;
+    let inspection: EndpointInspection;
     try {
-      inspection = await inspectEndpoint(this.#deps.run, {
+      inspection = await this.#deps.terminal.inspect({
         endpoint,
         cwd: job.cwd,
       });
@@ -936,7 +931,7 @@ export class WorkerWorkflow {
     const task = await this.#deps.getTask(taskId);
     if (runtime === undefined) return;
     try {
-      await closeEndpoint(this.#deps.run, {
+      await this.#deps.terminal.close({
         endpoint,
         cwd: taskSourcePath(task, runtime),
       });
@@ -1235,11 +1230,10 @@ export class WorkerWorkflow {
           "intent",
           endpointLaunch.workspaceLabel,
         );
-        const result = await createTaskEndpoint(this.#deps.run, {
+        const result = await this.#deps.terminal.createWorkspace({
           sessionId: this.#deps.sessionId,
           cwd: lease.path,
-          taskName: currentRuntime.taskName,
-          workspaceLabel: endpointLaunch.workspaceLabel,
+          label: endpointLaunch.workspaceLabel,
           role,
           generation: currentTask.generation,
           ...(this.#deps.parentWorkspaceId === undefined

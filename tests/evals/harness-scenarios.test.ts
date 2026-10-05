@@ -13,6 +13,7 @@ import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { sidecarSocketPath } from "../../src/harness/claude-code/socket.ts";
 import { DEFAULT_HARNESS, parseHarnessName } from "../../src/harness/contract.ts";
 import { createTandemService } from "../../src/service/controller.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { parseWorkerJob, type WorkerJob } from "../../src/workers/jobs.ts";
 import {
   SCENARIO_POLICY,
@@ -123,6 +124,7 @@ function claudeCodeDependencies(
   let clock = 0;
   return {
     run: world.run,
+    terminal: terminalBackend(world.run),
     startPersistent: async () => undefined,
     runInteractive: async () => {
       throw new Error("a headless launch runs the coordinator in a Herdr pane");

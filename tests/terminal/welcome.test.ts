@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { PassThrough } from "node:stream";
 import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
 import { runWelcome, WELCOME_PROMPT, WELCOME_TEXT } from "../../src/terminal/welcome.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 function keyboard(): PassThrough {
   const input = new PassThrough();
@@ -28,7 +29,7 @@ test("Enter in the welcome popup asks the Tandem coordinator to start onboarding
   const done = runWelcome({
     input,
     stdout: (text) => printed.push(text),
-    run,
+    terminal: terminalBackend(run),
     environment: popup,
     cwd: "/tmp",
   });
@@ -47,7 +48,13 @@ test("Enter in the welcome popup asks the Tandem coordinator to start onboarding
 test("the prompt is typed into the pane when Herdr sees no agent there", async () => {
   const input = keyboard();
   const { ran, run } = recorder(1);
-  const done = runWelcome({ input, stdout: () => undefined, run, environment: popup, cwd: "/tmp" });
+  const done = runWelcome({
+    input,
+    stdout: () => undefined,
+    terminal: terminalBackend(run),
+    environment: popup,
+    cwd: "/tmp",
+  });
   input.write("\r");
   await done;
   expect(ran.slice(1)).toEqual([
@@ -59,7 +66,13 @@ test("the prompt is typed into the pane when Herdr sees no agent there", async (
 test("Esc closes the welcome popup without sending anything", async () => {
   const input = keyboard();
   const { ran, run } = recorder();
-  const done = runWelcome({ input, stdout: () => undefined, run, environment: popup, cwd: "/tmp" });
+  const done = runWelcome({
+    input,
+    stdout: () => undefined,
+    terminal: terminalBackend(run),
+    environment: popup,
+    cwd: "/tmp",
+  });
   input.write("\x1b");
   await done;
   expect(ran).toEqual([]);
@@ -71,7 +84,7 @@ test("outside the popup, tandem welcome only prints the message", async () => {
   await runWelcome({
     input: keyboard(),
     stdout: (text) => printed.push(text),
-    run,
+    terminal: terminalBackend(run),
     environment: {},
     cwd: "/tmp",
   });
@@ -91,7 +104,7 @@ test("every welcome line fits inside the popup without wrapping", async () => {
   const done = runWelcome({
     input,
     stdout: (text) => printed.push(text),
-    run: recorder().run,
+    terminal: terminalBackend(recorder().run),
     environment: popup,
     cwd: "/tmp",
   });

@@ -1,6 +1,7 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { terminalContext } from "../terminal-backend/compose.ts";
 import { isNotFoundError } from "./storage.ts";
 import { assertKnownKeys, isRecord, parseJson } from "./values.ts";
 
@@ -9,7 +10,7 @@ export type TandemBoundaryEnvironment = Readonly<{
   readonly sessionId: string;
   readonly parentWorkspaceId?: string;
   /**
-   * The Herdr pane this process runs in, known only inside an active Herdr context whose session
+   * The terminal pane this process runs in, known only inside an active pane context whose session
    * is the Tandem session. Presentation placement only; it never grants ownership of that pane.
    */
   readonly coordinatorPaneId?: string;
@@ -118,31 +119,11 @@ export function processEnvironmentSnapshot(
     "PORTKEY_PROVIDER",
     "PORTKEY_CUSTOM_HOST",
     "PORTKEY_JEV_MODEL",
-    "HERDR_ENV",
-    "HERDR_SESSION",
-    "HERDR_SESSION_NAME",
-    "HERDR_WORKSPACE_ID",
-    "HERDR_PANE_ID",
+    ...terminalContext.variables,
   ]) {
     values[key] = process.env[key];
   }
   return values;
-}
-
-/**
- * The pane Herdr says this process runs in, only when Herdr is active and its session is the
- * Tandem session; a pane id from another session would name a pane Tandem cannot address.
- */
-function herdrPaneInSession(
-  source: TandemEnvironmentSource,
-  sessionId: string,
-): string | undefined {
-  const active = source.HERDR_ENV?.trim().toLowerCase();
-  if (active !== "1" && active !== "true") return undefined;
-  const herdrSession = (source.HERDR_SESSION ?? source.HERDR_SESSION_NAME)?.trim();
-  if (herdrSession !== sessionId) return undefined;
-  const paneId = source.HERDR_PANE_ID?.trim();
-  return paneId === undefined || paneId.length === 0 || paneId.includes("\0") ? undefined : paneId;
 }
 
 /** Resolve Tandem's process-boundary environment without leaking it into domain code. */
@@ -162,20 +143,21 @@ export function resolveTandemEnvironment(
   const sessionId = readBoundaryText(
     overrides.sessionId ??
       source.TANDEM_SESSION ??
-      source.HERDR_SESSION ??
-      source.HERDR_SESSION_NAME ??
+      terminalContext.sessionName(source) ??
       remembered?.sessionId ??
       defaults.sessionId ??
       "tandem",
     "TANDEM_SESSION",
   );
   const parentWorkspaceId = optionalBoundaryText(
-    overrides.parentWorkspaceId ?? source.TANDEM_PARENT_WORKSPACE ?? source.HERDR_WORKSPACE_ID,
+    overrides.parentWorkspaceId ??
+      source.TANDEM_PARENT_WORKSPACE ??
+      terminalContext.workspaceId(source),
     "TANDEM_PARENT_WORKSPACE",
   );
   const coordinatorPaneId =
     overrides.coordinatorPaneId === undefined
-      ? herdrPaneInSession(source, sessionId)
+      ? terminalContext.paneInSession(source, sessionId)
       : readBoundaryText(overrides.coordinatorPaneId, "coordinatorPaneId");
   const poolRoot = readBoundaryPath(
     overrides.poolRoot ?? source.TANDEM_POOL_ROOT ?? join(home, "pool"),

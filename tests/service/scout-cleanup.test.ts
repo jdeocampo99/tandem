@@ -35,6 +35,7 @@ import {
 } from "../../src/service/scout-cleanup.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { type WorkerTerminalState, writeWorkerTerminal } from "../../src/workers/terminal.ts";
 
 const TIMESTAMP = "2030-01-01T00:00:00.000Z";
@@ -619,7 +620,7 @@ test("a finished scout kept open for mockups is closed when building starts, kee
         idFactory: () => "unused",
       });
       await closeFinishedScoutPanes(
-        { store, runtimePath: runtimeFile(home), run },
+        { store, runtimePath: runtimeFile(home), terminal: terminalBackend(run) },
         "task-1",
       ).finally(stop);
 
@@ -641,7 +642,10 @@ test("closing finished scout panes leaves a scout that is not finished alone", a
       clock: () => TIMESTAMP,
       idFactory: () => "unused",
     });
-    await closeFinishedScoutPanes({ store, runtimePath: runtimeFile(home), run }, "task-1");
+    await closeFinishedScoutPanes(
+      { store, runtimePath: runtimeFile(home), terminal: terminalBackend(run) },
+      "task-1",
+    );
     expect(world.closedPanes).toEqual([]);
     expect((await readRuntime(home)).tasks[0]?.endpoints).toHaveLength(1);
   });

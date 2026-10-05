@@ -1,5 +1,4 @@
 import { join } from "node:path";
-import type { HerdrWorkspaceMoveRequest } from "../../src/adapters/herdr.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
 import type {
   CommandRequest,
@@ -13,6 +12,12 @@ import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 
+type WorkspaceMove = Readonly<{
+  readonly socketPath: string;
+  readonly workspaceId: string;
+  readonly insertIndex: number;
+}>;
+
 export const SESSION = "tandem";
 
 /**
@@ -22,10 +27,10 @@ export const SESSION = "tandem";
  */
 export type FakeSidebar = Readonly<{
   readonly order: string[];
-  readonly moves: HerdrWorkspaceMoveRequest[];
+  readonly moves: WorkspaceMove[];
   readonly calls: CommandRequest[];
   readonly run: CommandRunner;
-  readonly moveWorkspace: (request: HerdrWorkspaceMoveRequest) => Promise<unknown>;
+  readonly moveWorkspace: (request: WorkspaceMove) => Promise<unknown>;
   /** When set, `workspace.move` rejects with this message instead of moving anything. */
   fail: (message: string | undefined) => void;
 }>;
@@ -35,7 +40,7 @@ export function fakeSidebar(
   labels: Readonly<Record<string, string>> = {},
 ): FakeSidebar {
   const order = [...initial];
-  const moves: HerdrWorkspaceMoveRequest[] = [];
+  const moves: WorkspaceMove[] = [];
   const calls: CommandRequest[] = [];
   let failure: string | undefined;
   const ok = (value: unknown): CommandResult => ({

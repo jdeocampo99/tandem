@@ -1,7 +1,6 @@
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { runCommand } from "../adapters/commands.ts";
-import { closeEndpoint } from "../adapters/herdr.ts";
 import {
   AdapterProtocolError,
   EndpointBusyError,
@@ -28,6 +27,8 @@ import {
 } from "../runtime/persistence.ts";
 import type { RuntimeState, RuntimeTaskState } from "../runtime/schema.ts";
 import { createTaskStore, type TaskStore } from "../tasks/store.ts";
+import { terminalBackend } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import {
   absoluteDirectory,
@@ -59,6 +60,7 @@ export type TaskCleanupDependencies = Readonly<{
   readonly store: TaskStore;
   readonly runtimePath: string;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   /** The project's cleanupCommands, read when a finished task's worktree is cleaned up. */
   readonly cleanupCommands: (repoPath: string) => Promise<readonly string[]>;
@@ -291,7 +293,7 @@ type PaneClosureProgress = Readonly<{
  * that is already gone counts as closed.
  */
 async function closeOwnedPanes(
-  run: CommandRunner,
+  terminal: TerminalBackend,
   runtime: Pick<RuntimeTaskState, "endpoints" | "jobs">,
   cwd: string,
 ): Promise<PaneClosureProgress> {
@@ -299,8 +301,12 @@ async function closeOwnedPanes(
   for (const endpoint of runtime.endpoints) {
     try {
       const job = workerJobForEndpoint(runtime.jobs, endpoint);
-      await prepareWorkerTerminal(run, { endpoint, cwd, ...(job === undefined ? {} : { job }) });
-      await closeEndpoint(run, { endpoint, cwd });
+      await prepareWorkerTerminal(terminal, {
+        endpoint,
+        cwd,
+        ...(job === undefined ? {} : { job }),
+      });
+      await terminal.close({ endpoint, cwd });
     } catch (error) {
       if (isMissingEndpoint(error)) {
         closedPaneIds.push(endpoint.paneId);
@@ -462,7 +468,7 @@ async function keepResearchAgent(
  * implementation can adopt the worktree. The worktree lease and cleanup record are unchanged.
  */
 export async function closeFinishedScoutPanes(
-  deps: Pick<TaskCleanupDependencies, "store" | "runtimePath" | "run">,
+  deps: Pick<TaskCleanupDependencies, "store" | "runtimePath" | "terminal">,
   scoutId: string,
 ): Promise<void> {
   const [task, state] = await Promise.all([
@@ -482,7 +488,7 @@ export async function closeFinishedScoutPanes(
     return;
   }
   const panes = await closeOwnedPanes(
-    deps.run,
+    deps.terminal,
     runtime,
     runtime.worktree?.path ?? taskSourcePath(task, runtime),
   );
@@ -602,7 +608,7 @@ export async function releaseTerminalTaskResources(
     }
 
     const cwd = runtime.worktree?.path ?? taskSourcePath(task, runtime);
-    const panes = await closeOwnedPanes(deps.run, runtime, cwd);
+    const panes = await closeOwnedPanes(deps.terminal, runtime, cwd);
     if (panes.failure !== undefined) {
       const failure = panes.failure;
       if (failure.status === "deferred") return deferred(task.id, failure.reason);
@@ -791,6 +797,7 @@ async function freeSupersededWorktree(
 export type PendingScoutCleanupInput = Readonly<{
   readonly home: string;
   readonly run?: CommandRunner;
+  readonly terminal?: TerminalBackend;
   readonly clock?: Clock;
 }>;
 
@@ -820,6 +827,7 @@ export async function finishPendingScoutCleanup(
     }),
     runtimePath: runtimeFile(home),
     run,
+    terminal: input.terminal ?? terminalBackend(run),
     clock,
     cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home }),
   };
@@ -870,6 +878,7 @@ export async function finishPendingImplementationCleanup(
     }),
     runtimePath: runtimeFile(home),
     run,
+    terminal: input.terminal ?? terminalBackend(run),
     clock,
     cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home }),
   };

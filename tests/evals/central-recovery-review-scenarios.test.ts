@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { interruptEndpoint } from "../../src/adapters/herdr.ts";
 import type { Endpoint, ResolvedPolicy, ReviewResult } from "../../src/contracts.ts";
 import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
@@ -12,6 +11,7 @@ import {
   workerReceiptPath,
   writeWorkerReceipt,
 } from "../../src/tasks/communication-persistence.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { persistWorkerResult } from "../../src/workers/jobs.ts";
 import {
   SCENARIO_HEAD,
@@ -199,7 +199,7 @@ test("central recovery relaunches a dead legacy review lens as the current merge
     const endpoint = replacement.endpoint as Endpoint;
 
     // The relaunched review now "finishes": its pane goes quiet and a durable, passing result lands.
-    await interruptEndpoint(world.run, { endpoint, cwd: lease.path });
+    await terminalBackend(world.run).interrupt({ endpoint, cwd: lease.path });
     await writeWorkerReceipt(workerReceiptPath(replacement.jobPath), {
       schemaVersion: 1,
       jobId: replacement.id,

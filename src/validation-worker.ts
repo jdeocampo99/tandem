@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
-import { createHerdrStatusReporter } from "./adapters/herdr-status.ts";
 import type {
   CheckOrigin,
   CommandRunner,
@@ -11,6 +10,7 @@ import type {
 } from "./contracts.ts";
 import { writeJsonAtomically } from "./runtime/persistence.ts";
 import { ValidationConfigurationError } from "./tasks/acceptance.ts";
+import { terminalBackend } from "./terminal-backend/compose.ts";
 import {
   claimExecutionStart,
   type ExecutionAdmission,
@@ -390,7 +390,7 @@ export async function runValidationJob(
   }
   const run = options.run ?? runCommand;
   const writeResult = options.writeResult ?? writeJsonAtomically;
-  const statusReporter = createHerdrStatusReporter(runCommand, {
+  const statusReporter = terminalBackend(runCommand).agentStatusReporter({
     cwd: job.repoPath,
     agentLabel: `tandem-validation-${job.taskId.slice(0, 8)}`,
   });

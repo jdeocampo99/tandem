@@ -1,5 +1,6 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import { canonicalHome, canonicalPath, ownershipFailure, sessionText } from "./record.ts";
@@ -79,6 +80,7 @@ export type CoordinatorSessionReconciliation = Readonly<{
 
 export type RepositoryCoordinatorClaimInput = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly home: string;
   readonly sessionId: string;
   readonly repoPath: string;
@@ -169,11 +171,12 @@ export function decideRepositoryCoordinatorClaim(
 
 async function observeSessionCoordinator(
   run: CommandRunner,
+  terminal: TerminalBackend,
   location: CanonicalRepositoryLocation,
   found: DiscoveredCoordinatorRecord,
 ): Promise<ObservedSessionCoordinator> {
   try {
-    const running = await findRunningCoordinator(run, {
+    const running = await findRunningCoordinator(run, terminal, {
       home: location.home,
       sessionId: found.sessionId,
       repoPath: location.repoPath,
@@ -195,7 +198,7 @@ async function reconcileSessionCoordinator(
 ): Promise<CoordinatorSessionReconciliation> {
   const sourceHead = await input.requestedSourceHead();
   return withCoordinatorLaunchLock(location.home, found.sessionId, async () => {
-    const workspace = await retireCoordinatorWorkspace(input.run, location.home, found.record);
+    const workspace = await retireCoordinatorWorkspace(input.terminal, location.home, found.record);
     const decision = decideCoordinatorReplacement({
       previous: found.record,
       paneRetirement: workspace,
@@ -274,7 +277,7 @@ export async function claimRepositoryCoordinator(
   );
   const otherSessions: ObservedSessionCoordinator[] = [];
   for (const found of otherSessionRecords) {
-    otherSessions.push(await observeSessionCoordinator(input.run, location, found));
+    otherSessions.push(await observeSessionCoordinator(input.run, input.terminal, location, found));
   }
   const claim = decideRepositoryCoordinatorClaim({
     repoPath: location.repoPath,

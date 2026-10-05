@@ -3,6 +3,8 @@ import type { CommandRunner } from "../contracts.ts";
 import type { CoordinatorResourceOutcome } from "../coordinator/resources.ts";
 import type { CoordinatorWorkspaceRetirement } from "../coordinator/workspace.ts";
 import type { TandemService } from "../service/controller.ts";
+import { terminalContext } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { TerminalInvocation } from "./arguments.ts";
 import {
   type CliApplication,
@@ -19,16 +21,6 @@ export function launchProcessEnvironment(source: TandemEnvironmentSource): Tande
   delete sanitized.TANDEM_SOURCE_REPO;
   delete sanitized.TANDEM_PARENT_WORKSPACE;
   return sanitized;
-}
-
-export function hasActiveHerdrContext(source: TandemEnvironmentSource): boolean {
-  const session = source.HERDR_SESSION ?? source.HERDR_SESSION_NAME;
-  return (
-    (source.HERDR_ENV === "1" || source.HERDR_ENV === "true") &&
-    session !== undefined &&
-    source.HERDR_WORKSPACE_ID !== undefined &&
-    source.HERDR_PANE_ID !== undefined
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -156,12 +148,14 @@ export async function launchProjects(
   }>,
   service: TandemService,
   run: CommandRunner,
+  terminal: TerminalBackend,
   afterLaunches: (launches: readonly unknown[]) => Promise<void> = async () => undefined,
 ): Promise<readonly unknown[]> {
   const applicationDependencies: CliDependencies = {
     cwd: environment.cwd,
     processEnvironment: launchProcessEnvironment(environment.source),
     run,
+    terminal,
     service,
     runInteractive: dependencies.runInteractive ?? defaultRunInteractive,
     ...(dependencies.stdout === undefined ? {} : { stdout: dependencies.stdout }),
@@ -210,27 +204,27 @@ export async function launchProjects(
         "coordinator launch returned no workspace identity; refusing to attach an unrelated Herdr workspace",
       );
     }
-    const herdrEnvironment = {
+    const tandemEnvironment = {
       TANDEM_HOME: environment.home,
       TANDEM_POOL_ROOT: environment.poolRoot,
       TANDEM_SESSION: environment.sessionId,
     };
-    const focus = await run({
-      argv: ["herdr", "--session", environment.sessionId, "workspace", "focus", workspaceId],
+    const focus = await terminal.focusWorkspace({
+      sessionId: environment.sessionId,
       cwd: first,
-      env: herdrEnvironment,
+      workspaceId,
+      env: tandemEnvironment,
     });
-    if (focus.code !== 0) {
-      const detail = focus.stderr.trim() || focus.stdout.trim();
+    if (!focus.focused) {
       throw new Error(
-        `Herdr workspace focus failed with code ${focus.code}${detail.length === 0 ? "" : `: ${detail}`}`,
+        `Herdr workspace focus failed with code ${focus.code}${focus.detail.length === 0 ? "" : `: ${focus.detail}`}`,
       );
     }
-    if (!hasActiveHerdrContext(environment.source)) {
+    if (terminalContext.inheritedPane(environment.source).status !== "inside") {
       const attach = await (dependencies.runInteractive ?? defaultRunInteractive)({
-        argv: ["herdr", "--session", environment.sessionId],
+        argv: terminal.clientCommand(environment.sessionId),
         cwd: first,
-        env: herdrEnvironment,
+        env: tandemEnvironment,
       });
       if (attach !== 0) throw new Error(`Herdr attachment exited with code ${attach}`);
     }

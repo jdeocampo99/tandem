@@ -13,6 +13,7 @@ import {
 } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { ReservationResult } from "./admission.ts";
 import { assertSourceUnchanged, isCleanAt } from "./checkout.ts";
 import type { OperationClaim } from "./operation-claim.ts";
@@ -25,6 +26,7 @@ export type WorktreeLeasesDependencies = Readonly<{
   readonly store: TaskStore;
   readonly runtimePath: string;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   readonly getTask: (taskId: string) => Promise<TaskRecord>;
   readonly runtimeFor: (taskId: string) => Promise<RuntimeTaskState | undefined>;

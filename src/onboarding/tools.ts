@@ -1,7 +1,6 @@
-import { TANDEM_HERDR_PLUGIN } from "../adapters/herdr.ts";
 import type { CommandResult, CommandRunner } from "../contracts.ts";
 import { OMP_INSTALL_COMMAND } from "../harness/omp/adapter.ts";
-import { MIN_HERDR_VERSION, parseHerdrVersion, versionAtLeast } from "../terminal/herdr-setup.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 
 /** One thing Tandem needs on this machine: whether it is there, and the command that fixes it. */
 export type ToolCheck = Readonly<{
@@ -35,34 +34,11 @@ function firstLine(result: CommandResult | undefined): string {
 /** Checks the tools onboarding depends on, without changing anything. */
 export async function checkTools(
   run: CommandRunner,
+  terminal: TerminalBackend,
   input: Readonly<{ readonly cwd: string; readonly sessionId: string }>,
 ): Promise<readonly ToolCheck[]> {
   const { cwd } = input;
-  const checks: ToolCheck[] = [];
-
-  const herdrVersion = parseHerdrVersion(firstLine(await tryRun(run, ["herdr", "--version"], cwd)));
-  const herdrCurrent =
-    herdrVersion !== undefined && versionAtLeast(herdrVersion, MIN_HERDR_VERSION);
-  checks.push({
-    name: "Herdr",
-    ok: herdrCurrent,
-    detail:
-      herdrVersion === undefined
-        ? "not found"
-        : herdrCurrent
-          ? herdrVersion
-          : `${herdrVersion}, needs ${MIN_HERDR_VERSION}+`,
-    ...(herdrCurrent ? {} : { fix: "./setup.sh" }),
-  });
-  const plugins = await tryRun(run, ["herdr", "--session", input.sessionId, "plugin", "list"], cwd);
-  const popup = plugins?.stdout.includes(`- ${TANDEM_HERDR_PLUGIN} (`) === true;
-  checks.push({
-    name: "Tandem's welcome popup in Herdr",
-    ok: popup,
-    detail: popup ? "linked" : "not linked",
-    ...(popup ? {} : { fix: "./setup.sh" }),
-    optional: true,
-  });
+  const checks: ToolCheck[] = [...(await terminal.checkInstall(input))];
 
   const omp = await tryRun(run, ["omp", "--version"], cwd);
   checks.push({

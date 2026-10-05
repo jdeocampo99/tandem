@@ -1,7 +1,6 @@
 import { copyFile, lstat, readFile, realpath } from "node:fs/promises";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 import { runCommand } from "../adapters/commands.ts";
-import { createHerdrStatusReporter } from "../adapters/herdr-status.ts";
 import type { SessionDeps } from "../session/events.ts";
 import { type WorkerHost, WorkerSession } from "../session/worker.ts";
 import { type SteeringDelivery, WorkerSteering } from "../session/worker-steering.ts";
@@ -11,6 +10,7 @@ import {
   writeWorkerReceipt,
 } from "../tasks/communication-persistence.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
+import { terminalBackend } from "../terminal-backend/compose.ts";
 import { parseWorkerControlConfig, WORKER_CONTROL_ENV } from "../workers/control-protocol.ts";
 import { parseWorkerJob, persistWorkerResult, type WorkerJob } from "../workers/jobs.ts";
 import {
@@ -115,7 +115,7 @@ export function workerSession(
     host: harness.host,
     clock: SYSTEM_CLOCK,
     timers: harness.timers,
-    status: createHerdrStatusReporter(runCommand, {
+    status: terminalBackend(runCommand).agentStatusReporter({
       cwd: job.cwd,
       agentLabel: `tandem-${job.role}-${job.taskId.slice(0, 8)}`,
     }),

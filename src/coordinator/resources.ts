@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { readTreehousePoolStatus, releaseWorktree } from "../adapters/treehouse.ts";
 import type { CommandRunner, Endpoint, WorktreeLease } from "../contracts.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { ensurePrivateDirectoryTree } from "./lock.ts";
 import {
   type CoordinatorRecord,
@@ -118,6 +119,7 @@ export type CoordinatorReplacementInput = Readonly<{
 
 export type CoordinatorAllocationRollbackInput = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly home: string;
   readonly sessionId: string;
   readonly repoPath: string;
@@ -609,7 +611,7 @@ export async function rollbackCoordinatorAllocation(
   if (input.endpoint !== undefined) {
     let retirement: CoordinatorWorkspaceRetirement;
     try {
-      retirement = await retireCoordinatorWorkspace(input.run, input.home, {
+      retirement = await retireCoordinatorWorkspace(input.terminal, input.home, {
         repoPath: input.repoPath,
         endpoint: input.endpoint,
         worktree: input.lease,

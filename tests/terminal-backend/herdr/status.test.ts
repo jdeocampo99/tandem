@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { createHerdrStatusReporter } from "../../src/adapters/herdr-status.ts";
-import type { CommandRunner } from "../../src/contracts.ts";
+import type { CommandRunner } from "../../../src/contracts.ts";
+import { agentStatusReporter } from "../../../src/terminal-backend/herdr/status.ts";
 
 const options = {
   cwd: "/tmp/tandem-status",
@@ -9,7 +9,7 @@ const options = {
 };
 
 function reporterFor(run: CommandRunner) {
-  const reporter = createHerdrStatusReporter(run, options);
+  const reporter = agentStatusReporter(run, options);
   if (reporter === undefined) throw new Error("Expected a reporter in the native pane fixture");
   return reporter;
 }
@@ -113,9 +113,9 @@ test("shutdown waits for an in-flight report and cannot be undone by later activ
 
 test("reporting is disabled outside Herdr or without an exact pane context", () => {
   const host = nativeHost();
-  expect(createHerdrStatusReporter(host.run, { ...options, environment: {} })).toBeUndefined();
+  expect(agentStatusReporter(host.run, { ...options, environment: {} })).toBeUndefined();
   expect(
-    createHerdrStatusReporter(host.run, {
+    agentStatusReporter(host.run, {
       ...options,
       environment: { HERDR_ENV: "1", HERDR_SESSION: "test-session" },
     }),

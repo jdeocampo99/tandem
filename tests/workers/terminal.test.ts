@@ -2,10 +2,11 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createReviewerEndpoint, type HerdrPaneInspection } from "../../src/adapters/herdr.ts";
 import { EndpointBusyError } from "../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../src/contracts.ts";
 import type { DurableJob } from "../../src/runtime/schema.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import type { EndpointInspection } from "../../src/terminal-backend/contract.ts";
 import {
   addReplyUsage,
   readWorkerTerminalCommand,
@@ -22,6 +23,7 @@ import {
   writeWorkerTokenTally,
 } from "../../src/workers/terminal.ts";
 import {
+  openReviewerEndpoint,
   pauseWorkerTerminal,
   prepareWorkerTerminal,
   workerJobOccupyingEndpoint,
@@ -56,7 +58,7 @@ function fixture(root: string) {
     completed: true,
     heartbeatAt: new Date().toISOString(),
   };
-  const inspection: HerdrPaneInspection = {
+  const inspection: EndpointInspection = {
     endpoint,
     pane: {
       paneId: endpoint.paneId,
@@ -77,7 +79,7 @@ function fixture(root: string) {
   return { job, endpoint, state, inspection };
 }
 
-function nativeRunner(inspection: HerdrPaneInspection): CommandRunner {
+function nativeRunner(inspection: EndpointInspection): CommandRunner {
   return async (request) => {
     const action = request.argv[4];
     let result: unknown;
@@ -126,11 +128,13 @@ test("review can coexist with a completed interactive writer, but not a busy del
     };
     const run = nativeRunner(inspection);
     await writeWorkerTerminal(job.jobPath, { ...state, phase: "busy", completed: false });
-    await expect(createReviewerEndpoint(run, input)).rejects.toBeInstanceOf(EndpointBusyError);
+    await expect(openReviewerEndpoint(terminalBackend(run), input)).rejects.toBeInstanceOf(
+      EndpointBusyError,
+    );
     await writeWorkerTerminal(job.jobPath, state);
-    const reviewer = await createReviewerEndpoint(run, input);
-    expect(reviewer.endpoint.paneId).toBe("review-pane");
-    expect(reviewer.endpoint.workspaceId).toBe(endpoint.workspaceId);
+    const reviewer = await openReviewerEndpoint(terminalBackend(run), input);
+    expect(reviewer.paneId).toBe("review-pane");
+    expect(reviewer.workspaceId).toBe(endpoint.workspaceId);
     const foreign = {
       ...inspection,
       processInfo: {
@@ -141,7 +145,9 @@ test("review can coexist with a completed interactive writer, but not a busy del
         })),
       },
     };
-    await expect(createReviewerEndpoint(nativeRunner(foreign), input)).rejects.toThrow();
+    await expect(
+      openReviewerEndpoint(terminalBackend(nativeRunner(foreign)), input),
+    ).rejects.toThrow();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -186,7 +192,11 @@ test("a retained human conversation cannot be closed to reuse the worker pane", 
     const { job, endpoint, state, inspection } = fixture(root);
     await writeWorkerTerminal(job.jobPath, { ...state, phase: "busy" });
     await expect(
-      prepareWorkerTerminal(nativeRunner(inspection), { endpoint, cwd: root, job }),
+      prepareWorkerTerminal(terminalBackend(nativeRunner(inspection)), {
+        endpoint,
+        cwd: root,
+        job,
+      }),
     ).rejects.toBeInstanceOf(EndpointBusyError);
     expect(await readWorkerTerminalCommand(job.jobPath, job)).toBeUndefined();
     expect(await workerDelegationStopped(inspection, job)).toBe(true);
@@ -215,7 +225,7 @@ test("a closed interactive identity cannot authorize interrupting a replacement 
     const { job, endpoint, state, inspection } = fixture(root);
     await writeWorkerTerminal(job.jobPath, { ...state, phase: "closed" });
     await expect(
-      pauseWorkerTerminal(nativeRunner(inspection), {
+      pauseWorkerTerminal(terminalBackend(nativeRunner(inspection)), {
         endpoint,
         job,
         cwd: root,
@@ -262,7 +272,7 @@ test("a fresh pane still starting its shell is awaited before launch", async () 
     const settledRunner = nativeRunner(settled);
     const run: typeof runner = (request) =>
       ++calls < 3 ? runner(request) : settledRunner(request);
-    await prepareWorkerTerminal(run, { endpoint, cwd: root });
+    await prepareWorkerTerminal(terminalBackend(run), { endpoint, cwd: root });
     expect(calls).toBeGreaterThan(2);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -407,7 +417,7 @@ test("closing a finished Claude Code worker sends Claude Code's two exit keys at
         });
       }
     }, 10);
-    await prepareWorkerTerminal(run, { endpoint, cwd: root, job }).finally(() =>
+    await prepareWorkerTerminal(terminalBackend(run), { endpoint, cwd: root, job }).finally(() =>
       clearInterval(answering),
     );
     expect(sent).toEqual([["ctrl+d", "ctrl+d"]]);

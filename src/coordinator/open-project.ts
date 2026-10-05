@@ -1,5 +1,7 @@
 import { join } from "node:path";
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
+import { terminalContext } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { listCoordinatorRecords } from "./registry.ts";
 import { TANDEM_CHECKOUT } from "./tandem-checkout.ts";
 
@@ -11,12 +13,8 @@ const COORDINATOR_BINDINGS = [
   "TANDEM_REPO",
   "TANDEM_SOURCE_REPO",
   "TANDEM_PARENT_WORKSPACE",
-  "HERDR_ENV",
-  "HERDR_SESSION",
-  "HERDR_SESSION_NAME",
-  "HERDR_WORKSPACE_ID",
-  "HERDR_PANE_ID",
-] as const;
+  ...terminalContext.variables,
+];
 
 export type OpenProjectInput = Readonly<{
   readonly repoPath: string;
@@ -26,7 +24,7 @@ export type OpenProjectInput = Readonly<{
   readonly tandemCheckout?: string;
 }>;
 
-/** `tandem PATH --no-attach` for one saved project, in the same home and target Herdr session. */
+/** `tandem PATH --no-attach` for one saved project, in the same home and terminal session. */
 export function openProjectCommand(input: OpenProjectInput): CommandRequest {
   const main = join(input.tandemCheckout ?? TANDEM_CHECKOUT, "src", "main.ts");
   return {
@@ -55,6 +53,7 @@ export function openProjectCommand(input: OpenProjectInput): CommandRequest {
  */
 export async function openProject(
   run: CommandRunner,
+  terminal: TerminalBackend,
   input: OpenProjectInput,
 ): Promise<Readonly<{ readonly focused: boolean }>> {
   const result = await run(openProjectCommand(input));
@@ -67,16 +66,10 @@ export async function openProject(
   const records = await listCoordinatorRecords(input.home, input.sessionId);
   const record = records.find((candidate) => candidate.repoPath === input.repoPath);
   if (record === undefined) return { focused: false };
-  const focus = await run({
-    argv: [
-      "herdr",
-      "--session",
-      input.sessionId,
-      "workspace",
-      "focus",
-      record.endpoint.workspaceId,
-    ],
+  const focus = await terminal.focusWorkspace({
+    sessionId: input.sessionId,
     cwd: input.repoPath,
+    workspaceId: record.endpoint.workspaceId,
   });
-  return { focused: focus.code === 0 };
+  return { focused: focus.focused };
 }

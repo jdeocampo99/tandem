@@ -1,16 +1,15 @@
 import { expect, test } from "bun:test";
-import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
+import type { CommandRequest, CommandResult } from "../../../src/contracts.ts";
+import { parseHerdrVersion, versionAtLeast } from "../../../src/terminal-backend/herdr/install.ts";
 import {
   type HerdrSetupDependencies,
   herdrConfigPath,
   herdrStatusCommands,
   herdrUpdateCommand,
-  parseHerdrVersion,
   parseServerStatus,
   planHerdrConfig,
   setUpHerdrStatus,
-  versionAtLeast,
-} from "../../src/terminal/herdr-setup.ts";
+} from "../../../src/terminal-backend/herdr/setup.ts";
 
 const COMMANDS = herdrStatusCommands("/Users/me/.bun/bin/bun", "/Users/me/tandem/src/main.ts");
 

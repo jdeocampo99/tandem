@@ -1,8 +1,8 @@
-import type { HerdrStatusReporter } from "../adapters/herdr-status.ts";
 import type { BoardView } from "../board/view.ts";
 import type { CatchUpView } from "../memory/workstream.ts";
 import type { TodoItem } from "../playbooks/progress.ts";
 import type { TaskMessageBatch } from "../tasks/communication-protocol.ts";
+import type { AgentStatusReporter } from "../terminal-backend/contract.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
 
 /** What the running harness can do. The core checks these, never the harness name. */
@@ -169,6 +169,6 @@ export type SessionDeps = Readonly<{
     every(ms: number, run: () => void): Cancel;
     after(ms: number, run: () => void): Cancel;
   }>;
-  status: HerdrStatusReporter | undefined;
+  status: AgentStatusReporter | undefined;
   logError(message: string, error: unknown): void;
 }>;

@@ -3,15 +3,13 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { quoteShellArgument, runCommand } from "../adapters/commands.ts";
-import { TANDEM_HERDR_PLUGIN } from "../adapters/herdr.ts";
-import { readBoard } from "../board/read.ts";
-import { resolveTandemEnvironment } from "../config/environment.ts";
-import type { CommandResult, CommandRunner } from "../contracts.ts";
-import { DEFAULT_TERMINAL_SESSION_ID } from "./environment.ts";
-
-/** The oldest Herdr with both popup keybindings (0.7.4) and command entries in the tab bar (0.8.2). */
-export const MIN_HERDR_VERSION = "0.8.2";
+import { quoteShellArgument, runCommand } from "../../adapters/commands.ts";
+import { readBoard } from "../../board/read.ts";
+import { resolveTandemEnvironment } from "../../config/environment.ts";
+import type { CommandResult, CommandRunner } from "../../contracts.ts";
+import { DEFAULT_TERMINAL_SESSION_ID } from "../../terminal/environment.ts";
+import { MIN_HERDR_VERSION, parseHerdrVersion, versionAtLeast } from "./install.ts";
+import { TANDEM_HERDR_PLUGIN } from "./ui.ts";
 
 /** The key that opens the Tandem panel in a Herdr popup. */
 export const STATUS_POPUP_KEY = "prefix+t";
@@ -60,22 +58,6 @@ export type HerdrConfigPlan = Readonly<{
   /** What the user has to add by hand, because Tandem would have to change their own settings. */
   readonly skipped: readonly string[];
 }>;
-
-/** The version in `herdr --version` output, like "herdr 0.9.1". */
-export function parseHerdrVersion(output: string): string | undefined {
-  return /herdr\s+v?(\d+\.\d+\.\d+)/u.exec(output)?.[1];
-}
-
-/** Whether a dotted version is at least the minimum, comparing each number in turn. */
-export function versionAtLeast(version: string, minimum: string): boolean {
-  const left = version.split(".").map(Number);
-  const right = minimum.split(".").map(Number);
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-    if (difference !== 0) return difference > 0;
-  }
-  return true;
-}
 
 /**
  * Tandem's status commands with absolute paths: Herdr runs them through `/bin/sh -lc`, whose PATH
@@ -452,7 +434,7 @@ async function applyToSession(deps: HerdrSetupDependencies, herdr: Herdr): Promi
 
 async function main(): Promise<void> {
   const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
-  const tandemMain = fileURLToPath(new URL("../main.ts", import.meta.url));
+  const tandemMain = fileURLToPath(new URL("../../main.ts", import.meta.url));
   const tandem = resolveTandemEnvironment(process.env, {
     cwd: process.cwd(),
     sessionId: DEFAULT_TERMINAL_SESSION_ID,
@@ -462,7 +444,7 @@ async function main(): Promise<void> {
     run: runCommand,
     environment: process.env,
     commands: herdrStatusCommands(process.execPath, tandemMain),
-    pluginDirectory: fileURLToPath(new URL("../../herdr-plugin", import.meta.url)),
+    pluginDirectory: fileURLToPath(new URL("../../../herdr-plugin", import.meta.url)),
     sessionId: tandem.sessionId,
     herdrBinary: binary === null ? undefined : await realpath(binary).catch(() => binary),
     runningTasks: async () => {

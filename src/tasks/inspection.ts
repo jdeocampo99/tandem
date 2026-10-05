@@ -1,7 +1,6 @@
 import { access, realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { readCheckpoint } from "../adapters/git.ts";
-import { inspectEndpoint } from "../adapters/herdr.ts";
 import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { BlockCause, CommandRunner, Endpoint, ReviewMode, TaskRecord } from "../contracts.ts";
 import { activeRuntimeJob, taskRuntime } from "../runtime/activity.ts";
@@ -14,10 +13,12 @@ import type {
 } from "../runtime/schema.ts";
 import { describeError, reportPathFor } from "../service/records.ts";
 import { taskCheckoutPath } from "../service/source.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { fixRoundBudget } from "./findings.ts";
 
 export type InspectionDependencies = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly runtimePath: string;
 }>;
 
@@ -261,7 +262,7 @@ async function endpointObservation(
     return { endpoint, state: "unknown", ownership: "unknown", detail: "no worktree path" };
   }
   try {
-    const inspection = await inspectEndpoint(deps.run, { endpoint, cwd });
+    const inspection = await deps.terminal.inspect({ endpoint, cwd });
     return {
       endpoint,
       state: inspection.activeWorker ? "alive" : "stopped",

@@ -24,6 +24,7 @@ import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runt
 import type { DurableJob, RuntimeState } from "../../src/runtime/schema.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { readTimeline } from "../../src/tasks/timeline-store.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
 const policy: ResolvedPolicy = {
@@ -270,6 +271,7 @@ async function fixture(options: FixtureOptions = {}) {
     home,
     sessionId: "session-1",
     run,
+    terminal: terminalBackend(run),
     clock,
     idFactory,
     store,

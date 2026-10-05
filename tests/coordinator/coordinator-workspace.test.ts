@@ -14,6 +14,7 @@ import {
   coordinatorWorkspaceLabel,
   retireCoordinatorWorkspace,
 } from "../../src/coordinator/workspace.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 function endpoint(overrides: Partial<Endpoint> = {}): Endpoint {
   return {
@@ -232,7 +233,11 @@ test("closes a stopped owned pane when no other pane shares its workspace", asyn
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toEqual({ outcome: "closed" });
     expect(runner.panes.get("pane-a")?.present).toBe(false);
@@ -269,7 +274,11 @@ test("closes its own pane but retains the workspace when an extra pane remains",
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toEqual({
       outcome: "retained",
@@ -326,7 +335,11 @@ test("closes the recorded panel before the coordinator, so the panel never keeps
       { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toEqual({ outcome: "closed" });
     expect(runner.panes.get("panel-a")?.present).toBe(false);
@@ -350,7 +363,9 @@ test("closes a lone panel left after the coordinator's pane already closed", asy
       { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
     );
 
-    expect(await retireCoordinatorWorkspace(runner.run, join(root, "home"), record)).toEqual({
+    expect(
+      await retireCoordinatorWorkspace(terminalBackend(runner.run), join(root, "home"), record),
+    ).toEqual({
       outcome: "closed",
     });
     expect(runner.panes.get("panel-a")?.present).toBe(false);
@@ -372,7 +387,11 @@ test("a panel Herdr closed but still lists is not counted as a pane keeping the 
       { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toEqual({ outcome: "closed" });
     expect(runner.workspaceLabel.get("workspace-a")).toBe(coordinatorWorkspaceLabel(repoPath));
@@ -394,7 +413,11 @@ test("a panel that cannot be closed retains the workspace instead of failing ret
       { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toEqual({
       outcome: "retained",
@@ -421,7 +444,11 @@ test("a recorded panel id that now names another pane is left open and reported"
       { "workspace-a": coordinatorWorkspaceLabel(repoPath) },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toMatchObject({ outcome: "retained", extraPaneIds: ["panel-a"] });
     expect(runner.panes.get("panel-a")?.present).toBe(true);
@@ -448,7 +475,11 @@ test("leaves a custom-labeled workspace and its pane completely untouched", asyn
       { "workspace-a": "My scratch terminal" },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toEqual({ outcome: "retained", reason: "workspace has a custom label" });
     expect(runner.panes.get("pane-a")?.present).toBe(true);
@@ -467,7 +498,11 @@ test("treats an already-gone workspace as already clear", async () => {
     const record = { repoPath, endpoint: endpoint(), worktree };
     const runner = fakeRunner({}, {});
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result).toEqual({ outcome: "already-clear" });
     expect(runner.calls).toHaveLength(1);
@@ -503,7 +538,11 @@ test("quarantines a pane whose foreground working directory no longer matches it
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result.outcome).toBe("quarantined");
     expect(result.reason).toMatch(/no longer matches its recorded worktree/);
@@ -539,7 +578,11 @@ test("quarantines a pane occupied by a foreign active process instead of the rec
       { "workspace-a": label },
     );
 
-    const result = await retireCoordinatorWorkspace(runner.run, join(root, "home"), record);
+    const result = await retireCoordinatorWorkspace(
+      terminalBackend(runner.run),
+      join(root, "home"),
+      record,
+    );
 
     expect(result.outcome).toBe("quarantined");
     expect(runner.panes.get("pane-a")?.present).toBe(true);

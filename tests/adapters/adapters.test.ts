@@ -9,16 +9,6 @@ import {
   readReferencingFiles,
 } from "../../src/adapters/git.ts";
 import {
-  closeEndpoint,
-  createReviewerEndpoint,
-  createTaskEndpoint,
-  inspectEndpoint,
-  sendCommand,
-  showNotification,
-  splitBesidePane,
-  taskWorkspaceLabel,
-} from "../../src/adapters/herdr.ts";
-import {
   endPresentation,
   listenPresentation,
   openPresentation,
@@ -27,7 +17,6 @@ import {
 import {
   AdapterProtocolError,
   ApprovalRequiredError,
-  EndpointOwnershipError,
   LeaseSafetyError,
   WorktreeInUseError,
 } from "../../src/adapters/primitives.ts";
@@ -37,13 +26,11 @@ import {
   inspectPoolWorktree,
   readTreehousePoolStatus,
   releaseWorktree,
-  sanitizeTaskBranchName,
 } from "../../src/adapters/treehouse.ts";
 import type {
   CommandRequest,
   CommandResult,
   CommandRunner,
-  Endpoint,
   WorktreeLease,
 } from "../../src/contracts.ts";
 import { listOmpModels, validateModel } from "../../src/harness/omp/adapter.ts";
@@ -67,42 +54,6 @@ function scriptedRunner(results: readonly CommandResult[]): Readonly<{
   return { calls, run };
 }
 
-function endpoint(): Endpoint {
-  return {
-    sessionId: "session-1",
-    workspaceId: "workspace-1",
-    tabId: "tab-1",
-    paneId: "pane-1",
-    role: "implementer",
-    generation: 2,
-  };
-}
-function panePayload(
-  value: Partial<{
-    paneId: string;
-    tabId: string;
-    workspaceId: string;
-    foregroundCwd: string;
-  }> = {},
-): string {
-  return JSON.stringify({
-    result: {
-      pane: {
-        pane_id: value.paneId ?? "pane-1",
-        tab_id: value.tabId ?? "tab-1",
-        workspace_id: value.workspaceId ?? "workspace-1",
-        foreground_cwd: value.foregroundCwd ?? "/tmp/worktree",
-      },
-    },
-  });
-}
-
-function processPayload(paneId = "pane-1", processes: readonly unknown[] = []): string {
-  return JSON.stringify({
-    result: { process_info: { pane_id: paneId, foreground_processes: processes } },
-  });
-}
-
 const lease: WorktreeLease = {
   root: "/tmp/treehouse",
   path: "/tmp/treehouse/worktree",
@@ -113,123 +64,6 @@ const lease: WorktreeLease = {
   leaseHolder: "tandem-1",
   leasedAt: "2030-01-02T03:04:05.000Z",
 };
-
-test("creates a reviewer in the same physical worktree through a path alias", async () => {
-  const runner = scriptedRunner([
-    result(panePayload({ foregroundCwd: "/private/tmp/worktree" })),
-    result(processPayload()),
-    result(panePayload({ paneId: "reviewer-1" })),
-  ]);
-  const reviewer = await createReviewerEndpoint(
-    runner.run,
-    { sessionId: "session-1", cwd: "/tmp/worktree", writer: endpoint(), generation: 2 },
-    { realpath: async (path) => path.replace(/^\/tmp\//u, "/private/tmp/") },
-  );
-  expect(reviewer.endpoint.paneId).toBe("reviewer-1");
-  expect(reviewer.endpoint.workspaceId).toBe(endpoint().workspaceId);
-  expect(reviewer.endpoint.role).toBe("reviewer");
-  expect(reviewer.warnings).toEqual([]);
-});
-
-test("refuses a reviewer in a different physical worktree", async () => {
-  const runner = scriptedRunner([
-    result(panePayload({ foregroundCwd: "/tmp/another-worktree" })),
-    result(processPayload()),
-  ]);
-  await expect(
-    createReviewerEndpoint(
-      runner.run,
-      { sessionId: "session-1", cwd: "/tmp/worktree", writer: endpoint(), generation: 2 },
-      { realpath: async (path) => path },
-    ),
-  ).rejects.toBeInstanceOf(EndpointOwnershipError);
-});
-
-test("splits beside an anchor pane in its own workspace and tab without touching the anchor", async () => {
-  const runner = scriptedRunner([
-    result(panePayload({ paneId: "anchor-1" })),
-    result(panePayload({ paneId: "split-1" })),
-  ]);
-  const split = await splitBesidePane(runner.run, {
-    sessionId: "session-1",
-    cwd: "/tmp/repo",
-    anchorPaneId: "anchor-1",
-    role: "coordinator",
-    generation: 0,
-  });
-
-  expect(split.endpoint).toEqual({
-    sessionId: "session-1",
-    workspaceId: "workspace-1",
-    tabId: "tab-1",
-    paneId: "split-1",
-    role: "coordinator",
-    generation: 0,
-  });
-  expect(runner.calls.map((call) => call.argv)).toEqual([
-    ["herdr", "--session", "session-1", "pane", "get", "anchor-1"],
-    [
-      "herdr",
-      "--session",
-      "session-1",
-      "pane",
-      "split",
-      "anchor-1",
-      "--direction",
-      "right",
-      "--cwd",
-      "/tmp/repo",
-      "--no-focus",
-    ],
-  ]);
-});
-
-test("refuses a split that lands outside the anchor's tab", async () => {
-  const runner = scriptedRunner([
-    result(panePayload({ paneId: "anchor-1" })),
-    result(panePayload({ paneId: "split-1", tabId: "tab-2" })),
-  ]);
-  await expect(
-    splitBesidePane(runner.run, {
-      sessionId: "session-1",
-      cwd: "/tmp/repo",
-      anchorPaneId: "anchor-1",
-      role: "coordinator",
-      generation: 0,
-    }),
-  ).rejects.toBeInstanceOf(EndpointOwnershipError);
-});
-
-test("sanitizes task branches", () => {
-  expect(sanitizeTaskBranchName("  Fix: pane / ownership  ")).toBe("tandem/Fix-pane-ownership");
-});
-
-test("labels name the task by its short title", () => {
-  expect(
-    taskWorkspaceLabel({ title: "fix paid access", objective: "Investigate why paid users…" }),
-  ).toBe("└ fix paid access");
-});
-
-test("labels fall back to a normalized, shortened objective on untitled tasks", () => {
-  const label = taskWorkspaceLabel({
-    objective: `Fix parser\nwith hostile\u0000 controls and ${"界".repeat(120)}`,
-  });
-
-  expect(label).toMatch(/^└ Fix parser with hostile contro/u);
-  expect(label).not.toMatch(/\p{Cc}/u);
-  expect(label.endsWith("…")).toBe(true);
-  expect(label.length).toBeLessThanOrEqual(2 + 32);
-  expect(taskWorkspaceLabel({ title: " \n ", objective: "Research app standards" })).toBe(
-    "└ Research app standards",
-  );
-});
-
-test("long labels retain complete graphemes and normalize combining marks", () => {
-  const cluster = "\u{1F469}\u200d\u{1F4BB}";
-  const label = taskWorkspaceLabel({ title: `e\u0301${cluster.repeat(30)}`, objective: "x" });
-  expect(label).toMatch(new RegExp(`^└ é(?:${cluster})*…$`, "u"));
-  expect(label.length).toBeLessThanOrEqual(2 + 32);
-});
 
 test("validates an exact OMP model selector and thinking level without fallback", async () => {
   const runner = scriptedRunner([
@@ -335,152 +169,6 @@ test("lists available OMP models with conservative optional metadata", async () 
   ]);
   expect(runner.calls).toHaveLength(1);
   expect(runner.calls[0]?.argv).toEqual(["omp", "models", "--json"]);
-});
-
-test("refuses a Herdr endpoint whose pane identity changed", async () => {
-  const runner = scriptedRunner([result(panePayload({ workspaceId: "other-workspace" }))]);
-
-  await expect(
-    inspectEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" }),
-  ).rejects.toBeInstanceOf(EndpointOwnershipError);
-  expect(runner.calls).toHaveLength(1);
-});
-
-test("accepts omitted foreground processes on native worker exit", async () => {
-  const runner = scriptedRunner([
-    result(panePayload()),
-    result(JSON.stringify({ result: { process_info: { pane_id: endpoint().paneId } } })),
-  ]);
-  const inspection = await inspectEndpoint(runner.run, {
-    endpoint: endpoint(),
-    cwd: "/tmp/worktree",
-  });
-  expect(inspection.activeWorker).toBe(false);
-});
-
-test("rejects malformed foreground processes rather than treating them as idle", async () => {
-  const runner = scriptedRunner([
-    result(panePayload()),
-    result(
-      JSON.stringify({
-        result: { process_info: { pane_id: endpoint().paneId, foreground_processes: null } },
-      }),
-    ),
-  ]);
-  await expect(
-    inspectEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" }),
-  ).rejects.toBeInstanceOf(AdapterProtocolError);
-});
-
-test("sends a hostile command as one quoted pane command after identity inspection", async () => {
-  const runner = scriptedRunner([result(panePayload()), result(processPayload()), result()]);
-  const command = ["printf", "$(touch /tmp/not-created)"];
-  const sent = await sendCommand(runner.run, {
-    endpoint: endpoint(),
-    cwd: "/tmp/worktree",
-    command,
-  });
-
-  expect(sent.command).toEqual(command);
-  expect(runner.calls[2]?.argv).toEqual([
-    "herdr",
-    "--session",
-    "session-1",
-    "pane",
-    "run",
-    "pane-1",
-    "'printf' '$(touch /tmp/not-created)'",
-  ]);
-});
-
-test("creates a task workspace and best-effort moves it directly after its parent", async () => {
-  const moved: { request: unknown }[] = [];
-  const runner = scriptedRunner([
-    result(
-      JSON.stringify({
-        result: {
-          workspace: { workspace_id: "workspace-child" },
-          tab: { tab_id: "tab-child" },
-          root_pane: { pane_id: "pane-child" },
-        },
-      }),
-    ),
-    result(
-      JSON.stringify({
-        server: { socket: "/tmp/herdr.sock", running: true, session: "session-1" },
-      }),
-    ),
-    result(
-      JSON.stringify({
-        result: {
-          workspaces: [{ workspace_id: "workspace-parent" }, { workspace_id: "workspace-child" }],
-        },
-      }),
-    ),
-  ]);
-
-  const created = await createTaskEndpoint(
-    runner.run,
-    {
-      sessionId: "session-1",
-      cwd: "/tmp/worktree",
-      taskName: "Implement child",
-      workspaceLabel: "└ Implement child · child",
-      role: "implementer",
-      generation: 1,
-      parentWorkspaceId: "workspace-parent",
-    },
-    {
-      moveWorkspace: async (request) => {
-        moved.push({ request });
-        return {
-          result: {
-            type: "workspace_list",
-            workspaces: [{ workspace_id: "workspace-parent" }, { workspace_id: "workspace-child" }],
-          },
-        };
-      },
-    },
-  );
-
-  expect(created.endpoint.paneId).toBe("pane-child");
-  expect(created.warnings).toEqual([]);
-  expect(runner.calls[0]?.argv).toContain("└ Implement child · child");
-  expect(moved[0]?.request).toEqual({
-    socketPath: "/tmp/herdr.sock",
-    workspaceId: "workspace-child",
-    insertIndex: 1,
-  });
-});
-
-test("reports workspace-order warnings separately from the endpoint", async () => {
-  const runner = scriptedRunner([
-    result(
-      JSON.stringify({
-        result: {
-          workspace: { workspace_id: "workspace-child" },
-          tab: { tab_id: "tab-child" },
-          root_pane: { pane_id: "pane-child" },
-        },
-      }),
-    ),
-  ]);
-  const created = await createTaskEndpoint(
-    runner.run,
-    {
-      sessionId: "session-1",
-      cwd: "/tmp/worktree",
-      taskName: "Implement child",
-      workspaceLabel: "└ Implement child · child",
-      role: "implementer",
-      generation: 1,
-      parentWorkspaceId: "workspace-child",
-    },
-  );
-
-  expect(created.endpoint.paneId).toBe("pane-child");
-  expect(created.warnings).toHaveLength(1);
-  expect(Object.hasOwn(created.endpoint, "warnings")).toBe(false);
 });
 
 test("pins a newly acquired lease to the captured commit when the pool checkout is newer", async () => {
@@ -982,48 +670,6 @@ test("keeps a disconnected Lavish session resumable without reopening it", async
   expect(runner.calls).toHaveLength(1);
 });
 
-test("close endpoint never closes a pane with an active worker", async () => {
-  const runner = scriptedRunner([
-    result(panePayload()),
-    result(
-      processPayload("pane-1", [
-        {
-          pid: 42,
-          name: "node",
-          argv: ["node", "worker.js"],
-          argv0: "node",
-          cmdline: "node worker.js",
-        },
-      ]),
-    ),
-  ]);
-
-  await expect(
-    closeEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" }),
-  ).rejects.toThrow("active foreground worker");
-  expect(runner.calls).toHaveLength(2);
-});
-
-test("confirms pane closure from Herdr's structured stderr response", async () => {
-  const runner = scriptedRunner([
-    result(panePayload()),
-    result(processPayload()),
-    result(),
-    result("", 1, JSON.stringify({ error: { code: "pane_not_found" } })),
-  ]);
-  const closed = await closeEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" });
-  expect(closed.closed).toBe(true);
-});
-
-test("closing an already absent owned pane is idempotent", async () => {
-  const runner = scriptedRunner([
-    result("", 1, JSON.stringify({ error: { code: "pane_not_found" } })),
-  ]);
-  const closed = await closeEndpoint(runner.run, { endpoint: endpoint(), cwd: "/tmp/worktree" });
-  expect(closed.closed).toBe(true);
-  expect(runner.calls).toHaveLength(1);
-});
-
 test("parses the strict Treehouse pool status envelope", async () => {
   const runner = scriptedRunner([
     result(
@@ -1263,24 +909,4 @@ test("readReferencingFiles surfaces a real git failure", async () => {
   await expect(
     readReferencingFiles(run, { repo: "/repo", ref: "head", files: ["src/a.ts"], maxResults: 5 }),
   ).rejects.toThrow();
-});
-
-test("a Herdr notification goes through the user's toast settings with the needs-input sound", async () => {
-  const runner = scriptedRunner([{ code: 0, stdout: "", stderr: "" }]);
-  await showNotification(runner.run, "session-1", "/repo", {
-    title: "Tandem: Dark mode",
-    body: "brief waiting for approval · prefix+t for status",
-  });
-  expect(runner.calls[0]?.argv).toEqual([
-    "herdr",
-    "--session",
-    "session-1",
-    "notification",
-    "show",
-    "Tandem: Dark mode",
-    "--body",
-    "brief waiting for approval · prefix+t for status",
-    "--sound",
-    "request",
-  ]);
 });

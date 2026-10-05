@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { link, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import type { HerdrPaneInspection } from "../adapters/herdr.ts";
 import { isAgentRole } from "../contracts.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
+import type { EndpointInspection } from "../terminal-backend/contract.ts";
 import type { LegacyWorkerRole, WorkerJob } from "./jobs.ts";
 
 export const WORKER_JOB_PATH_ENV = "TANDEM_WORKER_JOB_PATH";
@@ -408,7 +408,7 @@ async function publishCommand(
 }
 
 export async function liveWorkerTerminal(
-  inspection: HerdrPaneInspection,
+  inspection: EndpointInspection,
   job: WorkerTerminalJob,
 ): Promise<WorkerTerminalState | undefined> {
   if (!inspection.activeWorker || job.role === "validation") return undefined;
@@ -431,11 +431,42 @@ export async function liveWorkerTerminal(
 }
 
 export async function workerDelegationStopped(
-  inspection: HerdrPaneInspection,
+  inspection: EndpointInspection,
   job?: WorkerTerminalJob,
 ): Promise<boolean> {
   if (!inspection.activeWorker) return true;
   if (job === undefined) return false;
   const terminal = await liveWorkerTerminal(inspection, job);
   return terminal !== undefined && (terminal.completed || terminal.phase === "paused");
+}
+
+const MAX_TASK_WORKSPACE_TITLE_LENGTH = 32;
+const workspaceGraphemes = new Intl.Segmenter("en", { granularity: "grapheme" });
+
+function normalizeWorkspaceText(value: string): string {
+  return value
+    .normalize("NFC")
+    .replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function truncateWorkspaceText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  const suffix = "…";
+  const available = Math.max(0, maxLength - suffix.length);
+  let output = "";
+  for (const segment of workspaceGraphemes.segment(value)) {
+    if (output.length + segment.segment.length > available) break;
+    output += segment.segment;
+  }
+  return `${output}${suffix}`;
+}
+
+/** Names a task's sidebar workspace by its short title, or by its objective on older tasks. */
+export function taskWorkspaceLabel(task: Readonly<{ title?: string; objective: string }>): string {
+  const title = normalizeWorkspaceText(task.title ?? "");
+  const name = title.length === 0 ? normalizeWorkspaceText(task.objective) : title;
+  if (name.length === 0) throw new TypeError("task title or objective must be non-empty text");
+  return `└ ${truncateWorkspaceText(name, MAX_TASK_WORKSPACE_TITLE_LENGTH)}`;
 }

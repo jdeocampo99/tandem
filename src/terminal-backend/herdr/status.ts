@@ -1,20 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { CommandRunner } from "../contracts.ts";
-import { checkedPath, checkedText } from "./primitives.ts";
-
-export type HerdrAgentState = "idle" | "working" | "blocked" | "unknown";
-
-export type HerdrStatusReporter = Readonly<{
-  report: (state: HerdrAgentState, message?: string) => Promise<void>;
-  release: () => Promise<void>;
-}>;
-
-export type HerdrStatusReporterOptions = Readonly<{
-  cwd: string;
-  agentLabel: string;
-  environment?: Readonly<Record<string, string | undefined>>;
-  timeoutMs?: number;
-}>;
+import { checkedPath, checkedText } from "../../adapters/primitives.ts";
+import type { CommandRunner } from "../../contracts.ts";
+import type { AgentStatusReporter, TerminalBackend } from "../contract.ts";
 
 function statusMessage(message: string | undefined): string | undefined {
   if (message === undefined) return undefined;
@@ -24,10 +11,10 @@ function statusMessage(message: string | undefined): string | undefined {
 }
 
 /** Publish presentation-only lifecycle state; native status never grants ownership. */
-export function createHerdrStatusReporter(
+export function agentStatusReporter(
   run: CommandRunner,
-  options: HerdrStatusReporterOptions,
-): HerdrStatusReporter | undefined {
+  options: Parameters<TerminalBackend["agentStatusReporter"]>[0],
+): AgentStatusReporter | undefined {
   const environment = options.environment ?? process.env;
   const active = environment.HERDR_ENV?.trim().toLowerCase();
   if (active !== "1" && active !== "true") return undefined;

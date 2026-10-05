@@ -1,5 +1,4 @@
 import { mkdir, readFile } from "node:fs/promises";
-import { inspectEndpoint, sendCommand } from "../adapters/herdr.ts";
 import { EndpointBusyError } from "../adapters/primitives.ts";
 import type {
   BlockCause,
@@ -42,6 +41,7 @@ import { taskSourcePath } from "../service/source.ts";
 import { policyIdentity } from "../tasks/acceptance.ts";
 import { taskInboxPath, workerReceiptPath } from "../tasks/communication-persistence.ts";
 import type { TaskStore } from "../tasks/store.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { resolvedExecutionModel } from "./execution-routing.ts";
 import { taskAtRest } from "./job-settlement.ts";
 import { parseWorkerJob, type WorkerJob, type WorkerRole } from "./jobs.ts";
@@ -141,6 +141,7 @@ export type JobLauncherDependencies = Readonly<{
   /** The owner this coordinator stamps on every operation it admits or takes over. */
   readonly claimOwner: string;
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly clock: Clock;
   readonly idFactory: IdFactory;
   readonly store: TaskStore;
@@ -322,13 +323,14 @@ export class JobLauncher {
           launch.runtime.jobs.filter((entry) => entry.id !== jobId),
           endpoint,
         );
-        await prepareWorkerTerminal(this.#deps.run, {
+        await prepareWorkerTerminal(this.#deps.terminal, {
           endpoint,
           cwd,
           ...(previousJob === undefined ? {} : { job: previousJob }),
         });
         commandSent = true;
-        await sendCommand(this.#deps.run, { endpoint, cwd, command });
+        await this.#deps.terminal.inspect({ endpoint, cwd });
+        await this.#deps.terminal.runCommand({ endpoint, cwd, command });
         await this.proveWorkerStartup(launch.job, endpoint, cwd);
       } catch (error) {
         if (!commandSent && error instanceof EndpointBusyError) {
@@ -573,7 +575,7 @@ export class JobLauncher {
   ): Promise<void> {
     const deadline = Date.now() + DEFAULT_STARTUP_GRACE_MS;
     while (true) {
-      const inspection = await inspectEndpoint(this.#deps.run, { endpoint, cwd });
+      const inspection = await this.#deps.terminal.inspect({ endpoint, cwd });
       if (inspection.activeWorker || (await this.#deps.resultExists(job.resultPath))) return;
       if (Date.now() >= deadline) {
         throw new Error(`worker did not become active within ${DEFAULT_STARTUP_GRACE_MS}ms`);

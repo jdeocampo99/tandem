@@ -1,4 +1,3 @@
-import type { HerdrAgentState, HerdrStatusReporter } from "../adapters/herdr-status.ts";
 import { type BoardRow, type BoardView, notifiesUser } from "../board/view.ts";
 import {
   coordinatorSourceGuidance,
@@ -17,6 +16,7 @@ import { fixRoundBudget, ledgerBlockers } from "../tasks/findings.ts";
 import { recordedReviewLevel } from "../tasks/review-levels.ts";
 import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { WELCOME_TEXT } from "../terminal/welcome.ts";
+import type { AgentState, AgentStatusReporter } from "../terminal-backend/contract.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
 import { atCompactionBoundary, finishedTaskIds } from "./compaction.ts";
 import type { CoordinatorMessage } from "./coordinator-reply.ts";
@@ -151,7 +151,7 @@ async function isInRepository(
   return resolved === repo;
 }
 
-type TaskStatus = Readonly<{ state: HerdrAgentState; message: string | undefined }>;
+type TaskStatus = Readonly<{ state: AgentState; message: string | undefined }>;
 
 /**
  * The coordinator pane's task status: the first open task in this repository waiting on someone,
@@ -180,11 +180,11 @@ async function coordinatorTaskStatus(
 /** The Herdr status of the coordinator pane: waiting for an answer, working, or its tasks' state. */
 class CoordinatorStatus {
   agentActive = false;
-  private taskState: HerdrAgentState = "idle";
+  private taskState: AgentState = "idle";
   private taskMessage: string | undefined;
   private readonly waitingInputs = new Set<string>();
 
-  constructor(readonly reporter: HerdrStatusReporter | undefined) {}
+  constructor(readonly reporter: AgentStatusReporter | undefined) {}
 
   get waitingForInput(): boolean {
     return this.waitingInputs.size > 0;

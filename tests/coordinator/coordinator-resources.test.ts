@@ -17,6 +17,7 @@ import {
 } from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import {
   FIRST_HEAD,
   fakePool,
@@ -76,6 +77,7 @@ async function fixture(): Promise<Fixture> {
     },
     dependencies: {
       run: pool.run,
+      terminal: terminalBackend(pool.run),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("headless launches never attach interactively");

@@ -1,10 +1,10 @@
 import { isAbsolute, relative, resolve } from "node:path";
-import type { HerdrAgentState } from "../adapters/herdr-status.ts";
 import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
 import { openSteps, type TodoItem } from "../playbooks/progress.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { findingHeadline } from "../tasks/findings.ts";
+import type { AgentState } from "../terminal-backend/contract.ts";
 import {
   parseWorkerResult,
   type WorkerJob,
@@ -164,10 +164,10 @@ export function workerPaneStatus(
     paused: boolean;
     waitingForAnswer: boolean;
     agentActive: boolean;
-    settled: HerdrAgentState;
+    settled: AgentState;
     settledMessage: string | undefined;
   }>,
-): Readonly<{ state: HerdrAgentState; message: string | undefined }> {
+): Readonly<{ state: AgentState; message: string | undefined }> {
   if (input.paused) return { state: "blocked", message: "Worker paused" };
   if (input.waitingForAnswer) return { state: "blocked", message: "Waiting for your answer" };
   if (input.agentActive) return { state: "working", message: undefined };
@@ -319,7 +319,7 @@ export class WorkerSession {
   private currentState: WorkerTerminalState;
   private cancelTimeout: Cancel | undefined;
   private agentActive = false;
-  private settledStatus: HerdrAgentState = "idle";
+  private settledStatus: AgentState = "idle";
   private statusMessage: string | undefined;
   private readonly waitingInputs = new Set<string>();
   private readonly runningTools = new Set<string>();

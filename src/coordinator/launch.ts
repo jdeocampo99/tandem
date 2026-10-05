@@ -3,7 +3,7 @@ import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path";
 import { quoteShellCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
-import { readHerdrStatus } from "../adapters/herdr.ts";
+import { AdapterCommandError } from "../adapters/primitives.ts";
 import { acquireWorktree } from "../adapters/treehouse.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { readModelSettings } from "../config/models.ts";
@@ -29,6 +29,8 @@ import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
 import { mergeInheritedEnvironment } from "../terminal/cli-process.ts";
+import { terminalContext } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import {
   type CoordinatorSessionReconciliation,
   claimRepositoryCoordinator,
@@ -55,8 +57,8 @@ import {
   retireCoordinatorWorkspace,
 } from "./workspace.ts";
 
-const HERDR_READY_ATTEMPTS = 40;
-const HERDR_READY_DELAY_MS = 250;
+const READY_ATTEMPTS = 40;
+const READY_DELAY_MS = 250;
 /** How long a coordinator shell Herdr just restored gets to finish starting before it counts as busy. */
 const RESTORED_SHELL_ATTEMPTS = 20;
 
@@ -127,6 +129,7 @@ export type CoordinatorLaunchResult = Readonly<{
 
 export type CoordinatorLaunchDependencies = Readonly<{
   readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
   readonly startPersistent: StartPersistent;
   readonly runInteractive: RunInteractive;
   readonly sleep: Sleep;
@@ -312,7 +315,7 @@ async function validateBoundCoordinatorSource(
   request: CoordinatorLaunchRequest,
   dependencies: CoordinatorLaunchDependencies,
   expectedHead: string,
-  context: HerdrContext | undefined,
+  context: InsidePane | undefined,
 ): Promise<string | undefined> {
   const boundSourcePath =
     request.sourceRepo === undefined && context === undefined
@@ -452,37 +455,7 @@ async function writeCoordinatorBootstrap(
   return scriptPath;
 }
 
-type HerdrContext = Readonly<{
-  readonly sessionId: string;
-  readonly workspaceId: string;
-  readonly paneId: string;
-}>;
-
-function herdrContext(source: TandemEnvironmentSource): HerdrContext | undefined {
-  const contextKeys = [
-    source.HERDR_SESSION ?? source.HERDR_SESSION_NAME,
-    source.HERDR_WORKSPACE_ID,
-    source.HERDR_PANE_ID,
-  ];
-  const herdrActive = source.HERDR_ENV === "1" || source.HERDR_ENV === "true";
-  const hasAny = contextKeys.some((value) => value !== undefined);
-  if (!herdrActive) {
-    if (hasAny)
-      throw new Error(
-        "Herdr identity variables are present while HERDR_ENV is inactive; refusing to guess the active pane",
-      );
-    return undefined;
-  }
-  if (contextKeys.some((value) => value === undefined))
-    throw new Error(
-      "existing Herdr context is incomplete; require HERDR_SESSION, HERDR_WORKSPACE_ID, and HERDR_PANE_ID",
-    );
-  return {
-    sessionId: text(contextKeys[0], "HERDR_SESSION"),
-    workspaceId: text(contextKeys[1], "HERDR_WORKSPACE_ID"),
-    paneId: text(contextKeys[2], "HERDR_PANE_ID"),
-  };
-}
+type InsidePane = Readonly<{ sessionId: string; workspaceId: string; paneId: string }>;
 
 function externalError(argv: readonly string[], result: CommandResult): Error {
   const details = result.stderr.trim() || result.stdout.trim();
@@ -497,49 +470,14 @@ async function runExternal(run: CommandRunner, request: CommandRequest): Promise
   return result;
 }
 
-function parseCreatedWorkspace(
-  stdout: string,
-): Readonly<{ workspaceId: string; tabId: string; paneId: string }> {
-  let payload: unknown;
+/** A terminal command the launch sends fails with the same plain error as its own commands. */
+async function asExternal<Result>(operation: Promise<Result>): Promise<Result> {
   try {
-    payload = JSON.parse(stdout) as unknown;
+    return await operation;
   } catch (error) {
-    throw new Error(
-      `herdr workspace create returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    if (error instanceof AdapterCommandError) throw externalError(error.request.argv, error.result);
+    throw error;
   }
-  if (payload === null || typeof payload !== "object" || Array.isArray(payload))
-    throw new Error("herdr workspace create returned a non-object response");
-  const root = payload as Record<string, unknown>;
-  const result = root.result;
-  if (result === null || typeof result !== "object" || Array.isArray(result))
-    throw new Error("herdr workspace create response omitted result");
-  const resultRecord = result as Record<string, unknown>;
-  const workspace = resultRecord.workspace;
-  const tab = resultRecord.tab;
-  const rootPane = resultRecord.root_pane;
-  if (
-    workspace === null ||
-    typeof workspace !== "object" ||
-    Array.isArray(workspace) ||
-    tab === null ||
-    typeof tab !== "object" ||
-    Array.isArray(tab) ||
-    rootPane === null ||
-    typeof rootPane !== "object" ||
-    Array.isArray(rootPane)
-  ) {
-    throw new Error(
-      "herdr workspace create response omitted workspace, tab, or root_pane identity",
-    );
-  }
-  const workspaceId = text(
-    (workspace as Record<string, unknown>).workspace_id,
-    "result.workspace.workspace_id",
-  );
-  const tabId = text((tab as Record<string, unknown>).tab_id, "result.tab.tab_id");
-  const paneId = text((rootPane as Record<string, unknown>).pane_id, "result.root_pane.pane_id");
-  return { workspaceId, tabId, paneId };
 }
 
 function coordinatorResultFromRecord(record: CoordinatorRecord): CoordinatorLaunchResult {
@@ -556,39 +494,17 @@ function coordinatorResultFromRecord(record: CoordinatorRecord): CoordinatorLaun
   };
 }
 
-async function readHerdrRunningState(
-  run: CommandRunner,
-  sessionId: string,
-  cwd: string,
-): Promise<boolean> {
-  const status = await readHerdrStatus(run, sessionId, cwd, true);
-  if (status.running === undefined) {
-    throw new Error(
-      `Herdr session ${JSON.stringify(sessionId)} status omitted explicit server.running state`,
-    );
-  }
-  return status.running;
-}
-
-async function probeHerdrSession(
-  run: CommandRunner,
-  sessionId: string,
-  cwd: string,
-): Promise<boolean> {
-  return readHerdrRunningState(run, sessionId, cwd);
-}
-
-async function waitForHerdr(
-  run: CommandRunner,
+async function waitForTerminal(
+  terminal: TerminalBackend,
   sleep: Sleep,
   sessionId: string,
   cwd: string,
 ): Promise<void> {
   let lastFailure = "Herdr status reported running=false";
-  for (let attempt = 0; attempt < HERDR_READY_ATTEMPTS; attempt += 1) {
-    if (await readHerdrRunningState(run, sessionId, cwd)) return;
+  for (let attempt = 0; attempt < READY_ATTEMPTS; attempt += 1) {
+    if (await terminal.sessionRunning({ sessionId, cwd })) return;
     lastFailure = "Herdr status reported running=false";
-    if (attempt + 1 < HERDR_READY_ATTEMPTS) await sleep(HERDR_READY_DELAY_MS);
+    if (attempt + 1 < READY_ATTEMPTS) await sleep(READY_DELAY_MS);
   }
   throw new Error(
     `Herdr session ${JSON.stringify(sessionId)} did not become ready: ${lastFailure}`,
@@ -597,15 +513,16 @@ async function waitForHerdr(
 
 async function waitForCoordinatorOwnership(
   run: CommandRunner,
+  terminal: TerminalBackend,
   sleep: Sleep,
   home: string,
   sessionId: string,
   repoPath: string,
 ): Promise<CoordinatorRecord> {
   let lastFailure = "no matching coordinator process";
-  for (let attempt = 0; attempt < HERDR_READY_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < READY_ATTEMPTS; attempt += 1) {
     try {
-      const record = await findRunningCoordinator(run, { home, sessionId, repoPath });
+      const record = await findRunningCoordinator(run, terminal, { home, sessionId, repoPath });
       if (record !== undefined) return record;
       lastFailure = "no matching coordinator process";
     } catch (error) {
@@ -620,7 +537,7 @@ async function waitForCoordinatorOwnership(
       }
       lastFailure = error.message;
     }
-    if (attempt + 1 < HERDR_READY_ATTEMPTS) await sleep(HERDR_READY_DELAY_MS);
+    if (attempt + 1 < READY_ATTEMPTS) await sleep(READY_DELAY_MS);
   }
   throw new Error(
     `coordinator in Herdr session ${JSON.stringify(sessionId)} did not become owned: ${lastFailure}`,
@@ -632,7 +549,7 @@ async function assertRunningCoordinatorSource(
   request: CoordinatorLaunchRequest,
   dependencies: CoordinatorLaunchDependencies,
   running: CoordinatorRecord,
-  context: HerdrContext | undefined,
+  context: InsidePane | undefined,
 ): Promise<void> {
   const runningCheckpoint = await readCheckpoint(dependencies.run, {
     repo: running.worktree.path,
@@ -665,11 +582,11 @@ async function retireSettledCoordinatorWorkspace(
   previous: RetiredRecord,
 ): Promise<CoordinatorWorkspaceRetirement> {
   for (let attempt = 1; ; attempt += 1) {
-    const retirement = await retireCoordinatorWorkspace(dependencies.run, home, previous);
+    const retirement = await retireCoordinatorWorkspace(dependencies.terminal, home, previous);
     if (retirement.outcome !== "quarantined" || attempt >= RESTORED_SHELL_ATTEMPTS) {
       return retirement;
     }
-    await dependencies.sleep(HERDR_READY_DELAY_MS);
+    await dependencies.sleep(READY_DELAY_MS);
   }
 }
 
@@ -715,14 +632,23 @@ export async function launchCoordinatorUnlocked(
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorLaunchResult> {
   const paths = coordinatorPaths(request);
-  const context = herdrContext(dependencies.processEnvironment);
+  const inherited = terminalContext.inheritedPane(dependencies.processEnvironment);
+  if (inherited.status === "invalid") throw new Error(inherited.reason);
+  const context: InsidePane | undefined =
+    inherited.status === "inside"
+      ? {
+          sessionId: text(inherited.sessionId, "HERDR_SESSION"),
+          workspaceId: text(inherited.workspaceId, "HERDR_WORKSPACE_ID"),
+          paneId: text(inherited.paneId, "HERDR_PANE_ID"),
+        }
+      : undefined;
   if (context !== undefined && context.sessionId !== request.sessionId) {
     throw new Error(
       `explicit session ${JSON.stringify(request.sessionId)} does not match current Herdr session ${JSON.stringify(context.sessionId)}`,
     );
   }
   const headless = request.headless || request.noAttach;
-  const running = await findRunningCoordinator(dependencies.run, {
+  const running = await findRunningCoordinator(dependencies.run, dependencies.terminal, {
     home: paths.home,
     sessionId: request.sessionId,
     repoPath: paths.repo,
@@ -730,7 +656,7 @@ export async function launchCoordinatorUnlocked(
   if (running !== undefined) {
     await assertRunningCoordinatorSource(request, dependencies, running, context);
     if (request.restart !== true) {
-      const panelFailure = await openPanelBeside(dependencies.run, paths.home, running);
+      const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, running);
       return {
         ...coordinatorResultFromRecord(running),
         ...(panelFailure === undefined ? {} : { panelFailure }),
@@ -824,6 +750,7 @@ async function coordinatorStartupFailure(
   try {
     rollback = await rollbackCoordinatorAllocation({
       run: input.dependencies.run,
+      terminal: input.dependencies.terminal,
       home: input.paths.home,
       sessionId: input.request.sessionId,
       repoPath: input.paths.repo,
@@ -849,7 +776,7 @@ type CoordinatorStartup = Readonly<{
   readonly request: CoordinatorLaunchRequest;
   readonly dependencies: CoordinatorLaunchDependencies;
   readonly paths: CoordinatorPaths;
-  readonly context: HerdrContext | undefined;
+  readonly context: InsidePane | undefined;
   readonly headless: boolean;
   readonly worktree: WorktreeLease;
   readonly previous: CoordinatorRecord | undefined;
@@ -909,9 +836,9 @@ async function stopUnreadyCoordinator(
   const pids = await processIdsNaming(dependencies.run, needle, cwd);
   if (pids.length === 0) return;
   await runExternal(dependencies.run, { argv: ["kill", "-TERM", ...pids], cwd });
-  for (let attempt = 0; attempt < HERDR_READY_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < READY_ATTEMPTS; attempt += 1) {
     if ((await processIdsNaming(dependencies.run, needle, cwd)).length === 0) return;
-    await dependencies.sleep(HERDR_READY_DELAY_MS);
+    await dependencies.sleep(READY_DELAY_MS);
   }
   throw new Error(`the coordinator naming ${needle} did not exit after SIGTERM`);
 }
@@ -1030,24 +957,32 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       ...(workspaceRetirement === undefined ? {} : { workspaceRetirement }),
     };
   }
-  const herdrLauncher = headless
-    ? ["herdr", "--session", request.sessionId, "server"]
-    : ["herdr", "--session", request.sessionId];
+  const terminalLauncher = headless
+    ? dependencies.terminal.serverCommand(request.sessionId)
+    : dependencies.terminal.clientCommand(request.sessionId);
   const serverEnvironment = mergeInheritedEnvironment(
     dependencies.processEnvironment,
     sourceEnvironment,
   );
   if (
     context === undefined &&
-    !(await probeHerdrSession(dependencies.run, request.sessionId, coordinatorCwd))
+    !(await dependencies.terminal.sessionRunning({
+      sessionId: request.sessionId,
+      cwd: coordinatorCwd,
+    }))
   ) {
     // Outside the pool: returning the coordinator's worktree must never end the server.
     await dependencies.startPersistent({
-      argv: herdrLauncher,
+      argv: terminalLauncher,
       cwd: paths.home,
       env: serverEnvironment,
     });
-    await waitForHerdr(dependencies.run, dependencies.sleep, request.sessionId, coordinatorCwd);
+    await waitForTerminal(
+      dependencies.terminal,
+      dependencies.sleep,
+      request.sessionId,
+      coordinatorCwd,
+    );
     // Starting Herdr can restore the previous workspace and its saved label.
     if (previous !== undefined) {
       workspaceRetirement = await retireSettledCoordinatorWorkspace(
@@ -1058,7 +993,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     }
   }
   if (previous === undefined) {
-    const restored = await findRestoredCoordinatorPanes(dependencies.run, {
+    const restored = await findRestoredCoordinatorPanes(dependencies.terminal, {
       sessionId: request.sessionId,
       repoPath: paths.repo,
       worktree,
@@ -1071,37 +1006,22 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       );
     }
   }
-  const workspaceResult = await runExternal(dependencies.run, {
-    argv: [
-      "herdr",
-      "--session",
-      request.sessionId,
-      "workspace",
-      "create",
-      "--cwd",
-      coordinatorCwd,
-      "--label",
-      coordinatorWorkspaceLabel(paths.repo),
-      "--no-focus",
-    ],
-    cwd: coordinatorCwd,
-    env: serverEnvironment,
-  });
-  const workspace = parseCreatedWorkspace(workspaceResult.stdout);
-  const endpoint: Endpoint = {
-    sessionId: request.sessionId,
-    workspaceId: workspace.workspaceId,
-    tabId: workspace.tabId,
-    paneId: workspace.paneId,
-    role: "coordinator",
-    generation: 0,
-  };
+  const { endpoint } = await asExternal(
+    dependencies.terminal.createWorkspace({
+      sessionId: request.sessionId,
+      cwd: coordinatorCwd,
+      label: coordinatorWorkspaceLabel(paths.repo),
+      role: "coordinator",
+      generation: 0,
+      env: serverEnvironment,
+    }),
+  );
   startup.onEndpointCreated(endpoint);
   const coordinatorEnvironment = {
     ...coordinatorEnvironmentOverrides(
       paths,
       request,
-      request.parentWorkspaceId ?? workspace.workspaceId,
+      request.parentWorkspaceId ?? endpoint.workspaceId,
       coordinatorCwd,
     ),
     ...harness.launchEnvironment,
@@ -1112,19 +1032,14 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     set: coordinatorEnvironment,
     cleared: harness.clearedEnvironment,
   });
-  await runExternal(dependencies.run, {
-    argv: [
-      "herdr",
-      "--session",
-      request.sessionId,
-      "pane",
-      "run",
-      workspace.paneId,
-      quoteShellCommand(["/bin/sh", bootstrapPath]),
-    ],
-    cwd: coordinatorCwd,
-    env: mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
-  });
+  await asExternal(
+    dependencies.terminal.runCommand({
+      endpoint,
+      cwd: coordinatorCwd,
+      command: ["/bin/sh", bootstrapPath],
+      env: mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
+    }),
+  );
   await saveCoordinatorRecord(paths.home, {
     schemaVersion: 1,
     repoPath: paths.repo,
@@ -1136,18 +1051,19 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   await awaitReadyOrStop(dependencies, harness, started, argv, coordinatorCwd);
   const owned = await waitForCoordinatorOwnership(
     dependencies.run,
+    dependencies.terminal,
     dependencies.sleep,
     paths.home,
     request.sessionId,
     paths.repo,
   );
-  const panelFailure = await openPanelBeside(dependencies.run, paths.home, owned);
+  const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, owned);
   return {
     command: argv,
     direct: false,
-    workspaceId: workspace.workspaceId,
-    tabId: workspace.tabId,
-    paneId: workspace.paneId,
+    workspaceId: endpoint.workspaceId,
+    tabId: endpoint.tabId,
+    paneId: endpoint.paneId,
     ...(workspaceRetirement === undefined ? {} : { workspaceRetirement }),
     ...(panelFailure === undefined ? {} : { panelFailure }),
   };
@@ -1173,6 +1089,7 @@ export async function withClaimedCoordinatorRepository<Result>(
       if (parallelCoordinatorsAllowed(dependencies.processEnvironment)) return operation([]);
       const reconciliations = await claimRepositoryCoordinator({
         run: dependencies.run,
+        terminal: dependencies.terminal,
         home: paths.home,
         sessionId: request.sessionId,
         repoPath: paths.repo,

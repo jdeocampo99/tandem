@@ -4,6 +4,7 @@ import { parse, resolve } from "node:path";
 import { rememberedSetupPath } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
 import { resetCoordinators } from "../coordinator/reset.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { TerminalEnvironment } from "./environment.ts";
 import { readRegisteredProjects } from "./projects.ts";
 
@@ -74,11 +75,12 @@ export async function applyHardReset(
   plan: HardResetPlan,
   environment: TerminalEnvironment,
   run: CommandRunner,
+  terminal: TerminalBackend,
   stdout: (text: string) => void,
   reset: typeof resetCoordinators = resetCoordinators,
 ): Promise<void> {
   try {
-    await reset(run, {
+    await reset(run, terminal, {
       home: environment.home,
       sessionId: environment.sessionId,
       repoPaths: plan.repos,
