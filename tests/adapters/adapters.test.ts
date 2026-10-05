@@ -465,7 +465,6 @@ test("reports workspace-order warnings separately from the endpoint", async () =
       }),
     ),
   ]);
-  const reportedWarnings: string[] = [];
   const created = await createTaskEndpoint(
     runner.run,
     {
@@ -477,12 +476,10 @@ test("reports workspace-order warnings separately from the endpoint", async () =
       generation: 1,
       parentWorkspaceId: "workspace-child",
     },
-    { warn: (message) => reportedWarnings.push(message) },
   );
 
   expect(created.endpoint.paneId).toBe("pane-child");
   expect(created.warnings).toHaveLength(1);
-  expect(created.warnings).toEqual(reportedWarnings);
   expect(Object.hasOwn(created.endpoint, "warnings")).toBe(false);
 });
 

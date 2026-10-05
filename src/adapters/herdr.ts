@@ -77,9 +77,6 @@ type HerdrWorkspaceMoveResponse = Readonly<{
 }>;
 export type HerdrAdapterOptions = Readonly<{
   moveWorkspace?: (request: HerdrWorkspaceMoveRequest) => Promise<unknown>;
-  warn?: (message: string) => void;
-  sleep?: (milliseconds: number) => Promise<void>;
-  now?: () => number;
 }>;
 
 export type HerdrWorkspaceMoveRequest = Readonly<{
@@ -429,14 +426,6 @@ export async function inspectEndpoint(
     activeWorker: processInfo.foregroundProcesses.some((process) => isWorkerProcess(process)),
   };
 }
-export async function inspectStopped(
-  run: CommandRunner,
-  endpoint: Endpoint,
-  cwd: string,
-): Promise<boolean> {
-  const inspection = await inspectEndpoint(run, { endpoint, cwd });
-  return !inspection.activeWorker;
-}
 
 function parseWorkspaceList(
   payload: unknown,
@@ -636,11 +625,6 @@ export async function readHerdrStatus(
   );
 }
 
-function recordWarning(options: HerdrAdapterOptions, warnings: string[], message: string): void {
-  warnings.push(message);
-  options.warn?.(message);
-}
-
 async function moveWorkspaceOverSocket(request: HerdrWorkspaceMoveRequest): Promise<unknown> {
   const { promise, resolve, reject } = Promise.withResolvers<unknown>();
   const socket = createConnection({ path: request.socketPath });
@@ -749,31 +733,21 @@ export async function moveWorkspaceAfterParent(
   const parentWorkspaceId = checkedText(input.parentWorkspaceId, "parentWorkspaceId");
   const workspaceId = checkedText(input.workspaceId, "workspaceId");
   if (parentWorkspaceId === workspaceId) {
-    recordWarning(
-      options,
-      warnings,
-      "refused workspace.move because parent and created workspace ids are identical",
-    );
+    warnings.push("refused workspace.move because parent and created workspace ids are identical");
     return warnings;
   }
   if (
     input.insertIndex !== undefined &&
     (!Number.isSafeInteger(input.insertIndex) || input.insertIndex < 0)
   ) {
-    recordWarning(
-      options,
-      warnings,
-      "refused workspace.move because insertIndex is not a non-negative integer",
-    );
+    warnings.push("refused workspace.move because insertIndex is not a non-negative integer");
     return warnings;
   }
   let status: HerdrSessionStatus;
   try {
     status = await readHerdrStatus(run, input.sessionId, input.cwd);
   } catch (error) {
-    recordWarning(
-      options,
-      warnings,
+    warnings.push(
       `workspace.move skipped: ${error instanceof Error ? error.message : String(error)}`,
     );
     return warnings;
@@ -789,9 +763,7 @@ export async function moveWorkspaceAfterParent(
       result.stdout,
     );
   } catch (error) {
-    recordWarning(
-      options,
-      warnings,
+    warnings.push(
       `workspace.move skipped: ${error instanceof Error ? error.message : String(error)}`,
     );
     return warnings;
@@ -802,9 +774,7 @@ export async function moveWorkspaceAfterParent(
   );
   const targetMatches = workspaces.filter((workspace) => workspace.workspaceId === workspaceId);
   if (parentMatches.length !== 1 || targetMatches.length !== 1) {
-    recordWarning(
-      options,
-      warnings,
+    warnings.push(
       `workspace.move skipped because parent (${parentMatches.length}) or target (${targetMatches.length}) identity was ambiguous`,
     );
     return warnings;
@@ -814,9 +784,7 @@ export async function moveWorkspaceAfterParent(
   );
   const insertIndex = input.insertIndex ?? parentIndex + 1;
   if (insertIndex > workspaces.length) {
-    recordWarning(
-      options,
-      warnings,
+    warnings.push(
       `workspace.move skipped because insertIndex ${insertIndex} is outside the workspace list`,
     );
     return warnings;
@@ -838,16 +806,12 @@ export async function moveWorkspaceAfterParent(
       (workspace) => workspace.workspaceId === parentWorkspaceId,
     ).length;
     if (targetCount !== 1 || parentCount !== 1) {
-      recordWarning(
-        options,
-        warnings,
+      warnings.push(
         "workspace.move returned an unverifiable workspace identity; no retry was attempted",
       );
     }
   } catch (error) {
-    recordWarning(
-      options,
-      warnings,
+    warnings.push(
       `workspace.move failed; worker placement was preserved: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
@@ -1046,7 +1010,6 @@ export async function sendExitKeys(
 export async function interruptEndpoint(
   run: CommandRunner,
   input: InterruptEndpointInput,
-  options: HerdrAdapterOptions = {},
 ): Promise<InterruptEndpointResult> {
   validateEndpoint(input.endpoint);
   const timeoutMs = input.timeoutMs ?? DEFAULT_INTERRUPT_TIMEOUT_MS;
@@ -1067,17 +1030,15 @@ export async function interruptEndpoint(
   ]);
   await runChecked(run, request, "herdr pane interrupt");
 
-  const now = options.now ?? Date.now;
-  const sleep = options.sleep ?? waitMilliseconds;
-  const deadline = now() + timeoutMs;
+  const deadline = Date.now() + timeoutMs;
   while (true) {
     const inspection = await inspectEndpoint(run, { endpoint: input.endpoint, cwd: input.cwd });
     if (!inspection.activeWorker)
       return { endpoint: input.endpoint, wasRunning: true, stopped: true };
-    if (now() >= deadline) {
+    if (Date.now() >= deadline) {
       throw new EndpointBusyError(input.endpoint);
     }
-    await sleep(pollIntervalMs);
+    await waitMilliseconds(pollIntervalMs);
   }
 }
 
