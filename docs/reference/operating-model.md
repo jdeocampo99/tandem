@@ -92,6 +92,12 @@ assigned to new work.
 
 ## Tern terminal backend
 
+Onboarding uses `probeTern`'s `missing`, `signedOut`, `ready` or `unknown` result. Executable
+resolution prefers PATH, then the app bundle. An explicit control socket proves sign-in through
+`gate.signed_in`; without one, a harmless scoped `tern ls --json` checks daemon readiness.
+Failed or malformed evidence stays unknown with a reason. A version string alone never proves
+readiness, and the probe never starts a daemon or changes a window.
+
 Tern's daemon maps to a Tandem terminal session; a Tern tab supplies both workspace and tab ids.
 A project gets a uniquely named `tandem-<project>` Tern session and workers get background tabs in
 that same session. Names and titles are display state and never prove ownership. The adapter binds

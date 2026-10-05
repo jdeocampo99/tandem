@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import type { z } from "zod";
+import { CommandStartError } from "../../adapters/commands.ts";
 import {
+  AdapterCommandError,
   AdapterError,
   EndpointBusyError,
   EndpointOwnershipError,
@@ -20,9 +22,12 @@ import {
 import {
   blocks,
   Created,
+  decode,
+  GateState,
   Id,
   isDaemonGone,
   type LocatedBlock,
+  resolveTernBinary,
   type TernOptions,
   TernOutcomeUnknownError,
   TernUnsupportedOperationError,
@@ -33,9 +38,60 @@ export type TernBackendOptions = TernOptions &
   Readonly<{
     /** Resolve only the recorded dedicated helper, including after a restart. */
     notificationEndpoint?: (target: SessionTarget) => Promise<Endpoint | undefined>;
+    controlSocket?: string;
     clock?: () => number;
     wait?: (milliseconds: number) => Promise<void>;
   }>;
+
+export type TernProbeResult =
+  | Readonly<{ status: "missing" }>
+  | Readonly<{ status: "signedOut" }>
+  | Readonly<{ status: "ready" }>
+  | Readonly<{ status: "unknown"; reason: string }>;
+
+export type TernProbeOptions = TernOptions & Readonly<{ cwd: string; controlSocket?: string }>;
+
+/** Read-only sign-in evidence. A version string is never sufficient for readiness. */
+export async function probeTern(
+  run: CommandRunner,
+  options: TernProbeOptions,
+): Promise<TernProbeResult> {
+  try {
+    const binary = resolveTernBinary(options);
+    if (binary === undefined) return { status: "missing" };
+    const probeRun: CommandRunner = (request) => run({ ...request, timeoutMs: 5_000 });
+    if (options.controlSocket !== undefined) {
+      const result = await probeRun({
+        argv: [binary, "ctl", "--control", options.controlSocket, "state"],
+        cwd: options.cwd,
+        ...(options.environment === undefined ? {} : { env: options.environment }),
+      });
+      if (result.code === 127) return { status: "missing" };
+      if (result.code !== 0)
+        return {
+          status: "unknown",
+          reason: result.stderr.trim() || `Tern control state exited ${result.code}`,
+        };
+      const state = decode(result.stdout, GateState, "tern ctl state");
+      return { status: state.gate.signed_in ? "ready" : "signedOut" };
+    }
+    const commands = ternCommands(probeRun, { ...options, binary });
+    await commands.ls(options.cwd);
+    return { status: "ready" };
+  } catch (error) {
+    if (
+      (error instanceof CommandStartError && error.message.includes("Executable not found")) ||
+      (error instanceof AdapterCommandError && error.result.code === 127)
+    )
+      return { status: "missing" };
+    return {
+      status: "unknown",
+      reason:
+        (error instanceof Error ? error.message : String(error)) ||
+        "Tern readiness could not be determined",
+    };
+  }
+}
 
 /** Resolve the recorded helper without discovering a substitute pane by title or placement. */
 export function ternNotificationEndpoint(owner: Endpoint): Endpoint | undefined {
@@ -468,16 +524,18 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     serverCommand: () => [commands.binary, "daemon"],
     clientCommand: () => [commands.binary],
     checkInstall: async (target) => {
-      try {
-        const version = await run({ argv: [commands.binary, "--version"], cwd: target.cwd });
+      const result = await probeTern(run, { ...options, cwd: target.cwd });
+      if (result.status === "ready") return [{ name: "Tern", ok: true, detail: "ready" }];
+      if (result.status === "signedOut")
         return [
           {
             name: "Tern",
-            ok: version.code === 0,
-            detail: version.code === 0 ? version.stdout.trim() : "not available",
+            ok: false,
+            detail: "not signed in",
+            fix: "Open Tern and sign in to your Stencil account.",
           },
         ];
-      } catch {
+      if (result.status === "missing")
         return [
           {
             name: "Tern",
@@ -486,7 +544,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
             fix: "Install Tern from https://stencil.so/tern",
           },
         ];
-      }
+      return [{ name: "Tern", ok: false, detail: `readiness unknown: ${result.reason}` }];
     },
     notify: async (target) => {
       const endpoint = await options.notificationEndpoint?.(target);

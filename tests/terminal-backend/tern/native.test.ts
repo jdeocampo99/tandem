@@ -4,6 +4,7 @@ import { quoteShellCommand } from "../../../src/adapters/commands.ts";
 import { EndpointBusyError } from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import {
+  probeTern,
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
@@ -71,6 +72,7 @@ nativeTest(
         await Bun.sleep(50);
       }
       const terminal = ternBackend(run, { binary: TERN_BINARY });
+      expect(await probeTern(run, { binary: TERN_BINARY, cwd: root })).toEqual({ status: "ready" });
       const commands = ternCommands(run, { binary: TERN_BINARY });
       const assertCreatedContext = async (endpoint: Endpoint) => {
         const contextTarget = { endpoint, cwd: root };

@@ -27,6 +27,7 @@ export const Processes = z.object({
 export const Created = z.object({ session: Id, tab: Id, block: Id });
 export const BlockAck = z.object({ block: Id });
 export const SessionAck = z.object({ session: Id });
+export const GateState = z.object({ gate: z.object({ signed_in: z.boolean() }) });
 export type TernListing = z.infer<typeof Listing>;
 export type LocatedBlock = Readonly<{
   session: z.infer<typeof Session>;
@@ -68,11 +69,18 @@ export type TernOptions = Readonly<{
   environment?: Readonly<Record<string, string>>;
 }>;
 
-export function ternCommands(run: CommandRunner, options: TernOptions) {
-  const binary =
+/** Resolve an executable, preserving explicit injection for native and fake runners. */
+export function resolveTernBinary(options: TernOptions): string | undefined {
+  return (
     options.binary ??
     Bun.which("tern", { PATH: options.environment?.PATH ?? process.env.PATH ?? "" }) ??
-    TERN_BINARY;
+    Bun.which(TERN_BINARY) ??
+    undefined
+  );
+}
+
+export function ternCommands(run: CommandRunner, options: TernOptions) {
+  const binary = resolveTernBinary(options) ?? TERN_BINARY;
   const request = (cwd: string, args: readonly string[]) => ({
     argv: [
       binary,
