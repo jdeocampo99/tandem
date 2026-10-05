@@ -190,6 +190,13 @@ function coordinatorRunner(input: CoordinatorRunnerInput): Readonly<{
           stderr: "",
         };
       }
+      if (request.argv.includes("workspace") && request.argv.includes("list")) {
+        return {
+          code: 0,
+          stdout: JSON.stringify({ result: { type: "workspace_list", workspaces: [] } }),
+          stderr: "",
+        };
+      }
       if (request.argv.includes("workspace") && request.argv.includes("create")) {
         return {
           code: 0,

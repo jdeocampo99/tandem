@@ -276,6 +276,10 @@ Applies when launch replaces a stopped coordinator and during reset.
 - A shell Herdr just restored is still starting (prompt, fastfetch), so launch retries retirement
   for about five seconds before treating the pane as busy. Without that wait, every Herdr restart
   left the old coordinator workspace open next to its replacement.
+- Herdr also restores coordinator workspaces whose records are gone (a reset or replaced home). A
+  launch with no record retires, the same way, each pane in a `◆ <repo>` workspace whose cwd is
+  the worktree it just leased. A restored pane whose worktree no longer existed reopens elsewhere,
+  so nothing proves it Tandem's and it is left alone.
 - Ownership that cannot be proven exactly and as stopped (cwd or process no longer matches the
   record) is quarantined: not closed, not renamed, reported, and listed again by `tandem fix`.
 - There is no explicit-retention option.

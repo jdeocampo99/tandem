@@ -514,6 +514,35 @@ export async function createScenarioWorld(
         }),
       );
     }
+    const presentPanes = () => [...panes.entries()].filter(([, pane]) => pane.present);
+    if (resource === "workspace" && action === "list") {
+      const open = new Set(presentPanes().map(([, pane]) => pane.workspaceId));
+      return commandResult(
+        JSON.stringify({
+          result: {
+            type: "workspace_list",
+            workspaces: [...workspaceLabels]
+              .filter(([workspaceId]) => open.has(workspaceId))
+              .map(([workspaceId, label]) => ({ workspace_id: workspaceId, label })),
+          },
+        }),
+      );
+    }
+    if (resource === "pane" && action === "list") {
+      return commandResult(
+        JSON.stringify({
+          result: {
+            type: "pane_list",
+            panes: presentPanes().map(([paneId, pane]) => ({
+              workspace_id: pane.workspaceId,
+              tab_id: pane.tabId,
+              pane_id: paneId,
+              cwd: pane.foregroundCwd,
+            })),
+          },
+        }),
+      );
+    }
     if (resource === "workspace") {
       if (action === "create") {
         nextPaneNumber += 1;

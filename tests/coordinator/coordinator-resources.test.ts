@@ -276,6 +276,40 @@ test("repeated launch and restart cycles keep one coordinator lease and one pool
   }
 });
 
+test("a first launch closes the coordinator workspace Herdr restored without a record, and nothing else", async () => {
+  const test = await fixture();
+  try {
+    const leasedPath = join(test.poolRoot, "worktree-2");
+    const restore = (paneId: string, workspaceId: string, label: string, cwd: string) => {
+      test.pool.workspaces.set(workspaceId, label);
+      test.pool.panes.set(paneId, {
+        sessionId: SESSION_ID,
+        paneId,
+        tabId: `${workspaceId}:t1`,
+        workspaceId,
+        cwd,
+        omp: undefined,
+      });
+    };
+    restore("w1:p1", "w1", "◆ repo", leasedPath);
+    restore("w2:p1", "w2", "◆ repo", test.decoy);
+    restore("w3:p1", "w3", "my notes", leasedPath);
+
+    const launched = await launchCoordinator(test.request, test.dependencies);
+
+    expect(launched.worktree.path).toBe(leasedPath);
+    expect(launched.workspaceRetirement?.outcome).toBe("closed");
+    expect([...test.pool.workspaces]).toEqual([
+      ["w2", "◆ repo"],
+      ["w3", "my notes"],
+      [launched.workspaceId ?? "no workspace", "◆ repo"],
+    ]);
+    expect(test.pool.panes.has("w1:p1")).toBe(false);
+  } finally {
+    await rm(test.root, { recursive: true, force: true });
+  }
+});
+
 test("a failure after lease acquisition releases the new lease and leaves nothing behind", async () => {
   const test = await fixture();
   try {

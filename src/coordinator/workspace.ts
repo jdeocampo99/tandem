@@ -1,5 +1,11 @@
+import { realpath } from "node:fs/promises";
 import { basename } from "node:path";
-import { closeEndpoint, type HerdrPaneInspection, inspectEndpoint } from "../adapters/herdr.ts";
+import {
+  closeEndpoint,
+  type HerdrPaneInspection,
+  inspectEndpoint,
+  listWorkspaces,
+} from "../adapters/herdr.ts";
 import { AdapterCommandError, EndpointBusyError } from "../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
 import {
@@ -22,7 +28,7 @@ export type CoordinatorWorkspaceRetirement = Readonly<{
   readonly extraPaneIds?: readonly string[];
 }>;
 
-type RetiredRecord = Pick<CoordinatorRecord, "repoPath" | "endpoint" | "worktree">;
+export type RetiredRecord = Pick<CoordinatorRecord, "repoPath" | "endpoint" | "worktree">;
 
 /** Short enough to read in Herdr's narrow sidebar; task workspaces nest under it with "└ ". */
 export function coordinatorWorkspaceLabel(repoPath: string): string {
@@ -225,4 +231,66 @@ export async function retireCoordinatorWorkspace(
     return withExtras({ outcome: "retained", reason }, extraPaneIds);
   }
   return { outcome: "closed" };
+}
+
+/**
+ * Coordinator panes Herdr restored from its saved session that no Tandem record names, as records
+ * to retire: a reset or replaced home lost the records, but Herdr still reopens their workspaces
+ * as plain shells when its server starts. Only a pane in a workspace with this repository's
+ * generated label, sitting in the worktree this launch just leased, counts.
+ */
+export async function findRestoredCoordinatorPanes(
+  run: CommandRunner,
+  input: Readonly<{
+    readonly sessionId: string;
+    readonly repoPath: string;
+    readonly worktree: RetiredRecord["worktree"];
+  }>,
+): Promise<readonly RetiredRecord[]> {
+  const { sessionId, repoPath, worktree } = input;
+  const labelled = new Set(
+    (await listWorkspaces(run, sessionId, worktree.path))
+      .filter(({ label }) => label !== undefined && isCoordinatorWorkspaceLabel(label, repoPath))
+      .map(({ workspaceId }) => workspaceId),
+  );
+  if (labelled.size === 0) return [];
+  const request: CommandRequest = {
+    argv: ["herdr", "--session", sessionId, "pane", "list"],
+    cwd: worktree.path,
+  };
+  const listed = await run(request);
+  if (listed.code !== 0) throw new AdapterCommandError("herdr pane list", request, listed);
+  const value = parseJson(listed.stdout, "herdr pane list");
+  if (!isRecord(value) || !isRecord(value.result) || !Array.isArray(value.result.panes)) {
+    throw new Error("herdr pane list returned an unknown pane list");
+  }
+  const physical = (path: string) => realpath(path).catch(() => path);
+  const leased = await physical(worktree.path);
+  const restored: RetiredRecord[] = [];
+  for (const pane of value.result.panes) {
+    if (
+      !isRecord(pane) ||
+      typeof pane.workspace_id !== "string" ||
+      typeof pane.tab_id !== "string" ||
+      typeof pane.pane_id !== "string" ||
+      typeof pane.cwd !== "string" ||
+      !labelled.has(pane.workspace_id) ||
+      (await physical(pane.cwd)) !== leased
+    ) {
+      continue;
+    }
+    restored.push({
+      repoPath,
+      worktree,
+      endpoint: {
+        sessionId,
+        workspaceId: pane.workspace_id,
+        tabId: pane.tab_id,
+        paneId: pane.pane_id,
+        role: "coordinator",
+        generation: 0,
+      },
+    });
+  }
+  return restored;
 }
