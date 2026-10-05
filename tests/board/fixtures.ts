@@ -50,7 +50,9 @@ export function state(overrides: Partial<BoardState> = {}): BoardState {
     poll: {},
     finishedThisWeek: [],
     progressAt: new Map(),
+    activities: new Map(),
     workerPanes: new Map(),
+    restarts: new Map(),
     ...overrides,
   };
 }

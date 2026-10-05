@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { Clock, IsoTimestamp, TaskRecord } from "../contracts.ts";
 import { withPrWatches } from "../pr-watch/store.ts";
+import { recoveryCounters, restartsUsedThisGeneration } from "../recovery/central-reentry.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
 import {
   activeRuntimeJob,
@@ -17,6 +18,7 @@ import { StoreLockTimeoutError } from "../tasks/store-errors.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
 import { type TaskRollup, taskCost, taskRollup } from "../tasks/trace.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
+import { readWorkerActivity, type WorkerActivity } from "../workers/worker-activity.ts";
 import {
   type BoardView,
   boardView,
@@ -50,6 +52,8 @@ export async function readBoard(home: string, clock: Clock): Promise<BoardView> 
       finishedThisWeek: await weekRollups(home, clock, saved, now),
       progressAt: await progressTimes(saved, runtime),
       workerPanes: workerPanes(saved, runtime),
+      activities: await workerActivities(saved, runtime),
+      restarts: restartsSpent(saved, runtime),
     };
   });
   return boardView(state, now);
@@ -69,6 +73,25 @@ async function progressTimes(
   return times;
 }
 
+/** What each running task's newest primary worker with an activity file is doing. */
+async function workerActivities(
+  tasks: readonly TaskRecord[],
+  runtime: RuntimeState,
+): Promise<ReadonlyMap<string, WorkerActivity>> {
+  const activities = new Map<string, WorkerActivity>();
+  for (const task of tasks) {
+    if (!isRunningStage(task.stage)) continue;
+    for (const job of currentPrimaryJobs(task, taskRuntime(runtime, task.id))) {
+      if (job.receiptPath === undefined) continue;
+      const activity = await readWorkerActivity(job.receiptPath);
+      if (activity === undefined) continue;
+      activities.set(task.id, activity);
+      break;
+    }
+  }
+  return activities;
+}
+
 /** Where each running task's live primary worker runs, from its job's Herdr endpoint. */
 function workerPanes(
   tasks: readonly TaskRecord[],
@@ -84,6 +107,23 @@ function workerPanes(
     panes.set(task.id, { workspaceId: endpoint.workspaceId, paneId: endpoint.paneId });
   }
   return panes;
+}
+
+/** The automatic restarts recovery spent on each blocked task's current generation. */
+function restartsSpent(
+  tasks: readonly TaskRecord[],
+  runtime: RuntimeState,
+): ReadonlyMap<string, number> {
+  const restarts = new Map<string, number>();
+  for (const task of tasks) {
+    if (task.stage !== "blocked") continue;
+    const used = restartsUsedThisGeneration(
+      recoveryCounters(taskRuntime(runtime, task.id)),
+      task.generation,
+    );
+    if (used > 0) restarts.set(task.id, used);
+  }
+  return restarts;
 }
 
 /** Rollups, with cost, of the tasks whose timeline says they finished in the last 7 days. */

@@ -1,13 +1,25 @@
 import { basename } from "node:path";
-import type { IsoTimestamp, RequestBriefRecord, TaskRecord, TaskStage } from "../contracts.ts";
+import {
+  type BlockCauseKind,
+  type IsoTimestamp,
+  isBlockCauseKind,
+  REQUEST_BRIEF_SIZES,
+  type RequestBriefRecord,
+  type ReviewLevel,
+  type TaskRecord,
+  type TaskStage,
+} from "../contracts.ts";
 import { type PrWatch, type PrWatchPoll, sameRef } from "../pr-watch/store.ts";
 import { elapsed, PR_MARKS, type PrWatchViewRow, prWatchView } from "../pr-watch/view.ts";
 import { awaitsApproval, requestApprovalState } from "../requests/brief.ts";
 import type { DurableExecutionRoutingPause } from "../runtime/schema.ts";
 import { isTerminalTask } from "../service/records.ts";
+import { ledgerBlockers } from "../tasks/findings.ts";
+import { recordedReviewLevel } from "../tasks/review-levels.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
 import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from "../tasks/trace.ts";
 import { raisedRoutingPause, routingPauseExplanation } from "../workers/execution-routing.ts";
+import type { WorkerActivity } from "../workers/worker-activity.ts";
 
 /** Task stages that wait on the user. */
 const NEEDS_YOU_STAGES: readonly TaskStage[] = ["awaiting-approval", "blocked", "ready"];
@@ -38,8 +50,12 @@ export type BoardState = Readonly<{
   readonly finishedThisWeek: readonly TaskRollup[];
   /** Task id to when its worker last made progress; tasks without a receipt are absent. */
   readonly progressAt: ReadonlyMap<string, IsoTimestamp>;
+  /** Task id to what its primary worker is doing, for display; tasks without it are absent. */
+  readonly activities: ReadonlyMap<string, WorkerActivity>;
   /** Task id to the pane of its live primary worker; tasks without one are absent. */
   readonly workerPanes: ReadonlyMap<string, WorkerPane>;
+  /** Task id to the automatic restarts recovery spent on its current generation; none are absent. */
+  readonly restarts: ReadonlyMap<string, number>;
 }>;
 
 /** Where a task's worker runs in Herdr, so the panel can focus it. */
@@ -89,7 +105,18 @@ export type BoardRow = Readonly<{
   readonly text: string;
   /** How long a running task has existed, like 12m. */
   readonly since?: string;
+  /** A brief's own size rating; absent on briefs saved before summaries. */
+  readonly briefSize?: BriefSize;
+  /** How a brief's work will be reviewed, when that is already known. */
+  readonly reviewLevel?: ReviewLevel | "none";
+  /** A ready task's pull request. */
+  readonly pullRequest?: Readonly<{ readonly number: number; readonly draft: boolean }>;
+  /** A blocked task's typed cause, when the site that blocked it recorded one. */
+  readonly blockKind?: BlockCauseKind;
+  /** Automatic restarts recovery spent on a blocked task's current generation, when any. */
+  readonly restarts?: number;
 }>;
+export type BriefSize = (typeof REQUEST_BRIEF_SIZES)[number];
 const BOARD_ROW_CAUSES = new Set<BoardRow["cause"]>([
   "brief",
   "question",
@@ -152,7 +179,15 @@ function isBoardRow(value: unknown): value is BoardRow {
     typeof row.mark === "string" &&
     typeof row.name === "string" &&
     typeof row.text === "string" &&
-    (row.since === undefined || typeof row.since === "string")
+    (row.since === undefined || typeof row.since === "string") &&
+    (row.briefSize === undefined || REQUEST_BRIEF_SIZES.some((size) => size === row.briefSize)) &&
+    (row.reviewLevel === undefined ||
+      row.reviewLevel === "none" ||
+      row.reviewLevel === "light" ||
+      row.reviewLevel === "standard") &&
+    (row.pullRequest === undefined || isFiniteNumber(recordOf(row.pullRequest)?.number)) &&
+    (row.blockKind === undefined || isBlockCauseKind(row.blockKind)) &&
+    (row.restarts === undefined || isFiniteNumber(row.restarts))
   );
 }
 
@@ -165,7 +200,9 @@ function isRunningBoardRow(value: unknown): value is RunningBoardRow {
     typeof row.repoPath === "string" &&
     typeof row.taskId === "string" &&
     typeof row.since === "string" &&
-    (row.worker === undefined || isWorkerPane(row.worker))
+    (row.worker === undefined || isWorkerPane(row.worker)) &&
+    (row.activity === undefined || recordOf(row.activity) !== undefined) &&
+    (row.openFindings === undefined || isFiniteNumber(row.openFindings))
   );
 }
 
@@ -243,6 +280,9 @@ export type RunningBoardRow = Omit<BoardRow, "cause" | "repoPath" | "taskId" | "
     taskId: string;
     since: string;
     worker?: WorkerPane;
+    activity?: WorkerActivity;
+    /** Review findings still blocking a task that is fixing them; absent when none are recorded. */
+    openFindings?: number;
   }>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -287,17 +327,15 @@ export function boardView(state: BoardState, now: IsoTimestamp): BoardView {
     projectPaths: state.projects,
     ...(pullRequests.readAt === undefined ? {} : { checkedAt: pullRequests.readAt }),
     needsYou: [
-      ...state.briefs.filter(awaitsApproval).map(briefRow),
+      ...state.briefs.filter(awaitsApproval).map((brief) => briefRow(brief, state.tasks)),
       ...live
         .filter(needsYou)
-        .map((task) => taskNeedsYouRow(task, modelQuestion(task, state.routingPauses))),
+        .map((task) => taskNeedsYouRow(task, modelQuestion(task, state.routingPauses), state)),
       ...red.map((row) => pullRequestRow(row, state)),
     ],
     running: live
       .filter((task): task is RunningTaskRecord => !needsYou(task) && isRunningStage(task.stage))
-      .map((task) =>
-        runningRow(task, now, state.progressAt.get(task.id), state.workerPanes.get(task.id)),
-      ),
+      .map((task) => runningRow(task, now, state, state.workerPanes.get(task.id))),
     pullRequests: pullRequests.rows
       .filter((row) => row.color !== "red")
       .map((row) => {
@@ -456,7 +494,12 @@ function taskNeedsYou(task: TaskRecord): boolean {
   return task.communication?.question !== undefined || NEEDS_YOU_STAGES.includes(task.stage);
 }
 
-function briefRow(brief: RequestBriefRecord): BoardRow {
+function briefRow(brief: RequestBriefRecord, tasks: readonly TaskRecord[]): BoardRow {
+  const { summary, skipReview } = brief.draft.content;
+  const reviewLevel =
+    skipReview === true
+      ? "none"
+      : tasks.find((task) => task.requestId === brief.id)?.reviewLevel?.level;
   return {
     key: `brief:${brief.id}`,
     cause: "brief",
@@ -468,6 +511,8 @@ function briefRow(brief: RequestBriefRecord): BoardRow {
       requestApprovalState(brief) === "unapproved"
         ? "brief waiting for approval"
         : "brief changed, needs approval again",
+    ...(summary === undefined ? {} : { briefSize: summary.size.level }),
+    ...(reviewLevel === undefined ? {} : { reviewLevel }),
   };
 }
 
@@ -492,6 +537,7 @@ function modelQuestion(
 function taskNeedsYouRow(
   task: TaskRecord,
   model: Readonly<{ key: string; text: string }> | undefined,
+  state: Pick<BoardState, "restarts">,
 ): BoardRow {
   const question = task.communication?.question;
   const reason: Pick<BoardRow, "key" | "cause" | "text"> =
@@ -516,16 +562,38 @@ function taskNeedsYouRow(
     name: shorten(task.objective, NAME_CHARS),
     mark: "🙋",
     text: shorten(reason.text, TEXT_CHARS),
+    ...(reason.cause === "blocked" ? stopFacts(task, state.restarts.get(task.id)) : {}),
+    ...(reason.cause === "ready" && task.pullRequest !== undefined
+      ? {
+          pullRequest: {
+            number: task.pullRequest.number,
+            draft: task.pullRequest.state === "draft",
+          },
+        }
+      : {}),
+  };
+}
+
+function stopFacts(
+  task: TaskRecord,
+  restarts: number | undefined,
+): Pick<BoardRow, "blockKind" | "restarts"> {
+  return {
+    ...(task.blockCause === undefined ? {} : { blockKind: task.blockCause.kind }),
+    ...(restarts === undefined || restarts === 0 ? {} : { restarts }),
   };
 }
 
 function runningRow(
   task: RunningTaskRecord,
   now: IsoTimestamp,
-  progressAt: IsoTimestamp | undefined,
+  state: Pick<BoardState, "progressAt" | "activities">,
   worker: WorkerPane | undefined,
 ): RunningBoardRow {
   const { mark, label } = RUNNING_LABELS[task.stage];
+  const progressAt = state.progressAt.get(task.id);
+  const activity = state.activities.get(task.id);
+  const open = task.stage === "awaiting-fixes" ? openFindings(task) : 0;
   return {
     key: `task:${task.id}:${task.stage}`,
     cause: task.stage,
@@ -538,7 +606,13 @@ function runningRow(
       progressAt !== undefined && Date.parse(now) - Date.parse(progressAt) > IDLE_MS
         ? `idle ${elapsed(progressAt, now)}`
         : elapsed(task.createdAt, now),
+    ...(activity === undefined ? {} : { activity }),
+    ...(open === 0 ? {} : { openFindings: open }),
   };
+}
+
+function openFindings(task: TaskRecord): number {
+  return ledgerBlockers(task.findingLedger ?? [], recordedReviewLevel(task).level).length;
 }
 
 function doneWithinDay(task: TaskRecord, now: IsoTimestamp): boolean {

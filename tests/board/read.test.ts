@@ -6,7 +6,12 @@ import { readBoard, runLiveBoard } from "../../src/board/read.ts";
 import { renderBoard } from "../../src/board/view.ts";
 import { withPrWatches } from "../../src/pr-watch/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
-import { seedScenarioTask, withScenario } from "../evals/scenario.ts";
+import {
+  scenarioRuntimeTask,
+  seedScenarioRuntime,
+  seedScenarioTask,
+  withScenario,
+} from "../evals/scenario.ts";
 
 test("the live board redraws only when its text changed, and skips a round the state is locked", async () => {
   const frames = ["a", "a", "locked", "b", "b"];
@@ -85,6 +90,23 @@ test("the board reads pull requests from what PR watch last saved", async () => 
   } finally {
     await rm(home, { recursive: true, force: true });
   }
+});
+
+test("a blocked task's row carries the restarts recovery spent on its current generation only", async () => {
+  await withScenario({}, async (world) => {
+    const blocked = await seedScenarioTask(world, { kind: "implementation", stage: "blocked" });
+    const recovery = (restartGeneration: number) =>
+      scenarioRuntimeTask({
+        taskId: blocked.id,
+        recovery: { schemaVersion: 1, validationRetries: 0, restarts: 2, restartGeneration },
+      });
+    await seedScenarioRuntime(world, recovery(blocked.generation));
+    const current = await readBoard(world.home, world.clock);
+    expect(current.needsYou.map((row) => row.restarts)).toEqual([2]);
+    await seedScenarioRuntime(world, recovery(blocked.generation + 1));
+    const other = await readBoard(world.home, world.clock);
+    expect(other.needsYou.map((row) => row.restarts)).toEqual([undefined]);
+  });
 });
 
 test("a task the timeline shows finishing this week adds the weekly line", async () => {

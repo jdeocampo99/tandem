@@ -3,10 +3,15 @@ import type {
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import type { WorkerReceipt } from "../../contracts.ts";
-import { toolName } from "../../workers/control-protocol.ts";
+import { type TodoItem, todoItems } from "../../playbooks/progress.ts";
+import type { ToolCall } from "../../session/events.ts";
 import { jobTrace, openWorkerSteering, workerJobPath } from "../worker-session.ts";
 import { contextWithTaskMessages, newestTaskMarker } from "./task-messages.ts";
-import { OmpWorkerPane, registerWorkerTerminalExtension } from "./terminal-extension.ts";
+import {
+  OmpWorkerPane,
+  ompWorkerToolCall,
+  registerWorkerTerminalExtension,
+} from "./terminal-extension.ts";
 
 export default async function workerControlExtension(pi: ExtensionAPI): Promise<void> {
   try {
@@ -39,9 +44,14 @@ async function registerWorkerSteering(pi: ExtensionAPI): Promise<void> {
     delivery: "context",
   });
   if (steering === undefined) return;
-  const record = (ctx: ExtensionContext, phase: WorkerReceipt["phase"], tool?: string) => {
+  const record = (
+    ctx: ExtensionContext,
+    phase: WorkerReceipt["phase"],
+    tool?: ToolCall,
+    todos?: readonly TodoItem[],
+  ) => {
     pane.enter(ctx);
-    steering.recordActivity(phase, tool);
+    steering.recordActivity(phase, tool, todos);
   };
 
   pi.on("context", async (event, ctx) => {
@@ -65,9 +75,16 @@ async function registerWorkerSteering(pi: ExtensionAPI): Promise<void> {
   pi.on("message_start", (_event, ctx) => record(ctx, "model"));
   pi.on("message_end", (_event, ctx) => record(ctx, "model"));
   pi.on("message_update", (_event, ctx) => record(ctx, "model"));
-  pi.on("tool_execution_start", (event, ctx) => record(ctx, "tool", toolName(event.toolName)));
-  pi.on("tool_execution_update", (event, ctx) => record(ctx, "tool", toolName(event.toolName)));
-  pi.on("tool_execution_end", (event, ctx) => record(ctx, "idle", toolName(event.toolName)));
+  pi.on("tool_execution_start", (event, ctx) =>
+    record(ctx, "tool", ompWorkerToolCall(event.toolCallId, event.toolName, event.args)),
+  );
+  pi.on("tool_execution_update", (event, ctx) =>
+    record(ctx, "tool", ompWorkerToolCall(event.toolCallId, event.toolName, event.args)),
+  );
+  pi.on("tool_execution_end", (event, ctx) => {
+    const call = ompWorkerToolCall(event.toolCallId, event.toolName);
+    record(ctx, "idle", call, call.kind === "todo" ? todoItems(event.result) : undefined);
+  });
   pi.on("agent_end", (event, ctx) => {
     trace("communication_agent_end", { willContinue: event.willContinue });
     record(ctx, event.willContinue === true ? "model" : "idle");
