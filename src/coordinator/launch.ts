@@ -50,6 +50,8 @@ import { resolveCoordinatorSourceHead } from "./source.ts";
 import {
   type CoordinatorWorkspaceRetirement,
   coordinatorWorkspaceLabel,
+  findRestoredCoordinatorPanes,
+  type RetiredRecord,
   retireCoordinatorWorkspace,
 } from "./workspace.ts";
 
@@ -660,7 +662,7 @@ async function assertRunningCoordinatorSource(
 async function retireSettledCoordinatorWorkspace(
   dependencies: CoordinatorLaunchDependencies,
   home: string,
-  previous: CoordinatorRecord,
+  previous: RetiredRecord,
 ): Promise<CoordinatorWorkspaceRetirement> {
   for (let attempt = 1; ; attempt += 1) {
     const retirement = await retireCoordinatorWorkspace(dependencies.run, home, previous);
@@ -1052,6 +1054,20 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
         dependencies,
         paths.home,
         previous,
+      );
+    }
+  }
+  if (previous === undefined) {
+    const restored = await findRestoredCoordinatorPanes(dependencies.run, {
+      sessionId: request.sessionId,
+      repoPath: paths.repo,
+      worktree,
+    });
+    for (const record of restored) {
+      workspaceRetirement = await retireSettledCoordinatorWorkspace(
+        dependencies,
+        paths.home,
+        record,
       );
     }
   }

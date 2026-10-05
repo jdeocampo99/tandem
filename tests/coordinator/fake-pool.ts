@@ -245,6 +245,36 @@ export function fakePool(input: PoolInput): Pool {
         }),
       );
     }
+    if (resource === "workspace" && action === "list") {
+      return ok(
+        JSON.stringify({
+          result: {
+            type: "workspace_list",
+            workspaces: [...workspaces].map(([workspaceId, label]) => ({
+              workspace_id: workspaceId,
+              label,
+            })),
+          },
+        }),
+      );
+    }
+    if (resource === "pane" && action === "list") {
+      return ok(
+        JSON.stringify({
+          result: {
+            type: "pane_list",
+            panes: [...panes.values()]
+              .filter((pane) => pane.sessionId === argv[2])
+              .map((pane) => ({
+                workspace_id: pane.workspaceId,
+                tab_id: pane.tabId,
+                pane_id: pane.paneId,
+                cwd: pane.cwd,
+              })),
+          },
+        }),
+      );
+    }
     if (resource === "workspace") {
       if (action === "create") {
         if (failure === "workspace-create") {
