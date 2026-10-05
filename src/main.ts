@@ -101,7 +101,7 @@ Usage:
                            --popup closes on Esc or after going somewhere
   tandem panel home|prev|next
                            Go to this project's chat, or the previous or next project
-  tandem action COMMAND    Run a native view action (open, brief-comment, brief-request-changes,\n                           brief-approve, pr-comment, restart, steer, review-submit)\n  tandem welcome           Show the welcome message again
+  tandem native COMMAND    Run a native view action (open, brief-comment, brief-request-changes,\n                           brief-approve, pr-comment, restart, steer, review-submit)\n  tandem welcome           Show the welcome message again
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
@@ -805,7 +805,7 @@ export async function runTerminal(
 ): Promise<TerminalRunResult> {
   const { stdout, stderr } = createTerminalOutput(dependencies);
   try {
-    if (argv[0] === "action") {
+    if (argv[0] === "native") {
       const action = argv[1];
       if (
         action === undefined ||
@@ -821,7 +821,7 @@ export async function runTerminal(
         ].includes(action)
       ) {
         throw new Error(
-          "tandem action requires open, brief-comment, brief-request-changes, brief-approve, pr-comment, restart, steer, or review-submit",
+          "tandem native requires open, brief-comment, brief-request-changes, brief-approve, pr-comment, restart, steer, or review-submit",
         );
       }
       const result = await runCli(argv.slice(1), {
@@ -840,7 +840,7 @@ export async function runTerminal(
       });
       return {
         exitCode: result.exitCode,
-        status: result.error === undefined ? "action" : "error",
+        status: result.error === undefined ? "native" : "error",
         ...(result.error === undefined ? {} : { error: result.error }),
       };
     }

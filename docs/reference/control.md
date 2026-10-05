@@ -135,20 +135,31 @@ lives in `approvalPrompt` in src/session/actions.ts.
 
 ## Native view actions
 
-Every native click invokes `tandem action COMMAND`. The view never edits durable state. The same
+Every native click invokes `tandem native COMMAND`. The view never edits durable state. The same
 commands are also available in the advanced action CLI (`bun src/cli.ts`).
 
 - `open task|brief|pr ID` validates the durable task or request, proves its running coordinator,
   and asks `TerminalBackend.openView` to replace the main area (task) or open a split (brief/PR).
-  For `pr`, ID is the linked task id, including a `pr-review` task. Herdr opens briefs through the
+  For `pr`, ID is the linked task id (including a `pr-review` task) or a PR number. A number
+  resolves only within the selected project and is refused when ambiguous. Herdr opens briefs through the
   existing review workflow and returns explicit warnings for unsupported native task/PR views.
+  Plugin context uses `--pane PANE_ID`, `--cwd PATH`, and `--window WINDOW_KEY` when available.
+  The pane and cwd must select exactly one recorded project/session before the scoped service is
+  created. Context never grants ownership; the coordinator is proven separately. The backend
+  receives that origin and must honor the supplied window/pane or return a refusal, rather than
+  opening in an unrelated window.
 - Brief comment, request-changes, and approval use the revision-bound paths in
   [request-briefs.md](request-briefs.md#native-brief-feedback).
 - `pr-comment TASK_ID --text TEXT` sends an in-scope fix request to the implementation task's
   worker through `steer`. Only a task with an open or draft Tandem PR accepts it. It never posts a
   GitHub comment, changes scope approval, publishes, or merges. `--input FILE` instead of `--text`
   accepts optional `text` and `comments: [{file, line, text}]`; anchors stay in the worker message.
-  Comments are joined into one direction under the existing steering bounds.
+  Comments are joined into one direction under the existing steering bounds. For a ready task
+  whose worker finished, steer uses evidence invalidation and the existing redirect/reconcile
+  path to start a new implementation generation in the same retained worktree. A completed task
+  with no such path is refused before a direction is saved. If recovery cannot start the fix,
+  the native command reports that feedback was saved and states the blocker; it never reports
+  silent delivery to a finished worker.
 - `restart TASK_ID` uses central recovery; `steer --task TASK_ID --text TEXT` uses the existing
   message path. These actions do not implement a second recovery or messaging mechanism.
 - `review-submit TASK_ID --input FILE` parses the same `ReviewSubmission` as the review page,

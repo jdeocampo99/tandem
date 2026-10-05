@@ -89,6 +89,7 @@ async function fixture() {
         ],
       },
     }),
+    listPanes: async () => [{ ...endpoint, cwd: clean, foregroundCwd: clean }],
     promptAgent: async (target) => {
       prompts.push(target.text);
     },
@@ -157,11 +158,11 @@ test("native Approve click records the displayed revision and both digests witho
   try {
     await f.write(f.seen);
     const result = await runTerminal(
-      ["action", "brief-approve", f.record.id, "--input", f.input, "--json"],
+      ["native", "brief-approve", f.record.id, "--input", f.input, "--json"],
       f.deps,
     );
     expect(result.exitCode).toBe(0);
-    expect(result.status).toBe("action");
+    expect(result.status).toBe("native");
     expect((await f.store.read(f.record.id))?.approval).toMatchObject({
       requestId: f.record.id,
       ...f.seen,
@@ -324,7 +325,7 @@ test("Tandem PR comments become durable worker fix requests without any GitHub c
   try {
     const task = await createPrTask(f);
     const result = await runTerminal(
-      ["action", "pr-comment", task.id, "--text", "Fix src/view.ts:12"],
+      ["native", "pr-comment", task.id, "--text", "Fix src/view.ts:12"],
       f.deps,
     );
     expect(result.exitCode).toBe(0);
@@ -443,11 +444,11 @@ test("inline PR comments preserve file and line in the worker's durable directio
   }
 });
 
-test("native action namespace rejects publication commands", async () => {
+test("native command namespace rejects publication commands", async () => {
   const f = await fixture();
   try {
     expect(
-      (await runTerminal(["action", "publish", "task-pr", "--yes"], f.deps)).exitCode,
+      (await runTerminal(["native", "publish", "task-pr", "--yes"], f.deps)).exitCode,
     ).not.toBe(0);
     expect(await f.service.list()).toEqual([]);
   } finally {
@@ -512,3 +513,149 @@ for (const state of ["closed", "merged"] as const) {
     }
   });
 }
+
+test("a numeric PR route resolves its durable task and refuses an ambiguous PR number", async () => {
+  const f = await fixture();
+  try {
+    const task = await createPrTask(f);
+    expect((await runCli(["open", "pr", "42"], f.deps)).exitCode).toBe(0);
+    expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+    const store = createTaskStore({
+      directory: join(f.home, "tasks"),
+      clock: () => NOW,
+      idFactory: () => "another-task",
+    });
+    const other = await store.create({
+      repoPath: f.repo,
+      kind: "implementation",
+      objective: "Another task",
+      acceptanceCriteria: ["works"],
+      surfaces: ["src"],
+      policy: {
+        config: defaultPolicy(),
+        guidance: { implementation: [], validation: [], review: [] },
+      },
+    });
+    await store.update(other.id, other.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      pullRequest: {
+        repository: "owner/repo",
+        number: 42,
+        state: "draft",
+        head: "a".repeat(40),
+        base: "main",
+      },
+    }));
+    const result = await runCli(["open", "pr", "42"], f.deps);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.error?.message).toContain("More than one task");
+    expect(f.opened).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("native open carries the plugin's pane, cwd, and window context to the backend", async () => {
+  const f = await fixture();
+  try {
+    const task = await createPrTask(f);
+    const origins: unknown[] = [];
+    const scopes: unknown[] = [];
+    const terminal = {
+      ...f.deps.terminal,
+      openView: async (input: Parameters<TerminalBackend["openView"]>[0]) => {
+        origins.push(input.origin);
+        return f.deps.terminal.openView(input);
+      },
+    };
+    const { service: _injectedService, ...dependencies } = f.deps;
+    const result = await runTerminal(
+      [
+        "native",
+        "open",
+        "pr",
+        "42",
+        "--pane",
+        "coordinator",
+        "--cwd",
+        f.clean,
+        "--window",
+        "own-window",
+      ],
+      {
+        ...dependencies,
+        terminal,
+        createService: (options) => {
+          scopes.push(options.sourceWorkspace);
+          return createTandemService({
+            ...options,
+            run: f.deps.run,
+            clock: () => NOW,
+            checkBriefLanguage: async () => [],
+          });
+        },
+        processEnvironment: { ...f.deps.processEnvironment, TANDEM_SESSION: "another-session" },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.status).toBe("native");
+    expect(scopes).toEqual([{ repoPath: f.repo, path: f.clean }]);
+    expect(origins).toEqual([{ paneId: "coordinator", cwd: f.clean, windowId: "own-window" }]);
+    expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("native open refuses conflicting project and pane context before opening a view", async () => {
+  const f = await fixture();
+  try {
+    const result = await runTerminal(
+      [
+        "native",
+        "open",
+        "brief",
+        f.record.id,
+        "--pane",
+        "unrelated",
+        "--cwd",
+        f.repo,
+        "--window",
+        "own-window",
+      ],
+      f.deps,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.error?.message).toContain("exactly one Tandem project");
+    expect(f.opened).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("native PR comment explicitly refuses a completed implementation worker", async () => {
+  const f = await fixture();
+  try {
+    const task = await createPrTask(f);
+    const store = createTaskStore({
+      directory: join(f.home, "tasks"),
+      clock: () => NOW,
+      idFactory: () => "task-pr",
+    });
+    await store.update(task.id, task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      stage: "completed",
+    }));
+    const result = await runTerminal(
+      ["native", "pr-comment", task.id, "--text", "Fix this"],
+      f.deps,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.error?.message).toContain("worker has finished");
+    expect((await f.service.get(task.id)).communication?.messages).toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});

@@ -39,7 +39,7 @@ src/requests/plain-language.ts
 - An explicit, human-confirmed decision in the main conversation or an Approve click in the native
   brief view records request id, revision, content digest, and agreement digest. The native click
   is the user's confirmation, like Submit on the PR review page; it needs no second dialog or
-  `--yes`. `tandem action brief-approve REQUEST_ID --input FILE` requires `briefRevision`,
+  `--yes`. `tandem native brief-approve REQUEST_ID --input FILE` requires `briefRevision`,
   `contentDigest`, and `agreementDigest` copied from the displayed view. All must match the current
   durable draft inside the approval compare-and-swap. A stale click records nothing and never
   approves a revision the user did not see. Conversation approval still requires the exact id,
@@ -95,7 +95,7 @@ src/requests/plain-language.ts
 
 ## Native brief feedback
 
-- `tandem action brief-comment REQUEST_ID --input FILE` and `brief-request-changes` carry the
+- `tandem native brief-comment REQUEST_ID --input FILE` and `brief-request-changes` carry the
   displayed `briefRevision`, `contentDigest`, and `agreementDigest`, plus optional overall `text`
   and `comments: [{line, text}]`. Lines are one-based in the rendered brief Markdown. At least
   one comment is required; there are at most 100 comments and 64,000 bytes of feedback.

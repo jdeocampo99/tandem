@@ -4,6 +4,7 @@ const PATH_OPTIONS: Readonly<Record<string, true>> = {
   "--home": true,
   "--pool-root": true,
   "--repo": true,
+  "--cwd": true,
   "--extension": true,
   "--input": true,
   "--config": true,
@@ -179,6 +180,9 @@ export type CliOptions = Readonly<{
   readonly objective?: string;
   readonly text?: string;
   readonly questionId?: string;
+  readonly viewPaneId?: string;
+  readonly viewWindowId?: string;
+  readonly viewCwd?: string;
   readonly supersedes: readonly string[];
   readonly title?: string;
   readonly base?: string;
@@ -324,6 +328,9 @@ type MutableCliOptions = {
   objective?: string;
   text?: string;
   questionId?: string;
+  viewPaneId?: string;
+  viewWindowId?: string;
+  viewCwd?: string;
   supersedes: string[];
   title?: string;
   base?: string;
@@ -452,6 +459,15 @@ const OPTION_SPECS: Readonly<Record<string, OptionSpec>> = {
   }),
   "--task-id": valued((options, value) => {
     options.taskId = value;
+  }),
+  "--pane": valued((options, value) => {
+    options.viewPaneId = value;
+  }),
+  "--window": valued((options, value) => {
+    options.viewWindowId = value;
+  }),
+  "--cwd": valued((options, value) => {
+    options.viewCwd = value;
   }),
   "--text": valued((options, value) => {
     options.text = value;

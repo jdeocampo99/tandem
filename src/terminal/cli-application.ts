@@ -28,6 +28,8 @@ import {
   type WatchControl,
 } from "./cli-process.ts";
 
+import { resolveViewActionEnvironment } from "./cli-view-context.ts";
+
 const DEFAULT_COORDINATOR_SESSION = "tandem";
 
 export type CliDependencies = Readonly<{
@@ -148,7 +150,11 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
 
   const invoke = async (invocation: CliInvocation, signal?: AbortSignal): Promise<CliResult> => {
     if (invocation.options.help) return { command: invocation.command, value: HELP_TEXT };
-    const environment = resolveEnvironment(invocation, dependencies);
+    const environment = await resolveViewActionEnvironment(
+      resolveEnvironment(invocation, dependencies),
+      invocation,
+      capabilities.terminal,
+    );
     return runCliCommand({
       invocation,
       environment,

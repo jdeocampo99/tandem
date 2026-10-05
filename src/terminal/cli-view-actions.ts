@@ -9,6 +9,7 @@ import type { TerminalView } from "../terminal-backend/contract.ts";
 import { CliUsageError, positiveInteger, text } from "./cli-arguments.ts";
 import type { CliCommandContext, CliCommandOutcome } from "./cli-commands.ts";
 import { jsonObjectFromFile, taskIdFor } from "./cli-input.ts";
+import { viewOriginFrom } from "./cli-view-context.ts";
 
 function exactKeys(input: Readonly<Record<string, unknown>>, allowed: readonly string[]): void {
   for (const key of Object.keys(input)) {
@@ -200,8 +201,50 @@ export async function commentOnPr(context: CliCommandContext): Promise<CliComman
     message = text(notes.join(" ").replace(/\s+/gu, " "), "PR feedback");
   }
   const service = context.service();
-  requireOwnPr(await service.get(taskId));
-  return { value: await service.steer({ taskId, text: `PR fix request: ${message}` }) };
+  const before = await service.get(taskId);
+  requireOwnPr(before);
+  if (before.stage === "completed") {
+    throw new CliUsageError(
+      "This task's worker has finished. Open the coordinator to arrange follow-up work; the PR comment was not sent.",
+    );
+  }
+  const direction = await service.steer({ taskId, text: `PR fix request: ${message}` });
+  if (
+    direction.stage === "blocked" ||
+    (before.stage === "ready" && direction.stage !== "implementing")
+  ) {
+    const current = await service.get(taskId);
+    throw new Error(
+      `PR feedback was saved, but the worker could not start fixing: ${current.blockReason ?? current.blockCause?.summary ?? `task is ${current.stage}`}`,
+    );
+  }
+  return { value: direction };
+}
+
+async function taskForPrNumber(context: CliCommandContext, number: number): Promise<TaskRecord> {
+  const repo = await canonicalPath(context.environment.repo, "repoPath");
+  const tasks = await context.service().list();
+  const scoped = await Promise.all(
+    tasks.map(async (task) => ({
+      task,
+      repo: await canonicalPath(task.repoPath, "task repoPath"),
+    })),
+  );
+  const matches = scoped
+    .filter(
+      (entry) =>
+        entry.repo === repo &&
+        (entry.task.pullRequest?.number === number || entry.task.prReview?.ref.number === number),
+    )
+    .map((entry) => entry.task);
+  if (matches.length !== 1 || matches[0] === undefined) {
+    throw new CliUsageError(
+      matches.length === 0
+        ? `No Tandem task has pull request #${number} in this project`
+        : `More than one task has pull request #${number}; open it by task id`,
+    );
+  }
+  return matches[0];
 }
 
 export async function openView(context: CliCommandContext): Promise<CliCommandOutcome> {
@@ -214,19 +257,24 @@ export async function openView(context: CliCommandContext): Promise<CliCommandOu
     repoPath = (await service.requestBrief(id)).record.repoPath;
     view = { kind, requestId: id };
   } else if (kind === "task" || kind === "pr") {
-    const task = await service.get(id);
+    const task =
+      kind === "pr" && /^\d+$/u.test(id)
+        ? await taskForPrNumber(context, positiveInteger(id, "PR number"))
+        : await service.get(id);
     if (kind === "pr" && task.pullRequest === undefined && task.kind !== "pr-review") {
       throw new CliUsageError("The task has no pull request to open");
     }
     repoPath = task.repoPath;
-    view = { kind, taskId: id };
+    view = { kind, taskId: task.id };
   } else throw new CliUsageError("open requires task, brief, or pr and its durable id");
   const owned = await coordinator(context, repoPath);
+  const origin = viewOriginFrom(context.invocation);
   const result = await context.capabilities.terminal.openView({
     coordinator: owned.endpoint,
     cwd: owned.worktree.path,
     home: context.environment.home,
     view,
+    ...(origin === undefined ? {} : { origin }),
   });
   if (result.fallback === "brief-review" && view.kind === "brief") {
     const brief = await service.reviewRequestBrief(view.requestId);

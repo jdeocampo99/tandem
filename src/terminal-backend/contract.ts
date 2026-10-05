@@ -71,6 +71,9 @@ export type TerminalView =
   | Readonly<{ kind: "brief"; requestId: string }>
   | Readonly<{ kind: "pr"; taskId: string }>;
 
+/** Presentation context from the initiating view; it grants no pane ownership. */
+export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
+
 export type OpenViewResult = Readonly<{
   opened: boolean;
   warnings: readonly string[];
@@ -212,10 +215,17 @@ export type TerminalBackend = Readonly<{
   focusAgent(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
 
   /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
+   * Supplied origin window/pane context must be honored or refused; never target another window.
    * Unsupported presentations return an explicit warning and never type into the conversation.
    */
   openView(
-    input: Readonly<{ coordinator: Endpoint; cwd: string; home: string; view: TerminalView }>,
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      view: TerminalView;
+      origin?: ViewOrigin;
+    }>,
   ): Promise<OpenViewResult>;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
