@@ -6,7 +6,6 @@ import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
 import {
   isCoordinatorPanel,
   openPanelBeside,
-  panelResizeAmount,
   readPanelPaneId,
 } from "../../src/coordinator/panel.ts";
 import type { CoordinatorRecord } from "../../src/coordinator/record.ts";
@@ -17,18 +16,6 @@ import {
   saveCoordinatorRecord,
 } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
-
-test("the panel is resized to 46 columns from its share of the split, and left alone when it fits", () => {
-  const split = (coordinator: number, panel: number) => [
-    { paneId: "w1:p1", width: coordinator },
-    { paneId: "w1:p2", width: panel },
-  ];
-  expect(panelResizeAmount(split(60, 60), "w1:p1", "w1:p2")).toBeCloseTo(0.11667, 4);
-  expect(panelResizeAmount(split(100, 100), "w1:p1", "w1:p2")).toBeCloseTo(0.27, 4);
-  expect(panelResizeAmount(split(40, 40), "w1:p1", "w1:p2")).toBeUndefined();
-  expect(panelResizeAmount(split(74, 46), "w1:p1", "w1:p2")).toBeUndefined();
-  expect(panelResizeAmount(split(60, 60), "w1:p1", "w9:p9")).toBeUndefined();
-});
 
 async function fixture(): Promise<{ root: string; home: string; record: CoordinatorRecord }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-coordinator-panel-")));
@@ -68,7 +55,7 @@ function ok(result: unknown): CommandResult {
   return { code: 0, stdout: JSON.stringify({ result }), stderr: "" };
 }
 
-test("opens the panel right of the coordinator, records it, and narrows it to 46 columns", async () => {
+test("opens the panel right of the coordinator and records it", async () => {
   const { root, home, record } = await fixture();
   try {
     await saveCoordinatorRecord(home, record);
@@ -79,17 +66,6 @@ test("opens the panel right of the coordinator, records it, and narrows it to 46
       if (command.startsWith("plugin pane open")) {
         return ok({ plugin_pane: { pane: { pane_id: "w1:p2" }, plugin_id: "tandem.ui" } });
       }
-      if (command.startsWith("pane layout")) {
-        return ok({
-          layout: {
-            panes: [
-              { pane_id: "w1:p1", rect: { width: 60 } },
-              { pane_id: "w1:p2", rect: { width: 60 } },
-            ],
-          },
-        });
-      }
-      if (command.startsWith("pane resize")) return ok({ resize: { changed: true } });
       throw new Error(`unexpected ${command}`);
     };
 
@@ -114,8 +90,6 @@ test("opens the panel right of the coordinator, records it, and narrows it to 46
         "--env",
         `TANDEM_PANEL_PROJECT=${record.repoPath}`,
       ],
-      ["pane", "layout", "--pane", "w1:p1"],
-      ["pane", "resize", "--pane", "w1:p1", "--direction", "right", "--amount", "0.1167"],
     ]);
     expect(await readPanelPaneId(home, record)).toBe("w1:p2");
     // The record stays exactly what a Tandem without the panel reads, and the panel file is
@@ -151,9 +125,7 @@ test("keeps a recorded panel that is still open, and reports a failed open witho
   try {
     await openPanelBeside(
       async (request) =>
-        request.argv[3] === "plugin"
-          ? ok({ plugin_pane: { pane: { pane_id: "w1:p2" } } })
-          : ok({ layout: { panes: [] } }),
+        request.argv[3] === "plugin" ? ok({ plugin_pane: { pane: { pane_id: "w1:p2" } } }) : ok({}),
       home,
       record,
     );

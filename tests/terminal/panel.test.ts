@@ -15,6 +15,7 @@ import {
   type PanelInput,
   type PanelState,
   panelActionSteps,
+  panelResize,
   panelStep,
   parsePanelInput,
   renderPanel,
@@ -375,6 +376,8 @@ function fakeTerminal() {
       popup: false,
       helpUnseen: false,
       rememberHelpSeen: async () => {},
+      paneId: undefined,
+      onResize: () => () => {},
       onExitSignal: (handler) => {
         stop = handler;
         return () => {
@@ -426,6 +429,104 @@ test("a go that Herdr cannot carry out says so in the footer", async () => {
   terminal.stop();
   await running;
   expect(terminal.written.join("")).toContain("⚠ Herdr couldn't focus it");
+});
+
+/** `herdr pane layout` for a coordinator and the panel right of it, filling the window. */
+function splitLayout(area: number, coordinator: number) {
+  return {
+    result: {
+      layout: {
+        area: { x: 0, y: 0, width: area, height: 40 },
+        panes: [
+          { pane_id: "w1:p1", rect: { x: 0, y: 0, width: coordinator, height: 40 } },
+          {
+            pane_id: "w1:p2",
+            rect: { x: coordinator, y: 0, width: area - coordinator, height: 40 },
+          },
+        ],
+        splits: [
+          {
+            direction: "right",
+            ratio: coordinator / area,
+            rect: { x: 0, y: 0, width: area, height: 40 },
+          },
+        ],
+      },
+    },
+  };
+}
+
+test("the panel is moved back to 46 columns whenever the window width changes", () => {
+  // A cold start fits the panel at the headless server's 120 columns; attaching a wider
+  // terminal scales the split, and the panel shrinks back by its excess over the window.
+  expect(panelResize(splitLayout(120, 60), "w1:p2", undefined)).toEqual({
+    areaWidth: 120,
+    direction: "right",
+    amount: 14 / 120,
+  });
+  expect(panelResize(splitLayout(174, 107), "w1:p2", 120)).toEqual({
+    areaWidth: 174,
+    direction: "right",
+    amount: 21 / 174,
+  });
+  expect(panelResize(splitLayout(200, 160), "w1:p2", 174)).toEqual({
+    areaWidth: 200,
+    direction: "left",
+    amount: 6 / 200,
+  });
+  expect(panelResize(splitLayout(174, 128), "w1:p2", 120)?.amount).toBe(0);
+  // In a narrow window the panel takes at most half.
+  expect(panelResize(splitLayout(80, 40), "w1:p2", undefined)).toMatchObject({ amount: 0 });
+});
+
+test("the panel leaves a border the user moved, and anything it cannot read", () => {
+  expect(panelResize(splitLayout(174, 90), "w1:p2", 174)).toBeUndefined();
+  expect(panelResize(splitLayout(174, 107), "w9:p9", undefined)).toBeUndefined();
+  expect(panelResize({ result: {} }, "w1:p2", undefined)).toBeUndefined();
+  const alone = splitLayout(120, 60);
+  alone.result.layout.splits = [];
+  expect(panelResize(alone, "w1:p2", undefined)).toBeUndefined();
+});
+
+test("a panel in its split fits itself on start and again only when the window width changes", async () => {
+  const terminal = fakeTerminal();
+  let layout = splitLayout(120, 60);
+  let resized = (): void => {};
+  const calls: string[] = [];
+  const running = runPanel(
+    terminal.deps({
+      paneId: "w1:p2",
+      onResize: (listener) => {
+        resized = listener;
+        return () => {
+          resized = () => {};
+        };
+      },
+      run: async (request) => {
+        const command = request.argv.slice(3).join(" ");
+        calls.push(command);
+        return { code: 0, stdout: JSON.stringify(layout), stderr: "" };
+      },
+    }),
+  );
+  await Bun.sleep(5);
+  layout = splitLayout(174, 107);
+  resized();
+  resized();
+  await Bun.sleep(5);
+  layout = splitLayout(174, 90);
+  resized();
+  await Bun.sleep(5);
+  terminal.stop();
+  await running;
+  expect(calls).toEqual([
+    "pane layout --pane w1:p2",
+    "pane resize --pane w1:p2 --direction right --amount 0.1167",
+    "pane layout --pane w1:p2",
+    "pane resize --pane w1:p2 --direction right --amount 0.1207",
+    "pane layout --pane w1:p2",
+    "pane layout --pane w1:p2",
+  ]);
 });
 
 const WORKING = panelView(

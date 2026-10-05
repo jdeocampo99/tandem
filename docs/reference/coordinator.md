@@ -228,10 +228,16 @@ Code: src/coordinator/panel.ts. Tests: tests/coordinator/panel.test.ts.
   `panel` pane: `herdr plugin pane open --plugin tandem.ui --entrypoint panel --placement split
   --target-pane <coordinator pane> --direction right --no-focus --env
   TANDEM_PANEL_PROJECT=<repo>`. Herdr refuses `--workspace` together with `--target-pane`.
-- Herdr has no width for a split, so launch reads `herdr pane layout` and moves the border with
-  `herdr pane resize --pane <coordinator pane> --direction right --amount <(panel - 46) / (both
-  widths)>`, leaving the panel 46 columns. The split keeps that ratio, so attaching from a terminal
-  of another width scales it.
+- Herdr has no width for a split, only a ratio, which it scales when a client attaches or the
+  terminal resizes. A cold start opens the panel on the headless server's 120-column window, so a
+  ratio set then is wrong once the real terminal attaches. The panel therefore sizes itself: when
+  it starts, and on each terminal resize, it reads `herdr pane layout --pane $HERDR_PANE_ID` and,
+  if the window width (`area.width`) differs from the one it last fitted for, moves its own border
+  with `herdr pane resize --pane $HERDR_PANE_ID --direction right|left --amount <|panel - target| /
+  split width>`, where the target is 46 columns or half its split, whichever is smaller. A resize
+  that leaves the window width unchanged is the user dragging the border, which it keeps. Only the
+  plugin's `panel` entrypoint does this; `tandem panel --popup` and a panel run by hand never
+  resize anything. Fits run one at a time, and a failed one is skipped.
 - Only Herdr's open response names a plugin pane, so launch keeps the pane id in
   `<digest of repo>.panel` (`{"paneId": …}`) beside the coordinator's record in the registry. The
   record itself is unchanged, so an older Tandem still reads it, and registry discovery reads only
