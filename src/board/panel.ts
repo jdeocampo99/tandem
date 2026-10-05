@@ -553,6 +553,7 @@ export type NativeTaskSummary = Readonly<{
   pullRequest?: Readonly<{ repo: string; number: number; url: string; draft: boolean }>;
 }>;
 export type NativeProjectRow = Readonly<{
+  terminal: "tern";
   repoPath: string;
   name: string;
   current: boolean;
@@ -595,14 +596,15 @@ export type NativePanelView = Readonly<{
 export function nativeProjectSwitcher(
   snapshot: BoardSnapshot,
   project: string,
-  sessions: ReadonlyMap<string, string> = new Map(),
+  sessions: ReadonlyMap<string, Readonly<{ terminal: string; sessionId: string }>> = new Map(),
 ): readonly NativeProjectRow[] {
   return snapshot.board.projectPaths.map((repoPath, index) => {
     const needsYou = snapshot.board.needsYou.filter((row) => row.repoPath === repoPath).length;
     const running = snapshot.board.running.filter((row) => row.repoPath === repoPath).length;
     const offline = !snapshot.coordinators.some((coordinator) => coordinator.repoPath === repoPath);
-    const sessionId = sessions.get(repoPath);
+    const session = sessions.get(repoPath);
     return {
+      terminal: "tern",
       repoPath,
       name: snapshot.board.projects[index] ?? repoPath,
       current: repoPath === project,
@@ -615,7 +617,7 @@ export function nativeProjectSwitcher(
           ? "all quiet"
           : `${running} running · ${needsYou} needs you`,
       ...(index >= 9 ? {} : { shortcut: `⌘${index + 1}` }),
-      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(session?.terminal === "tern" ? { sessionId: session.sessionId } : {}),
     };
   });
 }

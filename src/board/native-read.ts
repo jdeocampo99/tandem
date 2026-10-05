@@ -72,7 +72,7 @@ export class NativeViewsReader {
   async read(
     snapshot: BoardSnapshot,
     project: string,
-    sessions: ReadonlyMap<string, string> = new Map(),
+    sessions: ReadonlyMap<string, Readonly<{ terminal: string; sessionId: string }>> = new Map(),
   ): Promise<NativeViewsPublication> {
     const deps = this.#deps;
     const now = deps.clock();
@@ -299,8 +299,9 @@ export class NativeViewsReader {
     const ownPanel = nativePanelView({ snapshot, project, now, tasks: summaries, bellCount: 0 });
     const count = (title: string) =>
       ownPanel.sections.find((section) => section.title === title)?.count ?? 0;
-    const sessionId = sessions.get(project);
+    const session = sessions.get(project);
     const summary: NativeProjectSummary = {
+      terminal: "tern",
       repoPath: project,
       name: basename(project),
       writtenAt: now,
@@ -308,7 +309,7 @@ export class NativeViewsReader {
       needsYou: count("Needs you"),
       ready: count("Ready"),
       done: count("Recently done"),
-      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(session?.terminal === "tern" ? { sessionId: session.sessionId } : {}),
     };
     const other = await readNativeProjectSummaries(deps.home, project);
     warnings.push(...other.warnings);

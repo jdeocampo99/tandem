@@ -148,6 +148,7 @@ const projectSummaryModelSchema = z.object({
   project: z.string().min(1),
   writtenAt: z.string().datetime(),
   summary: z.object({
+    terminal: z.literal("tern"),
     repoPath: z.string().min(1),
     name: z.string(),
     writtenAt: z.string().datetime(),

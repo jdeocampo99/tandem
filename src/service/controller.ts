@@ -1001,9 +1001,12 @@ class TandemController {
           })),
         };
         await writeBoardSnapshot(this.#deps.home, snapshot);
+        const ternRecords = records.filter(
+          (record) => "terminal" in record.endpoint && record.endpoint.terminal === "tern",
+        );
         const project =
           this.#deps.sourceWorkspace?.repoPath ??
-          records.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
+          ternRecords.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
             ?.repoPath;
         if (this.#deps.terminal.name.toLowerCase() === "tern" && project !== undefined) {
           await writeNativeViews(
@@ -1011,7 +1014,15 @@ class TandemController {
             await this.#nativeViews.read(
               snapshot,
               project,
-              new Map(records.map((record) => [record.repoPath, record.endpoint.sessionId])),
+              new Map(
+                ternRecords.map((record) => [
+                  record.repoPath,
+                  {
+                    terminal: "tern",
+                    sessionId: record.endpoint.sessionId,
+                  },
+                ]),
+              ),
             ),
           );
         }

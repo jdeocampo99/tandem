@@ -104,7 +104,7 @@ Schemas: `src/board/native-views.ts`, `NativeProjectSummary`, `NativeTaskIndex`,
 
 ```ts
 NativeProjectSummary = {
-  repoPath:string, name:string, writtenAt:string,
+  terminal:"tern", repoPath:string, name:string, writtenAt:string,
   running:number, needsYou:number, ready:number, done:number, sessionId?:string
 }
 NativeTaskIndex = NativeTaskSummary & {detailFile:string}
@@ -137,6 +137,18 @@ shows offline, retains its last known counts and omits its stale focus session. 
 foreign summaries never become invented zero counts; malformed summaries add a warning. Reading
 and publishing this project's index never rewrites another project's bundle or details.
 
+Every emitted terminal identifier is tagged. `model.summary.sessionId` is paired with required
+`model.summary.terminal:"tern"`; `model.projects[].sessionId` and
+`model.panel.header.projects[].sessionId` are paired with their row's required `terminal:"tern"`.
+Session-map inputs retain `{terminal,sessionId}` together. The native controller admits only
+coordinator records whose stored endpoint explicitly names `terminal:"tern"`; foreign and
+untagged identifiers never enter a native model. Foreign summaries with absent/non-Tern tags are
+refused. Stale rows keep their terminal tag but omit their session id. Task, brief, PR, board and
+catch-up models emit no pane or workspace ids. Task/request/thread ids are their domain identities,
+not terminal identifiers. Shared `WorkerPane`, `PanelCoordinator` and legacy panel navigation
+changes belong to the terminal-setting parent; this slice does not alter their definitions.
+
+
 ### Panel and project switcher
 
 Schemas: `src/board/panel.ts`, exports `NativePanelView`, `NativePanelRow`,
@@ -155,7 +167,7 @@ NativePanelView = {
   footer?: string
 }
 NativeProjectRow = {
-  repoPath: string, name: string, current: boolean, offline: boolean,
+  terminal:"tern", repoPath: string, name: string, current: boolean, offline: boolean,
   running: number, needsYou: number, status: string,
   shortcut?: string, sessionId?: string
 }

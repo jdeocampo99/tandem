@@ -49,6 +49,7 @@ test("native envelope revisions change with model content and stay stable across
 
 test("published summaries keep stale project counts visible but never expose a stale focus session", () => {
   const summary = {
+    terminal: "tern" as const,
     repoPath: PROJECT,
     name: "app",
     writtenAt: NOW,
@@ -195,9 +196,14 @@ test("native panel keeps an active task with a draft PR running and shows model 
 });
 
 test("switcher distinguishes projects by path and reports offline, needs-you, current and shortcuts", () => {
-  const rows = nativeProjectSwitcher(snapshot, PROJECT, new Map([[PROJECT, "session-2"]]));
+  const rows = nativeProjectSwitcher(
+    snapshot,
+    PROJECT,
+    new Map([[PROJECT, { terminal: "tern", sessionId: "session-2" }]]),
+  );
   const current = rows.find((row) => row.current);
   expect(current).toMatchObject({
+    terminal: "tern",
     repoPath: PROJECT,
     running: 1,
     needsYou: 3,
@@ -206,6 +212,14 @@ test("switcher distinguishes projects by path and reports offline, needs-you, cu
   });
   expect(current?.status).toBe("1 running · 3 needs you");
   expect(rows.find((row) => !row.current)?.offline).toBe(true);
+  for (const terminal of ["herdr", "unknown"]) {
+    const foreign = nativeProjectSwitcher(
+      snapshot,
+      PROJECT,
+      new Map([[PROJECT, { terminal, sessionId: "session-2" }]]),
+    );
+    expect(foreign.find((row) => row.current)).not.toHaveProperty("sessionId");
+  }
 });
 
 test("board is view-only with no duplicate active PR card and preserves review stops and links", () => {
