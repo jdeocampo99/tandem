@@ -1,0 +1,11 @@
+schema = 1
+id = "tuiprobe"
+name = "Tandem native UI probe"
+version = "0.0.1"
+description = "Throwaway native-UI probe for spikes/tern-probe/ui"
+host = "host.luau"
+window = "window.luau"
+
+[[blocks]]
+id = "lab"
+title = "UI lab"

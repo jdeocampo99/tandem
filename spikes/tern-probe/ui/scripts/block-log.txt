@@ -1,0 +1,60 @@
+key tab mode=input
+key m/m mode=input
+key u/u mode=input
+key l/l mode=input
+key t/t mode=input
+key i/i mode=input
+key enter mode=input
+key l/l mode=input
+key i/i mode=input
+key n/n mode=input
+key e/e mode=input
+key 2/2 mode=input
+key tab mode=input
+key enter mode=input
+key tab mode=input
+key h/h mode=input
+key e/e mode=input
+key l/l mode=input
+key l/l mode=input
+key o/o mode=input
+key j/j mode=input
+key k/k mode=input
+key tab mode=input
+key a/a mode=input
+key b/b mode=input
+key c/c mode=input
+key j/j mode=input
+key enter mode=input
+key x/x mode=input
+key y/y mode=input
+key z/z mode=input
+key escape mode=input
+key a/a mode=input
+key b/b mode=input
+key c/c mode=input
+event {"ev":"focus","id":"main.ed","sf":"p"}
+event {"act":"mode","ev":"action","id":"dock.0.1","sf":"p","value":"diff"}
+event {"act":"diffclick","ev":"action","id":"main.0.diff","sf":"p"}
+event {"act":"diffclick","ev":"action","id":"main.0.diff","sf":"p"}
+event {"act":"diffclick","ev":"action","id":"main.0.diff","sf":"p"}
+event {"act":"diffclick","ev":"action","id":"main.0.diff","sf":"p"}
+event {"act":"diffclick","ev":"action","id":"main.0.diff","sf":"p"}
+event {"act":"diffclick","ev":"action","id":"main.0.diff","sf":"p"}
+event {"act":"mode","ev":"action","id":"dock.0.2","sf":"p","value":"diff2"}
+event {"act":"dl","ev":"action","id":"main.0.d3","sf":"p","value":"3"}
+event {"act":"mode","ev":"action","id":"dock.0.3","sf":"p","value":"rows"}
+rows view build ms=43.870666646398604 nodes~1800
+event {"act":"cmt","ev":"action","id":"main.list.r5.1","sf":"p","value":"5"}
+rows view build ms=29.317124979570508 nodes~1800
+event {"act":"mode","ev":"action","id":"dock.0.4","sf":"p","value":"md"}
+event {"act":"mdclick","ev":"action","id":"main.1","sf":"p"}
+event {"act":"para","ev":"action","id":"main.3.p2","sf":"p","value":"2"}
+event {"act":"mdclick","ev":"action","id":"main.1","sf":"p"}
+event {"act":"mode","ev":"action","id":"dock.0.5","sf":"p","value":"layer"}
+key o/o mode=layer
+key escape mode=layer
+event {"act":"mode","ev":"action","id":"dock.0.6","sf":"p","value":"motion"}
+event {"act":"mode","ev":"action","id":"dock.0.0","sf":"p","value":"input"}
+event {"act":"mode","ev":"action","id":"dock.0.7","sf":"p","value":"link"}
+event {"act":"openpr","ev":"action","id":"main.1","sf":"p"}
