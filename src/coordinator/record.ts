@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Endpoint, WorktreeLease } from "../contracts.ts";
 import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
 import { harnessFor } from "../harness/resolve.ts";
+import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 
 export const REGISTRY_DIRECTORY = "coordinator-registry";
 /** Prefix of every Treehouse lease holder Tandem uses for a coordinator, and for nothing else. */
@@ -127,7 +128,7 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   ensureExactKeys(
     value,
-    ["sessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
+    ["terminal", "sessionId", "workspaceId", "tabId", "paneId", "role", "generation"],
     field,
   );
   const sessionId = sessionText(value.sessionId);
@@ -137,7 +138,15 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   if (value.role !== "coordinator") throw new TypeError(`${field}.role must be "coordinator"`);
   const generation = positiveInteger(value.generation, `${field}.generation`);
   if (generation !== 0) throw new TypeError(`${field}.generation must be 0 for a coordinator`);
-  return { sessionId, workspaceId, tabId, paneId, role: "coordinator", generation };
+  return {
+    terminal: storedEndpointTerminal(value.terminal, field),
+    sessionId,
+    workspaceId,
+    tabId,
+    paneId,
+    role: "coordinator",
+    generation,
+  };
 }
 
 export function parseWorktree(value: unknown, field: string): WorktreeLease {

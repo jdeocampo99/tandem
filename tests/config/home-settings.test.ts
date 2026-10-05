@@ -57,3 +57,20 @@ test("code folders and the self-improvement mode are saved, replacing a one-line
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("terminal choice is validated and saved beside existing home settings", async () => {
+  const { saveTerminalChoice, readHomeSettingsSync } = await import(
+    "../../src/config/home-settings.ts"
+  );
+  const home = await mkdtemp(join(tmpdir(), "tandem-home-terminal-"));
+  try {
+    await writeFile(join(home, "settings.toml"), 'selfImprovement = "report"\n');
+    await saveTerminalChoice(home, "tern");
+    expect(readHomeSettingsSync(home).terminal).toBe("tern");
+    expect((await readHomeSettings(home)).selfImprovement).toBe("report");
+    await writeFile(join(home, "settings.toml"), 'terminal = "another"\n');
+    expect(() => readHomeSettingsSync(home)).toThrow('terminal must be "herdr" or "tern"');
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});

@@ -82,6 +82,7 @@ async function machine(
   };
   const saved: string[] = [];
   let settings: HomeSettings = {
+    terminal: "herdr",
     selfImprovement: "off",
     selfImprovementChosen: false,
     projectRoots: options.savedRoots?.(code, outside) ?? [],
@@ -120,6 +121,10 @@ async function machine(
     saveModels: async (input) => {
       saved.push(`models ${input.enabledProviders.join(",")}`);
     },
+    configureTerminal: async (terminal) => {
+      await record(`terminal ${terminal}`)();
+      return { requested: terminal, terminal };
+    },
     saveSelfImprovement: async (mode) => record(`mode ${mode}`)(),
     saveCodeFolders: async (folders) => {
       await record(`folders ${folders.join(",")}`)();
@@ -151,6 +156,7 @@ function answerFeedback(repositories: readonly unknown[], scoutModel = "anthropi
       ]),
     ),
     repositories,
+    terminal: "herdr",
     selfImprovement: "fix",
   };
   return [
@@ -182,6 +188,7 @@ function chooseFeedback(draft: unknown): string {
 const chooserDraft = {
   picks: { coordinator: { model: "anthropic/opus", thinking: "high" } },
   repositories: [],
+  terminal: "herdr",
   selfImprovement: "report",
 };
 
@@ -241,6 +248,7 @@ test("a valid answer is stored for one Save and saved in order", async () => {
 
   const report = await workflow.apply("/tandem", "answer-1");
   expect(saved).toEqual([
+    "terminal herdr",
     "models anthropic",
     "mode fix",
     `folders ${code}`,
@@ -268,7 +276,7 @@ test("approved mixed-model choices enable only the providers used by those model
   if (event.kind !== "answer") throw new Error(`expected an answer, got ${event.kind}`);
   expect(saved).toEqual([]);
   await workflow.apply("/tandem", event.answerId);
-  expect(saved[0]).toBe("models anthropic,openai");
+  expect(saved[1]).toBe("models anthropic,openai");
 });
 
 test("a Claude Code role is saved without enabling Claude Code for spending", async () => {
@@ -279,7 +287,7 @@ test("a Claude Code role is saved without enabling Claude Code for spending", as
   const event = await workflow.listen("/tandem", new AbortController().signal);
   if (event.kind !== "answer") throw new Error(`expected an answer, got ${event.kind}`);
   await workflow.apply("/tandem", event.answerId);
-  expect(saved[0]).toBe("models anthropic");
+  expect(saved[1]).toBe("models anthropic");
 });
 
 test("a Claude Code role is refused when Claude Code isn't installed", async () => {
@@ -328,6 +336,7 @@ test("searching another folder refreshes the page without saving; approval retai
             pasted: false,
           },
         ],
+        terminal: "herdr",
         selfImprovement: "report",
       };
       return [searchFeedback(dirname(outside), draft), answerFeedback([{ path: outside }])];
@@ -342,6 +351,7 @@ test("searching another folder refreshes the page without saving; approval retai
   expect((view.repos as { path: string }[]).map((repo) => repo.path)).toContain(outside);
   expect(view.draft).toMatchObject({
     repositories: [{ path: join(code, "api"), checks: ["make check"], install: "npm ci" }],
+    terminal: "herdr",
     selfImprovement: "report",
   });
   expect(view.pendingFolders).toContain("~/elsewhere");
@@ -367,6 +377,7 @@ test("a tagged Save wins over a co-poll folder search and keeps saved roots unch
           ]),
         ),
         repositories: [],
+        terminal: "herdr",
         selfImprovement: "fix",
       };
       const searchRow = `  "1",${JSON.stringify(JSON.stringify({ tandemSearch: 1, folder: dirname(folder), draft }))},form#folder-search,tandem-search,Search another folder`;
@@ -404,6 +415,7 @@ test("an invalid search folder reports the problem and preserves draft without p
           ]),
         ),
         repositories: [],
+        terminal: "herdr",
         selfImprovement: "fix",
       }),
     ],
@@ -414,7 +426,7 @@ test("an invalid search folder reports the problem and preserves draft without p
   expect(saved).toEqual([]);
   const view = pageData(await readFile(join(home, "setup", "tandem-setup.html"), "utf8"));
   expect(view.searchStatus).toMatchObject({ kind: "error" });
-  expect(view.draft).toMatchObject({ selfImprovement: "fix" });
+  expect(view.draft).toMatchObject({ terminal: "herdr", selfImprovement: "fix" });
   expect(view.pendingFolders).toEqual([]);
 });
 
@@ -424,6 +436,7 @@ test("searching an empty folder reports zero new repos instead of the existing r
       searchFeedback(join(code, "empty"), {
         picks: {},
         repositories: [],
+        terminal: "herdr",
         selfImprovement: "fix",
       }),
     ],
@@ -535,7 +548,7 @@ test("a failed step is reported without undoing the others, and its chat is not 
   expect(report.message).toContain("The issue setting was not saved: mode fix broke");
   expect(report.message).toContain(`api (${join(code, "api")}): not set up:`);
   expect(saved.some((entry) => entry.startsWith("open "))).toBe(false);
-  expect(saved[0]).toBe("models anthropic");
+  expect(saved[1]).toBe("models anthropic");
 });
 
 test("an answer that can't be saved comes back with every problem and stores nothing", async () => {

@@ -6,6 +6,7 @@ import type { SetupPageStatus } from "./setup-page.ts";
  */
 export type OnboardingFacts = Readonly<{
   readonly modelsChosen: boolean;
+  readonly terminalChosen: boolean;
   /** Folders saved for finding repositories by name. */
   readonly codeFolders: readonly string[];
   /** Saved projects other than the Tandem checkout. */
@@ -15,7 +16,12 @@ export type OnboardingFacts = Readonly<{
   readonly setupPage: SetupPageStatus;
 }>;
 
-export type OnboardingStep = "models" | "code-folders" | "self-improvement" | "repositories";
+export type OnboardingStep =
+  | "models"
+  | "terminal"
+  | "code-folders"
+  | "self-improvement"
+  | "repositories";
 
 /**
  * In the order setup walks them. The fixed-choice questions come before repositories, so the
@@ -24,6 +30,7 @@ export type OnboardingStep = "models" | "code-folders" | "self-improvement" | "r
 export function remainingOnboardingSteps(facts: OnboardingFacts): readonly OnboardingStep[] {
   const steps: OnboardingStep[] = [];
   if (!facts.modelsChosen) steps.push("models");
+  if (!facts.terminalChosen) steps.push("terminal");
   if (facts.codeFolders.length === 0) steps.push("code-folders");
   if (!facts.selfImprovementChosen) steps.push("self-improvement");
   if (facts.projects.length === 0) steps.push("repositories");
@@ -33,6 +40,8 @@ export function remainingOnboardingSteps(facts: OnboardingFacts): readonly Onboa
 const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
   models:
     "Choose models: call models, offer its presets by name (say why one is unavailable) and the Balanced profile, one line per role. They may pick a preset in plain words, then change any role. Recap all five roles with each one's harness, then configure-models; never list claude-code in enabledProviders.",
+  terminal:
+    "Ask which terminal to use: Herdr or Tern. Save the explicit choice with terminal-setting. Tern availability is checked before saving; missing or signed-out Tern falls back to Herdr with a reason. Never switch while tasks are running.",
   "code-folders": "Ask which folders hold their repositories and save them with save-code-folders.",
   "self-improvement":
     "Tandem asked about looking into its own problems; when they answer, call self-improvement with off, fix, or report.",
@@ -71,6 +80,11 @@ export function onboardingQuestion(
   step: OnboardingStep,
   _facts: OnboardingFacts,
 ): OnboardingQuestion | undefined {
+  if (step === "terminal")
+    return {
+      text: "Which terminal should Tandem use: Herdr or Tern? Tern needs the app and a signed-in Stencil account.",
+      hidden: "Call terminal-setting with the terminal the user chooses: herdr or tern.",
+    };
   if (step === "self-improvement") {
     return {
       text: "When a task keeps failing, should Tandem look into why? Off: never. Fix: it offers a fix for your approval. Report: it drafts a GitHub issue for you to file.",

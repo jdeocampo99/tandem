@@ -539,6 +539,7 @@ function leaseFor(home: string): WorktreeLease {
 
 function endpointFor(role: Endpoint["role"] = "scout"): Endpoint {
   return {
+    terminal: "herdr" as const,
     sessionId: "session-1",
     workspaceId: "workspace-1",
     tabId: "tab-1",
@@ -881,6 +882,7 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         setupCommands: ["bun install --frozen-lockfile"],
       },
     ],
+    terminal: "herdr",
     selfImprovement: "off",
   };
   await withFixture(
@@ -2783,6 +2785,7 @@ test("endpoint launch recovery adopts the exact Herdr pane without creating anot
       const operation = { ...operationForJob(seedJob, currentTask), phase: "admitted" as const };
       const reservation = { ...reservationBase, operationId: operation.id };
       const endpointLaunch = {
+        terminal: "herdr" as const,
         schemaVersion: 1 as const,
         reservationId: reservation.id,
         operationId: operation.id,

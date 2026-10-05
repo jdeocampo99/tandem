@@ -7,6 +7,7 @@ import {
   MODEL_ROLE_ORDER,
   type ModelSpec,
   type RepoPolicy,
+  type TerminalName,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
@@ -37,6 +38,7 @@ export type SetupView = Readonly<{
   pendingFolders: readonly string[];
   repos: readonly SetupRepo[];
   selfImprovement: SelfImprovementMode;
+  terminal: TerminalName;
   draft?: SetupPageDraft;
   searchStatus?: SetupSearchStatus;
 }>;
@@ -119,6 +121,7 @@ export type SetupViewInput = Readonly<{
   repos: readonly SetupRepoFacts[];
   /** Saved mode; absent when the user never chose, so the page starts at fix. */
   selfImprovement?: SelfImprovementMode;
+  terminal?: TerminalName;
   draft?: SetupPageDraft;
   searchStatus?: SetupSearchStatus;
 }>;
@@ -236,6 +239,7 @@ export function buildSetupView(input: SetupViewInput): SetupView {
       .sort((left, right) => left.path.localeCompare(right.path))
       .map((repo) => setupRepo(repo, input.homeFolder)),
     selfImprovement: input.selfImprovement ?? "fix",
+    terminal: input.terminal ?? "herdr",
     ...(input.draft === undefined ? {} : { draft: input.draft }),
     ...(input.searchStatus === undefined ? {} : { searchStatus: input.searchStatus }),
   };

@@ -456,7 +456,15 @@ export async function createScenarioWorld(
       processes: [{ pid: nextPid, name: "sh", argv: ["sh"] }],
     });
     workspaceLabels.set(workspaceId, `scenario ${input.paneId}`);
-    return { sessionId, workspaceId, tabId, paneId: input.paneId, role: "scout", generation: 0 };
+    return {
+      terminal: "herdr" as const,
+      sessionId,
+      workspaceId,
+      tabId,
+      paneId: input.paneId,
+      role: "scout",
+      generation: 0,
+    };
   };
 
   const grantLease = async (

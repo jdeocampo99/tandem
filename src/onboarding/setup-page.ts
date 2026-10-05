@@ -3,12 +3,21 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { endPresentation, listenPresentation, openPresentation } from "../adapters/lavish.ts";
 import type { HomeSettings, SelfImprovementMode } from "../config/home-settings.ts";
 import type { ModelSettings } from "../config/models.ts";
-import type { Clock, CommandResult, CommandRunner, IdFactory, RepoPolicy } from "../contracts.ts";
+import type {
+  Clock,
+  CommandResult,
+  CommandRunner,
+  IdFactory,
+  RepoPolicy,
+  TerminalName,
+} from "../contracts.ts";
 import type { ClaudeCodeAvailability } from "../harness/claude-code/availability.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import { describeLavishFailure, type LavishOpenFailure } from "../report/publish.ts";
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
+import { savedTerminalPreference } from "../terminal-backend/compose.ts";
+import type { TerminalChoiceResult } from "../terminal-backend/setting.ts";
 import {
   checkSetupAnswer,
   parseSetupAnswer,
@@ -66,6 +75,7 @@ export type SetupPageDependencies = Readonly<{
       enabledProviders: readonly string[];
     }>,
   ) => Promise<unknown>;
+  configureTerminal: (terminal: TerminalName) => Promise<TerminalChoiceResult>;
   saveSelfImprovement: (mode: SelfImprovementMode) => Promise<unknown>;
   saveCodeFolders: (folders: readonly string[]) => Promise<unknown>;
   setupRepo: (
@@ -213,6 +223,7 @@ export class SetupPageWorkflow {
       searchedFolders: data.roots,
       pendingFolders: this.#explicitRoots,
       repos,
+      terminal: savedTerminalPreference(data.settings).terminal,
       ...(data.settings.selfImprovementChosen
         ? { selfImprovement: data.settings.selfImprovement }
         : {}),
@@ -618,6 +629,15 @@ export class SetupPageWorkflow {
         return false;
       }
     };
+    const terminalSaved = await step(
+      "Saved the terminal choice.",
+      "The terminal choice was not saved",
+      async () => {
+        const selected = await this.#deps.configureTerminal(answer.terminal);
+        if (selected.reason !== undefined) lines.push(selected.reason);
+      },
+    );
+    if (!terminalSaved) return { message: lines.join("\n"), complete: false };
     await step("Saved the model choices and providers.", "Model choices were not saved", () =>
       this.#deps.saveModels({
         repoPath,

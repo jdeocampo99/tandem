@@ -181,6 +181,32 @@ export async function prepareProjects(
   interactive: boolean,
   tandemProject: string | undefined,
 ): Promise<readonly ProjectState[] | undefined> {
+  const anchor = states[0];
+  if (
+    anchor !== undefined &&
+    tandemProject === undefined &&
+    interactive &&
+    prompter !== undefined
+  ) {
+    const facts = await service.onboardingFacts(anchor.repoPath);
+    if (!facts.terminalChosen) {
+      const terminal = await prompter.ask("Which terminal should Tandem use?", {
+        choices: [
+          { name: "Herdr", value: "herdr" },
+          {
+            name: "Tern",
+            value: "tern",
+            description: "Requires Tern and a signed-in Stencil account",
+          },
+          { name: "Not now", value: "not-now" },
+        ],
+        default: "herdr",
+      });
+      if (terminal !== "herdr" && terminal !== "tern") return undefined;
+      const result = await service.configureTerminal(terminal);
+      if (result.reason !== undefined) prompter.write(`${result.reason}\n`);
+    }
+  }
   const settings = firstModelSettings(states);
   const needsSettings = (state: ProjectState) =>
     !state.existingConfig && state.repoPath !== tandemProject;

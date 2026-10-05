@@ -17,6 +17,7 @@ import type {
   WorktreeLease,
 } from "../contracts.ts";
 import { ALL_REVIEW_LENSES, LEGACY_ENDPOINT_ROLES, THINKING_LEVELS } from "../contracts.ts";
+import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 import type { LegacyWorkerRole } from "../workers/jobs.ts";
 
 const RUNTIME_SCHEMA_VERSION = 1;
@@ -247,6 +248,7 @@ export type DurableJob = Readonly<{
   readonly error?: string;
 }>;
 export type DurableEndpointLaunch = Readonly<{
+  readonly terminal: Endpoint["terminal"];
   readonly schemaVersion: 1;
   readonly reservationId: string;
   readonly operationId?: string;
@@ -672,6 +674,7 @@ function parseEndpointLaunch(value: unknown, field: string): DurableEndpointLaun
       : singleLine(value.parentWorkspaceId, `${field}.parentWorkspaceId`);
   return {
     schemaVersion: 1,
+    terminal: storedEndpointTerminal(value.terminal, field),
     reservationId: singleLine(value.reservationId, `${field}.reservationId`),
     ...(operationId === undefined ? {} : { operationId }),
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
@@ -732,6 +735,7 @@ function endpoint(value: unknown, field: string): Endpoint {
   // ponytail: legacy panes/launches may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
   const role = enumValue(value.role, LEGACY_ENDPOINT_ROLES, `${field}.role`);
   return {
+    terminal: storedEndpointTerminal(value.terminal, field),
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
     tabId: singleLine(value.tabId, `${field}.tabId`),

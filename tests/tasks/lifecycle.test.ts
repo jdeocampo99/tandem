@@ -83,6 +83,7 @@ const worktree: WorktreeLease = {
 
 function endpoint(generation: number): Endpoint {
   return {
+    terminal: "herdr" as const,
     sessionId: "session-1",
     workspaceId: "workspace-1",
     tabId: "tab-1",

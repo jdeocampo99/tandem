@@ -390,7 +390,9 @@ export async function runValidationJob(
   }
   const run = options.run ?? runCommand;
   const writeResult = options.writeResult ?? writeJsonAtomically;
-  const statusReporter = terminalBackend(runCommand).agentStatusReporter({
+  const statusReporter = terminalBackend(runCommand, {
+    home: job.execution.home,
+  }).agentStatusReporter({
     cwd: job.repoPath,
     agentLabel: `tandem-validation-${job.taskId.slice(0, 8)}`,
   });

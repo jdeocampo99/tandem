@@ -8,6 +8,7 @@ import { type WorkerTerminalJob, writeWorkerTerminal } from "../../src/workers/t
 import { prepareWorkerTerminal } from "../../src/workers/terminal-control.ts";
 
 const ENDPOINT: Endpoint = {
+  terminal: "herdr" as const,
   sessionId: "session-1",
   workspaceId: "workspace-1",
   tabId: "tab-1",

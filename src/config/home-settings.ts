@@ -1,5 +1,7 @@
+import { lstatSync, readFileSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import type { TerminalName } from "../contracts.ts";
 import { writeTextAtomically } from "../runtime/persistence.ts";
 import { isNotFoundError } from "./storage.ts";
 import { assertKnownKeys, deduplicateStrings, isRecord, readNonEmptyString } from "./values.ts";
@@ -9,6 +11,8 @@ import { assertKnownKeys, deduplicateStrings, isRecord, readNonEmptyString } fro
  * each use and never pinned to a task; an absent file means every default.
  */
 export type HomeSettings = Readonly<{
+  /** Absent until onboarding chooses a terminal; composition defaults to Herdr. */
+  readonly terminal?: TerminalName;
   /** What Tandem does when it looks into its own problems; see {@link SelfImprovementMode}. */
   readonly selfImprovement: SelfImprovementMode;
   /** Whether `selfImprovement` is written at all: the user already chose, so don't ask. */
@@ -33,6 +37,7 @@ const HOME_SETTINGS_KEYS: Readonly<Record<string, true>> = {
   workerSkills: true,
   selfImprovement: true,
   projectRoots: true,
+  terminal: true,
 };
 
 export async function readHomeSettings(home: string): Promise<HomeSettings> {
@@ -65,6 +70,7 @@ function parseHomeSettings(text: string, source: string): HomeSettings {
   if (!isRecord(parsed)) throw new TypeError(`${source} must be a TOML table`);
   assertKnownKeys(parsed, HOME_SETTINGS_KEYS, source);
   return {
+    ...(parsed.terminal === undefined ? {} : { terminal: readTerminalName(parsed.terminal) }),
     selfImprovement: readSelfImprovement(parsed.selfImprovement, `${source} selfImprovement`),
     selfImprovementChosen: parsed.selfImprovement !== undefined,
     projectRoots: readAbsolutePaths(parsed.projectRoots, `${source} projectRoots`),
@@ -151,4 +157,29 @@ function readSelfImprovement(value: unknown, field: string): SelfImprovementMode
   const mode = SELF_IMPROVEMENT_MODES.find((candidate) => candidate === value);
   if (mode === undefined) throw new TypeError(`${field} must be "off", "fix", or "report"`);
   return mode;
+}
+
+/** Synchronous composition roots select the terminal before creating any service or pane. */
+export function readHomeSettingsSync(home: string): HomeSettings {
+  const file = join(home, HOME_SETTINGS_FILE);
+  try {
+    if (!lstatSync(file).isFile()) throw new Error(`${file} must be a regular settings file`);
+    return parseHomeSettings(readFileSync(file, "utf8"), file);
+  } catch (error) {
+    if (!isNotFoundError(error)) throw error;
+    return { selfImprovement: "off", selfImprovementChosen: false, projectRoots: [] };
+  }
+}
+
+export function readTerminalName(value: unknown): TerminalName {
+  if (value === "herdr" || value === "tern") return value;
+  throw new TypeError('terminal must be "herdr" or "tern"');
+}
+
+/** Caller holds the state lock and proves no active task or owned operation spans the switch. */
+export async function saveTerminalChoice(
+  home: string,
+  terminal: TerminalName,
+): Promise<HomeSettings> {
+  return saveHomeSetting(home, "terminal", JSON.stringify(readTerminalName(terminal)));
 }

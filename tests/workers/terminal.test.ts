@@ -39,6 +39,7 @@ function fixture(root: string) {
     jobPath: join(root, "job.json"),
   };
   const endpoint: Endpoint = {
+    terminal: "herdr" as const,
     sessionId: "owned-session",
     workspaceId: "owned-workspace",
     tabId: "owned-tab",
