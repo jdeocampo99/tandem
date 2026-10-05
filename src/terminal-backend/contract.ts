@@ -77,6 +77,18 @@ export type FocusResult =
   | Readonly<{ focused: true }>
   | Readonly<{ focused: false; code: number; detail: string }>;
 
+/** A durable identity to show. The CLI validates it before asking a backend to present it. */
+export type TerminalView =
+  | Readonly<{ kind: "task"; taskId: string }>
+  | Readonly<{ kind: "brief"; requestId: string }>
+  | Readonly<{ kind: "pr"; taskId: string }>;
+
+export type OpenViewResult = Readonly<{
+  opened: boolean;
+  warnings: readonly string[];
+  fallback?: "brief-review";
+}>;
+
 export type AgentState = "idle" | "working" | "blocked" | "unknown";
 
 /** Presentation-only lifecycle state for the pane an agent runs in; it never grants ownership. */
@@ -210,6 +222,13 @@ export type TerminalBackend = Readonly<{
   ): Promise<FocusResult>;
   /** Focuses the exact pane; false when the terminal would not, which callers may ignore. */
   focusAgent(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
+
+  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
+   * Unsupported presentations return an explicit warning and never type into the conversation.
+   */
+  openView(
+    input: Readonly<{ coordinator: Endpoint; cwd: string; home: string; view: TerminalView }>,
+  ): Promise<OpenViewResult>;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;
