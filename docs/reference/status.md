@@ -231,8 +231,11 @@ tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
     recovery noticed a quiet worker that is still alive.
 - A running row whose worker is in a tool also shows `▸ <verb> <target> · <age>`, like
   `▸ edit src/auth/session.ts · 4s`, from the primary worker's display-only activity file (see
-  [control.md](control.md#message-receipts)). Verbs are plain for both harnesses' tool names
-  (`read`, `edit`, `write`, `run`, `search`); any other tool shows its lowercased name. The age
+  [control.md](control.md#message-receipts)). One table in src/board/panel.ts turns both
+  harnesses' tool names into plain verbs: `read`, `edit` (writes too), `run`, `search`, `browse`
+  (web search and fetch), `delegate` (OMP's `task`, Claude Code's `Task` and `Agent`), `ask`,
+  `report`, `copy`. To-do updates show no tool line. Any other tool shows its lowercased name
+  without an `mcp__<server>__` prefix, and a tool with no target shows just the verb. The age
   runs from the tool's start to the snapshot's time. A target too wide for the panel is cut from
   the left with `…`, so the file name stays. An implementing row puts its current step first: the
   to-do in progress, else the next pending one. Other running rows show only the tool line while
@@ -241,7 +244,8 @@ tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
   checklist (`☑` done, `▸` in progress, `☐` to do, `☒` dropped), `/` searches, `1`-`9` and `[` `]`
   switch project, `Esc` closes a `--popup` or clears a search, Ctrl-C closes. Clicking a chip
   switches; clicking a row selects it; double-clicking goes. The selection follows its task across
-  stage changes. A key help box shows until `x` or the first key, remembered by
+  stage changes. A key help box (with `Esc close` only in a `--popup`) shows until `x` or the
+  first key, remembered by
   `<home>/panel-keys-seen`. An escape sequence split across reads waits 50ms for its rest before
   it counts as `Esc`.
 - When the rows are taller than the terminal, they scroll to keep the selection in sight; the
@@ -250,14 +254,17 @@ tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
   primary worker focus that worker's pane, pull requests `open` in the browser; queued and paused
   rows go nowhere. Focusing runs `herdr --session <session> workspace focus <workspace>` then
   `agent focus <pane>`; the second may fail (Herdr focuses only panes it knows run an agent) and
-  the workspace focus still counts. Switching project focuses that coordinator's workspace. A
-  `--popup` exits after a successful go or switch. A go or switch that cannot get there says so
+  the workspace focus still counts. Switching project, from the panel or with `prefix+,` and
+  `prefix+.`, focuses that coordinator's workspace and then its chat pane, the same steps as going
+  to its chat. A go or switch closes an open search. A `--popup` exits after a successful go or
+  switch. A go or switch that cannot get there says so
   in the footer (`⚠ no coordinator is open for that project`, `⚠ Herdr couldn't focus it`,
   `⚠ couldn't open the link`) until the next key.
 - Search matches every word as a prefix of a word in the row's name, stage, kind (`needs you`,
   `stuck`, `review`, `pr`, `queued`, `done`, `running`), or project, across every project, grouped
-  under project headings. Query and rows split into words the same way, so `#412`, `fix-auth`,
-  and `acme/app` match.
+  under project headings in each project's own case (section titles are uppercase); with nothing
+  found it says `no matches`. Query and rows split into words the same way, so `#412`,
+  `fix-auth`, and `acme/app` match.
 - SIGTERM, SIGHUP, and drawing errors close the panel the same way Esc does: the terminal leaves
   raw mode, mouse reporting, and the alternate screen before the process ends.
 - Without a terminal to read keys from, it draws once and exits.
