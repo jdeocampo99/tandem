@@ -556,57 +556,66 @@ test("a numeric PR route resolves its durable task and refuses an ambiguous PR n
   }
 });
 
-test("native open carries the plugin's pane, cwd, and window context to the backend", async () => {
-  const f = await fixture();
-  try {
-    const task = await createPrTask(f);
-    const origins: unknown[] = [];
-    const scopes: unknown[] = [];
-    const terminal = {
-      ...f.deps.terminal,
-      openView: async (input: Parameters<TerminalBackend["openView"]>[0]) => {
-        origins.push(input.origin);
-        return f.deps.terminal.openView(input);
-      },
-    };
-    const { service: _injectedService, ...dependencies } = f.deps;
-    const result = await runTerminal(
-      [
-        "native",
-        "open",
-        "pr",
-        "42",
-        "--pane",
-        "coordinator",
-        "--cwd",
-        f.clean,
-        "--window",
-        "own-window",
-      ],
-      {
-        ...dependencies,
-        terminal,
-        createService: (options) => {
-          scopes.push(options.sourceWorkspace);
-          return createTandemService({
-            ...options,
-            run: f.deps.run,
-            clock: () => NOW,
-            checkBriefLanguage: async () => [],
-          });
+for (const contextSource of ["flags", "environment"] as const) {
+  test(`native open selects the project and carries the plugin context from ${contextSource}`, async () => {
+    const f = await fixture();
+    try {
+      const task = await createPrTask(f);
+      const origins: unknown[] = [];
+      const scopes: unknown[] = [];
+      const terminal = {
+        ...f.deps.terminal,
+        openView: async (input: Parameters<TerminalBackend["openView"]>[0]) => {
+          origins.push(input.origin);
+          return f.deps.terminal.openView(input);
         },
-        processEnvironment: { ...f.deps.processEnvironment, TANDEM_SESSION: "another-session" },
-      },
-    );
-    expect(result.exitCode).toBe(0);
-    expect(result.status).toBe("native");
-    expect(scopes).toEqual([{ repoPath: f.repo, path: f.clean }]);
-    expect(origins).toEqual([{ paneId: "coordinator", cwd: f.clean, windowId: "own-window" }]);
-    expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
-  } finally {
-    await f.close();
-  }
-});
+      };
+      const { service: _injectedService, ...dependencies } = f.deps;
+      const result = await runTerminal(
+        [
+          "native",
+          "open",
+          "pr",
+          "42",
+          "--pane",
+          "coordinator",
+          ...(contextSource === "flags" ? ["--cwd", f.clean, "--window", "own-window"] : []),
+        ],
+        {
+          ...dependencies,
+          terminal,
+          createService: (options) => {
+            scopes.push(options.sourceWorkspace);
+            return createTandemService({
+              ...options,
+              run: f.deps.run,
+              clock: () => NOW,
+              checkBriefLanguage: async () => [],
+            });
+          },
+          processEnvironment: {
+            ...f.deps.processEnvironment,
+            TANDEM_SESSION: "another-session",
+            TANDEM_NATIVE_CWD: contextSource === "environment" ? f.clean : "/unrelated/project",
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.status).toBe("native");
+      expect(scopes).toEqual([{ repoPath: f.repo, path: f.clean }]);
+      expect(origins).toEqual([
+        {
+          paneId: "coordinator",
+          cwd: f.clean,
+          ...(contextSource === "flags" ? { windowId: "own-window" } : {}),
+        },
+      ]);
+      expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+    } finally {
+      await f.close();
+    }
+  });
+}
 
 test("native open refuses conflicting project and pane context before opening a view", async () => {
   const f = await fixture();

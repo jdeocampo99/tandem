@@ -143,7 +143,8 @@ commands are also available in the advanced action CLI (`bun src/cli.ts`).
   For `pr`, ID is the linked task id (including a `pr-review` task) or a PR number. A number
   resolves only within the selected project and is refused when ambiguous. Herdr opens briefs through the
   existing review workflow and returns explicit warnings for unsupported native task/PR views.
-  Plugin context uses `--pane PANE_ID`, `--cwd PATH`, and `--window WINDOW_KEY` when available.
+  Plugin context uses `--pane PANE_ID` and `TANDEM_NATIVE_CWD` from the focused pane.
+  Explicit `--cwd PATH` overrides that environment value; `--window WINDOW_KEY` is optional.
   The pane and cwd must select exactly one recorded project/session before the scoped service is
   created. Context never grants ownership; the coordinator is proven separately. The backend
   receives that origin and must honor the supplied window/pane or return a refusal, rather than

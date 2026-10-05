@@ -57,6 +57,7 @@ function environmentSource(): TandemEnvironmentSource {
     "TANDEM_POOL_ROOT",
     "TANDEM_REPO",
     "TANDEM_SOURCE_REPO",
+    "TANDEM_NATIVE_CWD",
     PARALLEL_COORDINATORS_VARIABLE,
     ...terminalContext.variables,
   ];
@@ -150,13 +151,19 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
 
   const invoke = async (invocation: CliInvocation, signal?: AbortSignal): Promise<CliResult> => {
     if (invocation.options.help) return { command: invocation.command, value: HELP_TEXT };
+    const viewCwd =
+      invocation.options.viewCwd ?? capabilities.processEnvironment().TANDEM_NATIVE_CWD;
+    const resolvedInvocation =
+      viewCwd === undefined
+        ? invocation
+        : { ...invocation, options: { ...invocation.options, viewCwd } };
     const environment = await resolveViewActionEnvironment(
-      resolveEnvironment(invocation, dependencies),
-      invocation,
+      resolveEnvironment(resolvedInvocation, dependencies),
+      resolvedInvocation,
       capabilities.terminal,
     );
     return runCliCommand({
-      invocation,
+      invocation: resolvedInvocation,
       environment,
       service: () => getService(environment),
       signal,
