@@ -27,6 +27,7 @@ export function sameEndpointLaunch(
   return (
     left !== undefined &&
     left.schemaVersion === right.schemaVersion &&
+    left.terminal === right.terminal &&
     left.reservationId === right.reservationId &&
     left.operationId === right.operationId &&
     left.sessionId === right.sessionId &&
@@ -136,6 +137,12 @@ export async function recoverEndpointFromLaunch(
   terminal: TerminalBackend,
   intent: DurableEndpointLaunch,
 ): Promise<EndpointLaunchRecovery> {
+  if (intent.terminal !== terminal.name) {
+    return {
+      status: "ambiguous",
+      detail: `quarantined ${intent.terminal} launch under ${terminal.name}`,
+    };
+  }
   const workspaces = await findLaunchWorkspaces(terminal, intent);
   if (workspaces.status !== "found") return workspaces;
   const found: Readonly<{ workspace: WorkspaceListing; pane: PaneListing }>[] = [];
@@ -160,6 +167,7 @@ export async function recoverEndpointFromLaunch(
   return {
     status: "recovered",
     endpoint: {
+      terminal: intent.terminal,
       sessionId: intent.sessionId,
       workspaceId: match.workspace.workspaceId,
       tabId: match.pane.tabId,

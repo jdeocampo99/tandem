@@ -18,6 +18,7 @@ import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 function endpoint(overrides: Partial<Endpoint> = {}): Endpoint {
   return {
+    terminal: "herdr" as const,
     sessionId: "tandem",
     workspaceId: "workspace-a",
     tabId: "tab-a",

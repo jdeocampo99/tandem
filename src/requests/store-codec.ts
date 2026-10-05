@@ -11,6 +11,7 @@ import {
   type RequestReviewPaneStatus,
 } from "../contracts.ts";
 import { StateCorruptionError } from "../tasks/store-errors.ts";
+import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 import { checkedRequestBriefContent, requestBriefDigests } from "./brief.ts";
 
 const RECORD_KEYS = [
@@ -54,6 +55,7 @@ const PANE_KEYS = [
 ] as const;
 
 const ENDPOINT_KEYS = [
+  "terminal",
   "sessionId",
   "workspaceId",
   "tabId",
@@ -240,6 +242,7 @@ function parseEndpoint(value: unknown, source: string): Endpoint {
   const record = requiredRecord(value, source);
   assertExactKeys(record, ENDPOINT_KEYS, source);
   return {
+    terminal: storedEndpointTerminal(record.terminal, source),
     sessionId: requiredText(record, "sessionId", source),
     workspaceId: requiredText(record, "workspaceId", source),
     tabId: requiredText(record, "tabId", source),

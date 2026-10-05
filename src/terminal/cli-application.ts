@@ -154,7 +154,10 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
       environment,
       service: () => getService(environment),
       signal,
-      capabilities,
+      capabilities: {
+        ...capabilities,
+        terminal: dependencies.terminal ?? terminalBackend(run, { home: environment.home }),
+      },
     });
   };
   const shutdown = async (): Promise<void> => {

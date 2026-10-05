@@ -28,6 +28,7 @@ import type {
   SessionPane,
   TerminalBackend,
 } from "../terminal-backend/contract.ts";
+import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
 import { liveWorkerTerminal } from "../workers/terminal.ts";
 import { workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { withCoordinatorLaunchLock } from "./lock.ts";
@@ -123,6 +124,7 @@ function sameCoordinatorIdentity(left: CoordinatorRecord, right: CoordinatorReco
     left.endpoint.sessionId === right.endpoint.sessionId &&
     left.endpoint.workspaceId === right.endpoint.workspaceId &&
     left.endpoint.tabId === right.endpoint.tabId &&
+    left.endpoint.terminal === right.endpoint.terminal &&
     left.endpoint.paneId === right.endpoint.paneId &&
     left.worktree.root === right.worktree.root &&
     left.worktree.path === right.worktree.path &&
@@ -195,7 +197,13 @@ type ForceEndpoint = Readonly<{
 }>;
 
 function endpointKey(endpoint: Endpoint): string {
-  return [endpoint.sessionId, endpoint.workspaceId, endpoint.tabId, endpoint.paneId].join("\0");
+  return [
+    endpoint.terminal,
+    endpoint.sessionId,
+    endpoint.workspaceId,
+    endpoint.tabId,
+    endpoint.paneId,
+  ].join("\0");
 }
 
 function activeJobEndpoint(
@@ -989,9 +997,11 @@ async function resetIdleCoordinators(
   let snapshot = await readIdleCoordinatorSnapshot(run, terminal, scope.sessionId, liveRecords);
 
   const workerEndpoints = selectedWorkerEndpoints(selection);
+  for (const endpoint of workerEndpoints) assertTerminalEndpoint(terminal.name, endpoint);
   const presentationEndpoints = presentations
     .map((presentation) => presentation.endpoint ?? presentation.job?.endpoint)
     .filter((endpoint): endpoint is Endpoint => endpoint !== undefined);
+  for (const endpoint of presentationEndpoints) assertTerminalEndpoint(terminal.name, endpoint);
   if (
     snapshot === undefined &&
     [...workerEndpoints, ...presentationEndpoints].some(

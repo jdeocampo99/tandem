@@ -210,7 +210,10 @@ export type ResolvedPolicy = {
  */
 export const LEGACY_ENDPOINT_ROLES = [...MODEL_ROLE_ORDER, "verifier"] as const;
 
+export type TerminalName = "herdr" | "tern";
+
 export type Endpoint = {
+  readonly terminal: TerminalName;
   readonly sessionId: string;
   readonly workspaceId: string;
   readonly tabId: string;

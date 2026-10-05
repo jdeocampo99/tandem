@@ -159,6 +159,7 @@ test("an adversarial classifier result cannot approve scope, create, or start an
     };
     const endpoints: readonly Endpoint[] = [
       {
+        terminal: "herdr" as const,
         sessionId: "s1",
         workspaceId: "w1",
         tabId: "t1",

@@ -6,6 +6,7 @@ import { OnboardingGuide } from "../../../src/session/onboarding-guide.ts";
 
 const openPage: OnboardingFacts = {
   modelsChosen: true,
+  terminalChosen: true,
   codeFolders: ["/Users/me/code"],
   projects: [],
   selfImprovementChosen: false,

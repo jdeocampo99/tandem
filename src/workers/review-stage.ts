@@ -176,7 +176,11 @@ export class ReviewStage {
     } catch (error) {
       const currentRuntime = await this.#deps.runtimeFor(task.id);
       if (
-        currentRuntime?.endpoints.some((candidate) => candidate.paneId === reviewEndpoint.paneId)
+        currentRuntime?.endpoints.some(
+          (candidate) =>
+            candidate.terminal === reviewEndpoint.terminal &&
+            candidate.paneId === reviewEndpoint.paneId,
+        )
       ) {
         await records.releaseUnlaunchedTaskReservation(task.id, reservationId, claim);
       }

@@ -87,7 +87,7 @@ function createCoordinatorService(
               repoPath: environment.repo,
               sourceRepoPath: sourceRepo,
               run: runCommand,
-              terminal: terminalBackend(runCommand),
+              terminal: terminalBackend(runCommand, { home: environment.home }),
             }),
         }),
   });
@@ -103,7 +103,7 @@ export function bindCoordinator(
     cwd: harness.cwd,
     sessionId: harness.sessionId,
   });
-  const terminal = terminalBackend(options.run ?? runCommand);
+  const terminal = terminalBackend(options.run ?? runCommand, { home: environment.home });
   const session = new CoordinatorSession({
     host: harness.host,
     clock: { now: () => Date.now(), monotonic: () => performance.now() },

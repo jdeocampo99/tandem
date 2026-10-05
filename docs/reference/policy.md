@@ -285,3 +285,25 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
   Readers must accept events recorded before usage existed.
 - Background: [prompt-routing PRD](../jev-prompt-routing-prd.md), [integration overview](../jev-prd.md),
   [evaluation plan](../jev-evaluation.md).
+
+## Choosing the terminal
+
+The home setting `terminal = "herdr"` or `terminal = "tern"` applies across projects. An absent
+setting keeps Herdr. Only `src/terminal-backend/compose.ts` selects an implementation from it;
+composition reads the setting again before terminal operations, including after onboarding saves.
+
+The setup page offers both terminals in its first step and shows the choice on Review. In chat,
+the `terminal-setting` action confirms the choice; direct interactive repository onboarding asks
+when the home has no saved terminal. Choosing Tern checks its installed executable and account gate
+in a temporary, isolated daemon and window. A missing app, signed-out account, or unconfirmed gate
+saves Herdr instead and explains why. The probe closes its own window and daemon and changes no
+settings in the user's Tern configuration.
+
+Switching is refused under the state lock while tasks are queued or running, jobs are active, or
+reservations or launch outcomes retain uncertain ownership, including presentations. Availability
+is checked outside the lock; the switch is checked again under the lock immediately before saving.
+
+Endpoints and pending launch intents record their creating terminal. Historical records without
+that field are Herdr records. A record from the other terminal is quarantined before inspection,
+close, recovery, or navigation: its ids never authorize an operation in the selected terminal.
+Derived board navigation retains the terminal tag; an older untagged snapshot is treated as Herdr.

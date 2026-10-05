@@ -104,7 +104,11 @@ function workerPanes(
       (job) => activeRuntimeJob(job) && job.endpoint !== undefined,
     )?.endpoint;
     if (endpoint === undefined) continue;
-    panes.set(task.id, { workspaceId: endpoint.workspaceId, paneId: endpoint.paneId });
+    panes.set(task.id, {
+      terminal: endpoint.terminal,
+      workspaceId: endpoint.workspaceId,
+      paneId: endpoint.paneId,
+    });
   }
   return panes;
 }

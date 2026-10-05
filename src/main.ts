@@ -816,7 +816,7 @@ export async function runTerminal(
     }
     const environment = resolveTerminalEnvironment(invocation, dependencies);
     const run = dependencies.run ?? runCommand;
-    const terminal = dependencies.terminal ?? terminalBackend(run);
+    const terminal = dependencies.terminal ?? terminalBackend(run, { home: environment.home });
     if (invocation.command === "status") {
       return await handleStatus({ invocation, environment, dependencies, run, stdout });
     }

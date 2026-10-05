@@ -8,6 +8,7 @@ import {
   type TaskQuestion,
 } from "../contracts.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 export type PendingPresentationNotification = Readonly<{
   readonly id: string;
   readonly message: string;
@@ -407,6 +408,7 @@ export function parseEndpointValue(value: unknown, field: string): Endpoint {
   if (!Number.isSafeInteger(generation) || (generation as number) < 0)
     throw new TypeError(`${field}.generation is invalid`);
   return {
+    terminal: storedEndpointTerminal(value.terminal, field),
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
     tabId: singleLine(value.tabId, `${field}.tabId`),

@@ -201,8 +201,17 @@ async function gitText(
 }
 
 function jobForEndpoint(runtime: RuntimeTaskState, endpoint: Endpoint): DurableJob | undefined {
-  const byPane = runtime.jobs.find((job) => job.endpoint?.paneId === endpoint.paneId);
-  return byPane ?? runtime.jobs.find((job) => job.endpoint?.tabId === endpoint.tabId);
+  const byPane = runtime.jobs.find(
+    (job) =>
+      job.endpoint?.terminal === endpoint.terminal && job.endpoint?.paneId === endpoint.paneId,
+  );
+  return (
+    byPane ??
+    runtime.jobs.find(
+      (job) =>
+        job.endpoint?.terminal === endpoint.terminal && job.endpoint?.tabId === endpoint.tabId,
+    )
+  );
 }
 
 function jobState(job: DurableJob, resultExists: boolean): TaskJobState {

@@ -1,5 +1,5 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
-import type { AgentRole, Endpoint } from "../contracts.ts";
+import type { AgentRole, Endpoint, TerminalName } from "../contracts.ts";
 import type { ToolCheck } from "../onboarding/tools.ts";
 
 /** A pane Tandem owns, and the directory the backend's commands run from. */
@@ -96,7 +96,7 @@ export type SplitAnchor =
  */
 export type TerminalBackend = Readonly<{
   /** What doctor checks and messages call this terminal. */
-  name: string;
+  name: TerminalName;
 
   /** Reads the pane's identity and foreground processes, proving it is still `endpoint`. */
   inspect(target: EndpointTarget): Promise<EndpointInspection>;
