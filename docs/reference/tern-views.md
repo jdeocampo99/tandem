@@ -126,7 +126,7 @@ tandem native pr-comment TASK_ID --text TEXT CONTEXT
 tandem native pr-comment TASK_ID --input FILE CONTEXT
 tandem native review-submit TASK_ID --input FILE CONTEXT
 tandem native restart TASK_ID CONTEXT
-tandem native steer TASK_ID --text TEXT CONTEXT
+tandem native steer --task TASK_ID --text TEXT CONTEXT
 CONTEXT = --pane ID --cwd PATH [--window KEY]
 ```
 
@@ -191,8 +191,9 @@ user text is one argv element, including spaces and newlines.
 `yours: [{ file, line, body }]`. The CLI reuses the pinned-HEAD and no-double-post checks of
 the review page; the renderer does not publish directly.
 
-`restart` names the task and goes through central recovery. `steer` also requires the user's
-direction as one `--text` argv value. Both carry the same explicit pane/cwd/window context.
+`restart` names the task and goes through central recovery. `steer` requires `--task TASK_ID` and
+the user's direction as one `--text` argv value; positional task ids are refused. Both carry
+the same explicit pane/cwd/window context.
 The action worker owns these handlers alongside brief/PR mutations and `native open`;
 renderers own collecting input, writing the action file, invoking the CLI and cleanup.
 
