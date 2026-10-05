@@ -80,6 +80,11 @@ export type OpenViewResult = Readonly<{
   fallback?: "brief-review";
 }>;
 
+/** Installation and account readiness proved before offering a terminal in setup. */
+export type TerminalAvailability =
+  | Readonly<{ status: "missing" | "signedOut" | "ready" }>
+  | Readonly<{ status: "unknown"; reason: string }>;
+
 /** The last proven window width, and any limitation that prevented fitting the panel. */
 export type PanelFitResult = Readonly<{
   fittedWidth: number | undefined;

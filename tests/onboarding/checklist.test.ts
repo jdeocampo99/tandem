@@ -67,8 +67,23 @@ test("while Lavish is there, the setup page comes first and the chat keeps its s
 });
 
 test("a saved model setup still asks for an explicit terminal choice", () => {
-  const facts = { ...done, terminalChosen: false };
+  const facts = { ...done, terminalChosen: false, tern: { status: "ready" as const } };
   expect(remainingOnboardingSteps(facts)).toEqual(["terminal"]);
   expect(onboardingContext(facts)).toContain("terminal-setting");
   expect(onboardingQuestion("terminal", facts)?.text).toContain("Herdr or Tern");
 });
+
+for (const tern of [
+  { status: "missing" },
+  { status: "signedOut" },
+  { status: "unknown", reason: "Tern could not start." },
+] as const) {
+  test(`${tern.status} Tern is never offered in chat setup`, () => {
+    const facts = { ...done, terminalChosen: false, tern };
+    const question = onboardingQuestion("terminal", facts);
+    expect(question?.text).toContain("Using Herdr.");
+    expect(question?.text).not.toContain("Herdr or Tern");
+    expect(question?.hidden).toContain("with herdr");
+    expect(onboardingContext(facts)).toContain(question?.text ?? "missing");
+  });
+}

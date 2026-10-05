@@ -121,8 +121,8 @@ h2{font-size:15px;font-weight:600;margin:0}
     <div class="panel" style="padding:16px;margin-bottom:16px">
       <h3>Which terminal should Tandem use?</h3>
       <label><input type="radio" name="terminal" value="herdr"> Herdr</label>
-      <label style="margin-left:20px"><input type="radio" name="terminal" value="tern"> Tern</label>
-      <p class="sec-note">Tern needs the app and a signed-in Stencil account. If it is unavailable, Tandem saves Herdr and tells you why. Finish or stop running tasks before switching.</p>
+      <label id="tern-choice" style="margin-left:20px"><input type="radio" name="terminal" value="tern"> Tern</label>
+      <p class="sec-note" id="terminal-note"></p>
     </div>
     <div class="presets" id="presets"></div>
     <p class="harness-notes" id="harness-notes"></p>
@@ -232,7 +232,11 @@ const state = {
 };
 const repos = [];
 const pendingFolders = new Set(Array.isArray(VIEW.pendingFolders) ? VIEW.pendingFolders : []);
-document.querySelector(`input[name="terminal"][value="${draft?.terminal ?? VIEW.terminal}"]`).checked = true;
+document.getElementById("tern-choice").hidden = !VIEW.ternReady;
+document.querySelector('input[name="terminal"][value="tern"]').disabled = !VIEW.ternReady;
+document.getElementById("terminal-note").textContent = VIEW.terminalReason ?? "Tern is signed in and ready. Finish or stop running tasks before switching.";
+const initialTerminal = VIEW.ternReady ? (draft?.terminal ?? VIEW.terminal) : "herdr";
+document.querySelector(`input[name="terminal"][value="${initialTerminal}"]`).checked = true;
 const initialSelfImprovement = draft?.selfImprovement ?? VIEW.selfImprovement;
 document.querySelector(`input[name="self"][value="${initialSelfImprovement}"]`).checked = true;
 const viewRepos = Array.isArray(VIEW.repos) ? VIEW.repos : [];

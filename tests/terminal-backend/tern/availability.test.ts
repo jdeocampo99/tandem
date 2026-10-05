@@ -10,14 +10,13 @@ test("missing Tern falls back without starting a daemon or window", async () => 
     throw new Error("ENOENT");
   };
   expect(await probeTern(run)).toMatchObject({
-    available: false,
-    reason: expect.stringContaining("not installed"),
+    status: "missing",
   });
   expect(calls).toHaveLength(1);
 });
 
-for (const signedIn of [true, false]) {
-  test(`${signedIn ? "signed-in" : "signed-out"} Tern is detected through an isolated account gate and cleaned up`, async () => {
+for (const signedIn of [true, false, undefined]) {
+  test(`${signedIn === undefined ? "unknown" : signedIn ? "signed-in" : "signed-out"} Tern is detected through an isolated account gate and cleaned up`, async () => {
     const calls: CommandRequest[] = [];
     const aborted: string[] = [];
     const run: CommandRunner = async (request) => {
@@ -42,9 +41,16 @@ for (const signedIn of [true, false]) {
         stderr: "",
       };
     };
-    const result = await probeTern(run);
-    expect(result.available).toBe(signedIn);
-    if (!signedIn) expect(result).toMatchObject({ reason: expect.stringContaining("Sign in") });
+    let time = 0;
+    const result = await probeTern(run, {
+      now: () => time,
+      sleep: async (milliseconds) => {
+        time += milliseconds;
+      },
+    });
+    expect(result.status).toBe(
+      signedIn === undefined ? "unknown" : signedIn ? "ready" : "signedOut",
+    );
     const operations = calls.filter((call) => !call.argv.includes("--version"));
     const root = operations[0]?.cwd;
     expect(root).toBeDefined();

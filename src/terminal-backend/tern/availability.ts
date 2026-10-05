@@ -2,17 +2,15 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRunner } from "../../contracts.ts";
+import type { TerminalAvailability } from "../contract.ts";
 
 export const TERN_EXECUTABLE = "/Applications/Tern.app/Contents/MacOS/tern";
-export type TernAvailability =
-  | Readonly<{ available: true }>
-  | Readonly<{ available: false; reason: string }>;
 
 /** Check the window's account gate in a private daemon, without inspecting any user's pane. */
 export async function probeTern(
   run: CommandRunner,
   timing: Readonly<{ now?: () => number; sleep?: (milliseconds: number) => Promise<unknown> }> = {},
-): Promise<TernAvailability> {
+): Promise<TerminalAvailability> {
   const now = timing.now ?? Date.now;
   const sleep = timing.sleep ?? Bun.sleep;
   try {
@@ -21,10 +19,9 @@ export async function probeTern(
       cwd: tmpdir(),
       timeoutMs: 3_000,
     });
-    if (version.code !== 0)
-      return { available: false, reason: "Tern is not installed. Using Herdr." };
+    if (version.code !== 0) return { status: "missing" };
   } catch {
-    return { available: false, reason: "Tern is not installed. Using Herdr." };
+    return { status: "missing" };
   }
   const root = await realpath(await mkdtemp(join(tmpdir(), "td-tern-")));
   const control = join(root, "c.sock");
@@ -65,7 +62,7 @@ export async function probeTern(
       if (ready) break;
       await sleep(50);
     }
-    if (!ready) return { available: false, reason: "Tern could not start. Using Herdr." };
+    if (!ready) return { status: "unknown", reason: "Tern could not start." };
     window = run({
       argv: [TERN_EXECUTABLE, "--control", control, "--dir", root],
       cwd: root,
@@ -82,11 +79,10 @@ export async function probeTern(
           if (typeof value === "object" && value !== null && "gate" in value) {
             const gate = value.gate;
             if (typeof gate === "object" && gate !== null && "signed_in" in gate) {
-              if (gate.signed_in === true) return { available: true };
+              if (gate.signed_in === true) return { status: "ready" };
               if (gate.signed_in === false)
                 return {
-                  available: false,
-                  reason: "Sign in to Tern with your Stencil account first. Using Herdr.",
+                  status: "signedOut",
                 };
             }
           }
@@ -97,9 +93,11 @@ export async function probeTern(
       await sleep(50);
     }
     return {
-      available: false,
-      reason: "Tern's sign-in state could not be confirmed. Using Herdr.",
+      status: "unknown",
+      reason: "Tern's sign-in state could not be confirmed.",
     };
+  } catch {
+    return { status: "unknown", reason: "Tern could not be checked." };
   } finally {
     if (window !== undefined)
       await call(["ctl", "--control", control, "quit"]).catch(() => undefined);

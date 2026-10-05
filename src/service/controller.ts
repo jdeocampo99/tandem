@@ -208,7 +208,11 @@ import {
   ternAvailability,
 } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
-import { assertTerminalSwitch, type TerminalChoiceResult } from "../terminal-backend/setting.ts";
+import {
+  assertTerminalSwitch,
+  type TerminalChoiceResult,
+  ternFallbackReason,
+} from "../terminal-backend/setting.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
@@ -664,6 +668,7 @@ class TandemController {
   readonly #memory: ProjectMemory;
   readonly #selfImprovement: SelfImprovement;
   readonly #setupPage: SetupPageWorkflow;
+  #onboardingTern: ReturnType<typeof ternAvailability> | undefined;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -697,6 +702,7 @@ class TandemController {
       models: (repoPath) => this.models(repoPath),
       roots: () => deps.projectRoots(),
       homeSettings: () => readHomeSettings(deps.home),
+      probeTern: () => ternAvailability(deps.run),
       registeredProjects: () => readRegisteredProjects(deps.home),
       inspectRepo: async (path) => {
         const onboarded = await this.setupOnboard(path, false);
@@ -1114,15 +1120,17 @@ class TandemController {
       );
     });
     const available =
-      requested === "tern" ? await ternAvailability(this.#deps.run) : { available: true as const };
-    const terminal = available.available ? requested : "herdr";
+      requested === "tern" ? await ternAvailability(this.#deps.run) : { status: "ready" as const };
+    if (requested === "tern") this.#onboardingTern = Promise.resolve(available);
+    const reason = ternFallbackReason(available);
+    const terminal = available.status === "ready" ? requested : "herdr";
     return this.#deps.store.exclusive(async () => {
       const tasks = await this.#deps.store.list();
       const state = await readRuntimeState(this.#deps.runtimePath);
       assertTerminalSwitch(this.#deps.terminal.name, requested, tasks, state);
       assertTerminalSwitch(this.#deps.terminal.name, terminal, tasks, state);
       await saveTerminalChoice(this.#deps.home, terminal);
-      return { requested, terminal, ...(available.available ? {} : { reason: available.reason }) };
+      return { requested, terminal, ...(reason === undefined ? {} : { reason }) };
     });
   }
 
@@ -1134,9 +1142,15 @@ class TandemController {
       realpath(repoPath),
       this.#setupPage.status(),
     ]);
+    const terminalChosen = savedTerminalPreference(settings).chosen;
+    const probe = terminalChosen
+      ? undefined
+      : (this.#onboardingTern ?? ternAvailability(this.#deps.run));
+    if (probe !== undefined) this.#onboardingTern = probe;
     return {
       modelsChosen: models.configured,
-      terminalChosen: savedTerminalPreference(settings).chosen,
+      terminalChosen,
+      ...(probe === undefined ? {} : { tern: await probe }),
       codeFolders: settings.projectRoots,
       projects: registered.filter((project) => project !== tandem),
       selfImprovementChosen: settings.selfImprovementChosen,

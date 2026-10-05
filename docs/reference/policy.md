@@ -292,12 +292,12 @@ The home setting `terminal = "herdr"` or `terminal = "tern"` applies across proj
 setting keeps Herdr. Only `src/terminal-backend/compose.ts` selects an implementation from it;
 composition reads the setting again before terminal operations, including after onboarding saves.
 
-The setup page offers both terminals in its first step and shows the choice on Review. In chat,
-the `terminal-setting` action confirms the choice; direct interactive repository onboarding asks
-when the home has no saved terminal. Choosing Tern checks its installed executable and account gate
-in a temporary, isolated daemon and window. A missing app, signed-out account, or unconfirmed gate
-saves Herdr instead and explains why. The probe closes its own window and daemon and changes no
-settings in the user's Tern configuration.
+The setup page, chat, and direct interactive onboarding offer Tern only when `probeTern` reports
+`ready`. Its other outcomes are `missing`, `signedOut`, or `unknown` with a reason; each shows a
+one-line explanation and selects Herdr. Page discovery keeps the probe result for that open page
+and probes again when reopened. The `terminal-setting` action rechecks availability before saving
+Tern. The probe reads the executable and account gate in a temporary, isolated daemon and window,
+closes its own resources, and changes no settings in the user's Tern configuration.
 
 Switching is refused under the state lock while tasks are queued or running, jobs are active, or
 reservations or launch outcomes retain uncertain ownership, including presentations. Availability

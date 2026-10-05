@@ -1,6 +1,21 @@
 import type { TaskRecord, TerminalName } from "../contracts.ts";
 import { activeRuntimeJob, unreleasedReservation } from "../runtime/activity.ts";
 import type { RuntimeState } from "../runtime/schema.ts";
+import type { TerminalAvailability } from "./contract.ts";
+
+/** Only a confirmed signed-in account may be offered Tern. */
+export function ternFallbackReason(availability: TerminalAvailability): string | undefined {
+  switch (availability.status) {
+    case "ready":
+      return undefined;
+    case "missing":
+      return "Tern is not installed. Using Herdr.";
+    case "signedOut":
+      return "Sign in to Tern with your Stencil account first. Using Herdr.";
+    case "unknown":
+      return `${availability.reason.replace(/[\r\n]+/gu, " ")} Using Herdr.`;
+  }
+}
 
 /** Switching is refused while any job or uncertain reservation could still own terminal work. */
 export function assertTerminalSwitch(
