@@ -601,13 +601,14 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
     if (paneId === undefined) return;
     fitting = fitting
       .then(async () => {
-        fittedAreaWidth = await deps.terminal.fitPanel({
+        const fit = await deps.terminal.fitPanel({
           sessionId: deps.sessionId,
           cwd: deps.cwd,
           paneId,
           columns: PANEL_WIDTH,
           fittedWidth: fittedAreaWidth,
         });
+        fittedAreaWidth = fit.fittedWidth;
       })
       .catch(() => undefined);
   };

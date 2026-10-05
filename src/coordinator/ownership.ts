@@ -236,7 +236,10 @@ async function findOwnedCoordinator(
     );
   }
   if (matchingProcesses.length === 0) {
-    if (inspection.activeWorker) {
+    const foreground = inspection.processInfo.foregroundProcesses;
+    const stoppedBootstrap =
+      foreground.length === 1 && isCoordinatorBootstrap(foreground[0]?.argv ?? []);
+    if (inspection.activeWorker && !stoppedBootstrap) {
       const livePid = await liveCoordinatorProcess(run, record);
       if (livePid !== undefined) {
         throw ownershipFailure(
@@ -280,7 +283,7 @@ export function assertStoppedCoordinatorShell(inspection: EndpointInspection): v
   const { shellPid, foregroundProcesses } = inspection.processInfo;
   const only = foregroundProcesses.length === 1 ? foregroundProcesses[0] : undefined;
   if (
-    inspection.activeWorker ||
+    (inspection.activeWorker && !isCoordinatorBootstrap(only?.argv ?? [])) ||
     shellPid === undefined ||
     only === undefined ||
     (only.pid !== shellPid && !isCoordinatorBootstrap(only.argv))

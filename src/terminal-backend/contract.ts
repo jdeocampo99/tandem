@@ -61,6 +61,11 @@ export type SessionPane = Readonly<{
   agentStatus?: string;
 }>;
 
+export type PanelFitResult = Readonly<{
+  fittedWidth: number | undefined;
+  warnings: readonly string[];
+}>;
+
 export type FocusResult =
   | Readonly<{ focused: true }>
   | Readonly<{ focused: false; code: number; detail: string }>;
@@ -228,12 +233,13 @@ export type TerminalBackend = Readonly<{
   closePanel(target: SessionTarget & Readonly<{ panelPaneId: string }>): Promise<void>;
   /**
    * Brings the panel back to `columns` wide, once per window width: returns the window width it
-   * fitted for, or `fittedWidth` unchanged when there was nothing to do or the terminal refused.
+   * fitted for, or `fittedWidth` unchanged when there was nothing to do. Unsupported sizing
+   * returns a warning without changing the pane.
    */
   fitPanel(
     target: SessionTarget &
       Readonly<{ paneId: string; columns: number; fittedWidth: number | undefined }>,
-  ): Promise<number | undefined>;
+  ): Promise<PanelFitResult>;
   /** Publishes the agent's state on the pane this process inherited, or undefined outside one. */
   agentStatusReporter(
     input: Readonly<{
