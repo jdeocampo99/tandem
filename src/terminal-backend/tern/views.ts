@@ -180,12 +180,14 @@ export function ternViewHost(
       ...(kind === "brief" && placement === "split"
         ? {
             endpoint: {
-              ...input.coordinator,
               terminal: "tern" as const,
+              sessionId: input.coordinator.sessionId,
               terminalSessionId: entry.session.id,
               workspaceId: entry.tab.id,
               tabId: entry.tab.id,
               paneId: entry.block.id,
+              role: input.coordinator.role,
+              generation: input.coordinator.generation,
             },
           }
         : {}),
