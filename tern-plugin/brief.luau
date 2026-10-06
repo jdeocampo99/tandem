@@ -83,9 +83,12 @@ local function submit(state: State, cx: BlockCx, verb: string)
   agreementDigest = model.approval.agreementDigest, comments = state.comments,
   text = if string.find(state.overall.text, "%S") then state.overall.text else nil,
  }
+ local argv = { "/bin/sh", "native-input.sh", verb, model.requestId, "--pane", state.origin, "--cwd", state.cwd }
+ if state.window ~= "" then table.insert(argv, "--window"); table.insert(argv, state.window) end
+ if state.home ~= "" then table.insert(argv, "--home"); table.insert(argv, state.home) end
  state.busy = true
  local ok, problem = pcall(function()
-  tern.process.run({ "/bin/sh", "brief-action.sh", verb, model.requestId, state.origin, state.cwd, state.window, state.home },
+  tern.process.run(argv,
    { cwd = ".", stdin = tern.json.encode(payload) }, function(result)
     state.busy = false
     if result.status ~= 0 then

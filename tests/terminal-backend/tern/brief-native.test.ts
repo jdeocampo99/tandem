@@ -111,19 +111,28 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
         mode: 0o600,
       });
     await publish("fixture-2");
-    // Test only: the real renderer shells out to a receipt sink with a scripted stale refusal.
+    // The production shared writer runs unchanged against a test-only CLI receipt sink.
+    await mkdir(join(root, "src", "terminal"), { recursive: true });
+    await cp(
+      fileURLToPath(new URL("../../../src/terminal/native-input.ts", import.meta.url)),
+      join(root, "src", "terminal", "native-input.ts"),
+    );
     await writeFile(
-      join(plugin, "tandem.sh"),
-      `#!/bin/sh
-printf '%s\\n' "$@" > '${root}/args.txt'
-while [ "$#" -gt 0 ]; do
- if [ "$1" = --input ]; then shift; input=$1; fi
- shift
-done
-cat "$input" > '${root}/received.json'
-stat -f '%Lp' "$input" > '${root}/mode.txt'
-printf '%s' "$input" > '${root}/input-path.txt'
-if [ -f '${root}/refuse' ]; then echo 'Brief revision is stale; review the latest draft.' >&2; exit 1; fi
+      join(root, "src", "main.ts"),
+      `import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const root = ${JSON.stringify(root)};
+const argv = Bun.argv.slice(2);
+const input = argv[argv.indexOf("--input") + 1];
+if (!argv.includes("--input") || !input) throw new Error("Receipt sink requires --input");
+writeFileSync(join(root, "args.txt"), argv.join("\\n") + "\\n");
+writeFileSync(join(root, "received.json"), readFileSync(input));
+writeFileSync(join(root, "mode.txt"), (statSync(input).mode & 0o777).toString(8));
+writeFileSync(join(root, "input-path.txt"), input);
+if (existsSync(join(root, "refuse"))) {
+  console.error("Brief revision is stale; review the latest draft.");
+  process.exitCode = 1;
+}
 `,
     );
     await writeFile(join(root, "refuse"), "stale");

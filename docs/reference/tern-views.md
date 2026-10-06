@@ -302,9 +302,9 @@ only `model.approval` into its input, without recalculating any digest. Request 
 the displayed revision and digests, pending line comments and the optional overall comment.
 The CLI validates the durable revision and feedback anchors.
 
-Each submit writes a unique private input file through `brief-action.sh`: exclusive `mktemp`
-creation under umask 077, UTF-8 JSON on stdin, then read-only mode 0400. The shell invokes the
-CLI once with explicit pane/cwd/window context and removes the input on completion. While the
+Each submit passes UTF-8 JSON on stdin to the shared `native-input.sh` caller. Its TypeScript
+helper creates a unique private directory and exclusively writes the input before invoking the
+CLI once with explicit pane/cwd/window/home context, then removes the directory in `finally`. While the
 CLI runs, another submit is disabled. Nonzero stderr becomes a toast and keeps the pane and
 comments open; a successful result ends the native block. There is no automatic retry.
 
