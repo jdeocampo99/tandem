@@ -103,7 +103,12 @@ local function host(path: string)
   pane=effect(function(cx)
    -- Creation uses the currently focused host. Keep focus and creation in one callback so
    -- navigation between timer stages cannot redirect a block into an unrelated project.
-   cx.layout:focus(if ticket.placement=="task" and owner.floating then previous else coordinator)
+   local target=if ticket.placement=="task" and owner.floating then previous else coordinator
+   if target~=coordinator and target~=origin then
+    local current=cx.session:pane(target)
+    if not current or current.tab~=owner.tab or current.block~="tandem.task" or current.floating then error("Task replacement target changed") end
+   end
+   cx.layout:focus(target)
    return cx:new_block("tandem." .. ticket.kind,ticket.args,if ticket.placement=="window" then "tab" else "beside",{focus=ticket.placement~="panel",keep_open=false})
   end)
   if not pane then error("Native block could not open") end
@@ -126,7 +131,7 @@ local function host(path: string)
     cx.layout:close(previous)
     if previous==origin then originClosed=true end
    end) end
-   effect(function(cx) cx:command("pip_stash_all") end)
+   effect(function(cx) cx.layout:focus(pane); cx:command("pip_stash_all") end)
    effect(function(cx) cx.layout:focus(pane) end)
   end
  end

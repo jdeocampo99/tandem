@@ -34,7 +34,11 @@ local function context()
  function cx.layout:close(id) charge(alive); assert(panes[id]); panes[id]=nil; table.insert(effects,{name="close",id=id}) end
  function cx.layout:float(id,_over,_corner,_options) charge(alive); panes[id].floating=true; table.insert(effects,{name="float"}); return true end
  function cx.layout:dock(id,_over,_direction,_options) charge(alive); panes[id].floating=false; table.insert(effects,{name="dock"}); return true end
- function cx:command(name) charge(alive); table.insert(effects,{name=name}) end
+ function cx:command(name)
+  charge(alive)
+  if name=="pip_stash_all" then assert(focused==30,"stash followed another project's focus") end
+  table.insert(effects,{name=name})
+ end
  function cx:toast(_kind,_title,message) charge(alive); table.insert(toasts,message) end
  return cx,function() live=false end
 end
