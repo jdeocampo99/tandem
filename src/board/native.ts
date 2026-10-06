@@ -36,9 +36,10 @@ export function nativeBoardView(
   const cards = rows.map(({ row, section }) => {
     const task = tasks.find(
       (task) =>
-        row.key === `task:${task.taskId}` ||
-        (task.pullRequest !== undefined &&
-          row.key === `pr:${task.pullRequest.repo}#${task.pullRequest.number}`),
+        (row.target.kind === "task" && row.target.taskId === task.taskId) ||
+        (row.target.kind === "pr" &&
+          task.pullRequest?.repo === row.target.repo &&
+          task.pullRequest?.number === row.target.number),
     );
     const lane =
       task?.stage === "blocked" &&

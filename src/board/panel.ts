@@ -308,7 +308,9 @@ function signature(key: string, ...parts: readonly string[]): string {
   return [key, ...parts].join("\n");
 }
 
-function rowKey(row: Readonly<{ key: string; taskId?: string }>): string {
+function rowKey(row: Readonly<{ key: string; taskId?: string; cause: string }>): string {
+  // A failing watched PR is its own row even when it belongs to a visible task.
+  if (row.cause === "pull-request") return row.key;
   return row.taskId === undefined ? row.key : `task:${row.taskId}`;
 }
 
@@ -660,10 +662,19 @@ export function nativePanelView(
     ...board.doneToday.map(doneEntry),
   ].filter((entry) => entry.repoPath === project);
   const rows = entries.map((entry) => {
+    const watched = snapshot.board.pullRequests.find(
+      (pr) => `pr:${pr.repo}#${pr.number}` === entry.row.key,
+    );
+    // Red PRs live only in Needs you, so they have no entry in board.pullRequests.
+    const prIdentity = /^pr:(.+)#([1-9]\d*)$/u.exec(entry.row.key);
+    const prRepo = prIdentity?.[1];
+    const prNumber = prIdentity?.[2];
     const taskId = entry.row.key.startsWith("task:")
       ? entry.row.key.slice(5)
-      : snapshot.board.pullRequests.find((pr) => `pr:${pr.repo}#${pr.number}` === entry.row.key)
-          ?.taskId;
+      : (watched?.taskId ??
+        snapshot.board.needsYou.find(
+          (row) => row.cause === "pull-request" && row.key === entry.row.key,
+        )?.taskId);
     const task = input.tasks.find((task) => task.taskId === taskId);
     const pr = task?.pullRequest;
     const running = snapshot.board.running.find((row) => row.taskId === taskId);
@@ -677,13 +688,10 @@ export function nativePanelView(
           : entry.row.activity === undefined
             ? (entry.row.lines[0] ?? "")
             : [entry.row.activity.verb, entry.row.activity.target].filter(Boolean).join(" ");
-    const watched = snapshot.board.pullRequests.find(
-      (pr) => `pr:${pr.repo}#${pr.number}` === entry.row.key,
-    );
     const target: NativePanelTarget = entry.row.key.startsWith("brief:")
       ? { kind: "brief", requestId: entry.row.key.slice(6) }
-      : watched !== undefined
-        ? { kind: "pr", repo: watched.repo, number: watched.number }
+      : prRepo !== undefined && prNumber !== undefined
+        ? { kind: "pr", repo: prRepo, number: Number(prNumber) }
         : taskId !== undefined
           ? { kind: "task", taskId }
           : { kind: "none" };

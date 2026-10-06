@@ -199,6 +199,9 @@ NativePanelRow = {
 Draw title/state/stage/time on line one and `secondary` on line two. `detail` contains live
 activity or the saved stop reason; to-dos stay on the task page. PR metadata supplies clickable
 numbers. Active tasks with draft PRs stay in Running and are not duplicated as a Ready row.
+Row keys retain the represented identity: `task:ID`, `brief:ID` or `pr:owner/repo#N`.
+A failing watched PR keeps its PR key and target even when its linked task also needs attention.
+Board cards reuse these keys; row actions use their task, brief or repository-qualified PR target.
 All four section containers exist, including empty ones. Project switcher status includes offline
 and counts, with shortcuts for the first nine projects; the renderer owns the footer's open-project
 and previous/next controls. The bell count is this project's confirmed native alert deliveries

@@ -11,6 +11,7 @@ import {
   type NativeTaskSummary,
   nativePanelView,
   nativeProjectSwitcher,
+  panelView,
 } from "../../src/board/panel.ts";
 import type { BoardSnapshot } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
@@ -162,6 +163,57 @@ const summaries: readonly NativeTaskSummary[] = [running, ready, stuck].map((tas
         },
       }),
 }));
+
+test("blocked task and its red watched PR have distinct panel and board keys and targets", () => {
+  const redSnapshot: BoardSnapshot = {
+    ...snapshot,
+    board: boardView(
+      state({
+        tasks: [stuck],
+        watches: [
+          watch(
+            284,
+            { color: "red", status: "🔴 checks failed", note: "Fix the failed check" },
+            { taskId: stuck.id, repoPath: PROJECT },
+          ),
+        ],
+      }),
+      NOW,
+    ),
+  };
+  const panel = nativePanelView({
+    snapshot: redSnapshot,
+    project: PROJECT,
+    now: NOW,
+    tasks: summaries,
+    bellCount: 0,
+  });
+  const rows = panel.sections.flatMap((section) => section.rows);
+  expect(rows).toHaveLength(2);
+  expect(new Set(rows.map((row) => row.key)).size).toBe(rows.length);
+  expect(rows.map((row) => row.target)).toEqual([
+    { kind: "task", taskId: stuck.id },
+    { kind: "pr", repo: "acme/app", number: 284 },
+  ]);
+  expect(rows.map((row) => row.detail)).toEqual(["same 2 problems twice", "Fix the failed check"]);
+  const textRows = panelView(redSnapshot, {
+    project: PROJECT,
+    query: "",
+    now: NOW,
+    readFailed: false,
+  }).sections.flatMap((section) => section.rows);
+  expect(new Set(textRows.map((row) => row.key)).size).toBe(textRows.length);
+  expect(textRows.map((row) => row.target)).toEqual([
+    { kind: "chat", repoPath: PROJECT },
+    { kind: "url", url: "https://github.com/acme/app/pull/284" },
+  ]);
+  const board = nativeBoardView(redSnapshot, PROJECT, summaries, NOW);
+  const cards = board.lanes.flatMap((lane) => lane.cards);
+  expect(new Set(cards.map((card) => card.key)).size).toBe(cards.length);
+  expect(cards.toSorted((a, b) => a.key.localeCompare(b.key)).map((card) => card.target)).toEqual(
+    rows.toSorted((a, b) => a.key.localeCompare(b.key)).map((row) => row.target),
+  );
+});
 
 test("native panel rounds quota text and preserves the numeric meter", () => {
   for (const remainingPercent of [15.000000000000002, 85.4]) {
