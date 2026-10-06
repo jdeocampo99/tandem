@@ -26,6 +26,7 @@ const Opened = z.object({
   discarded: z.boolean(),
 });
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
+const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 const windowPrograms = new Set(["tandem.board", "tandem.usage", "tandem.catchup"]);
 const returnPrograms = new Set(
@@ -191,7 +192,7 @@ export function ternViewHost(
               indexPath,
               input.coordinator.paneId,
               input.cwd,
-              input.origin?.windowId ?? "",
+              source.block.args?.[3] ?? "",
               indexPath,
             ];
             const proveClosingIdentity = async () => {
@@ -450,6 +451,38 @@ export function ternViewHost(
       const { nativeDetailPath, nativeViewsPath } = await import("../../board/snapshot.ts");
       const { readNativeBundle } = await import("../../board/native-file.ts");
       const project = await projectForView(input.home, input.coordinator);
+      if (input.view.kind === "browser") {
+        const url = new URL(input.view.url);
+        if (url.protocol !== "https:") throw new Error("PR links require an HTTPS URL");
+        const cmd = await scoped(input);
+        const ownerId = Number(input.coordinator.paneId);
+        if (!Number.isSafeInteger(ownerId))
+          throw new Error("Browser owner id is not exactly representable");
+        await options.guard(input.coordinator.paneId, async () => {
+          const before = blocks(await cmd.ls(input.cwd));
+          await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+          const opened = await cmd.mutate(
+            input.cwd,
+            ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
+            BrowserOpened,
+          );
+          const created = blocks(
+            await cmd.ls(input.cwd).catch((cause: unknown) => {
+              throw new TernOutcomeUnknownError("tern browser", cause);
+            }),
+          ).find((entry) => entry.block.id === opened.ok.block);
+          if (
+            !created ||
+            created.session.id !== input.coordinator.terminalSessionId ||
+            before.some((entry) => entry.block.id === opened.ok.block)
+          )
+            throw new TernOutcomeUnknownError(
+              "tern browser",
+              "new browser identity was not confirmed",
+            );
+        });
+        return { opened: true, warnings: [] };
+      }
       if (input.view.kind === "board" && (await toggleBoard(input, project)))
         return { opened: true, warnings: [] };
       if (input.view.kind === "orchestrator" || input.view.kind === "inbox") {

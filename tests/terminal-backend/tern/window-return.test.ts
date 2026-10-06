@@ -86,6 +86,7 @@ for (const mode of [
         const ticket = JSON.parse(await readFile(request.argv[2] ?? "", "utf8"));
         expect(ticket.closeOrigin).toBe("4");
         expect(ticket.placement).toBe("return");
+
         removed = mode !== "retained";
         await writeFile(
           ticket.receipt,
@@ -111,7 +112,13 @@ for (const mode of [
     const back = () =>
       mode === "toggle"
         ? host.toggleBoard(
-            { coordinator, cwd: home, home, origin: { paneId: "4" }, view: { kind: "board" } },
+            {
+              coordinator,
+              cwd: home,
+              home,
+              origin: { paneId: "4", windowId: "active-window" },
+              view: { kind: "board" },
+            },
             home,
           )
         : host.open(
@@ -119,7 +126,7 @@ for (const mode of [
               coordinator,
               cwd: home,
               home,
-              origin: { paneId: "4" },
+              origin: { paneId: "4", windowId: "active-window" },
               view: { kind: "orchestrator" },
             },
             home,

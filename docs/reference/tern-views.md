@@ -372,7 +372,7 @@ rechecks exact identity and full arguments after the final process read immediat
 closing, then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
 are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
 
-The host never sets `keep_open` when launching split/detail blocks or task replacements.
+The host explicitly launches renderer blocks and task replacements with `keep_open=false`.
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.
 An exited retained pane can still report `live=true`. Neither `live` nor `exited` proves closure:
 only the exact pane id's absence from a scoped `tern ls` does.
@@ -489,6 +489,36 @@ Pass `native-input.sh` the verb, task/request ID, and the native CLI context fla
 It supports `brief-comment`, `brief-request-changes`, `brief-approve`, `pr-comment`, and
 `review-submit`. Callers use this shared writer rather than adding a screen-specific one.
 
+
+## Board, usage and catch-up actions
+
+Board and usage are full-window tabs with Escape and “← Orchestrator” returns. Returning proves
+this coordinator's exact block program, root/detail path and launch arguments, restores the
+preserved coordinator, and retires only the exact idle full-window view in the guarded
+return route, then confirms scoped absence. A window-command Board toggle uses the same return.
+The active window scope is independent of the view's immutable launch window argument.
+Hosting passes `keep_open=false`. Screen success callbacks invoke captured `cx:exit(0)`; nonzero
+results toast stderr and never invoke callback exit. Shared `navigation.run/back` accept an optional
+success callback. Uncertain opening or closure is quarantined without retries.
+
+`maybeShowCatchUp` in `src/memory/native-visits.ts` owns the project-visit trigger. Visible front-door
+launches/reconnects, `coordinator/open-project.ts` after confirmed focus, and the project-switch
+handler invoke it. Background `--no-attach` launches defer the visit to the caller's focus hook.
+The function reads the root signature and the Tandem-owned visit record, applies
+`shouldAutoShowCatchUp`, then opens `view:{kind:"catchup"}` through the hosting port. An explicit
+catch-up view opens the screen without that rule. Panel opening and polling never record visits.
+Opening before the first publication still saves the visit timestamp. The first successful root
+publication fills its missing signature without advancing that timestamp; subsequent publications
+leave the saved baseline intact.
+`native board catchup-dismiss` returns and records dismissal; `catchup-open-needs` returns, opens
+the first saved needs-you destination (brief, task or inbox), then records dismissal.
+
+`native board pr-link CARD_KEY` and `merged-link URL` resolve only PR identities present in the
+originating project's current root model. `openView({view:{kind:"browser",url}})` requires HTTPS
+and uses Tern's browser API with the exact coordinator as owner. The new browser block must be
+confirmed in that coordinator's recorded session. Uncertain mutations are never repeated.
+All callbacks carry the screen's own decimal pane, absolute coordinator cwd and optional window key.
+Nonzero CLI results show stderr in a toast; exit zero includes cancellation.
 
 ### Transition delivery
 
