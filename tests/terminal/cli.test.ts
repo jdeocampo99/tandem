@@ -17,14 +17,13 @@ import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordina
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { harnessOf } from "../../src/harness/contract.ts";
 import { harnessFor } from "../../src/harness/resolve.ts";
-import { blockArgs } from "../../src/native/contract.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   type CliApplication,
   type CliDependencies,
   createCliApplication,
 } from "../../src/terminal/cli-application.ts";
-import { CliUsageError, parseCliArgs } from "../../src/terminal/cli-arguments.ts";
+import { parseCliArgs } from "../../src/terminal/cli-arguments.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 async function writeOmpProbe(root: string, exitCode = 0): Promise<string> {
