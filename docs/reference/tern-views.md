@@ -266,7 +266,7 @@ implemented; host acceptance alone does not register a screen:
 | `tandem.task` | Direct `task` envelope | Conversation area, preserving its live coordinator |
 | `tandem.brief` | Direct `brief` envelope | Beside the conversation |
 | `tandem.pr` | Direct `pr` envelope | Beside the conversation |
-| `tandem.prs` | Root `panel` envelope | Beside the conversation |
+| `tandem.prs` | Root `panel` envelope | Reserved; `native prs` opens `tandem.pr` instead |
 | `tandem.board`, `tandem.usage`, `tandem.catchup` | Root `panel` envelope | Own full-window tab |
 | `tandem.welcome` | Root path (static welcome) | Beside the conversation |
 
@@ -293,7 +293,7 @@ The host explicitly launches renderer blocks and task replacements with `keep_op
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.
 An exited retained pane can still report `live=true`. Neither `live` nor `exited` proves closure:
 only the exact pane id's absence from a scoped `tern ls` does.
-For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0 under this default.
+For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0 with this setting.
 `BlockCx` has no other close API; renderers must not use the raw window-level layout close API.
 Successful hosting already removed its private ticket and receipt, so no host cleanup remains.
 Task pages use the Orchestrator return action instead, which restores the hidden conversation
@@ -398,7 +398,9 @@ The function reads the root signature and the Tandem-owned visit record, applies
 catch-up view opens the screen without that rule. Panel opening and polling never record visits.
 Opening before the first publication still saves the visit timestamp. The first successful root
 publication fills its missing signature without advancing that timestamp; subsequent publications
-leave the saved baseline intact.
+leave the saved baseline intact. Failed/uncertain catch-up opens leave the visit unacknowledged.
+Catch-up read, visit-record or hosting errors currently propagate to the visible opening/switch
+caller after focus; this does not undo the already focused project.
 `native board catchup-dismiss` returns and records dismissal; `catchup-open-needs` returns, opens
 the first saved needs-you destination (brief, task or inbox), then records dismissal.
 

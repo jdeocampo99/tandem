@@ -139,12 +139,42 @@ PRs, Board and usage buttons independently of shortcut consent.
 
 ### Registered screens
 
-The current package registers Panel, Welcome, Brief and PR. `native prs` selects a project's
-published PR and opens that PR pane; New request focuses and prompts the verified coordinator.
-Project switching and published-detail file navigation are also implemented. Task, Board, Usage
-and Catch-up have data models and hosting support, but their renderer registrations are still
-pending. The Board, Usage and Open task command slots currently return an unavailable error.
-Their panel buttons and palette entries remain visible.
+The package registers Panel, Welcome, Brief, PR, Board, Usage and Catch-up. `native prs`
+selects a project's published PR and opens that PR pane; New request focuses and prompts the
+verified coordinator. Project switching and published-detail navigation are implemented.
+Task has a data model and hosting support, but its renderer registration is still pending;
+Open task currently returns an unavailable error. Its palette entry remains visible.
+
+### Board, Usage and Catch-up
+
+- `native board` opens a full-window tab with four view-only lanes: Working, Needs you,
+  In review and Ready to merge. Cards show harness, title, branch, reason, age, model, cost,
+  linked PR and any stuck flag. There is no drag, task creation or merge control. Unknown
+  branches, models and prices stay explicit. PR clicks resolve the card's saved identity
+  against the originating project's current root model and open Tern's browser.
+- `native usage` opens a full-window tab. Provider/account limits come first, with 5-hour and
+  weekly meters, reset labels, original fetch timestamps and refresh warnings. Then come
+  today's cost, agent time and finished-task count, weekly spend, model-cost charts for today
+  and this week, and stage times. TypeScript supplies labels and chart widths; unknown limits,
+  unpriced usage and unreadable ledger rows never become invented zero totals.
+- Board toggles back from its exact originating Board block. Escape or Orchestrator returns
+  from Board/Usage through the guarded CLI, restoring the conversation and retiring only that
+  idle view. Last readable data remains visible on a file error, with a warning; data-bound
+  links/actions require a ready view, while returning remains available.
+- Catch-up opens on visible project opening, reconnecting or confirmed project switching after
+  **1+ hour** away, only with a known prior signature and a meaningful change. First visits,
+  unchanged work and timer-only repaints stay quiet. The full-window card lists merged PRs,
+  Needs you, blocked work and saved workstream notes. Dismiss/Escape returns to the conversation;
+  Open what needs me returns, then opens the first saved brief, task or inbox destination.
+- Private locked `<home>/native-visits/<repositoryKey>.json` records retain visit time and
+  signature. Polls and panel opening never advance the visit. A first publication can fill a
+  missing signature without changing its timestamp. Failed/uncertain openings remain
+  unacknowledged. Dismissal records the current signature only after confirmed navigation.
+  In the current implementation, catch-up read/visit/open errors propagate to the visible
+  opening or switch caller, even after project focus succeeded; no automatic retry occurs.
+
+See [screen actions](tern-views.md#board-usage-and-catch-up-actions) for CLI subactions and
+[view models](native-views.md#board) for data and accounting contracts.
 
 ## Tern 0.5.0 facts and limits
 
@@ -157,7 +187,7 @@ The initial probes and hosting comparison used 0.4.5; subsequent native hosting 
 - A handled custom layout route can make `tern open` exit nonzero with "cannot open in a file
   block" after opening successfully. The host requires a private receipt and exact scoped
   program/argument proof, even on exit zero. That error alone proves neither success nor failure.
-- Split/detail blocks and task replacements use the default `keep_open=false`. On 0.5.0,
+- Renderer blocks and task replacements explicitly use `keep_open=false`. On 0.5.0,
   `cx:exit(0)` removes that block; `keep_open=true` retains it and can still report `live=true`.
   Only exact-id absence proves closure. Task return restores the preserved conversation before
   removing its replacement block.

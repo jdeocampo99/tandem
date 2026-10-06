@@ -174,6 +174,11 @@ their diff lines. Comments on Tandem's PRs go straight to the worker as fix requ
 reviewing someone else's PR, choose the comments and verdict, then click Post to send the review.
 Tern's inbox brings you questions, new draft PRs and stuck tasks.
 
+Open Board to see work grouped by what needs doing, or Usage to check your remaining account
+limits before today's cost and time. Returning to a project after at least an hour away shows
+what merged, what needs you and where you left off, when something changed. Escape takes you
+back to the conversation.
+
 Install Tern and sign in with your Stencil account, then choose **Tern** during Tandem setup.
 Tern is a closed beta, so you need access as well as an account. Setup offers it only after
 confirming that it is installed and signed in; the check may briefly open its own window.
