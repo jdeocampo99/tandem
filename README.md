@@ -174,11 +174,6 @@ their diff lines. Comments on Tandem's PRs go straight to the worker as fix requ
 reviewing someone else's PR, choose the comments and verdict, then click Post to send the review.
 Tern's inbox brings you questions, new draft PRs and stuck tasks.
 
-Open Board to see work grouped by what needs doing, or Usage to check your remaining account
-limits before today's cost and time. Returning to a project after at least an hour away shows
-what merged, what needs you and where you left off, when something changed. Escape takes you
-back to the conversation.
-
 Install Tern and sign in with your Stencil account, then choose **Tern** during Tandem setup.
 Tern is a closed beta, so you need access as well as an account. Setup offers it only after
 confirming that it is installed and signed in; the check may briefly open its own window.
@@ -187,8 +182,23 @@ stopping existing tasks.
 
 Tandem asks separately before hiding Tern's sidebar and adding shortcuts for Board, PRs, Usage
 and switching projects. Decline and you can still use the panel buttons and command palette.
-Your custom keys stay yours. Choosing Herdr again restores settings Tandem changed, keeping
-any edits you made afterward. [Terminal reference](docs/reference/terminal.md) covers the details.
+Setup preserves custom keys; use the palette if a shortcut is already assigned elsewhere.
+Choosing Herdr again restores settings Tandem changed, keeping any edits you made afterward.
+
+- **Board:** use the panel's Board button, choose **Tandem: Toggle board** in Tern's command
+  palette, or press `Cmd+Shift+B` if setup installed it. Working, Needs you, In review and
+  Ready to merge lanes show each task's branch, model, cost and PR link.
+- **Usage:** click the panel's limit meter, choose **Tandem: Usage**, or press `Cmd+Shift+U`
+  if installed. Check provider limits and reset times first, then today's cost, agent time and
+  finished tasks, weekly spend and model breakdowns.
+- **Catch-up:** reopen or switch back to a previously visited project after at least an hour
+  away, and Tandem shows what changed: merged PRs, what needs you, blocked tasks and your
+  workstream notes. First visits and unchanged projects stay quiet. **Open what needs me**
+  takes you to the first waiting item; **Dismiss** or `Esc` returns to chat.
+
+From Board or Usage, press `Esc` or click **← Orchestrator** to return to the project's chat.
+Pressing `Cmd+Shift+B` again from Board also closes it.
+[Terminal reference](docs/reference/terminal.md) covers the details.
 
 ## Requirements
 
