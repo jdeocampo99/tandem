@@ -181,7 +181,7 @@ export function prPaneView(
       ...(unresolved[0] === undefined ? {} : { firstThreadId: unresolved[0].id }),
     },
     readAt: cached.readAt,
-    clockAt: input.now,
+    clockAt: cached.checks.some((check) => check.state === "running") ? input.now : cached.readAt,
     tabs: ["Description", ...(cached.tour.length === 0 ? [] : ["Tour"]), "Diff"],
     checks: cached.checks.map((check) => presentCheck(check, input.now)),
     description: {

@@ -99,7 +99,7 @@ function M.jump(s: State, model: models.Model, cx: BlockCx, prefix: string)
  end
 end
 function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx: BlockCx, send: Send): boolean
- if ev.ev == "focus" and ev.id then cx:frame({ { "focus", ev.id } }); return true end
+ if ev.ev == "focus" then return true end
  if ev.ev ~= "action" then return false end
  local act, value = ev.act, ev.value
  if act == "pr-file" then s.file = tonumber(value) or 1; return true end

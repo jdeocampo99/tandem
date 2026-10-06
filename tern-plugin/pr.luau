@@ -6,7 +6,7 @@ local models = require("./pr-model")
 local content = require("./pr-content")
 local components = require("./components")
 type Index = { pullRequests: { [string]: { header: { number: number, title: string, taskId: string?, repo: string }, detailFile: string } } }
-type State = { view: views.View<models.Model>, index: views.View<Index>?, content: content.State, cwd: string?, window: string, switcher: boolean }
+type State = { view: views.View<models.Model>, index: views.View<Index>?, content: content.State, cwd: string?, window: string, home: string, switcher: boolean }
 local function parseIndex(value: unknown): Index?
  if type(value) ~= "table" or type(value.pullRequests) ~= "table" then return nil end
  for _, pr in value.pullRequests do
@@ -18,12 +18,13 @@ local function invoke(s: State, cx: BlockCx): content.Invoke
  return function(verb, id, payload, done)
   if not s.cwd or string.sub(s.cwd, 1, 1) ~= "/" then cx:toast("error", "Tandem couldn't run that action", "The originating absolute cwd is required."); s.content.diff.busy = false; return end
   local json = verb == "pr-comment" or verb == "review-submit"
-  local argv = {"/bin/sh", if json then "pr-input.sh" else "tandem.sh"}
+  local argv = {"/bin/sh", if json then "native-input.sh" else "tandem.sh"}
   if not json then table.insert(argv, "native") end
   table.insert(argv, verb); table.insert(argv, id)
   if verb == "open" and type(payload) == "string" then table.insert(argv, payload) end
   table.insert(argv, "--pane"); table.insert(argv, string.format("%.0f", cx.pane))
   table.insert(argv, "--cwd"); table.insert(argv, s.cwd)
+  if s.home ~= "" then table.insert(argv, "--home"); table.insert(argv, s.home) end
   local window = s.window
   if window and window ~= "" then table.insert(argv, "--window"); table.insert(argv, window) end
   local ok, problem = pcall(function()
@@ -40,7 +41,7 @@ end
 local block: BlockDef<State> = {
  init = function(cx, args, _saved)
   local origin = nav.origin(args)
-  local s: State = {view=views.create(origin.path, "pr", models.parse), content=content.create(), cwd=origin.cwd, window=origin.window, switcher=false}
+  local s: State = {view=views.create(origin.path, "pr", models.parse), content=content.create(), cwd=origin.cwd, window=origin.window, home=origin.home, switcher=false}
   views.watch(s.view, cx)
   local indexPath = nav.root(origin)
   if indexPath ~= origin.path then s.index = views.create(indexPath, "panel", parseIndex); views.watch(s.index, cx) end
@@ -51,8 +52,8 @@ local block: BlockDef<State> = {
   local model = s.view.model
   local strip = ui.el("div", {class="tdm-pr-strip",key="strip"}, {ui.row({components.button(if model then "#" .. model.header.number .. " ▾" else "PRs ▾", "pr-switcher"), ui.node("text", {grow=1}), components.button("×", "pr-close")})})
   if not model then return {dock=strip, main=components.text("PR data unavailable. Wait for the coordinator to refresh its view.", "warn")} end
-  local result = content.view(s.content, model, s.view.status == "ready")
-  local top = {strip}
+  local result = content.view(s.content, model, s.view.status == "ready", nil, strip)
+  local top = {}
   if s.switcher and s.index and s.index.status == "ready" and s.index.model then
    local entries = {}
    for _, pr in s.index.model.pullRequests do table.insert(entries, pr) end
@@ -72,7 +73,10 @@ local block: BlockDef<State> = {
    for _, pr in s.index.model.pullRequests do table.insert(entries, pr) end
    table.sort(entries, function(a, b) return a.header.number < b.header.number end)
    local pr = entries[tonumber(ev.value) or 0]
-   if pr and pr.header.taskId then invoke(s, cx)("open", "pr", pr.header.taskId); s.switcher = false end
+   if pr and pr.header.taskId then
+    invoke(s, cx)("open", "pr", pr.header.taskId, function() cx:exit(0) end)
+    s.switcher = false
+   end
    return
   end
   if s.view.model then content.event(s.content, s.view.model, s.view.status == "ready", ev, cx, invoke(s, cx)) end
@@ -82,7 +86,7 @@ local block: BlockDef<State> = {
   if key.name == "escape" then if s.switcher then s.switcher = false else cx:exit(0) end; return true end
   if key.name == "pageup" or key.name == "pagedown" or key.name == "home" or key.name == "end" then
    local action = if key.name == "home" then "start" elseif key.name == "end" then "end" elseif key.name == "pageup" then "page-up" else "page-down"
-   cx:frame({{"scroll", s.content.prefix .. ".body", action}}); return true
+   cx:frame({{"scroll", "main", action}}); return true
   end
   return false
  end,

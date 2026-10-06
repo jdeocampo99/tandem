@@ -258,7 +258,7 @@ local function invokePr(state: State, cx: BlockCx): prContent.Invoke
   if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then return end
   if verb == 'open' and type(payload) == 'string' then run(state, cx, { 'open', id, payload }); return end
   if state.busy or string.sub(state.cwd, 1, 1) ~= '/' then return end
-  local argv = { '/bin/sh', 'pr-input.sh', verb, id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
+  local argv = { '/bin/sh', 'native-input.sh', verb, id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
   if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
   local window = state.origin.window
   if window and window ~= '' then table.insert(argv, '--window'); table.insert(argv, window) end

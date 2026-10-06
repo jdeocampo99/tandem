@@ -266,7 +266,8 @@ The existing HTML review page and native view share `parsePatch` in `src/pr-revi
 - `header`: `{repo,number,title,url,head,draft,next,taskId?,commits,additions,deletions,
   unresolved,firstThreadId?}`. `next` comes from the saved PR-watch note, with a draft fallback.
 - `readAt`: timestamp of the last complete cached GitHub read.
-- `clockAt`: timestamp used to sample running-check ages for this publication.
+- `clockAt`: timestamp used to sample running-check ages for this publication. With no running checks
+  it stays at `readAt`, preserving unchanged view bytes between clock ticks.
 - `tabs`: Description, optional Tour, Diff. Tour appears only with chapters.
 - `checks`: `{name,state:"passed"|"running"|"failed"|"pending",startedAt?,completedAt?,
   logUrl?,duration?,elapsedMs?}[]`. TypeScript computes completed durations and running ages

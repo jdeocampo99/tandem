@@ -148,7 +148,7 @@ convention and plugin only, without a shared native dispatcher.
 
 JSON actions pass `--input` and an absolute file path as separate argv elements. Renderers
 finish writing one UTF-8 JSON object before spawning the CLI, with a new file for each action
-in a private Tandem-owned directory supplied by the TypeScript view producer. The directory
+in a new private temporary directory owned by the shared TypeScript caller. The directory
 uses `0700`; TypeScript-created input files use `0600`. Never put action input in the plugin
 package, a repository, an environment variable, or an interpolated shell command. The file
 stays unchanged until that invocation finishes; the caller owns cleanup after completion or
@@ -357,6 +357,28 @@ task, brief or unambiguous PR identities in their project. The row prints OSC 8 
 for `tandem://task/ID`, `tandem://brief/ID` and `tandem://pr/NUMBER`. It is enabled only
 inside an unambiguous inherited Tern pane context. Herdr output and model reply text
 remain unchanged. Unknown or foreign identities never become native links.
+
+### Reusing the native PR components
+
+`tern-plugin/pr-content.luau` exports `create`, `view`, `event`, `key`, and `ready`.
+`view(state, model, ready, prefix?, strip?)` returns `{main,dock}`. Mount `dock` for the review
+summary, explicit verdict and Post controls. Set `prefix` to the actual embedded content root
+(default `main.content`); the shared diff uses it for comment focus and thread reveal.
+The optional strip is rendered inside the PR header. `pr-diff.luau` exports `create`,
+`view`, `rows`, `jump`, `event`, and `key`; both modules use `pr-model.luau` wire types.
+Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
+for wheel and keyboard input; the review dock remains visible while the content scrolls.
+
+PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. The shared
+`src/terminal/native-input.ts` helper writes one exclusive 0600 file in a private unique
+directory, invokes the native action once, and removes
+the directory after that invocation settles. Draft decisions and new review comments remain
+local until Post; displayed HEAD/generation are included in the submission for authority checks.
+Pass `native-input.sh` the verb, task/request ID, and the native CLI context flags
+(`--pane`, `--cwd`, optional `--window` and `--home`), with the JSON object on stdin.
+It supports `brief-comment`, `brief-request-changes`, `brief-approve`, `pr-comment`, and
+`review-submit`. Callers use this shared writer rather than adding a screen-specific one.
+
 
 ### Transition delivery
 
