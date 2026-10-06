@@ -104,6 +104,11 @@ export type PrReviewDependencies = Readonly<{
     input: Readonly<{ repoPath: string; objective: string; prReview: PrReviewState }>,
   ) => Promise<TaskRecord>;
   updatePrReview: (task: TaskRecord, next: PrReviewState) => Promise<TaskRecord>;
+  /** Applies a pure review mutation under a short store lock, preserving other task changes. */
+  mutatePrReview: (
+    taskId: string,
+    update: (task: TaskRecord) => PrReviewState,
+  ) => Promise<Readonly<{ task: TaskRecord; changed: boolean }>>;
   /** Moves a completed review back to queued for another run, and starts it. */
   runAgain: (task: TaskRecord) => Promise<void>;
   /** Releases a settled task's pane and, once closed, its worktree. */
@@ -362,11 +367,11 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       marker: reviewMarker(task.id, round.generation),
       cwd: state.checkout,
     };
-    let postingTask = task;
     const outcome =
       round.pendingPost === undefined
         ? await postReview(deps.run, input, async () => {
-            postingTask = await deps.updatePrReview(
+            // The revision-checked update is the exclusive claim. A losing caller never POSTs.
+            await deps.updatePrReview(
               task,
               replaceLatestRound(state, {
                 ...round,
@@ -412,20 +417,50 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
           : `The review was not sent: ${outcome.message}`,
       };
     }
-    const { pendingPost: _pendingPost, ...confirmed } = round;
-    await deps.updatePrReview(
-      postingTask,
-      replaceLatestRound(state, {
-        ...confirmed,
-        posted: { url: outcome.url, verdict: input.verdict, postedAt: deps.clock() },
-      }),
+    const postedAt = deps.clock();
+    const settled = await deps.mutatePrReview(task.id, (current) => {
+      const live = requireState(current);
+      const index = live.rounds.findIndex(
+        (candidate) => candidate.generation === round.generation && candidate.head === round.head,
+      );
+      const saved = live.rounds[index];
+      if (
+        live.ref.repo !== state.ref.repo ||
+        live.ref.number !== state.ref.number ||
+        saved === undefined
+      ) {
+        throw new Error(`The posted review round changed; check the PR: ${outcome.url}`);
+      }
+      if (saved.posted !== undefined) return live;
+      const { pendingPost, ...confirmed } = saved;
+      return {
+        ...live,
+        rounds: live.rounds.map((candidate, i) =>
+          i === index
+            ? {
+                ...confirmed,
+                posted: {
+                  url: outcome.url,
+                  verdict: pendingPost?.verdict ?? input.verdict,
+                  postedAt,
+                },
+              }
+            : candidate,
+        ),
+      };
+    });
+    const confirmedState = requireState(settled.task);
+    const confirmed = confirmedState.rounds.find(
+      (candidate) => candidate.generation === round.generation && candidate.head === round.head,
     );
-    const replies = await postReplies(state, confirmed);
+    if (confirmed?.posted === undefined) throw new Error("The review receipt was not saved.");
+    // Only the caller that records the receipt owns the follow-up replies.
+    const replies = settled.changed ? await postReplies(confirmedState, confirmed) : 0;
     return {
       taskId: task.id,
       posted: true,
-      url: outcome.url,
-      message: `Posted ${round.review.comments.length} comment${round.review.comments.length === 1 ? "" : "s"}${replies === 0 ? "" : ` and ${replies} ${replies === 1 ? "reply" : "replies"}`}: ${outcome.url}`,
+      url: confirmed.posted.url,
+      message: `Posted ${confirmed.review.comments.length} comment${confirmed.review.comments.length === 1 ? "" : "s"}${replies === 0 ? "" : ` and ${replies} ${replies === 1 ? "reply" : "replies"}`}: ${confirmed.posted.url}`,
     };
   }
 

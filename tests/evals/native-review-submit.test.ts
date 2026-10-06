@@ -81,7 +81,7 @@ function reviewService(world: ScenarioWorld, run: CommandRunner) {
   });
 }
 
-test("native submission holds its checked round through posting before a re-review can replace it", async () => {
+test("store mutations proceed during a native POST and its receipt settles only the posted round", async () => {
   await withScenario({}, async (world) => {
     const { round, state } = await seedReview(world);
     const posting = Promise.withResolvers<void>();
@@ -120,7 +120,6 @@ test("native submission holds its checked round through posting before a re-revi
     };
     const expected = { head: SCENARIO_HEAD, generation: 0 };
     let replacement: Promise<unknown> | undefined;
-    let replacementFinished = false;
     const submitted = service.reviewSubmit(SCENARIO_TASK_ID, submission, expected);
     try {
       await posting.promise;
@@ -130,6 +129,7 @@ test("native submission holds its checked round through posting before a re-revi
         const currentReview = current.prReview;
         await store.update(current.id, current.revision, (task) => ({
           ...task,
+          objective: "Changed while the POST is in flight",
           generation: 1,
           revision: task.revision + 1,
           prReview: {
@@ -145,16 +145,21 @@ test("native submission holds its checked round through posting before a re-revi
             ],
           },
         }));
-        replacementFinished = true;
       });
-      await Bun.sleep(50);
-      expect(replacementFinished).toBe(false);
+      // This must complete before releasing GitHub, with an independent store/lock context.
+      await replacement;
+      const during = await world.store.read(SCENARIO_TASK_ID);
+      expect(during?.generation).toBe(1);
+      expect(during?.prReview?.rounds[0]?.pendingPost?.verdict).toBe("approve");
+      expect(during?.prReview?.rounds[1]?.posted).toBeUndefined();
       release.resolve();
       expect(await submitted).toMatchObject({ posted: true });
       await replacement;
       expect(payloads).toHaveLength(1);
       expect(payloads[0]).toMatchObject({ commit_id: SCENARIO_HEAD, event: "APPROVE" });
       const current = await service.get(SCENARIO_TASK_ID);
+      expect(current.objective).toBe("Changed while the POST is in flight");
+      expect(current.generation).toBe(1);
       expect(current.prReview?.rounds[0]?.posted).toBeDefined();
       expect(current.prReview?.rounds[1]?.posted).toBeUndefined();
       await expect(service.reviewSubmit(SCENARIO_TASK_ID, submission, expected)).rejects.toThrow(
@@ -165,6 +170,154 @@ test("native submission holds its checked round through posting before a re-revi
       release.resolve();
       await Promise.allSettled([submitted, ...(replacement === undefined ? [] : [replacement])]);
       await service.shutdown();
+    }
+  });
+}, 20_000);
+
+test("simultaneous chat and native preflight can claim only one POST", async () => {
+  await withScenario({}, async (world) => {
+    const { state } = await seedReview(world);
+    const headsReady = Promise.withResolvers<void>();
+    let heads = 0;
+    let posts = 0;
+    const run: CommandRunner = async (request) => {
+      if (request.argv[0] !== "gh") return world.run(request);
+      if (request.argv.includes("--slurp")) return { code: 0, stdout: "[[]]", stderr: "" };
+      if (request.argv.includes("headRefOid")) {
+        heads += 1;
+        if (heads === 2) headsReady.resolve();
+        await headsReady.promise;
+        return { code: 0, stdout: SCENARIO_HEAD, stderr: "" };
+      }
+      if (request.argv.includes("POST")) {
+        posts += 1;
+        expect(
+          (await world.store.read(SCENARIO_TASK_ID))?.prReview?.rounds[0]?.pendingPost,
+        ).toBeDefined();
+        return {
+          code: 0,
+          stdout: JSON.stringify({ html_url: `${state.url}#review-1` }),
+          stderr: "",
+        };
+      }
+      throw new Error(`Unexpected GitHub request ${JSON.stringify(request.argv)}`);
+    };
+    const chat = reviewService(world, run);
+    const native = reviewService(world, run);
+    try {
+      const results = await Promise.allSettled([
+        chat.reviewPost(SCENARIO_TASK_ID, { verdict: "approve", approved: true }),
+        native.reviewSubmit(
+          SCENARIO_TASK_ID,
+          { tandemPrReview: 1, verdict: "approve", summary: "Approved", drafts: [], yours: [] },
+          { head: SCENARIO_HEAD, generation: 0 },
+        ),
+      ]);
+      expect(heads).toBe(2);
+      expect(posts).toBe(1);
+      expect(results.filter((result) => result.status === "fulfilled")).toMatchObject([
+        { value: { posted: true } },
+      ]);
+      expect(results.filter((result) => result.status === "rejected")).toMatchObject([
+        { reason: { name: "StaleTaskRevisionError" } },
+      ]);
+    } finally {
+      headsReady.resolve();
+      await Promise.all([chat.shutdown(), native.shutdown()]);
+    }
+  });
+}, 20_000);
+
+test("overlapping marker reconciliation saves one receipt and sends thread replies once", async () => {
+  await withScenario({}, async (world) => {
+    const { round, state } = await seedReview(world);
+    const initial = await world.store.read(SCENARIO_TASK_ID);
+    if (initial === undefined) throw new Error("Missing scenario task");
+    await world.store.update(initial.id, initial.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      prReview: {
+        ...state,
+        rounds: [
+          {
+            ...round,
+            review: {
+              ...round.review,
+              priorComments: [{ commentId: 42, status: "addressed", reply: "Thanks!" }],
+            },
+          },
+        ],
+      },
+    }));
+    const posting = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let landed = false;
+    let posts = 0;
+    let replies = 0;
+    const run: CommandRunner = async (request) => {
+      if (request.argv[0] !== "gh") return world.run(request);
+      if (request.argv.includes("--slurp"))
+        return {
+          code: 0,
+          stdout: JSON.stringify([
+            landed
+              ? [{ body: reviewMarker(SCENARIO_TASK_ID, 0), html_url: `${state.url}#review-1` }]
+              : [],
+          ]),
+          stderr: "",
+        };
+      if (request.argv.includes("headRefOid"))
+        return { code: 0, stdout: SCENARIO_HEAD, stderr: "" };
+      if (request.argv.some((arg) => arg.endsWith("/replies"))) {
+        replies += 1;
+        expect(
+          (await world.store.read(SCENARIO_TASK_ID))?.prReview?.rounds[0]?.posted,
+        ).toBeDefined();
+        return { code: 0, stdout: "{}", stderr: "" };
+      }
+      if (request.argv.includes("POST")) {
+        posts += 1;
+        landed = true;
+        posting.resolve();
+        await release.promise;
+        return {
+          code: 0,
+          stdout: JSON.stringify({ html_url: `${state.url}#review-1` }),
+          stderr: "",
+        };
+      }
+      throw new Error(`Unexpected GitHub request ${JSON.stringify(request.argv)}`);
+    };
+    const native = reviewService(world, run);
+    const chat = reviewService(world, run);
+    const submitted = native.reviewSubmit(
+      SCENARIO_TASK_ID,
+      {
+        tandemPrReview: 1,
+        verdict: "request-changes",
+        summary: "Saved choices",
+        drafts: [],
+        yours: [],
+      },
+      { head: SCENARIO_HEAD, generation: 0 },
+    );
+    try {
+      await posting.promise;
+      expect(
+        await chat.reviewPost(SCENARIO_TASK_ID, { verdict: "approve", approved: true }),
+      ).toMatchObject({ posted: true });
+      expect(replies).toBe(1);
+      release.resolve();
+      expect(await submitted).toMatchObject({ posted: true });
+      expect(posts).toBe(1);
+      expect(replies).toBe(1);
+      const saved = (await world.store.read(SCENARIO_TASK_ID))?.prReview?.rounds[0];
+      expect(saved?.posted?.verdict).toBe("request-changes");
+      expect(saved?.review.summaryComment).toBe("Saved choices");
+    } finally {
+      release.resolve();
+      await Promise.allSettled([submitted]);
+      await Promise.all([chat.shutdown(), native.shutdown()]);
     }
   });
 }, 20_000);
@@ -352,7 +505,7 @@ for (const refused of ["moved-head", "unreadable-head", "unreadable-markers"] as
 }
 
 for (const first of ["chat", "native"] as const) {
-  test(`${first} posting fences an overlapping ${first === "chat" ? "native" : "chat"} submission through its receipt`, async () => {
+  test(`${first} posting's durable claim prevents an overlapping ${first === "chat" ? "native" : "chat"} POST`, async () => {
     await withScenario({}, async (world) => {
       const { state } = await seedReview(world);
       const posting = Promise.withResolvers<void>();
@@ -378,7 +531,7 @@ for (const first of ["chat", "native"] as const) {
         }
         throw new Error(`Unexpected GitHub request ${JSON.stringify(request.argv)}`);
       };
-      // Separate controllers share the real home lock, as chat and a native CLI process do.
+      // Separate controllers share durable state, as chat and a native CLI process do.
       const chat = reviewService(world, run);
       const native = reviewService(world, run);
       const submission: ReviewSubmission = {
@@ -402,17 +555,20 @@ for (const first of ["chat", "native"] as const) {
           (value) => ({ value }),
           (error) => ({ error }),
         );
-        await Bun.sleep(50);
+        const other = await result;
+        expect(other).toMatchObject({
+          value: {
+            posted: false,
+            message: expect.stringContaining("GitHub may or may not have received this review"),
+          },
+        });
         expect(payloads).toHaveLength(1);
         release.resolve();
         expect(await submitted).toMatchObject({ posted: true });
-        const other = await result;
         if (first === "chat") {
-          expect(other).toMatchObject({
-            error: { message: `This review was already posted at ${state.url}#review-1.` },
-          });
+          await expect(nativePost()).rejects.toThrow("This review was already posted");
         } else {
-          expect(other).toMatchObject({ value: { posted: true } });
+          expect(await chatPost()).toMatchObject({ posted: true });
         }
         expect(payloads).toHaveLength(1);
         expect(payloads[0]).toMatchObject({
