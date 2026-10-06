@@ -153,6 +153,17 @@ unique owning window from that exact pane and refuses ambiguous targeting. The a
 owns `native open`; renderer workers own board/PRs/usage/project. This layer owns the calling
 convention and plugin only, without a shared native dispatcher.
 
+Private native opening tickets are consumed by `route.open` immediately. Ticket reads and layout
+work run in successive one-shot timers with the fresh `WindowCx` of each callback. Tern gives
+window callbacks a 50 ms budget and disables a hook that exceeds it; doing the whole layout in
+`route.open` can disable interception and expose later tickets as ordinary FILE blocks. Keep
+focus and block creation together so navigation between stages cannot change the destination.
+Recheck exact originating panes before layout effects. Never retry a failed stage or write a
+receipt for it: the TypeScript backend retains uncertain tickets and their durable opening intent.
+Back also rereads the previous task in the same callback before closing a task picker or docking
+the coordinator. A disappeared task, changed kind or tab, or newly floating task refuses the
+effect and preserves the originating view and recovery evidence.
+
 ### JSON action input
 
 JSON actions pass `--input` and an absolute file path as separate argv elements. Renderers
