@@ -26,6 +26,7 @@ async function fixture(kind: "board" | "usage" | "catchup" | "prs", mode = "conf
   let roots = 0,
     opens = 0,
     now = 0;
+  let detached = false;
   const focused: string[] = [];
   const run: CommandRunner = async (request) => {
     const ok = (value: unknown) => ({ code: 0, stderr: "", stdout: JSON.stringify(value) });
@@ -50,16 +51,16 @@ async function fixture(kind: "board" | "usage" | "catchup" | "prs", mode = "conf
                 name: null,
                 blocks: [
                   { id: "3", cwd: home, title: "Same title", live: true, cols: 150 },
-                  ...(placement === "split" ? rootBlocks : []),
+                  ...(placement === "split" && !detached ? rootBlocks : []),
                 ],
               },
-              ...(placement === "window" && roots > 0
+              ...(placement === "window" && roots > 0 && !detached
                 ? [{ id: "6", name: null, blocks: rootBlocks }]
                 : []),
             ],
           },
         ],
-        detached: [],
+        detached: detached ? rootBlocks : [],
       });
     }
     if (verb === "process")
@@ -81,14 +82,18 @@ async function fixture(kind: "board" | "usage" | "catchup" | "prs", mode = "conf
       }
       // Keep the first effect in flight while concurrent callers contend for the lock.
       await Bun.sleep(40);
-      roots = mode === "missing" ? 0 : mode === "duplicate" ? 2 : 1;
+      roots = mode === "missing" ? 0 : mode === "duplicate" ? 2 : roots + 1;
       if (mode !== "confirmed")
         return { code: 1, stdout: "", stderr: "lost opening acknowledgement" };
       await writeFile(
         ticket.receipt,
-        JSON.stringify({ paneId: "4", tabId: placement === "split" ? "2" : "6", sessionId: "1" }),
+        JSON.stringify({
+          paneId: String(3 + roots),
+          tabId: placement === "split" ? "2" : "6",
+          sessionId: "1",
+        }),
       );
-      return ok({ blocks: ["4"], discarded: false });
+      return ok({ blocks: [String(3 + roots)], discarded: false });
     }
     throw new Error(`unexpected ${verb}`);
   };
@@ -130,6 +135,11 @@ async function fixture(kind: "board" | "usage" | "catchup" | "prs", mode = "conf
       (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
     opens: () => opens,
     roots: () => roots,
+    seed: (count: number, detachedOnly = false, window = "own-window") => {
+      roots = count;
+      detached = detachedOnly;
+      args[3] = window;
+    },
     dispose: () => rm(home, { recursive: true, force: true }),
   };
 }
@@ -191,3 +201,39 @@ test("a fresh usage invocation recovers a lost acknowledgement without opening a
     await f.dispose();
   }
 });
+
+for (const kind of ["board", "usage"] as const) {
+  test(`fresh ${kind} hosts focus the unique existing full-window view without a layout effect`, async () => {
+    const f = await fixture(kind);
+    try {
+      f.seed(1);
+      expect((await f.open()).paneId).toBe("4");
+      expect((await f.open()).paneId).toBe("4");
+      expect(f.opens()).toBe(0);
+      expect(f.focused).toEqual(["4", "4"]);
+      expect(f.roots()).toBe(1);
+      expect(await f.evidence()).toEqual([]);
+    } finally {
+      await f.dispose();
+    }
+  });
+  for (const ambiguity of ["duplicate", "detached", "wrong-window"] as const) {
+    test(`fresh ${kind} hosts refuse ${ambiguity} full-window evidence before any effect`, async () => {
+      const f = await fixture(kind);
+      try {
+        f.seed(
+          ambiguity === "duplicate" ? 2 : 1,
+          ambiguity === "detached",
+          ambiguity === "wrong-window" ? "foreign-window" : "own-window",
+        );
+        await expect(f.open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+        await expect(f.open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+        expect(f.opens()).toBe(0);
+        expect(f.focused).toEqual([]);
+        expect(await f.evidence()).toEqual([]);
+      } finally {
+        await f.dispose();
+      }
+    });
+  }
+}
