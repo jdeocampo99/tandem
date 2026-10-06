@@ -27,7 +27,7 @@ type Model = {
 }
 type Index = prModels.Index & { briefs: { [string]: { detailFile: string } } }
 type Brief = { title: string, revision: number, lines: { { id: string, number: number, text: string, kind: string, isNew: boolean } } }
-type State = { origin: navigation.Origin, index: views.View<Index>?, brief: views.View<Brief>?, pr: views.View<prModels.Model>?, prContent: prContent.State, stopBrief: (() -> ())?, stopPr: (() -> ())?, view: views.View<Model>, field: fields.Field, tab: string, cwd: string, prMatch: boolean, busy: boolean, editing: boolean }
+type State = { origin: navigation.Origin, index: views.View<Index>?, brief: views.View<Brief>?, pr: views.View<prModels.Model>?, prContent: prContent.State, stopBrief: (() -> ())?, stopPr: (() -> ())?, view: views.View<Model>, field: fields.Field, tab: string, prMatch: boolean, busy: boolean, editing: boolean }
 
 local function optionalString(value: unknown): boolean return value == nil or type(value) == 'string' end
 local function events(value: unknown): boolean
@@ -232,14 +232,9 @@ end
 
 local function run(state: State, cx: BlockCx, args: { string }, clear: boolean?)
  if state.busy or state.view.status ~= 'ready' then return end
- if string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then cx:toast('error', 'Tandem action unavailable', 'An absolute originating cwd and index path are required.'); return end
  local argv = { '/bin/sh', 'tandem.sh', 'native' }
  for _, arg in args do table.insert(argv, arg) end
- table.insert(argv, '--pane'); table.insert(argv, string.format('%.0f', cx.pane))
- table.insert(argv, '--cwd'); table.insert(argv, state.cwd)
- if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
- local window = state.origin.window
- if window and window ~= '' then table.insert(argv, '--window'); table.insert(argv, window) end
+ navigation.context(argv, state.origin, cx)
  state.busy = true; cx:render()
  local ok, problem = pcall(function()
   tern.process.run(argv, { cwd = '.' }, function(result)
@@ -259,11 +254,8 @@ local function invokePr(state: State, cx: BlockCx): prContent.Invoke
   if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then refused('The displayed PR review is unavailable or changed. Reopen it before submitting.'); return end
   if verb == 'open' and type(payload) == 'string' then run(state, cx, { 'open', id, payload }); return end
   if state.busy then refused('Another task action is still running.'); return end
-  if string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then refused('The originating absolute cwd and native index path are required.'); return end
-  local argv = { '/bin/sh', 'native-input.sh', verb, id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
-  if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
-  local window = state.origin.window
-  if window and window ~= '' then table.insert(argv, '--window'); table.insert(argv, window) end
+  local argv = { '/bin/sh', 'native-input.sh', verb, id }
+  navigation.context(argv, state.origin, cx)
   state.busy = true
   local ok, problem = pcall(function()
    tern.process.run(argv, { cwd = '.', stdin = tern.json.encode(payload) }, function(result)
@@ -285,7 +277,7 @@ local block: BlockDef<State> = {
  init = function(cx, args)
   local origin = navigation.origin(args)
   local root = navigation.root(origin)
-  local state: State = { origin = origin, prContent = prContent.create(), prMatch = false, view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', cwd = origin.cwd, busy = false, editing = false }
+  local state: State = { origin = origin, prContent = prContent.create(), prMatch = false, view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', busy = false, editing = false }
   views.refresh(state.view); views.watch(state.view, cx)
   if root ~= '' then state.index = views.create(root, 'panel', parseIndex); views.refresh(state.index); views.watch(state.index, cx) end
   return state

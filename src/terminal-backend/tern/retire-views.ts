@@ -6,6 +6,7 @@ import type { Endpoint } from "../../contracts.ts";
 import { listCoordinatorQuarantineRecords } from "../../coordinator/quarantine.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
 import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
+import { parseBlockArgs, ViewKind } from "../../native/contract.ts";
 import type { EndpointTarget } from "../contract.ts";
 import { exactPane } from "./endpoints.ts";
 import {
@@ -17,19 +18,8 @@ import {
   TernOutcomeUnknownError,
 } from "./protocol.ts";
 
-const kinds = new Set([
-  "panel",
-  "welcome",
-  "task",
-  "task-picker",
-  "brief",
-  "pr",
-  "prs",
-  "board",
-  "usage",
-  "catchup",
-]);
-const windowKinds = new Set(["board", "usage", "catchup"]);
+const windowKinds: readonly ViewKind[] = ["board", "usage", "catchup"];
+const detailKinds: readonly ViewKind[] = ["task", "brief", "pr"];
 
 async function recordedCoordinator(home: string, target: EndpointTarget) {
   const owners = (await listCoordinatorRecords(home, target.endpoint.sessionId)).filter(
@@ -97,7 +87,7 @@ export async function planCoordinatorViews(
   const claims = blocks(listing).filter(
     (entry) =>
       entry.block.program?.startsWith("tandem.") &&
-      entry.block.args?.[1] === target.endpoint.paneId,
+      parseBlockArgs(entry.block.args)?.ctx.coordinator === target.endpoint.paneId,
   );
   if (claims.length === 0) return async () => {};
   if (home === undefined)
@@ -115,28 +105,29 @@ export async function planCoordinatorViews(
   const proveIdentity = async (entry: LocatedBlock) => {
     const endpoint = endpointFor(entry);
     const current = await exactPane(commands, { endpoint, cwd: target.cwd });
-    const kind = entry.block.program?.slice("tandem.".length) ?? "";
-    const args = entry.block.args;
-    const file = args?.[0] ?? "";
-    const expectedFile = ["task", "brief", "pr"].includes(kind)
-      ? basename(file).startsWith(`${kind}-`)
-        ? nativeDetailPath(home, owner.repoPath, basename(file))
-        : undefined
-      : index;
+    const kind = ViewKind.safeParse(entry.block.program?.slice("tandem.".length));
+    const listed = parseBlockArgs(entry.block.args);
+    const file = listed?.viewPath ?? "";
+    const expectedFile =
+      kind.success && detailKinds.includes(kind.data)
+        ? basename(file).startsWith(`${kind.data}-`)
+          ? nativeDetailPath(home, owner.repoPath, basename(file))
+          : undefined
+        : index;
     if (
-      !kinds.has(kind) ||
+      !kind.success ||
+      listed === undefined ||
       endpoint.paneId === target.endpoint.paneId ||
       entry.session.id !== target.endpoint.terminalSessionId ||
-      (windowKinds.has(kind)
+      (windowKinds.includes(kind.data)
         ? entry.tab.id === target.endpoint.tabId
         : entry.tab.id !== target.endpoint.tabId) ||
-      args?.length !== 5 ||
       file !== expectedFile ||
-      args[1] !== target.endpoint.paneId ||
-      args[2] !== target.cwd ||
-      args[4] !== index ||
+      listed.ctx.coordinator !== target.endpoint.paneId ||
+      listed.ctx.cwd !== target.cwd ||
+      listed.ctx.index !== index ||
       current.block.program !== entry.block.program ||
-      JSON.stringify(current.block.args) !== JSON.stringify(args)
+      JSON.stringify(current.block.args) !== JSON.stringify(entry.block.args)
     )
       throw new EndpointOwnershipError(
         endpoint,
@@ -178,7 +169,8 @@ export async function planCoordinatorViews(
         after.detached.length > 0 ||
         blocks(after).some(
           (p) =>
-            p.block.program?.startsWith("tandem.") && p.block.args?.[1] === target.endpoint.paneId,
+            p.block.program?.startsWith("tandem.") &&
+            parseBlockArgs(p.block.args)?.ctx.coordinator === target.endpoint.paneId,
         )
       )
         throw new TernOutcomeUnknownError(

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { EndpointOwnershipError } from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
@@ -112,7 +112,7 @@ for (const owner of ["present", "gone"] as const) {
   test(`tandem fix lists a retained open and, with --yes, abandons it when its coordinator is ${owner}`, async () => {
     await withRetainedOpen(async (home) => {
       const before = await intents(home);
-      expect(before.filter((name) => name.endsWith(".intent.json"))).toHaveLength(1);
+      expect(before.filter((name) => name.endsWith(".ticket.json"))).toHaveLength(1);
       const planned = await fix(home, () => owner, false);
       expect(planned.cleaned).toEqual([
         expect.objectContaining({
@@ -156,11 +156,27 @@ test("tandem fix --yes keeps a retained open when the coordinator turns ambiguou
 
 test("tandem fix reports an unreadable open record and leaves it in place", async () => {
   await withRetainedOpen(async (home) => {
-    const [name] = (await intents(home)).filter((each) => each.endsWith(".intent.json"));
+    const [name] = (await intents(home)).filter((each) => each.endsWith(".ticket.json"));
     const path = join(home, "native-host", name ?? "");
     await Bun.write(path, "{broken");
     const applied = await fix(home, () => "gone", true);
     expect(applied.quarantined).toEqual([expect.objectContaining({ kind: "native-open", path })]);
     expect(await readFile(path, "utf8")).toBe("{broken");
   });
+});
+
+test("tandem fix reports paused views it cannot list and still scans everything else", async () => {
+  const home = await realpath(await mkdtemp("/tmp/tandem-native-open-fix-"));
+  try {
+    await writeFile(join(home, "native-host"), "not a directory");
+    const planned = await fix(home, () => "present", false);
+    expect(planned.failed).toEqual([
+      expect.objectContaining({
+        kind: "native-open",
+        reason: expect.stringContaining("paused views could not be listed"),
+      }),
+    ]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });

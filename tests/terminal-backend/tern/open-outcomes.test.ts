@@ -1,11 +1,15 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { acquireDarwinFileLock } from "../../../src/tasks/store-lock.ts";
+import {
+  NativeViewNotOpenedError,
+  recoverViewOpens,
+} from "../../../src/terminal-backend/tern/host.ts";
 import {
   TernOutcomeUnknownError,
   ternCommands,
 } from "../../../src/terminal-backend/tern/protocol.ts";
-import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/view-intent.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 const coordinator: Endpoint = {
@@ -32,6 +36,10 @@ async function withTern(
     opens: () => number;
     lateReceipt: (receipt: unknown) => Promise<void>;
     retained: () => Promise<readonly string[]>;
+    /** The coordinator's tick: settles whatever is now decided, without a click. */
+    tick: () => Promise<void>;
+    home: string;
+    advance: (ms: number) => void;
   }) => Promise<void>,
 ): Promise<void> {
   const home = await mkdtemp("/tmp/tandem-open-outcomes-");
@@ -122,6 +130,11 @@ async function withTern(
         writeFile(lastReceipt, typeof receipt === "string" ? receipt : JSON.stringify(receipt)),
       retained: async () =>
         (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
+      home,
+      tick: () => recoverViewOpens(ternCommands(run, { binary: "tern" }), home, now),
+      advance: (ms) => {
+        now += ms;
+      },
     });
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -142,7 +155,7 @@ test("a host failure after a layout effect stays quarantined and is never retrie
   await withTern([{ status: "failed", appliedEffects: 1 }, { status: "done" }], async (tern) => {
     await expect(tern.open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     const retained = await tern.retained();
-    expect(retained.filter((name) => name.endsWith(".intent.json"))).toHaveLength(1);
+    expect(retained.filter((name) => name.endsWith(".ticket.json"))).toHaveLength(1);
     await expect(tern.open()).rejects.toThrow("tern open recovery outcome is unknown");
     expect(tern.opens()).toBe(1);
     expect(await tern.retained()).toEqual(retained);
@@ -172,5 +185,77 @@ test("a receipt read mid-write never settles or quarantines on its own", async (
     await tern.lateReceipt('{"status":"failed","stage":"task","appliedEff');
     await expect(tern.open()).rejects.toThrow("tern open recovery outcome is unknown");
     expect(tern.opens()).toBe(1);
+  });
+});
+
+test("a late zero-effect receipt settles on the coordinator's tick, before any click", async () => {
+  await withTern([{ status: "silent" }, { status: "done" }], async (tern) => {
+    await expect(tern.open()).rejects.toThrow("tern open outcome is unknown");
+    await tern.lateReceipt({
+      status: "failed",
+      stage: "identity",
+      appliedEffects: 0,
+      reason: "Exact originating panes disappeared",
+    });
+    await tern.tick();
+    expect(await tern.retained()).toEqual([]);
+    expect(await tern.open()).toMatchObject({ paneId: "5" });
+  });
+});
+
+test("an open Tern never answers stays paused after its ticket expires", async () => {
+  await withTern([{ status: "silent" }], async (tern) => {
+    await expect(tern.open()).rejects.toThrow("tern open outcome is unknown");
+    await expect(tern.open()).rejects.toHaveProperty(
+      "cause",
+      "an earlier Tandem view is still opening",
+    );
+    tern.advance(60_000);
+    await tern.tick();
+    await expect(tern.open()).rejects.toHaveProperty(
+      "cause",
+      "Tern never confirmed the view opened",
+    );
+    expect(tern.opens()).toBe(1);
+  });
+});
+
+test("a receipt that arrives after tandem fix abandoned its ticket is removed, not kept", async () => {
+  await withTern([{ status: "silent" }, { status: "done" }], async (tern) => {
+    await expect(tern.open()).rejects.toThrow("tern open outcome is unknown");
+    const [ticket] = (await tern.retained()).filter((name) => name.endsWith(".ticket.json"));
+    await rm(`${tern.home}/native-host/${ticket}`);
+    await tern.lateReceipt({ status: "done", paneId: "5", tabId: "2", sessionId: "1" });
+    await tern.tick();
+    expect(await tern.retained()).toEqual([]);
+    expect(await tern.open()).toMatchObject({ paneId: "5" });
+  });
+});
+
+test("the coordinator's tick skips an open in progress instead of waiting for its lock", async () => {
+  await withTern([{ status: "silent" }, { status: "done" }], async (tern) => {
+    await expect(tern.open()).rejects.toThrow("tern open outcome is unknown");
+    await tern.lateReceipt({
+      status: "failed",
+      stage: "identity",
+      appliedEffects: 0,
+      reason: "Exact originating panes disappeared",
+    });
+    const [lock] = (await readdir(`${tern.home}/native-host`)).filter((name) =>
+      name.endsWith(".lock"),
+    );
+    const release = await acquireDarwinFileLock(`${tern.home}/native-host/${lock}`, 1000, 20);
+    try {
+      const started = performance.now();
+      await tern.tick();
+      expect(performance.now() - started).toBeLessThan(1000);
+      expect((await tern.retained()).filter((name) => name.endsWith(".ticket.json"))).toHaveLength(
+        1,
+      );
+    } finally {
+      await release();
+    }
+    await tern.tick();
+    expect(await tern.retained()).toEqual([]);
   });
 });

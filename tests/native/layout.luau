@@ -1,6 +1,8 @@
 -- Reads cost 5 ms and layout effects cost 10 ms. Contexts expire when their callback returns.
 -- A synchronous panel route exceeds Tern's 50 ms budget; staged calls must stay below it.
+-- TICKETS, NOW_S, ROUTE and `encode` come from layout.test.ts; every ticket is TS-built.
 local timers, writes, effects, toasts, panes = {}, {}, {}, {}, {}
+local faultAt: number? = nil
 local active, calls, maximum, focused = false, 0, 0, 10
 local ticket
 local failMove,raiseMove=false,false
@@ -9,8 +11,10 @@ local closeAfter,closing=0,{}
 local width,ratio,failResize,ignoreResize=198,0.5,false,false
  span=1
 local span=1
+local fault=false
 local function charge(alive,cost)
  assert(active and alive(), "expired window context")
+ if fault then fault=false; error("injected fault") end
  calls += cost or 10
  assert(calls < 50, "callback exceeded its 50 ms budget")
  maximum=math.max(maximum,calls)
@@ -36,7 +40,7 @@ local function context()
   assert(focused==(if ticket.placement=="task" and panes[20].floating then tonumber(ticket.replaced) else tonumber(ticket.coordinator)),"block creation followed another project's focus")
   assert(options.keep_open==false)
   table.insert(effects,{name="new",kind=kind,args=args,how=how})
-  panes[30]={tab=if how=="tab" then 22 else 21,block=kind,floating=false}
+  panes[30]={tab=if how=="tab" then 22 else 21,block=kind,floating=false,args=args}
   return 30
  end
  function cx.layout:focus(id) charge(alive); assert(panes[id]); focused=id; table.insert(effects,{name="focus",id=id}) end
@@ -65,6 +69,12 @@ local function context()
  function cx:toast(_kind,_title,message) charge(alive); table.insert(toasts,message) end
  return cx,function() live=false end
 end
+local function clone(value)
+ if type(value)~="table" then return value end
+ local copy={}
+ for key,item in value do copy[key]=clone(item) end
+ return copy
+end
 local function reset(kind,placement)
  timers,writes,effects,toasts={}, {}, {}, {}
  failMove,raiseMove=false,false
@@ -72,7 +82,7 @@ local function reset(kind,placement)
  width,ratio,failResize,ignoreResize=198,0.5,false,false
  span=1
  panes={[10]={tab=11,block="shell",floating=false},[20]={tab=21,block="shell",floating=false}}
- ticket={version=1,kind=kind,placement=placement,args={"/b/index", "20", "/b", "", "/b/index"},coordinator="20",origin="20",session="2",receipt="/b/native-host/open.receipt.json"}
+ ticket=clone(assert(TICKETS[kind .. "/" .. placement],"no TS ticket for " .. kind .. "/" .. placement))
 end
 local function drain(before)
  local index=0
@@ -85,14 +95,16 @@ local function drain(before)
   end
   local cx,expire=context()
   active,calls,focused=true,0,10
+  fault=faultAt==index
   callback(if windowGone then nil else cx)
+  fault=false
   active=false; expire()
  end
 end
 local function open()
  local cx,expire=context()
  active,calls=true,0
- local result=host.open({path="/b/native-host/open.tandem-open.json"},cx)
+ local result=host.open({path=ROUTE},cx)
  assert(result.handled and calls==0 and #effects==0,"route must consume ticket before native work")
  active=false; expire()
 end
@@ -114,13 +126,13 @@ assert(panes[10] and panes[20],"opening B must preserve both coordinators")
 -- Native/hidden blocks report stale daemon columns. Calibrate with the current
 -- window size after placement, including another project selected between stages.
 for _,liveWidth in {120,198,320} do
- reset("panel","panel"); width=liveWidth; ticket.columns=80; open(); drain()
+ reset("panel","panel"); width=liveWidth; open(); drain()
  assert(#toasts==0 and writes[ticket.receipt] and math.abs(ratio*width-45)<=1)
 end
 -- Existing brief/PR splits put the panel divider inside a horizontal ancestor.
 -- Resize uses full-window cells on Tern 0.5.1, so local ratio alone halves the width.
 for _,ancestorShare in {0.5,0.75,0.3} do
- reset("panel","panel"); span=ancestorShare; ticket.columns=80; open(); drain()
+ reset("panel","panel"); span=ancestorShare; open(); drain()
  assert(#toasts==0 and writes[ticket.receipt] and math.abs(ratio*span*width-45)<=1,
   "nested panel must occupy 45 actual full-window cells")
 end
@@ -177,23 +189,28 @@ assert(#toasts==1 and failed() and panes[40] and panes[30],"an unconfirmed close
 
 reset("panel","panel"); ticket.session="1"; open(); drain()
 assert(#toasts==1 and failed(0) and #effects==0,"foreign session must stay fenced")
-reset("foreign","panel"); open(); drain()
+reset("panel","panel"); table.insert(ticket.args,"extra"); open(); drain()
 assert(#toasts==1 and failed(0) and #effects==0,"invalid ticket must stay consumed")
 assert(writes[ticket.receipt].stage=="ticket")
 
+-- An expired ticket changes nothing; one that expires between stages stops before its next effect.
+reset("panel","panel"); ticket.expiresAt=NOW_S*1000; open(); drain()
+assert(#toasts==1 and failed(0) and #effects==0 and writes[ticket.receipt].stage=="ticket")
+reset("panel","panel"); open()
+drain(function(index) if index==6 then ticket.expiresAt=NOW_S*1000 end end)
+assert(#toasts==1 and failed(1) and panes[30] and #timers==0,"expiry mid-open reports what it applied")
+
 -- A root Back closes the originating native view, then focuses the still-proven owner.
-reset("panel","return")
+reset("panel","return-board")
 panes[30]={tab=22,block="tandem.catchup",floating=false}
-ticket.origin="30"; ticket.closeOrigin="30"
 open(); drain()
 assert(#toasts==0 and panes[30]==nil and done("20"))
 assert(effects[1].name=="close" and effects[2].id==20)
 
 -- Tern retires the replaced task a few callbacks after the close; the receipt waits for it.
-reset("task","task")
+reset("task","task-replace")
 panes[20].floating=true
 panes[40]={tab=21,block="tandem.task",floating=false}
-ticket.origin="40"; ticket.replaced="40"
 closeAfter=3
 open(); drain()
 assert(#toasts==0 and panes[40]==nil and panes[30] and done("30"))
@@ -255,4 +272,46 @@ reset("panel","panel")
 local cx,expire=context()
 assert(host.open({path="/b/ordinary.json"},cx)==nil and #timers==0)
 expire()
-print("Staged routes, second-project views, fresh contexts and quarantine checks passed; max callback cost (ms):", maximum)
+
+-- T4: every TS-built ticket, with a fault injected at each stage in turn. Each run prints its
+-- receipt and the panes it left, so the test can check `decide()` against them.
+local function setup(name)
+ if name=="task/task-replace" or name=="panel/return-task" then
+  panes[20].floating=true
+  panes[40]={tab=21,block="tandem.task",floating=false}
+ elseif name=="panel/return-board" then
+  panes[30]={tab=22,block="tandem.catchup",floating=false}
+ end
+end
+-- Everything a layout effect can change: each pane's tab, kind and floating state, and the split.
+local function snapshot(): string
+ local ids={}
+ for id in panes do table.insert(ids,id) end
+ table.sort(ids)
+ local parts={}
+ for _,id in ids do
+  local pane=panes[id]
+  table.insert(parts,string.format("%d:%d:%s:%s",id,pane.tab,pane.block,tostring(pane.floating==true)))
+ end
+ return table.concat(parts,",") .. string.format("|%.6f|%.6f",ratio,span)
+end
+local function emit(name,stage,before)
+ local listed={}
+ for id,pane in panes do table.insert(listed,{id=id,tab=pane.tab,block=pane.block,args=pane.args}) end
+ print("T4\t" .. name .. "\t" .. stage .. "\t" .. encode(writes[ticket.receipt]) .. "\t" .. encode(listed)
+  .. "\t" .. tostring(before~=snapshot()))
+end
+for _,name in SWEEP do
+ local kind,placement=string.match(name,"^([^/]+)/(.+)$")
+ reset(kind,placement); setup(name)
+ local before=snapshot()
+ open()
+ local stages=0
+ drain(function(index) stages=index end)
+ emit(name,0,before)
+ for stage=1,stages do
+  reset(kind,placement); setup(name); before=snapshot(); faultAt=stage; open(); drain(); faultAt=nil
+  emit(name,stage,before)
+ end
+end
+print("Staged layout, second-project views, fresh contexts, expiry and quarantine checks passed")

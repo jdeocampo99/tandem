@@ -1,7 +1,9 @@
 --!strict
 -- Common CLI calling convention for screen renderers. No durable state or retries.
 local M = {}
-export type Origin = {path:string, coordinator:string, cwd:string, window:string, indexPath:string, home:string}
+-- `ctx` is Tandem's opaque launch context. Blocks never read it; every action echoes it back.
+-- `index` is the project's root index file, which detail views also watch.
+export type Origin = {path:string, ctx:string, index:string}
 -- Only the known catch-up warning on a proven successful entry permits callback exit.
 -- Retention and unknown warnings keep the originating pane open.
 function M.warnings(stdout: string): ({string}, boolean)
@@ -22,18 +24,17 @@ function M.warnings(stdout: string): ({string}, boolean)
  return messages,complete
 end
 function M.origin(args: {string}): Origin
- local indexPath=args[5] or ""
- local home=string.match(indexPath,"^(.*)/native%-views/[^/]+%.json$") or ""
- return {path=args[1] or "",coordinator=args[2] or "",cwd=args[3] or "",window=args[4] or "",indexPath=indexPath,home=home}
+ return {path=args[1] or "",ctx=args[2] or "",index=args[3] or ""}
+end
+-- Appends this block's origin to an action's argv: its exact pane and the echoed context.
+function M.context(argv: {string}, origin: Origin, cx: BlockCx)
+ table.insert(argv,"--pane"); table.insert(argv,string.format("%.0f",cx.pane))
+ table.insert(argv,"--ctx"); table.insert(argv,origin.ctx)
 end
 function M.run(origin: Origin, cx: BlockCx, args: {string}, onSuccess: (() -> ())?)
- if string.sub(origin.cwd,1,1)~="/" or string.sub(origin.home,1,1)~="/" then cx:toast("error","Tandem action unavailable","Originating cwd or index path is missing"); return end
  local argv={"/bin/sh","tandem.sh","native"}
  for _, arg in args do table.insert(argv,arg) end
- if origin.home~="" then table.insert(argv,"--home"); table.insert(argv,origin.home) end
- table.insert(argv,"--pane"); table.insert(argv,string.format("%.0f",cx.pane))
- table.insert(argv,"--cwd"); table.insert(argv,origin.cwd)
- if origin.window~="" then table.insert(argv,"--window"); table.insert(argv,origin.window) end
+ M.context(argv,origin,cx)
  local ok,problem=pcall(function()
   tern.process.run(argv,{cwd="."},function(result)
    if result.status~=0 then cx:toast("error","Tandem couldn't run that action",result.stderr)
@@ -47,7 +48,7 @@ function M.run(origin: Origin, cx: BlockCx, args: {string}, onSuccess: (() -> ()
  if not ok then cx:toast("error","Tandem couldn't start that action",tostring(problem)) end
 end
 function M.root(origin: Origin): string
- return origin.indexPath
+ return origin.index
 end
 function M.back(origin: Origin,cx: BlockCx,onSuccess: (() -> ())?)
  M.run(origin,cx,{"view-file",M.root(origin) .. "#orchestrator"},onSuccess)

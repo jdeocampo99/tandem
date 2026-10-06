@@ -25,7 +25,7 @@ local function hasText(node,label)
  return false
 end
 local function taskCreate()
- local s=taskBlock.init(cx,{taskPath,'42','/original repo','opaque-window',indexPath})
+ local s=taskBlock.init(cx,{taskPath,ctx,indexPath})
  assert(s.view.status=='ready' and s.index.status=='ready')
  taskBlock.view(s,cx)
  taskBlock.event(s,{ev='action',act='tab',value='PR'},cx)
@@ -47,7 +47,7 @@ local taskState=taskCreate()
 local before=#pending
 taskPost(taskState); taskPost(taskState)
 assert(#pending==before+1 and taskState.prContent.posting and taskState.busy)
-assert(table.concat(pending[#pending].argv,'|')=='/bin/sh|native-input.sh|review-submit|review-1|--pane|123|--cwd|/original repo|--home|/custom home|--window|opaque-window')
+assert(table.concat(pending[#pending].argv,'|')=='/bin/sh|native-input.sh|review-submit|review-1|--pane|123|--ctx|' .. ctx)
 assert(pending[#pending].opts.stdin.reviewHead=='abc123' and pending[#pending].opts.stdin.reviewGeneration==0)
 pending[#pending].callback({status=0,stdout='{"posted":false,"message":"PR head moved"}',stderr=''})
 taskPreserved(taskState)
@@ -66,11 +66,6 @@ taskPost(taskState)
 taskPreserved(taskState)
 assert(not taskState.busy and string.find(toasts[#toasts].message,'Could not spawn') and #pending==before+2)
 startFailure=false
-taskState.origin.home=''
-taskPost(taskState)
-taskPreserved(taskState)
-assert(#pending==before+2)
-taskState.origin.home='/custom home'
 taskState.busy=true
 taskPost(taskState)
 taskPreserved(taskState)

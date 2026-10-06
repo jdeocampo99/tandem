@@ -5,6 +5,7 @@ import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import { blockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 
@@ -49,12 +50,13 @@ for (const mode of [
       generation: 0,
     };
     const path = nativeViewsPath(home, cwd);
-    const args = [path, coordinator.paneId, cwd, "", path];
-    if (mode === "wrong-file") args[0] = "foreign.json";
-    if (mode === "wrong-owner") args[1] = "5";
-    if (mode === "wrong-cwd") args[2] = root;
-    if (mode === "wrong-window") args[3] = "foreign-window";
-    if (mode === "wrong-index") args[4] = "foreign.json";
+    const args: string[] = blockArgs(mode === "wrong-file" ? join(root, "foreign.json") : path, {
+      coordinator: mode === "wrong-owner" ? "5" : coordinator.paneId,
+      cwd: mode === "wrong-cwd" ? root : cwd,
+      home,
+      index: mode === "wrong-index" ? join(root, "foreign.json") : path,
+      ...(mode === "wrong-window" ? { window: "foreign-window" } : {}),
+    });
     if (mode === "extra-arg") args.push("foreign");
     let closes = 0,
       readsAfterClose = 0,

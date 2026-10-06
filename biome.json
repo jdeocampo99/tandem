@@ -97,7 +97,11 @@
       }
     },
     {
-      "includes": ["src/terminal-backend/tern/**", "tests/terminal-backend/tern/**"],
+      "includes": [
+        "src/terminal-backend/tern/**",
+        "tests/terminal-backend/tern/**",
+        "tests/native/**"
+      ],
       "linter": {
         "rules": {
           "style": {

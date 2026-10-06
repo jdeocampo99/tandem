@@ -40,7 +40,7 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
         // A crash here leaves no durable record behind.
         expect(
           (await readdir(join(home, "native-host"))).filter((name) =>
-            name.endsWith(".intent.json"),
+            name.endsWith(".ticket.json"),
           ),
         ).toEqual([]);
         expect(JSON.parse(request.argv[2] ?? "")).toEqual({
@@ -122,11 +122,11 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
           origin: { paneId: "3", cwd: repo },
           view: { kind: "browser", url: "https://example.invalid/pull/281" },
         });
-      const intents = async () =>
-        (await readdir(join(home, "native-host"))).filter((name) => name.endsWith(".intent.json"));
+      const tickets = async () =>
+        (await readdir(join(home, "native-host"))).filter((name) => name.endsWith(".ticket.json"));
       if (mode === "confirmed") {
         expect(await open()).toEqual({ opened: true, warnings: [] });
-        expect(await intents()).toEqual([]);
+        expect(await tickets()).toEqual([]);
         expect(opens).toBe(1);
         return;
       }
@@ -134,7 +134,7 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
         "Tern did not confirm the PR opened in its browser. Tandem did not retry",
       );
       expect(opens).toBe(1);
-      expect(await intents()).toEqual([]);
+      expect(await tickets()).toEqual([]);
       expect(focuses).toEqual([]);
       // The user's next click is a new opening, in this process or a fresh one.
       expect(await open()).toEqual({ opened: true, warnings: [] });
@@ -143,7 +143,7 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
         warnings: [],
       });
       expect(opens).toBe(3);
-      expect(await intents()).toEqual([]);
+      expect(await tickets()).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

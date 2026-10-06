@@ -285,8 +285,13 @@ export type TerminalBackend = Readonly<{
       view: Extract<TerminalView, { kind: "brief" }>;
     }>,
   ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
-  /** Native view opens under `home` whose outcome was never proved, read without changing them. */
+  /**
+   * Native view opens under `home` whose outcome was never proved, read without changing them.
+   * Throws when the opens themselves cannot be listed.
+   */
   retainedViewOpens(home: string): Promise<readonly RetainedViewOpen[]>;
+  /** Settles every retained native view open under `home` whose outcome is now proved. */
+  recoverViewOpens(home: string): Promise<void>;
   /**
    * Removes one retained open's records, never a pane, under that open's lock: only while the
    * record is unchanged and `conclusive` re-proves its coordinator's state.

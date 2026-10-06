@@ -17,13 +17,14 @@ import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordina
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { harnessOf } from "../../src/harness/contract.ts";
 import { harnessFor } from "../../src/harness/resolve.ts";
+import { blockArgs } from "../../src/native/contract.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import {
   type CliApplication,
   type CliDependencies,
   createCliApplication,
 } from "../../src/terminal/cli-application.ts";
-import { parseCliArgs } from "../../src/terminal/cli-arguments.ts";
+import { CliUsageError, parseCliArgs } from "../../src/terminal/cli-arguments.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 
 async function writeOmpProbe(root: string, exitCode = 0): Promise<string> {
@@ -334,6 +335,30 @@ function cancelledTask(): TaskRecord {
     notifications: [],
   };
 }
+
+test("a native block's echoed context locates its home, cwd and window; anything else is refused", () => {
+  const [, ctx] = blockArgs("/h/native-views/key/task-1.json", {
+    coordinator: "3",
+    cwd: "/work/app",
+    home: "/h",
+    index: "/h/native-views/key.json",
+    window: "opaque-window",
+  });
+  const invocation = parseCliArgs(["open", "task", "1", "--pane", "7", "--ctx", ctx]);
+  expect(invocation.options).toMatchObject({
+    home: "/h",
+    viewCwd: "/work/app",
+    viewWindowId: "opaque-window",
+    viewPaneId: "7",
+  });
+  for (const forged of [
+    "{}",
+    ctx.replace('"/work/app"', '"relative"'),
+    ctx.replace('"coordinator":"3",', '"coordinator":"3","extra":1,'),
+    ` ${ctx}`,
+  ])
+    expect(() => parseCliArgs(["open", "task", "1", "--ctx", forged])).toThrow(CliUsageError);
+});
 
 test("parseCliArgs keeps PR commands explicit and records consent separately", () => {
   const invocation = parseCliArgs([

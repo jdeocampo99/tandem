@@ -1,4 +1,5 @@
 import type { CreatableTaskKind, ThinkingLevel } from "../contracts.ts";
+import { type BlockContext, parseBlockContext } from "../native/contract.ts";
 import type { NativeRendererCommand } from "./native-renderers.ts";
 
 /** Paths and opaque native identifiers preserve their literal argv spelling. */
@@ -9,6 +10,7 @@ const LITERAL_OPTIONS: Readonly<Record<string, true>> = {
   "--cwd": true,
   "--pane": true,
   "--window": true,
+  "--ctx": true,
   "--extension": true,
   "--input": true,
   "--config": true,
@@ -487,6 +489,18 @@ const OPTION_SPECS: Readonly<Record<string, OptionSpec>> = {
   }),
   "--cwd": valued((options, value) => {
     options.viewCwd = value;
+  }),
+  // A native block echoes the context Tandem launched it with; only Tandem reads it.
+  "--ctx": valued((options, value, name) => {
+    let ctx: BlockContext;
+    try {
+      ctx = parseBlockContext(value);
+    } catch {
+      throw new CliUsageError(`${name} must be the native view context Tandem launched it with`);
+    }
+    options.home = ctx.home;
+    options.viewCwd = ctx.cwd;
+    if (ctx.window !== undefined) options.viewWindowId = ctx.window;
   }),
   "--text": valued((options, value) => {
     options.text = value;

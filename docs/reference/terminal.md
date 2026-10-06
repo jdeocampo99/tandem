@@ -124,24 +124,25 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   and durable recovery retains ownership/resources. Never infer non-commit from a nonzero exit.
   Inspect saved state and use [central recovery](recovery.md), rather than clearing the owner.
 
-Native hosting adds a private coordinator-bound intent lock, unique layout ticket and receipt.
-It proves the exact program, all five launch arguments and placement, refusing duplicate matches
-and conflicting detached/window evidence. A supplied window key must contain the exact origin
-and coordinator; without one, exactly one attached window is required. Unknown openings retain
-their fence and resources across fresh CLI calls; a host failure with zero applied layout effects
-settles instead and the user can open again. Native layout recovery requires exact block
-evidence; task replacement also proves the previous task pane absent. Browser opens keep no
+Native hosting (`tern/host.ts`) writes one durable ticket per open under a per-coordinator lock
+and reads the receipt `layout.luau` always writes. A pure `decide()` settles a ticket whose
+outcome is proved (opened, closed by the user, or failed before any layout effect) and keeps any
+other quarantined; nothing is retried. It proves the exact program, block arguments and
+placement, refusing duplicate matches and conflicting detached/window evidence. A supplied window
+key must contain the exact origin and coordinator; without one, exactly one attached window is
+required. Task replacement also proves the previous task pane absent. Browser opens keep no
 durable record: nothing can prove an uncertain one later and it is never re-invoked, so it never
 pauses other opens. Native and panel closes prove the full arguments and idle state again
-immediately before closing; failed verification quarantines the outcome. `tandem fix` lists
-retained opens and, with `--yes`, abandons one only after proving its coordinator exactly present
-or gone, through the port's `retainedViewOpens`/`abandonViewOpen` (Herdr has none).
+immediately before closing; failed verification quarantines the outcome. The port's
+`recoverViewOpens` settles decided tickets on each coordinator view publication. `tandem fix`
+lists retained opens and, with `--yes`, abandons one only after proving its coordinator exactly
+present or gone, through `retainedViewOpens`/`abandonViewOpen` (Herdr has none).
 
 Panels and root Board, Usage and Catch-up views reuse one exact existing block under the opening
-lock, checking all five arguments and intended placement. Duplicate, detached or foreign-window
-matches refuse reuse. Root views focus the proven pane without another layout opening. If an
-uncertain intent cannot be settled, Orchestrator return can still focus the exact conversation
-and show a warning while preserving every view, ticket and fence.
+lock, checking the block arguments and intended placement. Duplicate, detached or foreign-window
+matches refuse reuse. Root views focus the proven pane without another layout opening. If a
+retained ticket refuses an open, Orchestrator return can still focus the exact conversation
+and show a warning while preserving every view and ticket.
 See [hosting lifecycle](tern-views.md#native-hosting-and-renderer-launch-api).
 
 The plugin's `route.open` consumes private tickets immediately, then reads and lays them out
@@ -164,14 +165,12 @@ Every published view is `{version:1,kind,revision,model}`. The root has `kind:"p
 last readable display but disable revision-bound actions. These derived files never authorize
 an approval or post.
 
-All blocks receive exactly five strings:
-`{modelPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, indexPath}`.
-Argument five is the root index path. `navigation.origin` derives `home` from that path's
-`<home>/native-views/<project>.json` location. It passes the renderer's own pane id on actions,
-along with the supplied cwd, optional window key and derived custom-home flag.
+All blocks receive three strings, `[viewPath, ctxJson, indexPath]`, from `blockArgs` in
+`src/native/contract.ts`; listings are matched only through `parseBlockArgs`. Blocks treat
+`ctxJson` as opaque and echo it back with every action, with their own pane id. `indexPath` is
+the project's root index, which detail views also watch.
 
-Actions run once as `tandem native <verb> ... --pane <decimal id> --cwd <absolute path>
-[--window <key>]`. The CLI validates project and origin ownership before acting. JSON actions
+Actions run once as `tandem native <verb> ... --pane <decimal id> --ctx <ctxJson>`. The CLI validates project and origin ownership before acting. JSON actions
 use `native-input.sh` and `src/terminal/native-input.ts`: stdin becomes one unique immutable UTF-8
 file in a private 0700 directory, created exclusively as 0600 then made 0400. The caller deletes
 it after the invocation settles. Exit zero means done or cancelled; nonzero stderr becomes a

@@ -78,11 +78,11 @@ tern.route.link(function(link, cx)
 end)
 
 tern.route.open(function(req, cx)
- if string.match(req.path, "/native%-host/[%w%-]+%.tandem%-open%.json$") then
+ if string.match(req.path, "/native%-host/%x+%.[%x%-]+%.ticket%.json$") then
   local path=req.path
   tern.timer(1,function(loadCx)
    if not loadCx then return end
-   local loaded,host=pcall(function() return require("./view-host") end)
+   local loaded,host=pcall(function() return require("./layout") end)
    tern.timer(1,function(openCx)
     if not openCx then return end
     if loaded then host.open({path=path},openCx)

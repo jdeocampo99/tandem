@@ -8,6 +8,7 @@ import type { CommandRunner } from "../../../src/contracts.ts";
 import { findRunningCoordinator } from "../../../src/coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { parseBlockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { blocks, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
@@ -242,7 +243,9 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       const second = records.find((r) => r.repoPath === b);
       if (second === undefined) throw new Error("second coordinator record missing");
       const initialSecondPanel = blocks(await commands.ls(b)).find(
-        (p) => p.block.program === "tandem.panel" && p.block.args?.[1] === second.endpoint.paneId,
+        (p) =>
+          p.block.program === "tandem.panel" &&
+          parseBlockArgs(p.block.args)?.ctx.coordinator === second.endpoint.paneId,
       );
       if (initialSecondPanel === undefined) throw new Error("initial second-project panel missing");
       await terminal.closePanel({
@@ -350,7 +353,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       const secondPanel = blocks(await commands.ls(b)).find((p) => p.block.id === secondPanelId);
       expect(secondPanel?.session.id).toBe(second.endpoint.terminalSessionId);
       expect(secondPanel?.block.program).toBe("tandem.panel");
-      expect(secondPanel?.block.args?.[1]).toBe(second.endpoint.paneId);
+      expect(parseBlockArgs(secondPanel?.block.args)?.ctx.coordinator).toBe(second.endpoint.paneId);
       await publish(b);
       await terminal.focusWorkspace({
         sessionId: env.TANDEM_SESSION,
@@ -360,7 +363,9 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await until(async () => (await ctl("tree")).includes("Tern backend adapter"));
       await ctl("shot", "03-project-b-panel");
       const catchup = blocks(await commands.ls(b)).find(
-        (p) => p.block.program === "tandem.catchup" && p.block.args?.[1] === second.endpoint.paneId,
+        (p) =>
+          p.block.program === "tandem.catchup" &&
+          parseBlockArgs(p.block.args)?.ctx.coordinator === second.endpoint.paneId,
       );
       expect(catchup).toBeDefined();
       if (catchup === undefined) throw new Error("automatic second-project catch-up missing");
@@ -382,15 +387,17 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       const listing = await commands.ls(b);
       expect(
         blocks(listing).some(
-          (p) => p.block.program === "tandem.board" && p.block.args?.[1] === second.endpoint.paneId,
+          (p) =>
+            p.block.program === "tandem.board" &&
+            parseBlockArgs(p.block.args)?.ctx.coordinator === second.endpoint.paneId,
         ),
       ).toBe(true);
       expect(
-        blocks(listing).some((p) => p.block.args?.some((arg) => arg.endsWith(".tandem-open.json"))),
+        blocks(listing).some((p) => p.block.args?.some((arg) => arg.endsWith(".ticket.json"))),
       ).toBe(false);
       expect(
         (await readdir(join(home, "native-host"))).filter((name) =>
-          /\.(?:intent|receipt|tandem-open)\.json$/u.test(name),
+          /\.(?:ticket|receipt)\.json$/u.test(name),
         ),
       ).toEqual([]);
       expect(await readFile(join(root, "logs", "tern.log"), "utf8")).not.toContain(

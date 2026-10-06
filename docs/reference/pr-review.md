@@ -147,7 +147,7 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   Draft choices and new comments remain local until Post. The Post click is the user's approval;
   no second dialog or `--yes` is needed. The same pinned-head, revision-checked pending-post claim
   and receipt workflow applies as for the page. The user still chooses the verdict.
-- Native actions include `--pane ID --cwd ABSOLUTE_PATH [--window KEY]`; the shared
+- Native actions include `--pane ID --ctx CTX`, echoing the context the block was launched with; the shared
   [private JSON transport](terminal.md#native-views-and-actions) owns input-file cleanup.
   Nonzero stderr becomes a toast, local drafts remain available, and no outcome is retried.
   Exit zero alone does not prove a review posted: the renderer requires the CLI's

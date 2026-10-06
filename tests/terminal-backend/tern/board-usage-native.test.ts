@@ -10,8 +10,8 @@ import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
-import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/view-intent.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";

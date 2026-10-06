@@ -9,6 +9,7 @@ import {
   publishNativeViews,
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { blockArgs } from "../../../src/native/contract.ts";
 import {
   blocks,
   Created,
@@ -161,7 +162,9 @@ type ControlNode = {
       const launched = blocks(await ternCommands(commandRunner, { binary }).ls(root)).find(
         (entry) => entry.block.id === opened.paneId,
       );
-      expect(launched?.block.args).toEqual([file, endpoint.paneId, root, "", index]);
+      expect(launched?.block.args).toEqual(
+        blockArgs(file, { coordinator: endpoint.paneId, cwd: root, home: env.TANDEM_HOME, index }),
+      );
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       expect(JSON.stringify(await tree())).toContain("round 1 of 2");
       await ctl("shot", "03-task");
@@ -282,7 +285,7 @@ type ControlNode = {
       // The replacement settled, so it pauses no later open.
       expect(
         (await readdir(join(input.home, "native-host"))).filter((name) =>
-          name.endsWith(".intent.json"),
+          name.endsWith(".ticket.json"),
         ),
       ).toEqual([]);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
