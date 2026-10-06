@@ -1,13 +1,13 @@
--- Each native API call costs 10 ms. Contexts expire when their callback returns.
+-- Reads cost 5 ms and layout effects cost 10 ms. Contexts expire when their callback returns.
 -- A synchronous panel route exceeds Tern's 50 ms budget; staged calls must stay below it.
 local timers, writes, effects, toasts, panes = {}, {}, {}, {}, {}
 local active, calls, maximum, focused = false, 0, 0, 10
 local ticket
 local failMove=false
-local function charge(alive)
+local function charge(alive,cost)
  assert(active and alive(), "expired window context")
- calls += 1
- assert(calls < 5, "callback exceeded its 50 ms budget")
+ calls += cost or 10
+ assert(calls < 50, "callback exceeded its 50 ms budget")
  maximum=math.max(maximum,calls)
 end
 tern.timer=function(_delay,callback) table.insert(timers,callback) end
@@ -17,10 +17,10 @@ local function context()
  local live=true
  local function alive() return live end
  local cx={session={},layout={}}
- function cx.session:pane(id) charge(alive); return if panes[id] then table.clone(panes[id]) else nil end
- function cx.session:tabs() charge(alive); return {{id=11,session=1},{id=21,session=2},{id=22,session=2}} end
- function cx.session:layout(_tab) charge(alive); return {floats=if panes[20].floating then {{pane=20}} else {}} end
- function cx.session:tab_of(id) charge(alive); return if panes[id] then panes[id].tab else nil end
+ function cx.session:pane(id) charge(alive,5); return if panes[id] then table.clone(panes[id]) else nil end
+ function cx.session:tabs() charge(alive,5); return {{id=11,session=1},{id=21,session=2},{id=22,session=2}} end
+ function cx.session:layout(_tab) charge(alive,5); return {floats=if panes[20].floating then {{pane=20}} else {}} end
+ function cx.session:tab_of(id) charge(alive,5); return if panes[id] then panes[id].tab else nil end
  function cx:new_block(kind,args,how,options)
   charge(alive)
   assert(focused==(if ticket.placement=="task" and panes[20].floating then tonumber(ticket.replaced) else tonumber(ticket.coordinator)),"block creation followed another project's focus")
@@ -125,6 +125,39 @@ ticket.origin="50"; ticket.replaced="40"
 open(); drain()
 assert(#toasts==0 and panes[50]==nil and panes[40] and panes[20].floating and writes[ticket.receipt].paneId=="20")
 
+-- Back can originate outside the previous task. Recheck that task immediately before
+-- closing the picker or docking its coordinator, after the earlier pane/layout reads.
+for _,source in {"tandem.task-picker","tandem.panel"} do
+ for _,change in {"missing","kind","tab","floating"} do
+  reset("panel","return")
+  panes[20].floating=true
+  panes[40]={tab=21,block="tandem.task",floating=false}
+  panes[50]={tab=21,block=source,floating=false}
+  ticket.origin="50"; ticket.replaced="40"
+  open()
+  drain(function(index)
+   if index==6 then
+    if change=="missing" then panes[40]=nil
+    elseif change=="kind" then panes[40].block="foreign"
+    elseif change=="tab" then panes[40].tab=11
+    else panes[40].floating=true end
+   end
+  end)
+  assert(#toasts==1 and writes[ticket.receipt]==nil and #effects==0,
+   "Back must refuse a changed previous task before any effect: " .. source .. "/" .. change)
+  assert(panes[50] and panes[20].floating and #timers==0,"Back must preserve panes without retry")
+ end
+end
+
+reset("panel","return")
+panes[20].floating=true
+panes[40]={tab=21,block="tandem.task",floating=false}
+panes[50]={tab=21,block="tandem.panel",floating=false}
+ticket.origin="50"; ticket.replaced="40"
+open(); drain()
+assert(#toasts==0 and panes[50] and panes[40]==nil and not panes[20].floating)
+assert(writes[ticket.receipt].paneId=="20","Back from panel must still dock and retire the task")
+
 reset("panel","panel"); open()
 drain(function(index) if index==5 then panes[20].floating=true end end)
 assert(#toasts==1 and writes[ticket.receipt]==nil and #effects==0,"changed floating ownership must stay fenced")
@@ -133,4 +166,4 @@ reset("panel","panel")
 local cx,expire=context()
 assert(host.open({path="/b/ordinary.json"},cx)==nil and #timers==0)
 expire()
-print("Staged routes, second-project views, fresh contexts and quarantine checks passed; max native calls per callback:", maximum)
+print("Staged routes, second-project views, fresh contexts and quarantine checks passed; max callback cost (ms):", maximum)

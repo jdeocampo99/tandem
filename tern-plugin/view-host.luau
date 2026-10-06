@@ -31,7 +31,7 @@ local function host(path: string)
  local originClosed=false
  local ownerFloating=owner.floating==true
  -- Recheck both exact panes in the live session immediately before each layout effect.
- local function effect<T>(operation: (WindowCx) -> T): T
+ local function effect<T>(operation: (WindowCx, PaneInfo?) -> T): T
   return call(function(cx)
    local liveOwner = cx.session:pane(coordinator)
    local liveSource = if origin==coordinator then liveOwner else cx.session:pane(origin)
@@ -41,11 +41,17 @@ local function host(path: string)
     if liveSource then error("Closed originating pane reappeared") end
    elseif not liveSource or liveSource.tab~=source.tab or liveSource.block~=source.block
     or (origin~=coordinator and (liveSource.floating==true)~=(source.floating==true)) then error("Exact originating pane changed") end
-   return operation(cx)
+   return operation(cx,liveSource)
   end)
  end
  local pane: number?
  local previous=if ticket.replaced then tonumber(ticket.replaced) else nil
+ local function previousTask(cx: WindowCx, liveSource: PaneInfo?)
+  local current=if previous==origin then liveSource elseif previous then cx.session:pane(previous) else nil
+  if not current or current.block~="tandem.task" or current.tab~=owner.tab or current.floating then
+   error("Task return target changed")
+  end
+ end
  if ticket.placement=="inbox" then
   effect(function(cx) cx:command("inbox") end)
   pane=origin
@@ -55,13 +61,17 @@ local function host(path: string)
    local layout=call(function(cx) return cx.session:layout(owner.tab) end)
    if owner.floating and (not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
     or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator) then error("Task picker layout changed") end
-   effect(function(cx) cx.layout:close(origin); originClosed=true end)
+   effect(function(cx,liveSource)
+    if owner.floating then previousTask(cx,liveSource) end
+    cx.layout:close(origin); originClosed=true
+   end)
   elseif owner.floating then
    local old=if previous then call(function(cx) return cx.session:pane(previous) end) else nil
    local layout=call(function(cx) return cx.session:layout(owner.tab) end)
    if not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
     or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator then error("Task return layout changed") end
-   if not effect(function(cx)
+   if not effect(function(cx,liveSource)
+    previousTask(cx,liveSource)
     local current=cx.session:layout(owner.tab)
     if not current or #current.floats~=1 or current.floats[1].pane~=coordinator then error("Task return layout changed") end
     local docked=cx.layout:dock(coordinator,previous,"right",{focus=false})

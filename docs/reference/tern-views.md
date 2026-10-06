@@ -152,6 +152,9 @@ window callbacks a 50 ms budget and disables a hook that exceeds it; doing the w
 focus and block creation together so navigation between stages cannot change the destination.
 Recheck exact originating panes before layout effects. Never retry a failed stage or write a
 receipt for it: the TypeScript backend retains uncertain tickets and their durable opening intent.
+Back also rereads the previous task in the same callback before closing a task picker or docking
+the coordinator. A disappeared task, changed kind or tab, or newly floating task refuses the
+effect and preserves the originating view and recovery evidence.
 
 ### JSON action input
 
