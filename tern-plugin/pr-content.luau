@@ -6,7 +6,8 @@ local fields = require("./text-field")
 local diff = require("./pr-diff")
 local M = {}
 export type State = { tab: string, chapter: number, stop: number, diff: diff.State, summary: fields.Field?, verdict: string, head: string?, generation: number?, clock: number, epoch: number, posting: boolean, submitted: boolean, focus: string, prefix: string, identity: string? }
-export type Invoke = (string, string, unknown?, (() -> ())?) -> ()
+export type ActionResult = {status: number, stdout: string, stderr: string}
+export type Invoke = (string, string, unknown?, ((ActionResult) -> ())?) -> ()
 function M.create(): State
  return { tab = "Description", chapter = 1, stop = 1, diff = diff.create(), verdict = "comment", clock = tern.now(), epoch = os.time() * 1000, posting = false, submitted = false, focus = "comment", prefix = "main.content" }
 end
@@ -132,7 +133,16 @@ function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx:
    local yours = {}
    for _, mine in s.diff.yours do table.insert(yours, {file=mine.file,line=mine.line,body=mine.body}) end
    s.posting = true
-   invoke("review-submit", model.review.taskId, {tandemPrReview=1,reviewHead=s.head,reviewGeneration=s.generation,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours)}, function() s.submitted = true end)
+   invoke("review-submit", model.review.taskId, {tandemPrReview=1,reviewHead=s.head,reviewGeneration=s.generation,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours)}, function(result)
+    s.posting = false
+    if result == nil or result.status ~= 0 then return end
+    local decoded, value = pcall(tern.json.decode, result.stdout)
+    if decoded and type(value) == "table" and value.posted == true then s.submitted = true
+    else
+     local message = if decoded and type(value) == "table" and type(value.message) == "string" then value.message else "No posted review receipt was returned. Check the PR before trying again."
+     cx:toast("info", "Review wasn't confirmed as posted", message)
+    end
+   end)
    return true
   end
  end

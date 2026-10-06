@@ -383,8 +383,14 @@ The optional strip is rendered inside the PR header. `pr-diff.luau` exports `cre
 For the task's Diff tab set the content state's `tab="Diff"`; for its PR tab set
 `tab="Description"`. Pass readiness from both the task/index and PR detail views to
 `view` and `event`. Retain the same content state while navigating to preserve local drafts.
-The standalone PR block calls `cx:exit(0)` after a successful `review-submit`, as it does for
-its close control. Embedded content records success locally; its task host owns navigation.
+The shared `Invoke` completion receives the process result `{status,stdout,stderr}`. For
+`review-submit`, callers invoke it after every settled outcome, including a nonzero exit,
+missing origin or spawn failure. Other action completions remain success-only. Content clears
+`posting` on completion, retains drafts on failure/refusal, and marks `submitted` only for
+exit zero with decoded CLI stdout containing `posted: true`. A `posted: false` result displays
+its message; an unreadable receipt asks the user to check the PR. No outcome retries an action.
+The standalone PR block calls `cx:exit(0)` only after that confirmed posted receipt, as it does
+for its close control. Embedded content records success locally; its task host owns navigation.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
 for wheel and keyboard input; the review dock remains visible while the content scrolls.
 PR line numbers use muted text color rather than element opacity, avoiding a compositing
