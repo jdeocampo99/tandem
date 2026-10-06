@@ -328,6 +328,10 @@ Successful hosting already removed its private ticket and receipt, so no host cl
 Task pages use the Orchestrator return action instead, which restores the hidden conversation
 before removing its replacement block.
 
+`openView` with kind `board` toggles back when its exact originating block is this project's
+board, using the same guarded return and closure. Other origins open the board normally;
+renderers never parse Tern program metadata or guess pane ownership.
+
 Known owned renderer back buttons all restore the conversation. When the coordinator is floated,
 the host proves its exact task block by program, coordinator and index launch arguments before
 docking the coordinator and closing that task. Returning from Board, Usage or Catch-up also
