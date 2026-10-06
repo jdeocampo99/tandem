@@ -362,6 +362,10 @@ workflow(
         () => clickIfShown(window, "← Orchestrator"),
         async () => (await window.focusedPane()) === project.endpoint.paneId,
       );
+      await window.until(
+        "keyboard-opened task page closed after ← Orchestrator",
+        async () => !(await window.screen()).includes("task #width"),
+      );
     });
   },
   120_000,
@@ -480,7 +484,9 @@ workflow(
             await Bun.file(project.transcript)
               .text()
               .catch(() => "")
-          ).includes(lineNote),
+          )
+            .split("\n")
+            .includes(lineNote),
         );
         await window.until(
           "brief pane closed after Request changes",
@@ -694,8 +700,10 @@ workflow(
       await window.until("fix request in the worker inbox", async () => {
         const inbox = await readTaskInbox(taskInboxPath(window.home, "width"));
         return (
-          inbox?.messages.some((message) =>
-            message.text.startsWith(`PR fix request: src/panel.ts:3: ${note}`),
+          inbox?.messages.some(
+            (message) =>
+              message.text ===
+              `PR fix request: src/panel.ts:3: ${note} This task's pull request is already open. If you change code, commit it before you submit; Tandem pushes the branch to the pull request, so don't push it yourself.`,
           ) === true
         );
       });

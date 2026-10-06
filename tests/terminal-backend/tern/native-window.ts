@@ -47,8 +47,8 @@ export type TernWindow = Readonly<{
   screen: () => Promise<string>;
   focusedPane: () => Promise<string | undefined>;
   click: (target: string | ControlNode | undefined) => Promise<void>;
-  /** Clicks a control that focuses a text field, types `text`, and waits until the field shows it. */
-  typeInto: (target: string | ControlNode | undefined, text: string) => Promise<void>;
+  /** Clicks the empty text field showing `placeholder`, types `text`, and waits until it shows. */
+  typeInto: (placeholder: string, text: string) => Promise<void>;
   shot: (name: string) => Promise<string>;
   until: (label: string, check: () => Promise<boolean>, timeoutMs?: number) => Promise<void>;
 }>;
@@ -190,17 +190,17 @@ export async function withTernWindow(
     const [x = 0, y = 0, width = 0, height = 0] = rect;
     await ctl("click", String(x + width / 2), String(y + height / 2));
   };
-  const typeInto = async (target: string | ControlNode | undefined, text: string) => {
+  const typeInto = async (placeholder: string, text: string) => {
     // A plugin block moves focus into its field on a later frame, and the control tree exposes
-    // no editor focus, so text typed too soon is dropped by the block. Only an empty field retries.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      await click(target);
+    // no editor focus, so text typed too soon is dropped. Typing repeats only while the field
+    // still shows its placeholder a second later, so text that arrived is never typed twice.
+    const empty = async () =>
+      (await nodes()).some((node) => node.text === placeholder && node.rect !== undefined);
+    for (let attempt = 0; attempt < 5 && (await empty()); attempt += 1) {
+      await click(placeholder);
       await ctl("type", JSON.stringify(text));
       const deadline = Date.now() + 1_000;
-      while (Date.now() < deadline) {
-        if ((await screen()).includes(text)) return;
-        await Bun.sleep(100);
-      }
+      while (Date.now() < deadline && (await empty())) await Bun.sleep(100);
     }
     await until(`typed text ${JSON.stringify(text)}`, async () => (await screen()).includes(text));
   };
@@ -253,8 +253,9 @@ export async function withTernWindow(
     await ctl("account", "signed-in");
     const [width, height] = options.size ?? [1500, 950];
     await ctl("size", String(width), String(height));
-    // `ctl state` answers before the plugin host finishes starting; a route opened in that window
-    // never writes its receipt.
+    // Known product gap: `ctl state` answers before the plugin host is ready, and a route opened
+    // then never writes its receipt. Remove this settle once Tandem waits for plugin readiness
+    // (the startup barrier planned alongside step 5).
     await Bun.sleep(500);
     await body(pending);
     console.log(`Native evidence: ${root}`);
