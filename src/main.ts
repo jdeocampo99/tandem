@@ -40,6 +40,7 @@ import {
 } from "./terminal/fix-report.ts";
 import { applyHardReset, planHardReset, renderHardResetPlan } from "./terminal/hard-reset.ts";
 import {
+  catchUpWarningNotice,
   launchProjects,
   otherSessionReconciliationNotices,
   panelFailureNotice,
@@ -816,6 +817,8 @@ async function runProjectFlow({
     for (const notice of otherSessionReconciliationNotices(repoPath, launch)) stdout(notice);
     const panelNotice = panelFailureNotice(repoPath, launch);
     if (panelNotice !== undefined) stdout(panelNotice);
+    const catchUpNotice = catchUpWarningNotice(repoPath, launch);
+    if (catchUpNotice !== undefined) stdout(catchUpNotice);
   }
   return {
     exitCode: 0,

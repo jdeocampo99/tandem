@@ -163,6 +163,31 @@ const summaries: readonly NativeTaskSummary[] = [running, ready, stuck].map((tas
       }),
 }));
 
+test("native panel rounds quota text and preserves the numeric meter", () => {
+  for (const remainingPercent of [15.000000000000002, 85.4]) {
+    const view = nativePanelView({
+      snapshot,
+      project: PROJECT,
+      now: NOW,
+      tasks: summaries,
+      bellCount: 0,
+      fiveHour: {
+        provider: "anthropic",
+        account: "fixture",
+        window: "five-hour",
+        label: "5h",
+        remainingPercent,
+        resetInMs: 8_040_000,
+        fetchedAt: NOW,
+      },
+    });
+    expect(view.header.fiveHourLabel).toBe(
+      remainingPercent < 50 ? "5h 85% · 2h 14m" : "5h 15% · 2h 14m",
+    );
+    expect(view.header.fiveHour?.remainingPercent).toBe(remainingPercent);
+  }
+});
+
 test("native panel keeps an active task with a draft PR running and shows model and live tool on one dim line", () => {
   const view = nativePanelView({
     snapshot,
@@ -172,6 +197,7 @@ test("native panel keeps an active task with a draft PR running and shows model 
     bellCount: 3,
   });
   expect(view.header.bellCount).toBe(3);
+  expect(view.header.fiveHourLabel).toBe("5h unavailable");
   expect(view.header.otherProjectsNeedYou).toBe(1);
   expect(view.sections.map((section) => section.title)).toEqual([
     "Needs you",

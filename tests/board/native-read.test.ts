@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { markNativeAlertsRead, NativeAlerts } from "../../src/board/native-alerts.ts";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
 import { nativeDetailPath, nativeViewsPath, writeNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
@@ -501,5 +502,50 @@ test("publication prunes absent task/brief/PR details only in its own project an
     } finally {
       await reader.settle();
     }
+  });
+});
+
+test("panel bell reads successful native deliveries and ignores coordinator acknowledgement", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const task = await seedScenarioTask(world, { kind: "implementation", stage: "implementing" });
+    const terminal = {
+      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+      notify: async () => {},
+    };
+    const deps = { home: world.home, clock: world.clock, run: world.run, terminal };
+    const alerts = new NativeAlerts(deps);
+    const reader = new NativeViewsReader(deps);
+    const snapshot = {
+      version: 1 as const,
+      writtenAt: world.clock(),
+      coordinators: [],
+      board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+    };
+    await alerts.observe(snapshot, world.repoPath, world.sessionId);
+    const updated = await world.store.update(task.id, task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      communication: {
+        revision: 0,
+        messages: [],
+        question: { id: "decision", text: "Approve scope?" },
+      },
+      notifications: [{ id: "coordinator-backlog", message: "worker report", acknowledged: false }],
+    }));
+    expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(0);
+    await alerts.observe(snapshot, world.repoPath, world.sessionId);
+    expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(1);
+    await world.store.update(task.id, updated.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      notifications: current.notifications.map((notification) => ({
+        ...notification,
+        acknowledged: true,
+      })),
+    }));
+    expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(1);
+    await markNativeAlertsRead(world.home, world.repoPath, 1);
+    expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(0);
+    await reader.settle();
   });
 });

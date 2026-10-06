@@ -149,6 +149,10 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   workspace from its record; a failed focus is reported, not an error. After confirmed focus,
   optional Tern catch-up failures return warnings while preserving the successful open result.
   Catch-up never selects an arbitrary window, and a failed catch-up leaves the visit unacknowledged.
+  All visible entry paths share `tryShowCatchUp`; launch/reconnect return `catchUpWarning`
+  separately from `panelFailure`, and the front door prints it. Native project/inbox entries
+  return successful results with warning toasts. Launch/ownership/focus errors stay outside
+  the optional catch-up boundary.
 - At each session start, while no saved project other than the Tandem checkout exists, it opens
   the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
   `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`

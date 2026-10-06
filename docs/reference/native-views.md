@@ -168,7 +168,8 @@ The service uses the published-summary builder; existing `panelView` and text ta
 NativePanelView = {
   header: {
     title: string, project: string, projects: NativeProjectRow[],
-    otherProjectsNeedYou: number, bellCount: number, fiveHour?: LimitMeter
+    otherProjectsNeedYou: number, bellCount: number, fiveHour?: LimitMeter,
+    fiveHourLabel: string // whole percent used; numeric meter retains provider precision
   },
   sections: { title: "Needs you" | "Running" | "Ready" | "Recently done",
               count: number, rows: NativePanelRow[] }[],
@@ -193,8 +194,10 @@ activity or the saved stop reason; to-dos stay on the task page. PR metadata sup
 numbers. Active tasks with draft PRs stay in Running and are not duplicated as a Ready row.
 All four section containers exist, including empty ones. Project switcher status includes offline
 and counts, with shortcuts for the first nine projects; the renderer owns the footer's open-project
-and previous/next controls. The bell count is Tandem's saved unacknowledged task notifications;
-the Tern inbox renderer can provide its own live count to `nativePanelView`.
+and previous/next controls. The bell count is this project's confirmed native alert deliveries
+minus its user read cursor;
+it includes brief and PR-watch alerts and is independent of coordinator acknowledgements.
+See [bell/read semantics](tern-views.md#panel-bell-and-user-read-semantics).
 The compact meter uses the lowest known remaining percentage among the account 5-hour limits.
 
 ### Task page
@@ -360,19 +363,13 @@ models plus saved project records. `{project,merged:RecentPullRequest[],needsYou
 blocked:{key,name,reason}[],whereWeLeftOff:{workstream,text}[],workstreams:CatchUpView[],
 actions:["open-needs-you","dismiss"]}`. Project merges include tasks without a workstream.
 
-The host calls `shouldAutoShowCatchUp({now,lastOpenedAt?,previousSignature?,currentSignature})`.
-It returns true only at **1+ hour** away, with a known previous visit/signature and a different
-meaningful signature. Unknown visits, invalid dates, repaint/timer changes and unchanged work
-never auto-show. The host owns visit/dismiss tracking and invokes this pure rule on project open;
-`src/memory/native-visits.ts` stores the last visit/signature and explicit dismissal in private,
-locked, atomically replaced `<home>/native-visits/<repositoryKey>.json` files. Its exported
-`maybeShowCatchUp` is called after visible project opening, reconnecting and confirmed switching;
-background `--no-attach` launch defers to the caller's focus hook. Panel opening and polling never
-change visit timestamps. A visit before the first root publication records its timestamp without
-a signature. The first successful publication fills only that missing baseline; later publications
-preserve it so changes remain detectable on return. Publication never creates a visit or advances
-its timestamp. A failed opening does not acknowledge the visit. After confirmed focus,
-`open-project` reports optional catch-up failures as warnings while preserving its successful
-open result; see [terminal behavior](terminal.md#board-usage-and-catch-up) for other callers.
-First visits and unchanged work remain quiet. Dismiss and
-Open what needs me acknowledge the current signature only after confirmed navigation.
+The host calls `shouldAutoShowCatchUp({now,lastVisibleAt?,previousSignature?,currentSignature})`.
+It returns true only at **1+ hour** since last visibility, with a known baseline/signature and a
+different meaningful signature. Invalid dates, repaint/timer changes and unchanged work stay quiet.
+The host stores private locked presentation records under `<home>/native-visits`, updates last
+visibility on departure and foreground heartbeats, and runs the rule on every project entry,
+including inbox activation. A catch-up failure shows a warning, preserves successful project
+navigation and leaves the visit unacknowledged; see the [single entry rule](terminal.md#board-usage-and-catch-up).
+Initial publication fills a missing baseline only. Dismiss and
+Open what needs me acknowledge after confirmed navigation. See [visibility semantics and API
+limits](tern-views.md#board-usage-and-catch-up-actions).
