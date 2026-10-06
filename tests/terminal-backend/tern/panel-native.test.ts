@@ -7,6 +7,7 @@ import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.t
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import { parseBlockArgs } from "../../../src/native/contract.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
@@ -191,7 +192,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       expect(
         blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
           (entry) =>
-            entry.block.program === "tandem.panel" && entry.block.args?.[1] === coordinator.paneId,
+            entry.block.program === "tandem.panel" &&
+            parseBlockArgs(entry.block.args)?.ctx.coordinator === coordinator.paneId,
         ),
       ).toHaveLength(1);
       expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(true);

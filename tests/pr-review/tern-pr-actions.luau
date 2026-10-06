@@ -43,7 +43,9 @@ local views = loadModule('./view-file')
 local content = loadModule('./pr-content')
 local cx={pane=123,render=function() end,exit=function(_,code) assert(code==0); exits+=1 end,
  toast=function(_,level,title,message) table.insert(toasts,{level=level,title=title,message=message}) end}
-local args={'/custom home/native-views/project/pr-review-1.json','42','/original repo','opaque-window','/custom home/native-views/project.json'}
+-- Tandem's launch context, which the block echoes back verbatim and never reads.
+local ctx='{"coordinator":"42","cwd":"/original repo","home":"/custom home","index":"/custom home/native-views/project.json","window":"opaque-window"}'
+local args={'/custom home/native-views/project/pr-review-1.json',ctx}
 local function create()
  local state=block.init(cx,args,nil)
  assert(views.refresh(state.view) and state.view.status=='ready')
@@ -62,7 +64,7 @@ end
 local state=create()
 post(state); post(state)
 assert(#pending==1 and state.content.posting)
-assert(table.concat(pending[1].argv,'|')=='/bin/sh|native-input.sh|review-submit|review-1|--pane|123|--cwd|/original repo|--home|/custom home|--window|opaque-window')
+assert(table.concat(pending[1].argv,'|')=='/bin/sh|native-input.sh|review-submit|review-1|--pane|123|--ctx|' .. ctx)
 assert(pending[1].opts.stdin.reviewHead=='abc123' and pending[1].opts.stdin.reviewGeneration==0)
 assert(pending[1].opts.stdin.summary=='My edited summary 日本語')
 pending[1].callback({status=1,stdout='',stderr='CLI refused'})
@@ -89,10 +91,6 @@ post(failedStart)
 preserved(failedStart)
 assert(string.find(toasts[#toasts].message,'Could not spawn') and #pending==4)
 startFailure=false
-local invalidOrigin=create(); invalidOrigin.home=''
-post(invalidOrigin)
-preserved(invalidOrigin)
-assert(#pending==4)
 -- Service-owned uncertainty guidance remains distinct from a definite refusal.
 local uncertain=create()
 post(uncertain)
@@ -119,14 +117,14 @@ content.event(embedded,model,true,{ev='action',act='pr-post'},cx,function(_,_,_,
 assert(embedded.posting and complete~=nil)
 complete({status=0,stdout='{"posted":true,"url":"https://github.com/acme/app/pull/281#pullrequestreview-1"}',stderr=''})
 assert(embedded.submitted and not embedded.posting and exits==0)
--- The production renderer also carries custom home through its non-JSON shell path.
+-- The production renderer also echoes its context through its non-JSON shell path.
 block.event(uncertain,{ev='action',act='pr-task'},cx)
 assert(#pending==7)
-assert(table.concat(pending[7].argv,'|')=='/bin/sh|tandem.sh|native|open|task|review-1|--pane|123|--cwd|/original repo|--home|/custom home|--window|opaque-window')
+assert(table.concat(pending[7].argv,'|')=='/bin/sh|tandem.sh|native|open|task|review-1|--pane|123|--ctx|' .. ctx)
 assert(pending[7].opts.stdin==nil)
 pending[7].callback({status=0,stdout='{}',stderr=''})
 assert(exits==0 and #pending==7)
-print('PR action result, home forwarding and draft retention checks passed')
+print('PR action result, context echo and draft retention checks passed')
 
 local savedModel=table.clone(model)
 savedModel.header=table.clone(model.header)

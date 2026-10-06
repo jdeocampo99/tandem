@@ -128,8 +128,11 @@ export type ObservedPendingScout = Readonly<{
 
 /** Something the read-only scan itself could not complete, reported rather than assumed empty. */
 export type ReconcileScanFailure = Readonly<{
+  readonly kind: Extract<ReconcileResourceKind, "worktree-lease" | "native-open">;
   readonly subject: string;
   readonly reason: string;
+  /** The path that could not be read, when the subject is one. */
+  readonly path?: string;
 }>;
 
 /** Whether a retained native open's coordinator is exactly present, exactly gone, or unclear. */
@@ -438,6 +441,8 @@ async function observePoolLeases(
       });
     } catch (error) {
       failures.push({
+        kind: "worktree-lease",
+        path: location.poolRoot,
         subject: location.poolRoot,
         reason: `the Treehouse pool for ${location.repoPath} could not be read: ${describeFailure(error)}`,
       });
@@ -565,6 +570,7 @@ export async function scanTandemResources(
   const { coordinators, unreadable } = await observeCoordinators(input, home);
   const { leases, failures } = await observePoolLeases(input, coordinators);
   const quarantines = await listCoordinatorQuarantineRecords(home);
+  const native = await observeNativeOpens(input.terminal, home);
   return {
     home,
     coordinators,
@@ -579,8 +585,8 @@ export async function scanTandemResources(
     unreadable,
     quarantines,
     settledQuarantineIds: await observeSettledQuarantines(input.run, quarantines, coordinators),
-    failures,
-    nativeOpens: await observeNativeOpens(input.terminal, home),
+    failures: [...failures, ...native.failures],
+    nativeOpens: native.opens,
   };
 }
 
@@ -807,15 +813,30 @@ async function nativeOpenOwner(
 async function observeNativeOpens(
   terminal: TerminalBackend,
   home: string,
-): Promise<readonly ObservedNativeOpen[]> {
-  const observed: ObservedNativeOpen[] = [];
-  for (const open of await terminal.retainedViewOpens(home))
-    observed.push(
+): Promise<Readonly<{ opens: readonly ObservedNativeOpen[]; failures: ReconcileScanFailure[] }>> {
+  let retained: readonly RetainedViewOpen[];
+  try {
+    retained = await terminal.retainedViewOpens(home);
+  } catch (error) {
+    return {
+      opens: [],
+      failures: [
+        {
+          kind: "native-open",
+          subject: "native view opens",
+          reason: `paused views could not be listed: ${describeFailure(error)}`,
+        },
+      ],
+    };
+  }
+  const opens: ObservedNativeOpen[] = [];
+  for (const open of retained)
+    opens.push(
       open.status === "unreadable"
         ? { unreadable: open }
         : { open, owner: await nativeOpenOwner(terminal, open) },
     );
-  return observed;
+  return { opens, failures: [] };
 }
 
 function planNativeOpen(observed: ObservedNativeOpen): ReconcilePlanItem {
@@ -1290,10 +1311,10 @@ function reportFrom(
   }
   for (const failure of input.failures) {
     buckets.failed.push({
-      kind: "worktree-lease",
+      kind: failure.kind,
       id: failure.subject,
       reason: failure.reason,
-      path: failure.subject,
+      ...(failure.path === undefined ? {} : { path: failure.path }),
     });
   }
   return {

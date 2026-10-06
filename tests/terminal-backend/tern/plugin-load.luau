@@ -18,7 +18,7 @@ local function hit(name) callbackCount[name] = (callbackCount[name] or 0) + 1 en
 local function loadModule(name)
  assert(not loading, 'LOAD eagerly required ' .. name)
  imports[name] = (imports[name] or 0) + 1
- if name == './view-host' then return {open = function(req, cx) assert(req.path and cx); return {handled=true} end} end
+ if name == './layout' then return {open = function(req, cx) assert(req.path and cx); return {handled=true} end} end
  return {
   init = function(cx, args, saved) assert(cx.token and args[1]=='fixture' and saved=='saved'); hit('init'); return {token=cx.token} end,
   view = function(state, cx) assert(state.token==cx.token); hit('view'); return {main='view'} end,
@@ -53,8 +53,8 @@ for id,def in definitions do
 end
 for _,name in {'view','title','key','event','resize','save'} do assert(callbackCount[name]==9) end
 assert(callbackCount.init==18)
-assert(openRoute({path='/tmp/native-host/id.tandem-open.json'},{}).handled)
-assert(imports['./view-host']==nil)
+assert(openRoute({path='/tmp/native-host/ab12.cd34.ticket.json'},{}).handled)
+assert(imports['./layout']==nil)
 while #timers>0 do table.remove(timers,1)({}) end
-assert(imports['./view-host']==1)
+assert(imports['./layout']==1)
 print('Plugin LOAD is registration-only; lazy callbacks and cached definitions pass')

@@ -62,8 +62,11 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
   (no receipt, a failure after layout changes, or a done receipt without exact block proof).
   Applying abandons it only under that coordinator's open lock, while the record is unchanged,
   after the terminal proves the coordinator pane exactly present or exactly gone again. A
-  detached or otherwise inconclusive answer keeps it. Abandoning removes only the record, ticket
-  and receipt; no pane is closed and nothing is reopened. An unreadable record is listed and kept.
+  detached or otherwise inconclusive answer keeps it. Abandoning removes only the ticket and its
+  receipt; no pane is closed and nothing is reopened. An unreadable ticket is listed and kept. A
+  receipt that arrives after its ticket was abandoned is removed by the next recovery. If the
+  retained opens cannot be listed at all, the scan reports that as a `native-open` failure and
+  still covers every other resource.
 
 ### Superseded worktrees (`freeable`)
 

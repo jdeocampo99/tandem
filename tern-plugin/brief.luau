@@ -15,7 +15,7 @@ type Brief = {
 }
 type Draft = { lineId: string, text: string }
 type State = {
- file: files.View<Brief>, shown: Brief?, shownRevision: string?, cwd: string, origin: string, window: string, home: string,
+ file: files.View<Brief>, shown: Brief?, shownRevision: string?, pane: string, ctx: string,
  comments: { Draft }, editing: string?, editor: fields.Field, overall: fields.Field, active: string,
  busy: boolean, submitted: boolean, notice: string?,
 }
@@ -74,7 +74,7 @@ local function submit(state: State, cx: BlockCx, verb: string)
   cx:toast("warning", "Add a comment", "Explain what should change before requesting changes.")
   return
  end
- if string.sub(state.cwd, 1, 1) ~= "/" or string.sub(state.home, 1, 1) ~= "/" or not string.match(state.origin, "^%d+$") then
+ if state.ctx == "" or not string.match(state.pane, "^%d+$") then
   cx:toast("error", "Missing Tandem context", "Reopen the brief from the project's panel.")
   return
  end
@@ -83,9 +83,7 @@ local function submit(state: State, cx: BlockCx, verb: string)
   agreementDigest = model.approval.agreementDigest, comments = state.comments,
   text = if string.find(state.overall.text, "%S") then state.overall.text else nil,
  }
- local argv = { "/bin/sh", "native-input.sh", verb, model.requestId, "--pane", state.origin, "--cwd", state.cwd }
- if state.window ~= "" then table.insert(argv, "--window"); table.insert(argv, state.window) end
- if state.home ~= "" then table.insert(argv, "--home"); table.insert(argv, state.home) end
+ local argv = { "/bin/sh", "native-input.sh", verb, model.requestId, "--pane", state.pane, "--ctx", state.ctx }
  state.busy = true
  local ok, problem = pcall(function()
   tern.process.run(argv,
@@ -124,8 +122,8 @@ local brief: BlockDef<State> = {
  init = function(cx, args)
   local origin = navigation.origin(args)
   local state: State = {
-   file = files.create(origin.path, "brief", parse), cwd = origin.cwd,
-   origin = string.format("%.0f", cx.pane), window = origin.window, home = origin.home,
+   file = files.create(origin.path, "brief", parse),
+   pane = string.format("%.0f", cx.pane), ctx = origin.ctx,
    comments = {}, editor = fields.create(nil, true), overall = fields.create(), active = "overall", busy = false, submitted = false,
   }
   files.refresh(state.file)

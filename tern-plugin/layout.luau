@@ -1,7 +1,7 @@
 --!strict
--- Only immutable backend-authored opening tickets can reach the native layout API.
+-- Interprets one backend-authored ticket (src/native/contract.ts `Ticket`). Every stage checks
+-- the ticket's expiry, then rechecks its exact panes, then applies one effect. It never retries.
 local M = {}
-local kinds = { panel=true, task=true, brief=true, pr=true, prs=true, board=true, usage=true, catchup=true, welcome=true, ["task-picker"]=true }
 -- Every window callback has a 50 ms budget. Yield between native calls, and use only the
 -- fresh WindowCx supplied to that callback. Never keep a context after its handler returns.
 local function call<T>(operation: (WindowCx) -> T, delay: number?): T
@@ -13,10 +13,16 @@ local CLOSE_POLL_MS, CLOSE_POLLS = 50, 20
 type Run = {stage: string, applied: number}
 local function host(path: string, receipt: string, run: Run): {[string]: string}
  local ok, ticket = pcall(function() return tern.json.decode(tern.fs.read(path, 16384)) end)
- if not ok or type(ticket) ~= "table" or ticket.version ~= 1 or not kinds[ticket.kind]
-  or type(ticket.args) ~= "table" or #ticket.args ~= 5 or ticket.receipt ~= receipt then
+ if not ok or type(ticket) ~= "table" or ticket.version ~= 1 or type(ticket.kind) ~= "string"
+  or type(ticket.args) ~= "table" or #ticket.args ~= 2 or ticket.receipt ~= receipt
+  or type(ticket.expiresAt) ~= "number" then
   error("Invalid opening ticket")
  end
+ -- A ticket the backend no longer waits for must not change the layout.
+ local function current()
+  if os.time() * 1000 >= ticket.expiresAt then error("Opening ticket expired") end
+ end
+ current()
  run.stage="identity"
  local coordinator = tonumber(ticket.coordinator)
  local origin = tonumber(ticket.origin)
@@ -37,6 +43,7 @@ local function host(path: string, receipt: string, run: Run): {[string]: string}
  -- Recheck both exact panes in the live session immediately before each layout effect.
  local function effect<T>(operation: (WindowCx, PaneInfo?) -> T): T
   return call(function(cx)
+   current()
    local liveOwner = cx.session:pane(coordinator)
    local liveSource = if origin==coordinator then liveOwner else cx.session:pane(origin)
    if not liveOwner or liveOwner.tab~=owner.tab or liveOwner.block~=owner.block
@@ -215,7 +222,7 @@ local function host(path: string, receipt: string, run: Run): {[string]: string}
 end
 
 function M.open(req: OpenRequest, _cx: WindowCx): RouteDecision?
- local stem=string.match(req.path, "^(.*/native%-host/[%w%-]+)%.tandem%-open%.json$")
+ local stem=string.match(req.path, "^(.*/native%-host/%x+%.[%x%-]+)%.ticket%.json$")
  if not stem then return nil end
  local receipt=stem .. ".receipt.json"
  local run: Run={stage="ticket",applied=0}

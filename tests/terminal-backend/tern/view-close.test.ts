@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { nativeBriefFile } from "../../../src/board/native-views.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { blockArgs } from "../../../src/native/contract.ts";
 import {
   TernOutcomeUnknownError,
   ternCommands,
@@ -35,13 +36,12 @@ for (const mode of [
       role: "coordinator",
       generation: 0,
     };
-    const args = [
-      nativeDetailPath(home, home, nativeBriefFile("req-1")),
-      "3",
+    const args = blockArgs(nativeDetailPath(home, home, nativeBriefFile("req-1")), {
+      coordinator: "3",
+      cwd: home,
       home,
-      "",
-      nativeViewsPath(home, home),
-    ];
+      index: nativeViewsPath(home, home),
+    });
     let removed = mode === "missing";
     let processReads = 0;
     let closeCalls = 0;
@@ -78,7 +78,7 @@ for (const mode of [
                               mode === "wrong-request" ||
                               (mode === "changed" && processReads > 0) ||
                               (mode === "args-after-second-read" && processReads === 2)
-                                ? ["foreign.json", ...args.slice(1)]
+                                ? ["/foreign.json", args[1]]
                                 : args,
                           },
                         ]),
@@ -187,7 +187,12 @@ for (const kind of ["board"] as const) {
         role: "coordinator",
         generation: 0,
       };
-      const args = [nativeViewsPath(home, home), "3", home, "", nativeViewsPath(home, home)];
+      const args = blockArgs(nativeViewsPath(home, home), {
+        coordinator: "3",
+        cwd: home,
+        home,
+        index: nativeViewsPath(home, home),
+      });
       let removed = mode === "missing";
       let processReads = 0;
       let closeCalls = 0;
@@ -220,7 +225,7 @@ for (const kind of ["board"] as const) {
                                 mode === "foreign-program" ? "unrelated.brief" : `tandem.${kind}`,
                               args:
                                 mode === "wrong-request" || (mode === "changed" && processReads > 0)
-                                  ? ["foreign.json", ...args.slice(1)]
+                                  ? ["/foreign.json", args[1]]
                                   : args,
                             },
                           ]),
@@ -259,6 +264,7 @@ for (const kind of ["board"] as const) {
       };
       let quarantined = false;
       const host = ternViewHost(ternCommands(run, {}), {
+        guardOpen: async (_key, operation) => operation(),
         clock: Date.now,
         wait: async () => {},
         guard: async (_key, operation) => {
@@ -294,13 +300,13 @@ for (const kind of ["board"] as const) {
           expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
           if (mode === "unknown") {
             expect(
-              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
+              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".ticket.json")),
             ).toBe(true);
             const returned = await close();
             expect(returned.warnings?.[0]).toContain("recovery record were kept");
             expect(closeCalls).toBe(1);
             expect(
-              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
+              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".ticket.json")),
             ).toBe(true);
           }
         }

@@ -14,8 +14,8 @@ import { RequestBriefWorkflow } from "../../../src/requests/workflow.ts";
 import { createTandemService } from "../../../src/service/controller.ts";
 import { executeTandemAction } from "../../../src/session/actions.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
+import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
 import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
-import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/view-intent.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
 

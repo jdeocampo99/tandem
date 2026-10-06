@@ -7,6 +7,7 @@ import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
+import { parseBlockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { blocks, Processes, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
@@ -228,7 +229,9 @@ exec /bin/sleep 30
         await shot(`01-before-reset-${view.kind}`);
       }
       const before = await commands.ls(repo);
-      const owned = blocks(before).filter((p) => p.block.args?.[1] === record.endpoint.paneId);
+      const owned = blocks(before).filter(
+        (p) => parseBlockArgs(p.block.args)?.ctx.coordinator === record.endpoint.paneId,
+      );
       expect(owned.map((p) => p.block.program)).toEqual(
         expect.arrayContaining(["tandem.brief", "tandem.board", "tandem.usage"]),
       );

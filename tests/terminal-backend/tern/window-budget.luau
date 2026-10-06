@@ -40,8 +40,8 @@ local function loadModule(name)
  if moduleFailure==name then charge(35); error("module refused") end
  if not imports[name] then charge(35); imports[name]=true end
  if name=="./navigation" then return loadNavigation() end
- assert(name=="./view-host")
- return {open=function(req,_cx) charge(5); assert(req.path=="/home/native-host/id.tandem-open.json"); return {handled=true} end}
+ assert(name=="./layout")
+ return {open=function(req,_cx) charge(5); assert(req.path=="/home/native-host/ab12.cd34.ticket.json"); return {handled=true} end}
 end
 -- ENTRY_POINT
 assert(next(imports)==nil and #timers==0)
@@ -99,13 +99,13 @@ for _,url in {"tandem://task/task-1","tandem://brief/brief-1","tandem://pr/282"}
 end
 invoke("route.link:unrelated",function(context) assert(hooks.link({url="https://example.invalid"},context)==nil) end)
 invoke("route.open:unrelated",function(context) assert(hooks.open({path="/plain.txt"},context)==nil) end)
-moduleFailure="./view-host"
-invoke("route.open:load-failure",function(context) assert(hooks.open({path="/home/native-host/id.tandem-open.json"},context).handled) end)
+moduleFailure="./layout"
+invoke("route.open:load-failure",function(context) assert(hooks.open({path="/home/native-host/ab12.cd34.ticket.json"},context).handled) end)
 while tick() do end
 assert(string.find(toasts[#toasts].message,"module refused"))
 moduleFailure=nil
-invoke("route.open:ticket",function(context) assert(hooks.open({path="/home/native-host/id.tandem-open.json"},context).handled) end)
-assert(imports["./view-host"]==nil,"route must defer cold hosting load")
+invoke("route.open:ticket",function(context) assert(hooks.open({path="/home/native-host/ab12.cd34.ticket.json"},context).handled) end)
+assert(imports["./layout"]==nil,"route must defer cold hosting load")
 while tick() do end
 invoke("window_start",hooks.window_start); while tick() do end
 -- Burst focus queues away/entry pairs. Completion cannot launch the next process inline,

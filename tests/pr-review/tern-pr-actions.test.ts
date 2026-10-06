@@ -52,7 +52,7 @@ test("PR and embedded task actions retain drafts on failure and require a posted
       new Response(child.stderr).text(),
     ]);
     expect(status, stderr).toBe(0);
-    expect(stdout).toContain("PR action result, home forwarding and draft retention checks passed");
+    expect(stdout).toContain("PR action result, context echo and draft retention checks passed");
     expect(stdout).toContain("Embedded task review completion checks passed");
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -6,7 +6,7 @@ local navigation = require('./navigation')
 local components = require('./components')
 type Task = { taskId: string, title: string, stage: string, model: string? }
 type Model = { project: string, tasks: { [string]: Task } }
-type State = { origin: navigation.Origin, view: views.View<Model>, field: fields.Field, cwd: string, busy: boolean, selected: number }
+type State = { origin: navigation.Origin, view: views.View<Model>, field: fields.Field, busy: boolean, selected: number }
 local function parse(value: unknown): Model?
  if type(value) ~= 'table' or type(value.project) ~= 'string' or type(value.tasks) ~= 'table' then return nil end
  for id, task in value.tasks do
@@ -28,11 +28,8 @@ local function choices(state: State): { Task }
 end
 local function open(state: State, cx: BlockCx, id: string)
  if state.busy or state.view.status ~= 'ready' or not state.view.model or not state.view.model.tasks[id] then return end
- if string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then cx:toast('error', 'Task picker unavailable', 'An absolute originating cwd and index path are required.'); return end
- local argv = { '/bin/sh', 'tandem.sh', 'native', 'open', 'task', id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
- if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
- local window = state.origin.window
- if window and window ~= '' then table.insert(argv, '--window'); table.insert(argv, window) end
+ local argv = { '/bin/sh', 'tandem.sh', 'native', 'open', 'task', id }
+ navigation.context(argv, state.origin, cx)
  state.busy = true
  local ok, problem = pcall(function()
   tern.process.run(argv, { cwd = '.' }, function(result)
@@ -45,7 +42,7 @@ end
 local block: BlockDef<State> = {
  init = function(cx, args)
   local origin = navigation.origin(args)
-  local state = { origin = origin, view = views.create(args[1] or '', 'panel', parse), field = fields.create(), cwd = origin.cwd, busy = false, selected = 1 }
+  local state = { origin = origin, view = views.create(args[1] or '', 'panel', parse), field = fields.create(), busy = false, selected = 1 }
   views.refresh(state.view); views.watch(state.view, cx)
   return state
  end,

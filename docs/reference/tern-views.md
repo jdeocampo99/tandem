@@ -138,12 +138,14 @@ tandem native pr-comment TASK_ID --input FILE CONTEXT
 tandem native review-submit TASK_ID --input FILE CONTEXT
 tandem native restart TASK_ID CONTEXT
 tandem native steer --task TASK_ID --text TEXT CONTEXT
-CONTEXT = --pane ID --cwd PATH [--window KEY]
+CONTEXT = --pane ID (--ctx CTX | --cwd PATH [--window KEY])
 ```
 
-`--pane` and `--cwd` are required. Pane ids come from the current `WindowCx`, formatted as exact
-decimal strings; cwd is that pane's absolute directory, passed as one argv element. The plugin
-shows an error without spawning when either is unavailable. No context comes from
+`--pane` is required. Pane ids come from the current `WindowCx`, formatted as exact decimal
+strings. A block passes `--ctx` with the context it was launched with, verbatim; the CLI accepts
+only a context `blockArgs` would write and takes the home, cwd and window key from it. Window
+commands without a block pass the focused pane's absolute cwd as `--cwd`, as one argv element,
+and show an error without spawning when it is unavailable. No context comes from
 `TANDEM_NATIVE_CWD` or a guessed first pane. Task/brief ids contain letters, digits, `_` and `-`;
 PR routes accept a durable task id, a decimal number, or a cached `owner/repo#number`.
 The repository-qualified form can open taskless watched PRs read-only.
@@ -183,8 +185,8 @@ Horizontal ancestor ratios translate nested dividers into actual pane width when
 are already beside the conversation.
 It ignores daemon/pre-split column counts, including hidden project tabs. The host checks the
 result within one cell before writing its receipt. An unavailable, changed or clamped divider
-fails without a retry, writing a failed receipt with its applied effects so the opening intent
-and panes stay quarantined for recovery.
+fails without a retry, writing a failed receipt with its applied effects so the ticket and
+panes stay quarantined for recovery.
 
 Back also rereads the previous task in the same callback before closing a task picker or docking
 the coordinator. A disappeared task, changed kind or tab, or newly floating task refuses the
@@ -226,7 +228,7 @@ For example, the caller passes this argv suffix, preserving paths with spaces as
 
 ```text
 native brief-request-changes REQUEST_ID --input /absolute/private/action.json
-  --pane ID --cwd /absolute/project/path [--window KEY]
+  --pane ID --ctx CTX
 ```
 
 `pr-comment` accepts either `--text TEXT` or `--input FILE`, never both. Its JSON object has
@@ -284,68 +286,76 @@ The native brief pane and its loading, feedback and retirement behavior are defi
 
 ## Native hosting and renderer launch API
 
-The Tern backend opens private, unique `<home>/native-host/<uuid>.tandem-open.json`
-layout tickets with `tern open`. The window route uses `cx:new_block`; a private receipt
-records the exact resulting pane, tab and session. Tern 0.5.0 reports handled layout routes
-as "cannot open in a file block", even after opening them. Success therefore requires the
-receipt and a scoped listing proving the exact block program and launch arguments. Missing
-or conflicting evidence quarantines the opening, retaining its ticket and resources.
-A confirmed opening removes its transient ticket and receipt. No title proves ownership.
+`src/terminal-backend/tern/host.ts` owns every staged open. The cross-language shapes it writes
+(`Ticket`, `Receipt`, block arguments and `VIEW_KINDS`) are defined once in
+`src/native/contract.ts`. Each open writes a private ticket
+`<home>/native-host/<coordinatorKey>.<token>.ticket.json` and runs `tern open` on it. The window
+route hands the ticket to `tern-plugin/layout.luau`, which writes exactly one
+`<coordinatorKey>.<token>.receipt.json`: `done` with the exact pane, tab and session, or `failed`
+with its stage and the number of layout effects it applied. Tern 0.5.0 reports handled layout
+routes as "cannot open in a file block", even after opening them, so only the receipt and a
+scoped listing decide. An exit-0 block list is corroboration. No title proves ownership.
 
-Browser opens run under the same coordinator-bound lock, and an unresolved native intent still
-refuses them, but they keep no durable record. Nothing can later prove or disprove a browser
-opening and it is never re-invoked, so a new acknowledgement and scoped listing either confirm
-the new block or the click reports once that Tern did not confirm it. A crash after `tern
-browser` leaves nothing behind, and no browser outcome pauses later opens. Panel-close
-verification failures quarantine the close in the
-backend guard and retain resources without a second close.
-Panel close refuses detached placement even before the effect. A unique recorded coordinator
-must bind the panel's session, tab, worktree cwd and all five launch arguments, including the
-project view path; the conversation itself cannot be closed as a panel. The full program and
-argument proof runs again after the idle process read, immediately before the close mutation.
-Changed or foreign programs/arguments refuse without closing anything. The recorded binding
-remains usable when retirement has already closed the coordinator pane.
+`layout.luau` runs each stage in its own 1 ms timer with a fresh context. Every stage checks the
+ticket's `expiresAt`, then rechecks the exact coordinator and origin panes, then applies one
+effect. Focus is not counted as an effect. Closes wait up to one second for the exact pane's
+absence. It writes the receipt on every exit, including errors in timer callbacks and a window
+that closed between stages, and it never retries.
 
-Before any opening mutation, the host locks a private coordinator-bound intent under
-`<home>/native-host`. Panels and root Board, Usage, Catch-up and PR list views list the
-scoped session inside that lock and reuse exactly one block
-with the full program and five launch arguments in the intended tab placement; duplicate
-matches refuse. A window-scoped lookup also reads the daemon-wide listing before concluding
-absence. Unresolved detached blocks or matching blocks outside the owning session/window
-refuse an opening; they never authorize a duplicate. A different window launch argument for
-this coordinator and view also refuses reuse. Successful task opens retain their replacement behavior.
-The read-only exact coordinator check runs immediately before focus. A known failure before
-this invocation attempts any mutation cancels only its own new intent, so failed or malformed
-pre-focus reads leave no fence. Earlier uncertain intents are never cancelled by a failed read.
-The intent is claimed before the first mutation. A failed receipt with zero applied effects
-proves nothing changed: the backend settles the intent and refuses the click with "The Tandem
-view did not open and nothing changed. Open it again.", beside the host's "Tandem view did not
-open" toast. Any applied effect, a missing receipt after five seconds, or failed or malformed
-verification reads keep the intent. A later CLI/backend instance must settle retained intents
-and route tickets before it can open: a late zero-effect failed receipt settles; otherwise
-exact block evidence is required. A missing receipt can be settled by the unique exact block;
-conflicting receipts, failed receipts with effects, or missing block evidence retain the fence
-and resources. Lock files remain for later callers. Nothing is retried automatically.
-`tandem fix` lists every retained intent with its reason and, with `--yes`, abandons one only
-after proving its coordinator exactly present or exactly gone; see
-[reconciliation](reconciliation.md#tandem-fix).
-The durable fence governs native opens even within one backend instance, so exact recovery
-can settle a previous verification failure instead of being blocked by a process-local guard.
-Reused root views focus the exact existing pane without another layout opening.
+A ticket is written first without `expiresAt` (claimed) and rewritten with `expiresAt`, ten
+seconds ahead, immediately before the first effect (focus). The pure `decide(ticket, receipt,
+listing, now)` gives every ticket one answer:
 
-Return first attempts the same exact recovery. If the intent remains unprovable, it only focuses
-the exact recorded coordinator under the opening lock, preserving every view, ticket and intent.
-The CLI returns a plain warning displayed by the renderer: the user can continue in the conversation
-or use Tern's tab switcher, while new native openings remain fenced. This safe exit neither clears
-the uncertain operation nor retries its layout mutation.
+| Ticket | Answer |
+| --- | --- |
+| Claimed, nothing dispatched | Drop it |
+| Dispatched, no whole receipt, not expired | Wait; the click reports an unknown outcome after five seconds |
+| Receipt `done`, exactly one matching block | Settle as opened |
+| Receipt `done`, no matching block and the receipt's pane gone | Settle as closed by the user |
+| Receipt `done`, anything else (duplicates, detached blocks, another pane or tab, a replaced or closed origin still present) | Quarantine |
+| Receipt `failed` with zero effects | Settle as not opened; the click says "The Tandem view did not open and nothing changed. Open it again." |
+| Receipt `failed` with effects, or no receipt after expiry | Quarantine |
 
-Task replacement and return additionally require a same-scope listing proving the replaced
-task pane is absent, with no detached ambiguity, before settling the opening intent. The intent
-keeps the replaced pane id for fresh CLI recovery; evidence for the new pane alone never settles
-retirement of its predecessor. Unconfirmed retirement keeps the intent, route, receipt and
-resources, without another opening mutation.
+`tern.fs` has no rename, so a receipt that does not parse whole counts as no receipt. Settling
+removes the receipt, then the ticket. Nothing is retried automatically; a new click is a new
+ticket. The click, the coordinator's view publication tick (`recoverViewOpens`) and `tandem fix`
+all decide retained tickets, so a late receipt settles without another click. Recovery also
+removes a receipt whose ticket `tandem fix` already abandoned.
 
-The host accepts these layout kinds and five string launch arguments. A kind is available
+The host holds one lock per coordinator key for the whole open. Inside it, it decides the
+coordinator's retained tickets first; any ticket still waiting or quarantined refuses the open.
+Browser opens run under the same lock and refusal but write no ticket: nothing can later prove or
+disprove a browser opening and it is never re-invoked, so the click either confirms the new
+block or reports once that Tern did not confirm it. No browser outcome pauses later opens.
+
+Panels and root Board, Usage, Catch-up and PR list views reuse exactly one block launched with
+the same program and block arguments in the intended tab placement; duplicate matches refuse. A
+window-scoped lookup also reads the daemon-wide listing before concluding absence, and a block
+launched for another window key refuses reuse. Detached blocks or matching blocks outside the
+owning session or window refuse an opening; they never authorize a duplicate. Reused root views
+focus the existing pane without another layout opening. The read-only exact coordinator check runs
+immediately before dispatch, so a failed or malformed pre-dispatch read drops only its own
+claimed ticket.
+
+Task replacement and return also require the listing to show the replaced task pane and any
+closed full-window origin absent, with no detached ambiguity, before a `done` receipt settles.
+Unconfirmed retirement keeps the ticket, receipt and resources.
+
+Return to the orchestrator stays a safe exit: when a retained ticket refuses the open, it only
+focuses the exact recorded coordinator, preserving every view and ticket, and the renderer shows
+the plain warning that new native openings stay paused. `tandem fix` lists every retained ticket
+with its reason and, with `--yes`, abandons one only after proving its coordinator exactly present
+or exactly gone; see [reconciliation](reconciliation.md#tandem-fix).
+
+Panel-close verification failures quarantine the close in the backend guard and retain
+resources without a second close. Panel close refuses detached placement even before the effect.
+A unique recorded coordinator must bind the panel's session, tab, worktree cwd and its block
+arguments; the conversation itself cannot be closed as a panel. The full program and argument
+proof runs again after the idle process read, immediately before the close mutation. Changed or
+foreign programs/arguments refuse without closing anything. The recorded binding remains usable
+when retirement has already closed the coordinator pane.
+
+The host accepts these layout kinds and two string block arguments. A kind is available
 only after its block is registered in `host.luau` and `plugin.toml` and its CLI handler is
 implemented; host acceptance alone does not register a screen:
 
@@ -360,12 +370,14 @@ implemented; host acceptance alone does not register a screen:
 | `tandem.board`, `tandem.usage`, `tandem.catchup` | Root `panel` envelope | Own full-window tab |
 | `tandem.welcome` | Root path (static welcome) | Beside the conversation |
 
-`args = {modelPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, indexPath}`.
-The renderer passes its **own** `cx.pane`, plus the supplied cwd and optional window key,
-to every native CLI action. `tern-plugin/navigation.luau` provides `origin(args)`,
-`run(origin, cx, argv)`, `root(origin)` and `back(origin, cx)` without action policy or retries.
-`origin.indexPath` is explicit; `root` returns it and `origin.home` is derived from its
-`<home>/native-views/<project>.json` location for custom-home CLI flags.
+`args = blockArgs(viewPath, ctx) = [viewPath, ctxJson]`, built only by `src/native/contract.ts`
+and matched in listings only through `parseBlockArgs`. `ctx` holds the coordinator pane, cwd,
+home, index path and optional window key. Luau never reads it: every native CLI action echoes it
+back verbatim as `--ctx`, with the renderer's **own** `cx.pane` as `--pane`, and the CLI parses it
+with `parseBlockContext`. `tern-plugin/navigation.luau` provides `origin(args)`,
+`context(argv, origin, cx)`, `run(origin, cx, argv)`, `root(origin)` and `back(origin, cx)`
+without action policy or retries. `root` is the view path itself, or for a task, brief or PR
+detail the index file its directory is named after.
 Root inputs come from `nativeViewsPath`; detail inputs come from `nativeDetailPath`.
 Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
 board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
@@ -425,7 +437,7 @@ that scope. Multiple windows are refused rather than choosing one by ordering.
 ### Task page and picker
 
 `task.luau` draws the direct `TaskPageView` envelope as `tandem.task`. It uses the
-five hosting arguments above and reads the explicit root index through `navigation.root`.
+block arguments above and reads the project's root index through `navigation.root`.
 Brief and PR detail references are project-relative filenames; they resolve beside the
 shown task detail file. The Brief tab reads saved lines; review and annotations open
 in the separate brief pane. Diff and PR use `pr-model` and `pr-content`, including
@@ -461,7 +473,7 @@ not associations. `forTask(taskDetailPath, taskId, indexModel)` returns a refres
 loaded PR model names the same task. A missing, malformed or mismatched file returns a view
 with `status="unavailable"`; callers may retain and watch it with `view-file.watch`.
 Use `taskDetailPath` before reusing an existing watched view or cancelling it when the path
-changes. Pass the task model's `header.id` and the ready index at launch argument five.
+changes. Pass the task model's `header.id` and the ready index from `navigation.root`.
 
 `tern-plugin/pr-content.luau` exports `create`, `view`, `event`, `key`, and `ready`.
 `view(state, model, ready, prefix?, strip?)` returns `{main,dock}`. Mount `dock` for the review
@@ -496,12 +508,12 @@ PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. Th
 `src/terminal/native-input.ts` helper creates one exclusive 0600 file in a private unique
 0700 directory, makes it read-only (0400) before invoking the native action once, and removes
 the directory in `finally` after that invocation settles. The wrapper accepts `VERB ID` plus
-explicit `--pane`, `--cwd`, optional `--window` and `--home` arguments, preserving their argv
+explicit `--pane` and `--ctx` arguments, preserving their argv
 boundaries and the child's stdout, stderr and exit status. The native CLI owns the verb
 allow-list and all context, JSON and domain validation. Draft decisions and new review comments remain
 local until Post; displayed HEAD/generation are included in the submission for authority checks.
 Pass `native-input.sh` the verb, task/request ID, and the native CLI context flags
-(`--pane`, `--cwd`, optional `--window` and `--home`), with the JSON object on stdin.
+(`--pane` and the echoed `--ctx`), with the JSON object on stdin.
 It supports `brief-comment`, `brief-request-changes`, `brief-approve`, `pr-comment`, and
 `review-submit`. Callers use this shared writer rather than adding a screen-specific one.
 

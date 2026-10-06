@@ -63,7 +63,7 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
   That endpoint records only the brief's terminal, session, workspace, tab, pane, role and
   generation identity. The coordinator's `notificationPane` stays on its own endpoint for alerts.
   Approval, abandonment and current-revision request changes retire it through scoped `closeView`.
-  Unknown opening outcomes keep the host's durable intent and resources quarantined; no legacy
+  Unknown opening outcomes keep the host's durable ticket and resources quarantined; no legacy
   shell pane or automatic retry follows. Unknown closure leaves approval or feedback standing
   and quarantines the receipt. Tiny in-chat fixes still open no pane.
 - A review receipt tagged for another terminal is quarantined with a plain warning before any
@@ -132,7 +132,7 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 ## Native brief pane
 
 - `tandem native open brief REQUEST_ID` opens `tandem.brief` beside the verified project's
-  conversation. All native actions include `--pane ID --cwd ABSOLUTE_PATH [--window KEY]`;
+  conversation. All native actions include `--pane ID --ctx CTX`, echoing the context the block was launched with;
   JSON inputs use the private immutable transport in [terminal.md](terminal.md#native-views-and-actions).
 - The pane shows the title, revision, change count and NEW lines. Hover `+` opens a line editor;
   Comment saves a local pending card under that line. Those cards and the optional overall text

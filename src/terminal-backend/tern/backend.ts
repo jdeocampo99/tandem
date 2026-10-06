@@ -8,6 +8,7 @@ import {
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
 import type { CommandRunner, Endpoint, TerminalPaneLocation } from "../../contracts.ts";
+import { blockArgs, parseBlockArgs } from "../../native/contract.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import { probeTern } from "./availability.ts";
 import {
@@ -67,7 +68,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   // Durable runtime quarantines a rejected effect; this guard also prevents local blind retries.
   const quarantined = new Set<string>();
   const guard = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
-    if (quarantined.has(key) || quarantined.has(`native-open:${key}`))
+    if (quarantined.has(key))
       throw new TernOutcomeUnknownError(key, "an earlier effect is quarantined");
     try {
       return await operation();
@@ -76,17 +77,12 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       throw error;
     }
   };
-  const guardOpen = async <T>(
-    key: string,
-    operation: () => Promise<T>,
-    recoveredNativeOpen = false,
-  ): Promise<T> => {
-    // Exact native intent recovery only settles an opening, never an unrelated close.
-    const openingKey = `native-open:${key}`;
-    if (recoveredNativeOpen) quarantined.delete(openingKey);
+  // An open records its own uncertain outcome as a durable ticket, so only a pane quarantine
+  // from another effect refuses it here.
+  const guardOpen = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
     if (quarantined.has(key))
       throw new TernOutcomeUnknownError(key, "an earlier effect is quarantined");
-    return guard(openingKey, operation);
+    return operation();
   };
   const check = async (target: EndpointTarget) => {
     try {
@@ -270,10 +266,11 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     openView: async (input) => (await native()).views.openView(input),
     closeView: async (input) => (await native()).views.closeView(input),
     // Loaded on use, as native() is, to keep native hosting out of every backend load.
-    retainedViewOpens: async (home) =>
-      (await import("./view-intent.ts")).listRetainedNativeOpens(home),
+    retainedViewOpens: async (home) => (await import("./host.ts")).listRetainedNativeOpens(home),
     abandonViewOpen: async (open, conclusive) =>
-      (await import("./view-intent.ts")).abandonRetainedNativeOpen(open, conclusive),
+      (await import("./host.ts")).abandonRetainedNativeOpen(open, conclusive),
+    recoverViewOpens: async (home) =>
+      (await import("./host.ts")).recoverViewOpens(commands, home, clock()),
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>
@@ -673,7 +670,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         entry.session.id === input.coordinator.terminalSessionId &&
         entry.tab.id === input.coordinator.tabId &&
         entry.block.program === "tandem.panel" &&
-        entry.block.args?.[1] === input.coordinator.paneId
+        parseBlockArgs(entry.block.args)?.ctx.coordinator === input.coordinator.paneId
       );
     },
     closePanel: async (target) =>
@@ -688,12 +685,12 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           throw new EndpointOwnershipError(endpoint, "panel close requires its recorded home");
         const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
         const { nativeViewsPath } = await import("../../board/snapshot.ts");
-        const { exactNativeView } = await import("./view-intent.ts");
+        const { exactView } = await import("./host.ts");
         const owners = (await listCoordinatorRecords(options.home, target.sessionId)).filter(
           (record) =>
             record.endpoint.terminal === "tern" &&
             record.endpoint.paneId !== entry.block.id &&
-            record.endpoint.paneId === entry.block.args?.[1] &&
+            record.endpoint.paneId === parseBlockArgs(entry.block.args)?.ctx.coordinator &&
             record.endpoint.terminalSessionId === entry.session.id &&
             record.endpoint.tabId === entry.tab.id &&
             record.endpoint.workspaceId === entry.tab.id &&
@@ -703,9 +700,14 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         if (owners.length !== 1 || owner === undefined)
           throw new EndpointOwnershipError(endpoint, "panel has no unique recorded coordinator");
         const path = nativeViewsPath(options.home, owner.repoPath);
-        const args = [path, owner.endpoint.paneId, target.cwd, "", path];
+        const args = blockArgs(path, {
+          coordinator: owner.endpoint.paneId,
+          cwd: target.cwd,
+          home: options.home,
+          index: path,
+        });
         const proveIdentity = async () => {
-          const current = await exactNativeView(
+          const current = await exactView(
             commands,
             target.cwd,
             owner.endpoint,

@@ -3,6 +3,7 @@ import { lstat, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { AdapterCommandError, AdapterProtocolError } from "../../../src/adapters/primitives.ts";
 import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { blockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import {
   TernOutcomeUnknownError,
@@ -49,9 +50,19 @@ for (const mode of [
   "foreign-return",
   "unsafe-id",
 ] as const)
-  test(`native opening ${mode} retains exact identity and never falls back to a title`, async () => {
+  test(`native opening ${mode} keeps exact identity and never falls back to a title`, async () => {
     const home = await mkdtemp("/tmp/tandem-host-test-");
     const modelPath = nativeViewsPath(home, home);
+    const argsFor = (coordinator = "3", window?: string) =>
+      blockArgs(modelPath, {
+        coordinator,
+        cwd: home,
+        home,
+        index: modelPath,
+        ...(window === undefined ? {} : { window }),
+      });
+    const tickets = async () =>
+      (await readdir(`${home}/native-host`)).filter((name) => name.endsWith(".ticket.json"));
     const splitKind = mode.startsWith("brief-")
       ? "brief"
       : mode.startsWith("pr-")
@@ -139,15 +150,12 @@ for (const mode of [
                                     : splitKind !== undefined
                                       ? `tandem.${splitKind}`
                                       : "tandem.panel",
-                              args: [
-                                modelPath,
+                              args: argsFor(
                                 mode === "foreign-return" ? "999" : "3",
-                                home,
                                 moved && mode === "relaunch-other-window-args"
                                   ? "another-window"
-                                  : "",
-                                modelPath,
-                              ],
+                                  : undefined,
+                              ),
                             },
                           ]
                         : []),
@@ -159,7 +167,7 @@ for (const mode of [
                               cwd: home,
                               live: true,
                               program: "tandem.panel",
-                              args: [modelPath, "3", home, "", modelPath],
+                              args: argsFor(),
                             },
                           ]
                         : []),
@@ -177,7 +185,7 @@ for (const mode of [
                               cwd: home,
                               live: true,
                               program: "tandem.panel",
-                              args: [modelPath, "3", home, "", modelPath],
+                              args: argsFor(),
                             },
                           ],
                         },
@@ -201,7 +209,7 @@ for (const mode of [
                               cwd: home,
                               live: true,
                               program: "tandem.panel",
-                              args: [modelPath, "3", home, "", modelPath],
+                              args: argsFor(),
                             },
                           ],
                         },
@@ -219,7 +227,7 @@ for (const mode of [
                       cwd: home,
                       live: true,
                       program: "tandem.panel",
-                      args: [modelPath, "3", home, "", modelPath],
+                      args: argsFor(),
                     },
                   ]
                 : [],
@@ -238,7 +246,7 @@ for (const mode of [
         routePath = path;
         const ticket = JSON.parse(await readFile(path, "utf8"));
         expect((await lstat(path)).mode & 0o777).toBe(0o600);
-        expect(ticket.args).toEqual([modelPath, "3", home, "", modelPath]);
+        expect(ticket.args).toEqual(argsFor());
         created = true;
         if (
           ![
@@ -259,12 +267,15 @@ for (const mode of [
     };
     const quarantined = new Set<string>();
     const host = ternViewHost(ternCommands(run, {}), {
+      guardOpen: async (key, operation) => {
+        if (quarantined.has(key)) throw new TernOutcomeUnknownError(key, "quarantined");
+        return operation();
+      },
       clock: () => now,
       wait: async (ms) => {
         now += ms;
       },
-      guard: async (key, operation, recoveredNativeOpen) => {
-        if (recoveredNativeOpen) quarantined.delete(key);
+      guard: async (key, operation) => {
         if (quarantined.has(key)) throw new TernOutcomeUnknownError(key, "quarantined");
         try {
           return await operation();
@@ -315,9 +326,7 @@ for (const mode of [
           moved = mode !== "relaunch-success";
         } else {
           await expect(first.openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-          expect(
-            (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-          ).toBe(true);
+          expect(await tickets()).toHaveLength(1);
           if (mode === "relaunch-no-exact-pane") created = false;
         }
         const before = effects;
@@ -327,7 +336,8 @@ for (const mode of [
           expect(
             (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
           ).toEqual([]);
-        } else if (mode === "relaunch-no-exact-pane") {
+        } else if (mode === "relaunch-no-exact-pane" || mode === "relaunch-missing-receipt") {
+          // A route Tern never answered stays retained whatever the listing shows.
           await expect(fresh().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
           expect(await Bun.file(routePath).exists()).toBe(true);
         } else {
@@ -357,9 +367,7 @@ for (const mode of [
           expect(effects).toBe(1);
           await expect(backend().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
           expect(effects).toBe(1);
-          expect(
-            (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-          ).toBe(true);
+          expect(await tickets()).toHaveLength(1);
         } else {
           await expect(first.openPanel(input)).rejects.toBeInstanceOf(
             mode === "pre-focus-read-failed" ? AdapterCommandError : AdapterProtocolError,
@@ -406,19 +414,8 @@ for (const mode of [
           ].includes(mode)
         ) {
           const before = effects;
-          if (
-            [
-              "verification-failed",
-              "verification-malformed",
-              "unknown",
-              "brief-unknown",
-              "pr-unknown",
-            ].includes(mode)
-          ) {
-            const recovered = await open();
-            expect(recovered.paneId).toBe("4");
-            if (mode === "brief-unknown")
-              expect(recovered.endpoint).toEqual({ ...endpoint, paneId: "4" });
+          if (["verification-failed", "verification-malformed"].includes(mode)) {
+            expect((await open()).paneId).toBe("4");
             expect(await Bun.file(routePath).exists()).toBe(false);
             expect(
               (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
@@ -426,9 +423,7 @@ for (const mode of [
           } else {
             await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
             expect(await Bun.file(routePath).exists()).toBe(true);
-            expect(
-              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-            ).toBe(true);
+            expect(await tickets()).toHaveLength(1);
           }
           expect(effects).toBe(before);
           expect(created).toBe(true);

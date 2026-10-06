@@ -289,6 +289,9 @@ export class TernParityHost {
   #next: number | undefined;
   readonly #scratch: string;
   readonly #epochMs: number;
+  /** How far the window's timers have advanced its clock past `#epochMs`. */
+  #advancedMs = 0;
+  readonly #startedMs = performance.now();
 
   private constructor(
     world: ScenarioWorld,
@@ -337,6 +340,13 @@ export class TernParityHost {
     await rm(this.#scratch, { recursive: true, force: true });
   }
 
+  /**
+   * Tandem's clock as the window sees it: ticket expiry compares the two, and the window's
+   * timers run ahead of wall time.
+   */
+  readonly #clock = (): number =>
+    this.#epochMs + this.#advancedMs + Math.floor(performance.now() - this.#startedMs);
+
   /** The scenario's commands, except that a lost browser reply fails after Tern acted. */
   readonly #run: CommandRunner = async (request) => {
     const result = await this.world.run(request);
@@ -348,7 +358,10 @@ export class TernParityHost {
 
   /** The panel opens the way a coordinator launch opens it, through the Tern backend. */
   async openPanel(project: ScenarioTernProject = this.project): Promise<number> {
-    const id = await terminalBackend(this.#run, { home: this.world.home }).openPanel({
+    const id = await terminalBackend(this.#run, {
+      home: this.world.home,
+      tern: { clock: this.#clock },
+    }).openPanel({
       coordinator: project.coordinator,
       cwd: project.worktree.path,
       project: project.repoPath,
@@ -595,7 +608,7 @@ export class TernParityHost {
           TANDEM_POOL_ROOT: world.poolRoot,
         },
         run: this.#run,
-        terminal: terminalBackend(this.#run, { home: world.home }),
+        terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
         createService: (options) =>
           createTandemService({
             ...options,
@@ -624,6 +637,9 @@ export class TernParityHost {
   async send(...commands: Command[]): Promise<Line> {
     const sync = await this.#sync();
     const appended = [...(sync === undefined ? [] : [sync]), ...commands];
+    for (const command of commands)
+      if (command.op === "advance" && typeof command.ms === "number")
+        this.#advancedMs += command.ms;
     this.#commands.push(...appended);
     const source = [
       this.#modules,
@@ -716,7 +732,7 @@ export class TernParityHost {
     const paneKey = JSON.stringify(panes);
     const paths = [
       ...(await listFiles(join(this.world.home, "native-views"), /\.json$/u)),
-      ...(await listFiles(join(this.world.home, "native-host"), /\.tandem-open\.json$/u)),
+      ...(await listFiles(join(this.world.home, "native-host"), /\.ticket\.json$/u)),
     ];
     const files: Record<string, string | boolean> = {};
     for (const path of paths) {

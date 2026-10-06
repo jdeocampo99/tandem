@@ -38,8 +38,10 @@ export class NativeViewsPublisher {
           this.#pending = undefined;
           try {
             const session = next.sessions.get(next.project);
-            if (session?.terminal === "tern")
+            if (session?.terminal === "tern") {
+              await this.#recoverOpens();
               await this.#alerts.observe(next.snapshot, next.project, session.sessionId);
+            }
             const view = await publishNativeViews(this.#deps.home, next.project, () =>
               this.#reader.read(next.snapshot, next.project, next.sessions),
             );
@@ -63,6 +65,22 @@ export class NativeViewsPublisher {
         this.#busy = false;
       }
     });
+  }
+
+  /** A late receipt settles its paused open here, without waiting for the user's next click. */
+  async #recoverOpens(): Promise<void> {
+    try {
+      await this.#deps.terminal.recoverViewOpens(this.#deps.home);
+    } catch (error) {
+      await appendDiagnosticEvent(
+        this.#deps.home,
+        {
+          event: "native-open-recovery-failed",
+          details: { errorClass: error instanceof Error ? error.name : typeof error },
+        },
+        this.#deps.clock,
+      );
+    }
   }
 
   /** Resolves once queued publications and the remote reads they started have finished. */
