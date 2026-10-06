@@ -40,11 +40,13 @@ function briefFeedback(requestId: string, input: Readonly<Record<string, unknown
   if (entries.length > 100) throw new CliUsageError("Brief feedback may have at most 100 comments");
   const comments = entries.map((entry) => {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new CliUsageError("Each comment must contain line and text");
+      throw new CliUsageError("Each comment must contain lineId and text");
     }
     const comment = entry as Record<string, unknown>;
-    exactKeys(comment, ["line", "text"]);
-    return { line: revision(comment.line, "line"), text: text(comment.text, "comment text") };
+    exactKeys(comment, ["lineId", "text"]);
+    if (typeof comment.lineId !== "string" || comment.lineId.length === 0)
+      throw new CliUsageError("lineId must be a nonempty string");
+    return { lineId: comment.lineId, text: text(comment.text, "comment text") };
   });
   const feedback: BriefFeedback = {
     ...viewedBrief(requestId, input),
