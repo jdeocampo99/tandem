@@ -320,6 +320,8 @@ are quarantined. This does not register or mutate the legacy Markdown `reviewPan
 
 The host never sets `keep_open` when launching split/detail blocks or task replacements.
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.
+An exited retained pane can still report `live=true`. Neither `live` nor `exited` proves closure:
+only the exact pane id's absence from a scoped `tern ls` does.
 For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0 under this default.
 `BlockCx` has no other close API; renderers must not use the raw window-level layout close API.
 Successful hosting already removed its private ticket and receipt, so no host cleanup remains.
