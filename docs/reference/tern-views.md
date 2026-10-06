@@ -529,7 +529,8 @@ work for hours followed by an immediate switch back stays quiet. A closed/discon
 stops heartbeats; its last persisted sample is the baseline. A pulse within a minute of a
 transition is skipped, so the next persisted sample can lag by almost two minutes.
 Visibility means the selected project in a Tern window, rather than time since launch or keyboard
-inactivity. Tern's API exposes pane focus, not macOS application activation; a selected window
+inactivity. Away time starts when you select a different Tern project or close its last visible
+Tern window. Tern 0.5 exposes pane focus, not macOS application activation; a selected window
 continues to count as visible while another application is active. Another window's heartbeats
 keep that project visible. Old records with no last-visible baseline stay quiet on first entry.
 Panel file polling never changes visits. The first publication fills a missing signature only.

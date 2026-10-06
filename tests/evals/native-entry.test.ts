@@ -160,9 +160,14 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
       );
       expect(visit.previousSignature).toBe(failure === "none" ? "after" : "before");
       if (failure === "none") {
+        const lastVisibleAt = new Date(Date.now() - 120_000).toISOString();
+        await visitNativeProject(
+          { ...baseline, signature: "after", now: lastVisibleAt },
+          async () => {},
+        );
         const path = join(world.home, "native-visits", `${repositoryKey(world.repoPath)}.json`);
-        const saved = await readFile(path, "utf8");
-        const inode = (await lstat(path)).ino;
+        let saved = await readFile(path, "utf8");
+        let inode = (await lstat(path)).ino;
         const viewPath = nativeViewsPath(world.home, world.repoPath);
         const view = await readFile(viewPath, "utf8");
         const viewInode = (await lstat(viewPath)).ino;
@@ -183,6 +188,15 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
             },
           );
           expect(pulse.exitCode).toBe(0);
+          if (heartbeat === 0) {
+            const advanced = await readFile(path, "utf8");
+            expect(Date.parse(JSON.parse(advanced).lastVisibleAt)).toBeGreaterThan(
+              Date.parse(lastVisibleAt),
+            );
+            expect(JSON.parse(advanced).previousSignature).toBe("after");
+            saved = advanced;
+            inode = (await lstat(path)).ino;
+          }
           expect(await readFile(path, "utf8")).toBe(saved);
           expect((await lstat(path)).ino).toBe(inode);
           expect(await readFile(viewPath, "utf8")).toBe(view);
