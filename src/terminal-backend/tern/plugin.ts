@@ -30,8 +30,12 @@ export type TernPluginDependencies = Readonly<{
 }>;
 
 async function command(deps: TernPluginDependencies, args: readonly string[]) {
+  const binary =
+    deps.binary ??
+    Bun.which("tern", { PATH: deps.env?.PATH ?? process.env.PATH ?? "" }) ??
+    TERN_APP_BINARY;
   const request = {
-    argv: [deps.binary ?? TERN_APP_BINARY, "plugin", ...args, "--json"],
+    argv: [binary, "plugin", ...args, "--json"],
     cwd: deps.cwd,
     ...(deps.env === undefined ? {} : { env: deps.env }),
   };

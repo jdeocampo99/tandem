@@ -206,6 +206,9 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   refuses and tells the user to stop it and relaunch (`legacyCoordinatorGuidance` in ownership.ts).
   An unrecorded `claude` loading Tandem's adapter plugin can't be tied to a repository, so launch
   refuses beside it too.
+  Discovery skips daemon-hosted Tandem Tern blocks only when their native `program` is an exact
+  `tandem.<block-id>` and their child, foreground group and foreground process are all absent.
+  Titles never prove this identity; a live childless shell or unknown block still fails closed.
 - Each record names the coordinator's `harness` (see [harness.md](harness.md)); a record saved
   before that field is OMP. Only a new coordinator takes its harness from its model
   (`harnessOf`), and launch refuses it before checking files or starting anything when Tandem
