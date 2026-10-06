@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
+import { nativeBriefFile, nativeViewText } from "../../../src/board/native-views.ts";
+import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import {
   ternBackend,
@@ -52,15 +52,15 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
     // Only layout fixtures: other workers own the actual task/board renderers.
     await writeFile(
       join(plugin, "layout-fixture.luau"),
-      'return {init=function(cx,args) return {} end, title=function() return "Layout fixture" end, view=function() return {main=tern.ui.col({tern.ui.text({tern.ui.span("Layout fixture")})})} end}',
+      'return {init=function(cx,args) return {} end, key=function(state,key,cx) if key.name=="escape" then cx:exit(0); return true end; return false end, title=function() return "Layout fixture" end, view=function() return {main=tern.ui.col({tern.ui.text({tern.ui.span("Layout fixture")})})} end}',
     );
     await writeFile(
       join(plugin, "host.luau"),
-      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("board", require("./layout-fixture"))\n`,
+      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("board", require("./layout-fixture"))\ntern.block.define("brief", require("./layout-fixture"))\ntern.block.define("usage", require("./layout-fixture"))\ntern.block.define("catchup", require("./layout-fixture"))\n`,
     );
     await writeFile(
       join(plugin, "plugin.toml"),
-      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="board"\ntitle="Layout fixture board"\n`,
+      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="board"\ntitle="Layout fixture board"\n[[blocks]]\nid="brief"\ntitle="Layout fixture brief"\n[[blocks]]\nid="usage"\ntitle="Layout fixture usage"\n[[blocks]]\nid="catchup"\ntitle="Layout fixture catch-up"\n`,
     );
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
@@ -216,6 +216,62 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         wait: Bun.sleep,
         guard: async (_key, operation) => operation(),
       });
+      const brief = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "brief", requestId: "req-native" } },
+        root,
+        "brief",
+        "split",
+        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+      );
+      await ctl("key", "escape");
+      await Bun.sleep(200);
+      const exited = blocks(await ternCommands(run, { environment: env }).ls(root)).find(
+        (entry) => entry.block.id === brief.paneId,
+      );
+      expect(exited).toBeUndefined();
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      await ctl("shot", "04-exited-brief");
+      expect(
+        await host.close(
+          {
+            coordinator,
+            cwd: root,
+            home,
+            origin: { paneId: brief.paneId },
+            view: { kind: "brief", requestId: "req-native" },
+          },
+          root,
+        ),
+      ).toEqual({ closed: true, warnings: [] });
+      const reopened = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "brief", requestId: "req-native" } },
+        root,
+        "brief",
+        "split",
+        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+      );
+      expect(
+        await host.close(
+          {
+            coordinator,
+            cwd: root,
+            home,
+            origin: { paneId: reopened.paneId },
+            view: { kind: "brief", requestId: "req-native" },
+          },
+          root,
+        ),
+      ).toEqual({ closed: true, warnings: [] });
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          (entry) => entry.block.id === reopened.paneId,
+        ),
+      ).toBe(false);
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
       const task = await host.open(
         { coordinator, cwd: root, home, view: { kind: "task", taskId: "adapter" } },
         root,
@@ -303,6 +359,41 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,
       );
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          (entry) => entry.block.id === board.paneId,
+        ),
+      ).toBe(false);
+      for (const kind of ["usage", "catchup"] as const) {
+        const full = await host.open(
+          { coordinator, cwd: root, home, view: { kind } },
+          root,
+          kind,
+          "window",
+          path,
+        );
+        await host.open(
+          {
+            coordinator,
+            cwd: root,
+            home,
+            view: { kind: "orchestrator" },
+            origin: { paneId: full.paneId },
+          },
+          root,
+          "panel",
+          "return",
+          path,
+        );
+        expect(
+          blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+            (entry) => entry.block.id === full.paneId,
+          ),
+        ).toBe(false);
+        expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+          true,
+        );
+      }
       const other = await terminal.createWorkspace({
         sessionId: "other",
         cwd: root,
@@ -355,7 +446,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         true,
       );
       console.log(
-        `Native proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-projects.png ${root}/shots/live/09-needs-you.png ${root}/shots/live/09-done.png ${root}/shots/live/09-stuck.png`,
+        `Native proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-projects.png ${root}/shots/live/04-exited-brief.png ${root}/shots/live/09-needs-you.png ${root}/shots/live/09-done.png ${root}/shots/live/09-stuck.png`,
       );
     } finally {
       if (window) {
