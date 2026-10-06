@@ -25,11 +25,16 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
       generation: 0,
     };
     let opens = 0;
+    const focuses: string[] = [];
     let loseListing = false;
     const run: CommandRunner = async (request) => {
       const verb = request.argv[1];
       if (verb === "inspect")
         return { code: 0, stderr: "", stdout: JSON.stringify({ clients: [{ kind: "window" }] }) };
+      if (verb === "focus") {
+        focuses.push(request.argv[2] ?? "");
+        return { code: 0, stderr: "", stdout: '{"block":"3"}' };
+      }
       if (verb === "browser") {
         const intents = (await readdir(join(home, "native-host"))).filter((name) =>
           name.endsWith(".intent.json"),
@@ -143,6 +148,28 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
             name.endsWith(".intent.json"),
           ),
         ).toHaveLength(1);
+        const name = (await readdir(join(home, "native-host"))).find((name) =>
+          name.endsWith(".intent.json"),
+        );
+        const intentPath = join(home, "native-host", name ?? "");
+        const fence = await readFile(intentPath, "utf8");
+        for (const backend of [terminal, ternBackend(run, { home, binary: "tern" })]) {
+          const returned = await backend.openView({
+            coordinator,
+            cwd: repo,
+            home,
+            origin: { paneId: "3", cwd: repo },
+            view: { kind: "orchestrator" },
+          });
+          expect(returned.opened).toBe(true);
+          expect(returned.warnings[0]).toContain("Returned to your conversation");
+          expect(returned.warnings[0]).toContain("tab switcher");
+          expect(await readFile(intentPath, "utf8")).toBe(fence);
+        }
+        expect(focuses).toEqual(["3", "3"]);
+        await expect(open(ternBackend(run, { home, binary: "tern" }))).rejects.toThrow(
+          "outcome is unknown",
+        );
       }
       expect(opens).toBe(1);
     } finally {
