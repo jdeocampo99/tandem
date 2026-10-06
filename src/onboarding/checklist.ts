@@ -1,6 +1,5 @@
 import type { TerminalAvailability } from "../terminal-backend/contract.ts";
 import { ternFallbackReason } from "../terminal-backend/setting.ts";
-import type { SetupPageStatus } from "./setup-page.ts";
 
 /**
  * First-time setup, worked out from saved state so leaving halfway resumes at the next missing
@@ -16,8 +15,6 @@ export type OnboardingFacts = Readonly<{
   /** Saved projects other than the Tandem checkout. */
   readonly projects: readonly string[];
   readonly selfImprovementChosen: boolean;
-  /** Whether the setup page can be, or is, the way through setup in this session. */
-  readonly setupPage: SetupPageStatus;
 }>;
 
 export type OnboardingStep =
@@ -53,11 +50,6 @@ const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
     "Ask which repositories to set up. For each: find-repo with the name or path (with several matches, ask which). Say in two lines which checks and install step it found; ask them to confirm or change those. Then setup with their answers, pr-watch-merging with how pull requests merge, and open-project.",
 };
 
-const SETUP_PAGE_FIRST =
-  "Setup is unfinished. When the user wants to set up, call setup-page first: one page covers every step. If it fails, set up here instead.";
-const SETUP_PAGE_OPEN =
-  "Setup is unfinished. The setup page is open; its answer reaches you by itself. Help with questions about any page step here without asking the user to save first. Only if the user would rather set up here:";
-
 /** What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done. */
 export function onboardingContext(facts: OnboardingFacts): string | undefined {
   const [current, ...later] = remainingOnboardingSteps(facts);
@@ -65,14 +57,7 @@ export function onboardingContext(facts: OnboardingFacts): string | undefined {
   const after = later.length === 0 ? "" : ` Then: ${later.join(", ")}.`;
   const reason = current === "terminal" ? onboardingQuestion("terminal", facts)?.text : undefined;
   const step = `Current step: ${STEP_GUIDANCE[current]}${reason === undefined ? "" : ` ${reason}`}${after}`;
-  if (facts.setupPage === "ready") return `${SETUP_PAGE_FIRST} ${step}`;
-  if (facts.setupPage === "open") return `${SETUP_PAGE_OPEN} ${step}`;
   return `Setup is unfinished. ${step}`;
-}
-
-/** Whether setup's plain questions are asked in the chat: not while the setup page covers them. */
-export function chatAsksSetupQuestions(facts: OnboardingFacts): boolean {
-  return facts.setupPage === "unavailable" || facts.setupPage === "done";
 }
 
 export type OnboardingQuestion = Readonly<{

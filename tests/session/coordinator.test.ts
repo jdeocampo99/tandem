@@ -700,7 +700,6 @@ function welcomeSession(
           codeFolders: [],
           projects: options.projects.filter((project) => project !== "/repo"),
           selfImprovementChosen: false,
-          setupPage: "unavailable",
         }),
         board: async () => ({
           now: "",

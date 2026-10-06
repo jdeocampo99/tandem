@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import {
-  chatAsksSetupQuestions,
   type OnboardingFacts,
   onboardingContext,
   onboardingQuestion,
@@ -13,7 +12,6 @@ const fresh: OnboardingFacts = {
   codeFolders: [],
   projects: [],
   selfImprovementChosen: false,
-  setupPage: "unavailable",
 };
 
 const done: OnboardingFacts = {
@@ -22,7 +20,6 @@ const done: OnboardingFacts = {
   codeFolders: ["/Users/me/code"],
   projects: ["/Users/me/code/api"],
   selfImprovementChosen: true,
-  setupPage: "unavailable",
 };
 
 test("setup walks the fixed choices before repositories", () => {
@@ -52,18 +49,6 @@ test("plain-choice steps have fixed wording; open-ended steps have none", () => 
   expect(onboardingQuestion("self-improvement", fresh)?.hidden).toContain("self-improvement");
   expect(onboardingQuestion("models", fresh)).toBeUndefined();
   expect(onboardingQuestion("repositories", fresh)).toBeUndefined();
-});
-
-test("while Lavish is there, the setup page comes first and the chat keeps its steps as fallback", () => {
-  const ready = onboardingContext({ ...fresh, setupPage: "ready" }) ?? "";
-  expect(ready).toStartWith("Setup is unfinished. When the user wants to set up, call setup-page");
-  expect(ready).toContain("Current step: Choose models");
-  const open = onboardingContext({ ...fresh, setupPage: "open" }) ?? "";
-  expect(open).toContain("The setup page is open; its answer reaches you by itself.");
-  expect(chatAsksSetupQuestions({ ...fresh, setupPage: "ready" })).toBe(false);
-  expect(chatAsksSetupQuestions({ ...fresh, setupPage: "open" })).toBe(false);
-  expect(chatAsksSetupQuestions({ ...fresh, setupPage: "done" })).toBe(true);
-  expect(onboardingContext({ ...done, setupPage: "ready" })).toBeUndefined();
 });
 
 test("a saved model setup still asks for an explicit terminal choice", () => {

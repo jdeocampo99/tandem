@@ -322,7 +322,6 @@ export class CoordinatorSession {
       host: this.deps.host,
       service: () => this.service(),
       repo: this.deps.environment.repo,
-      logError: (message, error) => this.deps.logError(message, error),
     });
     return this.onboardingGuide;
   }
@@ -482,7 +481,6 @@ export class CoordinatorSession {
   ): Promise<void> {
     this.status.agentActive = willContinue;
     this.status.report();
-    this.onboardingGuide?.agentEnd({ willContinue, messages });
     this.reviewPages.agentEnd({ willContinue, messages });
     if (!willContinue) {
       const traceOnly = this.turnAction === "trace";
@@ -519,7 +517,6 @@ export class CoordinatorSession {
   async shutdown(): Promise<void> {
     const inFlight = this.reconcileInFlight;
     this.shuttingDown = true;
-    this.onboardingGuide?.stop();
     this.reviewPages.stop();
     this.cancelTick?.();
     this.cancelTick = undefined;

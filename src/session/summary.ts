@@ -1071,9 +1071,6 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
   if (action === "find-repo") return summarizeFoundRepos(value);
   if (action === "check-tools") return summarizeToolChecks(value);
-  if (action === "setup-page" && typeof value === "string") {
-    return boundedOutput(value, ACTION_RESULT_MAX_CHARS);
-  }
   if (action === "save-code-folders" || action === "self-improvement") {
     return "Saved.";
   }

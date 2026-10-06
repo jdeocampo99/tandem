@@ -49,7 +49,6 @@ export type TandemAction =
   | Readonly<{ readonly action: "save-code-folders"; readonly folders: readonly string[] }>
   | Readonly<{ readonly action: "self-improvement"; readonly mode: SelfImprovementMode }>
   | Readonly<{ readonly action: "check-tools" }>
-  | Readonly<{ readonly action: "setup-page"; readonly repoPath: string }>
   | Readonly<{
       readonly action: "configure-models";
       readonly repoPath: string;
@@ -607,14 +606,6 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
       approved: true,
     }),
   "check-tools": async (action, service) => actionResult(await service.checkTools(), action.action),
-  "setup-page": async (action, service) => {
-    const opened = await service.openSetupPage(action.repoPath);
-    const link = opened.url === undefined ? "" : ` (${opened.url})`;
-    return actionResult(
-      `The setup page is open in Lavish${link}. Its answer comes back to this chat by itself; wait for it.`,
-      action.action,
-    );
-  },
   models: async (action, service) =>
     actionResult(await service.models(action.repoPath), action.action),
   "configure-models": async (action, service) =>
@@ -1092,9 +1083,9 @@ export async function runTandemCommand(
   }
 }
 
-/** `/tandem models .` and `/tandem setup-page` mean the coordinator's own checkout. */
+/** `/tandem models .` means the coordinator's own checkout. */
 export function resolveCommandAction(action: TandemAction, cwd: string): TandemAction {
-  return (action.action === "models" || action.action === "setup-page") && action.repoPath === "."
+  return action.action === "models" && action.repoPath === "."
     ? { ...action, repoPath: cwd }
     : action;
 }
@@ -1312,10 +1303,6 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   "check-tools": {
     arity: { min: 1, max: 1 },
     parse: () => ({ action: "check-tools" }),
-  },
-  "setup-page": {
-    arity: { min: 1, max: 2 },
-    parse: (words) => ({ action: "setup-page", repoPath: words[1] ?? "." }),
   },
   models: {
     arity: { min: 1, max: 2 },

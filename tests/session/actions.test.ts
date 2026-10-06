@@ -1712,25 +1712,6 @@ test("a report-mode issue is filed only after the user approves the cleaned-up d
   ]);
 });
 
-test("the setup page opens without approval", async () => {
-  const calls: string[] = [];
-  const service = {
-    openSetupPage: async (repoPath: string) => {
-      calls.push(`open ${repoPath}`);
-      return { path: "/home/setup/tandem-setup.html", url: "http://127.0.0.1:4387/session/a" };
-    },
-  } as unknown as TandemService;
-
-  const opened = await executeTandemAction({ action: "setup-page", repoPath: "/tandem" }, service, {
-    confirm: async () => false,
-  });
-  expect(opened.value).toBe(
-    "The setup page is open in Lavish (http://127.0.0.1:4387/session/a). Its answer comes back to this chat by itself; wait for it.",
-  );
-  expect(calls).toEqual(["open /tandem"]);
-  expect(parseTandemCommand("setup-page")).toEqual({ action: "setup-page", repoPath: "." });
-});
-
 test("create forwards the workstream the work belongs to", async () => {
   const createCalls: unknown[] = [];
   const service = {

@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import type { RepoPolicy } from "../../src/contracts.ts";
 import type { ModelRecord } from "../../src/harness/contract.ts";
-import { renderSetupHtml } from "../../src/onboarding/setup-render.ts";
 import { buildSetupView, type SetupViewInput } from "../../src/onboarding/setup-view.ts";
 
 const catalogue: readonly ModelRecord[] = [
@@ -26,6 +25,7 @@ const saved: RepoPolicy["models"] = {
 };
 
 const input: SetupViewInput = {
+  mode: "setup",
   tern: { status: "missing" },
   generatedAt: "2026-09-26T12:00:00.000Z",
   homeFolder: "/Users/me",
@@ -140,30 +140,6 @@ test("repositories say where their commands came from, with the home folder as ~
   expect(tandem?.setUp).toBe(true);
   expect(web?.validationSource).toStartWith("Could not inspect this repository:");
   expect(web?.installSource).toStartWith("Could not inspect this repository:");
-});
-
-test("the page is one self-contained document with the shared components inlined", () => {
-  const html = renderSetupHtml(buildSetupView(input));
-  expect(html.startsWith("<!doctype html>")).toBe(true);
-  expect(html).toContain("<title>Tandem setup</title>");
-  expect(html).toContain("--sunk: #23232e;");
-  expect(html).not.toContain("/*{{");
-  expect(html).toContain("window.TandemUI");
-  expect(html).not.toContain("{{");
-  const data = /<script type="application\/json" id="setup-data">([\s\S]*?)<\/script>/.exec(html);
-  expect(JSON.parse(data?.[1] ?? "null")).toEqual(buildSetupView(input));
-});
-
-test("names from disk cannot close the data script", () => {
-  const hostile = "</script><img src=x onerror=alert(1)>";
-  const html = renderSetupHtml(
-    buildSetupView({
-      ...input,
-      repos: [...input.repos, { path: hostile, setUp: false }],
-    }),
-  );
-  expect(html).not.toContain("<img");
-  expect(html.toLowerCase().match(/<\/script>/g)).toHaveLength(3);
 });
 
 for (const tern of [

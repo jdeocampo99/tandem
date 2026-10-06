@@ -892,9 +892,6 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
       runner: {
         ompModels: OMP_MODELS,
         projectLaunchResponse: commandResult(),
-        presentationOpenResponse: commandResult(
-          "session:\n  status: opened\n  url: http://127.0.0.1:4387/session/setup\n",
-        ),
       },
     },
     async ({ home, service, task, runnerState }) => {
@@ -920,47 +917,20 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
       expect(own.setupCommands.map((command) => command.name)).toContain(
         "pnpm install --frozen-lockfile",
       );
-      const opened = await service.openSetupPage(task.repoPath);
-      expect(opened.path).toBe(join(home, "setup", "tandem-setup.html"));
-      const page = await readFile(opened.path, "utf8");
-      const setupDataMatch = page.match(
-        /<script type="application\/json" id="setup-data">([\s\S]*?)<\/script>/,
-      );
-      expect(setupDataMatch).not.toBeNull();
-      const setupData = JSON.parse(setupDataMatch?.[1] ?? "") as {
-        repos: Array<{
-          path: string;
-          validationCommands: string[];
-          install: string;
-        }>;
-      };
+      const view = await service.setupView(task.repoPath, "setup");
       const foreignPath = await realpath(foreign);
-      const foreignView = setupData.repos.find((repo) => repo.path === foreignPath);
+      const foreignView = view.repos.find((repo) => repo.path === foreignPath);
       expect(foreignView).toBeDefined();
       expect(foreignView?.validationCommands).toEqual(["bun run check"]);
       expect(foreignView?.install).toBe("bun install --frozen-lockfile");
-      runnerState.queuePresentationResponse(
-        commandResult(
-          [
-            "session:",
-            "  status: feedback",
-            "prompts[1]{uid,prompt,selector,tag,text}:",
-            `  "1",${JSON.stringify(
-              JSON.stringify({
-                ...setupAnswer,
-                repositories: [{ ...setupAnswer.repositories[0], path: foreign }],
-              }),
-            )},button#next,tandem-setup,Tandem setup answer`,
-          ].join("\n"),
-        ),
-      );
 
-      const pending = service.awaitSetupAnswer(task.repoPath, new AbortController().signal);
-      runnerState.releasePresentation();
-      const event = await pending;
-      expect(event.kind).toBe("answer");
-      if (event.kind !== "answer") throw new Error(`unexpected setup event: ${event.kind}`);
-      const saved = await service.applySetup(task.repoPath, event.answerId);
+      const saved = await service.saveSetup(
+        task.repoPath,
+        JSON.stringify({
+          ...setupAnswer,
+          repositories: [{ ...setupAnswer.repositories[0], path: foreign }],
+        }),
+      );
       expect(saved.complete).toBe(true);
       const config = await readFile(await centralConfigPath(foreign, home), "utf8");
       expect(config).toContain('"bun test"');

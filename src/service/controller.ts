@@ -80,12 +80,9 @@ import { catalogueHarness, harnessFor, runnableModels } from "../harness/resolve
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
-import {
-  type SetupApplyResult,
-  type SetupPageEvent,
-  type SetupPageOpened,
-  SetupPageWorkflow,
-} from "../onboarding/setup-page.ts";
+import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
+import type { SetupMode, SetupView } from "../onboarding/setup-view.ts";
+import { type SetupApplyResult, SetupWorkflow } from "../onboarding/setup-workflow.ts";
 import { checkTools, type ToolCheck } from "../onboarding/tools.ts";
 import {
   PINNABLE_PLAYBOOK_IDS,
@@ -382,19 +379,10 @@ export type TandemService = Readonly<{
   readonly checkTools: () => Promise<readonly ToolCheck[]>;
   /** What first-time setup still needs, for the Tandem coordinator at `repoPath`. */
   readonly onboardingFacts: (repoPath: string) => Promise<OnboardingFacts>;
-  /** Builds the setup page for the Tandem coordinator at `repoPath` and opens it in Lavish. */
-  readonly openSetupPage: (repoPath: string) => Promise<SetupPageOpened>;
-  /**
-   * Waits for the open setup page's next feedback, showing `reply` in the browser first. A valid
-   * answer is stored for `applySetup`; an invalid one comes back with its problems.
-   */
-  readonly awaitSetupAnswer: (
-    repoPath: string,
-    signal: AbortSignal,
-    reply?: string,
-  ) => Promise<SetupPageEvent>;
-  /** Saves a validated setup answer and reports its complete or partial result. */
-  readonly applySetup: (repoPath: string, answerId: string) => Promise<SetupApplyResult>;
+  /** What the setup block shows for the Tandem coordinator at `repoPath`. */
+  readonly setupView: (repoPath: string, mode: SetupMode) => Promise<SetupView>;
+  /** Parses, revalidates, and saves a setup answer; reports its complete or partial result. */
+  readonly saveSetup: (repoPath: string, answerText: string) => Promise<SetupApplyResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   /** Opens a saved project's coordinator in this Herdr session; refuses one not yet set up. */
   readonly openProject: (
@@ -689,7 +677,7 @@ class TandemController {
   readonly #prWatch: PrWatcher;
   readonly #memory: ProjectMemory;
   readonly #selfImprovement: SelfImprovement;
-  readonly #setupPage: SetupPageWorkflow;
+  readonly #setup: SetupWorkflow;
   #onboardingTern: ReturnType<typeof ternAvailability> | undefined;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
@@ -716,12 +704,10 @@ class TandemController {
       traceTask: (taskId) => this.trace(taskId),
       createTask: (input) => this.create(input),
     });
-    this.#setupPage = new SetupPageWorkflow({
-      home: deps.home,
+    this.#setup = new SetupWorkflow({
       homeFolder: homedir(),
       run: deps.run,
       clock: deps.clock,
-      idFactory: deps.idFactory,
       models: (repoPath) => this.models(repoPath),
       roots: () => deps.projectRoots(),
       homeSettings: () => readHomeSettings(deps.home),
@@ -1001,10 +987,8 @@ class TandemController {
           sessionId: this.#deps.sessionId,
         }),
       onboardingFacts: (repoPath) => this.onboardingFacts(repoPath),
-      openSetupPage: (repoPath) => this.#setupPage.open(repoPath),
-      awaitSetupAnswer: (repoPath, signal, reply) =>
-        this.#setupPage.listen(repoPath, signal, reply),
-      applySetup: (repoPath, answerId) => this.#setupPage.apply(repoPath, answerId),
+      setupView: (repoPath, mode) => this.#setup.view(repoPath, mode),
+      saveSetup: (repoPath, answerText) => this.saveSetup(repoPath, answerText),
       inspect: (id) => this.inspect(id),
       trace: (id) => this.trace(id),
       traceSummary: () => this.traceSummary(),
@@ -1227,13 +1211,20 @@ class TandemController {
     return selected;
   }
 
+  private async saveSetup(repoPath: string, answerText: string): Promise<SetupApplyResult> {
+    const parsed = parseSetupAnswer(answerText);
+    if (!parsed.ok) {
+      throw new Error(`The setup answer can't be saved: ${parsed.problems.join(" ")}`);
+    }
+    return this.#setup.apply(repoPath, parsed.answer);
+  }
+
   private async onboardingFacts(repoPath: string): Promise<OnboardingFacts> {
-    const [models, settings, registered, tandem, setupPage] = await Promise.all([
+    const [models, settings, registered, tandem] = await Promise.all([
       readModelSettings({ repoPath, home: this.#deps.home }),
       readHomeSettings(this.#deps.home),
       readRegisteredProjects(this.#deps.home),
       realpath(repoPath),
-      this.#setupPage.status(),
     ]);
     const terminalChosen = savedTerminalPreference(settings).chosen;
     const probe = terminalChosen
@@ -1247,7 +1238,6 @@ class TandemController {
       codeFolders: settings.projectRoots,
       projects: registered.filter((project) => project !== tandem),
       selfImprovementChosen: settings.selfImprovementChosen,
-      setupPage,
     };
   }
 

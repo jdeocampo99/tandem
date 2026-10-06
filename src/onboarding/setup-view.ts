@@ -16,16 +16,16 @@ import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harness/contract.ts";
 import type { TerminalAvailability } from "../terminal-backend/contract.ts";
 import { ternFallbackReason } from "../terminal-backend/setting.ts";
-import type { SetupPageDraft } from "./setup-answer.ts";
 
 /**
- * The setup page's view model: everything the page shows and every choice it offers, assembled
- * from saved state and read-only discovery. Pure; src/onboarding/setup-page.ts gathers the facts.
+ * The setup block's view model: everything it shows and every choice it offers, assembled from
+ * saved state and read-only discovery. Pure; src/onboarding/setup-workflow.ts gathers the facts.
  */
-export type SetupSearchStatus = Readonly<{ kind: "ok" | "error"; message: string }>;
+export type SetupMode = "setup" | "settings";
 
 export type SetupView = Readonly<{
   schemaVersion: 1;
+  mode: SetupMode;
   generatedAt: IsoTimestamp;
   /** Claude Code's models first, then OMP's, so each harness is one run in the pickers. */
   models: readonly SetupModel[];
@@ -36,15 +36,11 @@ export type SetupView = Readonly<{
   thinkingNotes: Readonly<Record<ThinkingLevel, string>>;
   /** The folders crawled for repositories, with the home folder shown as `~`. */
   searchedFolders: readonly string[];
-  /** Explicit folders selected in this open page, not saved until final approval. */
-  pendingFolders: readonly string[];
   repos: readonly SetupRepo[];
   selfImprovement: SelfImprovementMode;
   terminal: TerminalName;
   ternReady: boolean;
   terminalReason?: string;
-  draft?: SetupPageDraft;
-  searchStatus?: SetupSearchStatus;
 }>;
 
 /** One harness's group in the model pickers; `unavailable` says why it offers no models. */
@@ -113,6 +109,7 @@ export type SetupRepoFacts = Readonly<{
 }>;
 
 export type SetupViewInput = Readonly<{
+  mode: SetupMode;
   generatedAt: IsoTimestamp;
   /** The user's home folder, shown as `~`. */
   homeFolder: string;
@@ -121,14 +118,11 @@ export type SetupViewInput = Readonly<{
   claudeCode: ClaudeCodeAvailability;
   savedModels?: RepoPolicy["models"];
   searchedFolders: readonly string[];
-  pendingFolders?: readonly string[];
   repos: readonly SetupRepoFacts[];
   /** Saved mode; absent when the user never chose, so the page starts at fix. */
   selfImprovement?: SelfImprovementMode;
   terminal?: TerminalName;
   tern: TerminalAvailability;
-  draft?: SetupPageDraft;
-  searchStatus?: SetupSearchStatus;
 }>;
 
 type RoleCopy = Omit<SetupRole, "id" | "pick">;
@@ -215,6 +209,7 @@ export function buildSetupView(input: SetupViewInput): SetupView {
   const models = setupCatalogue(input.ompCatalogue, input.claudeCode).map(setupModel);
   return {
     schemaVersion: 1,
+    mode: input.mode,
     generatedAt: input.generatedAt,
     models,
     harnesses: [
@@ -242,9 +237,6 @@ export function buildSetupView(input: SetupViewInput): SetupView {
     }),
     thinkingNotes: THINKING_NOTES,
     searchedFolders: input.searchedFolders.map((folder) => shownPath(folder, input.homeFolder)),
-    pendingFolders: (input.pendingFolders ?? []).map((folder) =>
-      shownPath(folder, input.homeFolder),
-    ),
     repos: [...input.repos]
       .sort((left, right) => left.path.localeCompare(right.path))
       .map((repo) => setupRepo(repo, input.homeFolder)),
@@ -252,8 +244,6 @@ export function buildSetupView(input: SetupViewInput): SetupView {
     terminal: input.terminal ?? "herdr",
     ternReady: input.tern.status === "ready",
     ...(terminalReason === undefined ? {} : { terminalReason }),
-    ...(input.draft === undefined ? {} : { draft: input.draft }),
-    ...(input.searchStatus === undefined ? {} : { searchStatus: input.searchStatus }),
   };
 }
 

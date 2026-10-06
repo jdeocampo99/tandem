@@ -1,6 +1,6 @@
 /*
- * tandem.css: the tokens and components every Tandem page shares (the `tandem report` page, the
- * setup page). Pages inline it at build time (src/pages/assemble.ts) and add only their own layout.
+ * tandem.css: the tokens and components every Tandem page shares (the `tandem report` and PR review
+ * pages). Pages inline it at build time (src/pages/assemble.ts) and add only their own layout.
  */
 :root {
   color-scheme: dark;

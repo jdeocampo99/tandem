@@ -101,7 +101,6 @@ export const tandemRequestSchema = z.strictObject({
       mode: z.enum(["off", "fix", "report"]),
     }),
     z.strictObject({ action: z.literal("check-tools") }),
-    z.strictObject({ action: z.literal("setup-page"), repoPath: z.string() }),
     z.strictObject({ action: z.literal("models"), repoPath: z.string() }),
     z.strictObject({
       action: z.literal("configure-models"),
