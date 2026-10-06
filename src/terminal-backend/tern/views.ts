@@ -46,6 +46,12 @@ const returnPrograms = new Set(
   ].map((kind) => `tandem.${kind}`),
 );
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
+type ViewOpeningResult = {
+  paneId: string;
+  project: string;
+  endpoint?: Endpoint;
+  warnings?: string[];
+};
 
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
   const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
@@ -153,7 +159,7 @@ export function ternViewHost(
       | "welcome",
     placement: "panel" | "split" | "task" | "window" | "return" | "inbox",
     path: string,
-  ): Promise<{ paneId: string; project: string; endpoint?: Endpoint; warnings?: string[] }> => {
+  ): Promise<ViewOpeningResult> => {
     const { ensurePrivateDirectoryTree } = await import("../../coordinator/lock.ts");
     const { nativeViewsPath } = await import("../../board/snapshot.ts");
     const cmd = await scoped(input, placement === "return");
@@ -181,7 +187,7 @@ export function ternViewHost(
           }
         : {}),
     });
-    return withNativeOpenIntent(
+    return withNativeOpenIntent<ViewOpeningResult>(
       { ...input, indexPath },
       cmd,
       async (intent) => {

@@ -231,7 +231,7 @@ for (const mode of [
       if (verb === "focus") {
         if (mode === "focus-unknown")
           return { code: 1, stderr: "lost focus acknowledgement", stdout: "" };
-        return { code: 0, stderr: "", stdout: '{"block":3}' };
+        return { code: 0, stderr: "", stdout: JSON.stringify({ block: request.argv[2] }) };
       }
       if (verb === "open") {
         const path = request.argv[2];
@@ -398,7 +398,7 @@ for (const mode of [
         expect(await open()).toEqual(expected);
         const before = effects;
         expect(await open()).toEqual(expected);
-        expect(effects).toBe(before);
+        expect(effects).toBe(before + (mode === "prs-success" ? 1 : 0));
       } else {
         await expect(open()).rejects.toThrow();
         if (
@@ -413,8 +413,19 @@ for (const mode of [
           ].includes(mode)
         ) {
           const before = effects;
-          if (["verification-failed", "verification-malformed", "unknown"].includes(mode)) {
-            expect((await open()).paneId).toBe("4");
+          if (
+            [
+              "verification-failed",
+              "verification-malformed",
+              "unknown",
+              "brief-unknown",
+              "pr-unknown",
+            ].includes(mode)
+          ) {
+            const recovered = await open();
+            expect(recovered.paneId).toBe("4");
+            if (mode === "brief-unknown")
+              expect(recovered.endpoint).toEqual({ ...endpoint, paneId: "4" });
             expect(await Bun.file(routePath).exists()).toBe(false);
             expect(
               (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
