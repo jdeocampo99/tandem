@@ -209,7 +209,8 @@ This model is the `model` inside the task file envelope.
 - `stageTrack`: `{stage,label,state:"done"|"current"|"pending"|"skipped",round?:{used,max}}[]`.
   Implementation tracks Implement/Validate/Review/Fix/Ready; research/review tasks use their own
   stages. Skipped required stages are explicit; fix rounds come from the inspection budget.
-- `tabs`: available labels from Overview/Brief/Progress/Diff/PR/Cost. `requestId?` and
+- `tabs`: always Overview/Brief/Progress/Diff/PR/Cost, in that order; missing related data
+  renders a read-only empty state. `requestId?` and
   `pullRequest?` link other models in the bundle.
 - `overview`: `{summary,todos:TodoItem[],done,total,recent:StoredTimelineEvent[]}`. Recent is
   the last five events, newest first. To-dos appear only here.

@@ -48,8 +48,13 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
   const clean = join(poolRoot, "coordinator");
   await mkdir(repo);
   await mkdir(clean, { recursive: true });
+  if (terminalName === "tern") {
+    await mkdir(home, { recursive: true });
+    await saveTerminalChoice(home, "tern");
+  }
   const endpoint = {
     terminal: terminalName,
+    ...(terminalName === "tern" ? { terminalSessionId: "1" } : {}),
     sessionId: "isolated",
     workspaceId: "workspace",
     tabId: "tab",
@@ -84,8 +89,7 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     throw new Error("No external commands expected");
   };
   const terminal: TerminalBackend = {
-    ...terminalBackend(run),
-    name: terminalName,
+    ...terminalBackend(run, { terminal: terminalName }),
     inspect: async (target) => ({
       endpoint: target.endpoint,
       pane: { ...endpoint, foregroundCwd: clean },
@@ -1252,7 +1256,7 @@ test("published wave-2 argv dispatches a registered renderer without starting a 
   try {
     let starts = 0;
     const { service: _service, ...dependencies } = f.deps;
-    const commands = [["board"], ["usage"], ["open-task"]];
+    const commands = [["board"], ["usage"]];
     for (const command of commands) {
       const errors: string[] = [];
       const output: string[] = [];
@@ -1379,6 +1383,50 @@ test("renderer commands reject missing context and invalid project/file input be
   }
 });
 
+for (const outcome of ["opened", "refused"] as const)
+  test(`native task picker ${outcome} preserves exact origin and never retries`, async () => {
+    const f = await fixture("tern");
+    const calls: Parameters<TerminalBackend["openView"]>[0][] = [];
+    try {
+      const result = await runTerminal(
+        [
+          "native",
+          "open-task",
+          "--pane",
+          "101",
+          "--cwd",
+          f.repo,
+          "--window",
+          "own-window",
+          "--json",
+        ],
+        {
+          ...f.deps,
+          terminal: {
+            ...f.deps.terminal,
+            openView: async (input) => {
+              calls.push(input);
+              return {
+                opened: outcome === "opened",
+                warnings: outcome === "opened" ? [] : ["Picker unavailable"],
+              };
+            },
+          },
+        },
+      );
+      expect(result.exitCode, result.error?.message).toBe(outcome === "opened" ? 0 : 1);
+      expect(calls, result.error?.message).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        view: { kind: "task-picker" },
+        origin: { paneId: "101", cwd: f.repo, windowId: "own-window" },
+        home: f.home,
+      });
+      if (outcome === "refused") expect(result.error?.message).toContain("Picker unavailable");
+    } finally {
+      await f.service.shutdown();
+      await rm(f.root, { recursive: true, force: true });
+    }
+  });
 test("New request focuses the owned coordinator and asks for conversational intake", async () => {
   const f = await fixture();
   const focused: string[] = [];

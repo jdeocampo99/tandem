@@ -132,14 +132,7 @@ export function taskPageView(input: TaskPageInput): TaskPageView {
         ? { round: { used: inspection.codeFixRounds.used, max: inspection.codeFixRounds.max } }
         : {}),
     })),
-    tabs: [
-      "Overview",
-      ...(task.requestId === undefined ? [] : ["Brief"]),
-      "Progress",
-      ...(inspection.branch === undefined ? [] : ["Diff"]),
-      ...(task.pullRequest === undefined && task.prReview === undefined ? [] : ["PR"]),
-      "Cost",
-    ],
+    tabs: ["Overview", "Brief", "Progress", "Diff", "PR", "Cost"],
     overview: {
       summary: task.objective,
       todos,
