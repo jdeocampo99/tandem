@@ -50,6 +50,7 @@ function dependencies(
     getTask: async () => reviewed,
     createTask: unexpected,
     updatePrReview: unexpected,
+    mutatePrReview: unexpected,
     runAgain: unexpected,
     settle: unexpected,
     ...(openNativePage === undefined ? {} : { openNativePage }),
