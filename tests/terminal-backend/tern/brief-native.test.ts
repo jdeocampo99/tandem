@@ -102,7 +102,8 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       },
       NOW,
     );
-    const model = briefView(second, [], "http://127.0.0.1:4387/review");
+    // Production request briefs have no Lavish page; this fixture has no browser URL either.
+    const model = briefView(second);
     const path = nativeDetailPath(env.TANDEM_HOME, root, "brief-req-tern.json");
     await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
     const publish = async (revision: string, value = model) =>
