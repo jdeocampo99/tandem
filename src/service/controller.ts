@@ -6,9 +6,9 @@ import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
-import { NativeViewsReader } from "../board/native-read.ts";
+import { NativeViewsPublisher } from "../board/native-publish.ts";
 import { readBoard } from "../board/read.ts";
-import { type BoardSnapshot, writeBoardSnapshot, writeNativeViews } from "../board/snapshot.ts";
+import { type BoardSnapshot, writeBoardSnapshot } from "../board/snapshot.ts";
 import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts";
 import {
   type HomeSettings,
@@ -658,7 +658,7 @@ class TaskRevisionConflictError extends Error {
 
 class TandemController {
   readonly #deps: ServiceDependencies;
-  readonly #nativeViews: NativeViewsReader;
+  readonly #nativeViews: NativeViewsPublisher;
   readonly #source: SourceInboxWorkflow;
   readonly #presentationFeedback: PresentationFeedbackWorkflow;
   readonly #presentationRuntime: PresentationRuntimeWorkflow;
@@ -682,7 +682,7 @@ class TandemController {
   #sourceReady = true;
   constructor(deps: ServiceDependencies) {
     this.#deps = deps;
-    this.#nativeViews = new NativeViewsReader(deps);
+    this.#nativeViews = new NativeViewsPublisher(deps);
     this.#drafts = new DraftRefreshWorkflow({
       home: deps.home,
       clock: deps.clock,
@@ -1022,30 +1022,22 @@ class TandemController {
           })),
         };
         await writeBoardSnapshot(this.#deps.home, snapshot);
-        const ternRecords = records.filter(
-          (record) => "terminal" in record.endpoint && record.endpoint.terminal === "tern",
-        );
+        const ternRecords = records.filter((record) => record.endpoint.terminal === "tern");
         const project =
           this.#deps.sourceWorkspace?.repoPath ??
           ternRecords.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
             ?.repoPath;
-        if (this.#deps.terminal.name.toLowerCase() === "tern" && project !== undefined) {
-          await writeNativeViews(
-            this.#deps.home,
-            await this.#nativeViews.read(
-              snapshot,
-              project,
-              new Map(
-                ternRecords.map((record) => [
-                  record.repoPath,
-                  {
-                    terminal: "tern",
-                    sessionId: record.endpoint.sessionId,
-                  },
-                ]),
-              ),
+        if (this.#deps.terminal.name === "tern" && project !== undefined) {
+          this.#nativeViews.schedule({
+            snapshot,
+            project,
+            sessions: new Map(
+              ternRecords.map((record) => [
+                record.repoPath,
+                { terminal: "tern", sessionId: record.endpoint.sessionId },
+              ]),
             ),
-          );
+          });
         }
       },
       prWatch: () => this.#prWatch.view(),
