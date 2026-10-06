@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -10,7 +10,7 @@ import {
 import type { NativeNavigationModel } from "../../board/native-file.ts";
 import type { Endpoint } from "../../contracts.ts";
 import type { TerminalBackend } from "../contract.ts";
-import { exactPane, paneMutation } from "./endpoints.ts";
+import { exactPane } from "./endpoints.ts";
 import {
   BlockAck,
   blocks,
@@ -19,6 +19,7 @@ import {
   type TernCommands,
   TernOutcomeUnknownError,
 } from "./protocol.ts";
+import { exactNativeView, withNativeOpenIntent } from "./view-intent.ts";
 
 const Opened = z.object({
   blocks: z.array(z.union([Id, z.number().int().safe().positive().transform(String)])),
@@ -127,7 +128,7 @@ export function ternViewHost(
   const open = async (
     input: ViewHostingInput,
     project: string,
-    kind: string,
+    kind: "panel" | "task" | "brief" | "pr" | "prs" | "board" | "usage" | "catchup" | "welcome",
     placement: "panel" | "split" | "task" | "window" | "return" | "inbox",
     path: string,
   ) => {
@@ -136,92 +137,6 @@ export function ternViewHost(
     const cmd = await scoped(input);
     return options.guard(input.coordinator.paneId, async () => {
       const indexPath = nativeViewsPath(input.home, project);
-      let closeOrigin: string | undefined;
-      let proveClosingOrigin: (() => Promise<void>) | undefined;
-      if (
-        placement === "return" &&
-        input.origin?.paneId !== undefined &&
-        input.origin.paneId !== input.coordinator.paneId
-      ) {
-        const source = blocks(await cmd.ls(input.cwd)).find(
-          (entry) => entry.block.id === input.origin?.paneId,
-        );
-        if (
-          source?.block.program === undefined ||
-          !returnPrograms.has(source.block.program) ||
-          source.block.args?.[1] !== input.coordinator.paneId ||
-          source.block.args?.[4] !== indexPath
-        )
-          throw new EndpointOwnershipError(
-            input.coordinator,
-            "return origin is not this coordinator's native view",
-          );
-        if (windowPrograms.has(source.block.program)) {
-          const endpoint: Endpoint = {
-            ...input.coordinator,
-            paneId: source.block.id,
-            workspaceId: source.tab.id,
-            tabId: source.tab.id,
-          };
-          const expected = [
-            indexPath,
-            input.coordinator.paneId,
-            input.cwd,
-            input.origin?.windowId ?? "",
-            indexPath,
-          ];
-          proveClosingOrigin = async () => {
-            const current = await exactPane(cmd, { endpoint, cwd: input.cwd });
-            if (
-              current.block.program !== source.block.program ||
-              JSON.stringify(current.block.args) !== JSON.stringify(expected)
-            )
-              throw new EndpointOwnershipError(
-                endpoint,
-                "return origin is not the exact full-window view",
-              );
-            const process = await cmd.read(input.cwd, ["process", endpoint.paneId], Processes);
-            if (
-              process.pane !== endpoint.paneId ||
-              process.child !== null ||
-              process.foreground !== null ||
-              process.group !== null
-            )
-              throw new EndpointBusyError(endpoint);
-          };
-          await proveClosingOrigin();
-          closeOrigin = source.block.id;
-        }
-      }
-      const existingTasks =
-        placement === "task" || placement === "return"
-          ? blocks(await cmd.ls(input.cwd)).filter(
-              (entry) =>
-                entry.tab.id === input.coordinator.tabId &&
-                entry.block.program === "tandem.task" &&
-                entry.block.args?.[1] === input.coordinator.paneId &&
-                entry.block.args?.[4] === indexPath,
-            )
-          : [];
-      if (existingTasks.length > 1)
-        throw new EndpointOwnershipError(
-          input.coordinator,
-          "several task blocks claim this coordinator",
-        );
-      const replaced = existingTasks[0]?.block.id;
-      const directory = join(input.home, "native-host");
-      await ensurePrivateDirectoryTree(directory, "native route directory");
-      const token = randomUUID();
-      const route = join(directory, `${token}.tandem-open.json`);
-      const receipt = join(directory, `${token}.receipt.json`);
-      await paneMutation(cmd, { endpoint: input.coordinator, cwd: input.cwd }, [
-        "focus",
-        input.coordinator.paneId,
-      ]);
-      // Freshly revealed background tabs receive their real window size asynchronously.
-      await options.wait(150);
-      const columns = (await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd })).block
-        .cols;
       const args = [
         path,
         input.coordinator.paneId,
@@ -229,81 +144,204 @@ export function ternViewHost(
         input.origin?.windowId ?? "",
         indexPath,
       ];
-      await writeFile(
-        route,
-        JSON.stringify({
+      return withNativeOpenIntent({ ...input, indexPath }, cmd, async (intent) => {
+        const reused =
+          placement === "panel" || intent.recovered
+            ? await exactNativeView(cmd, input.cwd, input.coordinator, kind, placement, args)
+            : undefined;
+        if (reused !== undefined) return { paneId: reused.block.id, project };
+        let closeOrigin: string | undefined;
+        let proveClosingOrigin: (() => Promise<void>) | undefined;
+        if (
+          placement === "return" &&
+          input.origin?.paneId !== undefined &&
+          input.origin.paneId !== input.coordinator.paneId
+        ) {
+          const source = blocks(await cmd.ls(input.cwd)).find(
+            (entry) => entry.block.id === input.origin?.paneId,
+          );
+          if (
+            source?.block.program === undefined ||
+            !returnPrograms.has(source.block.program) ||
+            source.block.args?.[1] !== input.coordinator.paneId ||
+            source.block.args?.[4] !== indexPath
+          )
+            throw new EndpointOwnershipError(
+              input.coordinator,
+              "return origin is not this coordinator's native view",
+            );
+          if (windowPrograms.has(source.block.program)) {
+            const endpoint: Endpoint = {
+              ...input.coordinator,
+              paneId: source.block.id,
+              workspaceId: source.tab.id,
+              tabId: source.tab.id,
+            };
+            const expected = [
+              indexPath,
+              input.coordinator.paneId,
+              input.cwd,
+              input.origin?.windowId ?? "",
+              indexPath,
+            ];
+            const proveClosingIdentity = async () => {
+              const current = await exactPane(cmd, { endpoint, cwd: input.cwd });
+              if (
+                current.block.program !== source.block.program ||
+                JSON.stringify(current.block.args) !== JSON.stringify(expected)
+              )
+                throw new EndpointOwnershipError(
+                  endpoint,
+                  "return origin is not the exact full-window view",
+                );
+            };
+            proveClosingOrigin = async () => {
+              await proveClosingIdentity();
+              const process = await cmd.read(input.cwd, ["process", endpoint.paneId], Processes);
+              if (
+                process.pane !== endpoint.paneId ||
+                process.child !== null ||
+                process.foreground !== null ||
+                process.group !== null
+              )
+                throw new EndpointBusyError(endpoint);
+              await proveClosingIdentity();
+            };
+            await proveClosingOrigin();
+            closeOrigin = source.block.id;
+          }
+        }
+        const existingTasks =
+          placement === "task" || placement === "return"
+            ? blocks(await cmd.ls(input.cwd)).filter(
+                (entry) =>
+                  entry.tab.id === input.coordinator.tabId &&
+                  entry.block.program === "tandem.task" &&
+                  entry.block.args?.[1] === input.coordinator.paneId &&
+                  entry.block.args?.[4] === indexPath,
+              )
+            : [];
+        if (existingTasks.length > 1)
+          throw new EndpointOwnershipError(
+            input.coordinator,
+            "several task blocks claim this coordinator",
+          );
+        const replaced = existingTasks[0]?.block.id;
+        const directory = join(input.home, "native-host");
+        await ensurePrivateDirectoryTree(directory, "native route directory");
+        const token = randomUUID();
+        const route = join(directory, `${token}.tandem-open.json`);
+        const receipt = join(directory, `${token}.receipt.json`);
+        await intent.claim(route, {
           version: 1,
           kind,
           placement,
           args,
-          columns,
-          origin: input.origin?.paneId ?? input.coordinator.paneId,
           coordinator: input.coordinator.paneId,
-          session: input.coordinator.terminalSessionId,
+          session: Id.parse(input.coordinator.terminalSessionId),
           receipt,
-          replaced,
-          closeOrigin,
-        }),
-        { flag: "wx", mode: 0o600 },
-      );
-      // Recheck immediately before the opening effect.
-      await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-      await proveClosingOrigin?.();
-      let acknowledgement: z.infer<typeof Opened> | undefined;
-      try {
-        const request = cmd.request(input.cwd, ["open", route]);
-        const outcome = await cmd.run(request);
-        if (outcome.code === 0) acknowledgement = Opened.parse(JSON.parse(outcome.stdout));
-        else if (!outcome.stderr.includes("cannot open in a file block"))
-          throw new Error(outcome.stderr);
-        // Tern's CLI reports handled custom layout routes as no file block. The private
-        // receipt and exact program/args proof below are required even when the CLI exits 0.
-      } catch (cause) {
-        throw new TernOutcomeUnknownError("tern open", cause);
-      }
-
-      const deadline = options.clock() + 5000;
-      let result: z.infer<typeof Receipt> | undefined;
-      while (options.clock() < deadline) {
+        });
+        // Keep the final exact-id read immediately before focus. A failed read safely
+        // cancels this invocation's intent because no mutation has been attempted.
+        await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+        intent.markMutationAttempted();
+        const focused = await cmd.mutate(input.cwd, ["focus", input.coordinator.paneId], BlockAck);
+        if (focused.block !== input.coordinator.paneId)
+          throw new TernOutcomeUnknownError("tern focus", "acknowledgement names another block");
+        // Freshly revealed background tabs receive their real window size asynchronously.
+        await options.wait(150);
+        const columns = (await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd }))
+          .block.cols;
+        await writeFile(
+          route,
+          JSON.stringify({
+            version: 1,
+            kind,
+            placement,
+            args,
+            columns,
+            origin: input.origin?.paneId ?? input.coordinator.paneId,
+            coordinator: input.coordinator.paneId,
+            session: input.coordinator.terminalSessionId,
+            receipt,
+            replaced,
+            closeOrigin,
+          }),
+          { flag: "wx", mode: 0o600 },
+        );
+        // Recheck immediately before the opening effect.
+        await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+        await proveClosingOrigin?.();
+        let acknowledgement: z.infer<typeof Opened> | undefined;
         try {
-          result = Receipt.parse(JSON.parse(await readFile(receipt, "utf8")));
-          break;
-        } catch {
-          await options.wait(50);
+          const request = cmd.request(input.cwd, ["open", route]);
+          const outcome = await cmd.run(request);
+          if (outcome.code === 0) acknowledgement = Opened.parse(JSON.parse(outcome.stdout));
+          else if (!outcome.stderr.includes("cannot open in a file block"))
+            throw new Error(outcome.stderr);
+          // Tern's CLI reports handled custom layout routes as no file block. The private
+          // receipt and exact program/args proof below are required even when the CLI exits 0.
+        } catch (cause) {
+          throw new TernOutcomeUnknownError("tern open", cause);
         }
-      }
-      if (result === undefined)
-        throw new TernOutcomeUnknownError(
-          "tern open",
-          "route receipt was not confirmed; keep route and resources",
+
+        const deadline = options.clock() + 5000;
+        let result: z.infer<typeof Receipt> | undefined;
+        while (options.clock() < deadline) {
+          try {
+            result = Receipt.parse(JSON.parse(await readFile(receipt, "utf8")));
+            break;
+          } catch {
+            await options.wait(50);
+          }
+        }
+        if (result === undefined)
+          throw new TernOutcomeUnknownError(
+            "tern open",
+            "route receipt was not confirmed; keep route and resources",
+          );
+        const listing = await cmd.ls(input.cwd).catch((cause: unknown) => {
+          throw new TernOutcomeUnknownError("tern open", cause);
+        });
+        const entry = blocks(listing).find((each) => each.block.id === result.paneId);
+        if (
+          (placement === "return" && result.paneId !== input.coordinator.paneId) ||
+          (closeOrigin !== undefined &&
+            (listing.detached.length > 0 ||
+              blocks(listing).some((each) => each.block.id === closeOrigin))) ||
+          (acknowledgement !== undefined &&
+            acknowledgement.blocks.length > 0 &&
+            !acknowledgement.blocks.includes(result.paneId)) ||
+          entry === undefined ||
+          entry.tab.id !== result.tabId ||
+          entry.session.id !== result.sessionId ||
+          result.sessionId !== input.coordinator.terminalSessionId ||
+          (!["return", "inbox"].includes(placement) &&
+            (entry.block.program !== `tandem.${kind}` ||
+              JSON.stringify(entry.block.args) !== JSON.stringify(args)))
+        )
+          throw new TernOutcomeUnknownError(
+            "tern open",
+            "created block identity or arguments changed",
+          );
+        const confirmed = await exactNativeView(
+          cmd,
+          input.cwd,
+          input.coordinator,
+          kind,
+          placement,
+          args,
         );
-      const listing = await cmd.ls(input.cwd).catch((cause: unknown) => {
-        throw new TernOutcomeUnknownError("tern open", cause);
+        if (confirmed !== undefined && confirmed.block.id !== result.paneId)
+          throw new TernOutcomeUnknownError("tern open", "native evidence names another block");
+        if (!["return", "inbox"].includes(placement) && confirmed === undefined)
+          throw new TernOutcomeUnknownError(
+            "tern open",
+            "native block disappeared during verification",
+          );
+        await intent.settle();
+        return { paneId: result.paneId, project };
       });
-      const entry = blocks(listing).find((each) => each.block.id === result.paneId);
-      if (
-        (placement === "return" && result.paneId !== input.coordinator.paneId) ||
-        (closeOrigin !== undefined &&
-          (listing.detached.length > 0 ||
-            blocks(listing).some((each) => each.block.id === closeOrigin))) ||
-        (acknowledgement !== undefined &&
-          acknowledgement.blocks.length > 0 &&
-          !acknowledgement.blocks.includes(result.paneId)) ||
-        entry === undefined ||
-        entry.tab.id !== result.tabId ||
-        entry.session.id !== result.sessionId ||
-        result.sessionId !== input.coordinator.terminalSessionId ||
-        (!["return", "inbox"].includes(placement) &&
-          (entry.block.program !== `tandem.${kind}` ||
-            JSON.stringify(entry.block.args) !== JSON.stringify(args)))
-      )
-        throw new TernOutcomeUnknownError(
-          "tern open",
-          "created block identity or arguments changed",
-        );
-      await rm(route);
-      await rm(receipt);
-      return { paneId: result.paneId, project };
     });
   };
   const close = async (input: Parameters<TerminalBackend["closeView"]>[0], project: string) => {
@@ -339,7 +377,7 @@ export function ternViewHost(
         workspaceId: entry.tab.id,
         tabId: entry.tab.id,
       };
-      const prove = async () => {
+      const proveIdentity = async () => {
         const current = await exactPane(cmd, { endpoint, cwd: input.cwd });
         if (
           current.block.program !== "tandem.brief" ||
@@ -349,6 +387,9 @@ export function ternViewHost(
             endpoint,
             "origin is not this request's exact native brief",
           );
+      };
+      const prove = async () => {
+        await proveIdentity();
         const process = await cmd.read(input.cwd, ["process", endpoint.paneId], Processes);
         if (
           process.pane !== endpoint.paneId ||
@@ -361,6 +402,7 @@ export function ternViewHost(
       await prove();
       // Identity, arguments and idle state must still hold immediately before the effect.
       await prove();
+      await proveIdentity();
       const ack = await cmd.mutate(input.cwd, ["close", endpoint.paneId], BlockAck);
       if (ack.block !== endpoint.paneId)
         throw new TernOutcomeUnknownError("brief close", "acknowledged another block");

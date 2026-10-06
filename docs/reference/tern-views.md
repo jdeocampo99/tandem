@@ -285,6 +285,36 @@ prompt. On switching to Herdr, the shared configure callback restores preference
 choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
 plugin consent. The Tern package stays linked for later use.
 
+## Native brief pane and request intake
+
+The `tandem.brief` Luau block reads a direct `BriefView` detail envelope. Launch arguments are
+`[detailPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, tandemHome]`. It uses the shared file loader,
+text fields, diff rows and comment cards. Hovering a line reveals a gutter `+`; the comment editor
+opens below that line. Comment saves a local pending card, Cancel discards the editor, and Remove
+removes a pending card. No comment drafts are written to Tandem state or restored after restart.
+The optional overall comment sits in the bottom bar. `browserUrl`, when supplied by the detail
+model, offers the existing "Edit in browser" page.
+
+Pending comments pin the shown brief and its stable line ids. If the detail file advances, the
+pane keeps that displayed revision and offers "Discard comments and refresh". A missing or
+malformed file leaves the last readable content visible with actions disabled. Approve copies
+only `model.approval` into its input, without recalculating any digest. Request changes carries
+the displayed revision and digests, pending line comments and the optional overall comment.
+The CLI validates the durable revision and feedback anchors.
+
+Each submit passes UTF-8 JSON on stdin to the shared `native-input.sh` caller. Its TypeScript
+helper creates a unique private directory and exclusively writes the input before invoking the
+CLI once with explicit pane/cwd/window/home context, then removes the directory in `finally`. While the
+CLI runs, another submit is disabled. Nonzero stderr becomes a toast and keeps the pane and
+comments open. After success, the CLI closes the scoped native split only while the durable
+revision and digest triplet still match. A retained pane displays success warnings and disables
+submission, so an uncertain close never invites another approval or feedback delivery. Local ×
+uses `cx:exit(0)` with hosting's default `keep_open=false`. There is no automatic retry.
+
+"Tandem: New request…" focuses the ownership-proven coordinator and sends a short intake prompt
+asking what the user wants to change. The user answers in that conversation. The action rechecks
+ownership after focusing, sends nothing if focus or proof fails, and creates no task or approval.
+
 ## Native hosting and renderer launch API
 
 The Tern backend opens private, unique `<home>/native-host/<uuid>.tandem-open.json`
@@ -294,6 +324,21 @@ as "cannot open in a file block", even after opening them. Success therefore req
 receipt and a scoped listing proving the exact block program and launch arguments. Missing
 or conflicting evidence quarantines the opening, retaining its ticket and resources.
 A confirmed opening removes its transient ticket and receipt. No title proves ownership.
+Before any opening mutation, the host locks a private coordinator-bound intent under
+`<home>/native-host`. For panels, it lists the scoped session and reuses exactly one block
+with the full program and five launch arguments in the intended tab placement; duplicate
+matches refuse. A window-scoped lookup also reads the daemon-wide listing before concluding
+absence. Unresolved detached blocks or matching blocks outside the owning session/window
+refuse an opening; they never authorize a duplicate. A different window launch argument for
+this coordinator and view also refuses reuse. Successful task opens retain their replacement behavior.
+The read-only exact coordinator check runs immediately before focus. A known failure before
+this invocation attempts any mutation cancels only its own new intent, so failed or malformed
+pre-focus reads leave no fence. Earlier uncertain intents are never cancelled by a failed read.
+The intent is claimed before the first mutation and remains on every unconfirmed outcome,
+including failed or malformed verification reads. A later CLI/backend instance must settle
+retained intents and route tickets from that same exact block evidence before it can open.
+A missing receipt can be settled by the unique exact block; conflicting receipts or missing
+block evidence retain the fence and resources. Lock files remain for later callers.
 
 All renderers use these block ids and the same five string launch arguments:
 
@@ -323,7 +368,8 @@ coordinator, home, cwd and origin context.
 retires only the exact originating native brief split. The caller checks the durable revision
 and completes approval/feedback first; close errors become successful-action warnings, never retries.
 The host proves the block's program, all launch arguments, scoped session and idle state twice,
-then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
+rechecks exact identity and full arguments after the final process read immediately before
+closing, then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
 are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
 
 The host never sets `keep_open` when launching split/detail blocks or task replacements.
@@ -410,8 +456,14 @@ The optional strip is rendered inside the PR header. `pr-diff.luau` exports `cre
 For the task's Diff tab set the content state's `tab="Diff"`; for its PR tab set
 `tab="Description"`. Pass readiness from both the task/index and PR detail views to
 `view` and `event`. Retain the same content state while navigating to preserve local drafts.
-The standalone PR block calls `cx:exit(0)` after a successful `review-submit`, as it does for
-its close control. Embedded content records success locally; its task host owns navigation.
+The shared `Invoke` completion receives the process result `{status,stdout,stderr}`. For
+`review-submit`, callers invoke it after every settled outcome, including a nonzero exit,
+missing origin or spawn failure. Other action completions remain success-only. Content clears
+`posting` on completion, retains drafts on failure/refusal, and marks `submitted` only for
+exit zero with decoded CLI stdout containing `posted: true`. A `posted: false` result displays
+its message; an unreadable receipt asks the user to check the PR. No outcome retries an action.
+The standalone PR block calls `cx:exit(0)` only after that confirmed posted receipt, as it does
+for its close control. Embedded content records success locally; its task host owns navigation.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
 for wheel and keyboard input; the review dock remains visible while the content scrolls.
 PR line numbers use muted text color rather than element opacity, avoiding a compositing
@@ -440,8 +492,11 @@ It supports `brief-comment`, `brief-request-changes`, `brief-approve`, `pr-comme
 
 The native publisher consumes durable task timeline events for questions, approval waits and
 blocked transitions. It observes new draft PR identities for `done`, and new brief or failing-PR
-Needs you rows. A private per-project delivery cursor under `<home>/native-alerts` is saved
-before sending OSC. Repeated ticks, relaunches and unknown delivery outcomes never resend a
+Needs you rows. Model-routing questions use their stable routing-decision row identity,
+including queued admission waits and questions raised during an active task stage. Their
+claimed identities survive temporary row absence, wording changes and coordinator relaunch;
+timeline admission waits do not emit a duplicate alert. A private per-project delivery cursor under `<home>/native-alerts` is saved
+under a cross-process lock before sending OSC. Repeated ticks, relaunches and unknown delivery outcomes never resend a
 claimed transition. The first snapshot establishes a baseline without replaying historical alerts.
 These cursors are presentation delivery state, not task authority.
 

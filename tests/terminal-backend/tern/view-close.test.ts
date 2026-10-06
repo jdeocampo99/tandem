@@ -16,6 +16,10 @@ for (const mode of [
   "foreign-program",
   "busy",
   "changed",
+  "removed-after-second-read",
+  "program-after-second-read",
+  "args-after-second-read",
+  "tab-after-second-read",
   "unknown",
 ] as const) {
   test(`retiring a native brief: ${mode} closes only the exact idle originating split`, async () => {
@@ -56,7 +60,7 @@ for (const mode of [
                   name: null,
                   blocks: [
                     { id: "3", title: "Tandem brief", cwd: home, live: true },
-                    ...(removed
+                    ...(removed || (mode === "tab-after-second-read" && processReads === 2)
                       ? []
                       : [
                           {
@@ -65,15 +69,38 @@ for (const mode of [
                             cwd: home,
                             live: false,
                             program:
-                              mode === "foreign-program" ? "unrelated.brief" : "tandem.brief",
+                              mode === "foreign-program" ||
+                              (mode === "program-after-second-read" && processReads === 2)
+                                ? "unrelated.brief"
+                                : "tandem.brief",
                             args:
-                              mode === "wrong-request" || (mode === "changed" && processReads > 0)
+                              mode === "wrong-request" ||
+                              (mode === "changed" && processReads > 0) ||
+                              (mode === "args-after-second-read" && processReads === 2)
                                 ? ["foreign.json", ...args.slice(1)]
                                 : args,
                           },
                         ]),
                   ],
                 },
+                ...(mode === "tab-after-second-read" && processReads === 2
+                  ? [
+                      {
+                        id: "5",
+                        name: null,
+                        blocks: [
+                          {
+                            id: "4",
+                            title: "Tandem brief",
+                            cwd: home,
+                            live: false,
+                            program: "tandem.brief",
+                            args,
+                          },
+                        ],
+                      },
+                    ]
+                  : []),
               ],
             },
           ],
@@ -81,6 +108,7 @@ for (const mode of [
         };
       else if (verb === "process") {
         processReads++;
+        if (processReads === 2 && mode === "removed-after-second-read") removed = true;
         value = {
           pane: "4",
           child: mode === "busy" ? { pid: 10, name: "sh", argv: ["sh"], cwd: home } : null,

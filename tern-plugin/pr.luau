@@ -8,7 +8,12 @@ local components = require("./components")
 type State = { view: views.View<models.Model>, index: views.View<models.Index>?, content: content.State, cwd: string?, window: string, home: string, switcher: boolean }
 local function invoke(s: State, cx: BlockCx): content.Invoke
  return function(verb, id, payload, done)
-  if not s.cwd or string.sub(s.cwd, 1, 1) ~= "/" or string.sub(s.home, 1, 1) ~= "/" then cx:toast("error", "Tandem couldn't run that action", "The originating absolute cwd and native index path are required."); s.content.diff.busy = false; return end
+  if not s.cwd or string.sub(s.cwd, 1, 1) ~= "/" or string.sub(s.home, 1, 1) ~= "/" then
+   local message = "The originating absolute cwd and native index path are required."
+   cx:toast("error", "Tandem couldn't run that action", message); s.content.diff.busy = false
+   if verb == "review-submit" and done then done({status=1,stdout="",stderr=message}) end
+   return
+  end
   local json = verb == "pr-comment" or verb == "review-submit"
   local argv = {"/bin/sh", if json then "native-input.sh" else "tandem.sh"}
   if not json then table.insert(argv, "native") end
@@ -22,13 +27,16 @@ local function invoke(s: State, cx: BlockCx): content.Invoke
   local ok, problem = pcall(function()
    tern.process.run(argv, {cwd=".", stdin=if json then tern.json.encode(payload) else nil}, function(result)
     s.content.diff.busy = false
-    if result.status ~= 0 then cx:toast("error", "Tandem couldn't run that action", result.stderr)
-    elseif done then done() end
-    if result.status == 0 and verb == "review-submit" then cx:exit(0); return end
+    if result.status ~= 0 then cx:toast("error", "Tandem couldn't run that action", result.stderr) end
+    if done and (result.status == 0 or verb == "review-submit") then done(result) end
+    if verb == "review-submit" and s.content.submitted then cx:exit(0); return end
     cx:render()
    end)
   end)
-  if not ok then s.content.diff.busy = false; cx:toast("error", "Tandem couldn't start that action", tostring(problem)) end
+  if not ok then
+   s.content.diff.busy = false; cx:toast("error", "Tandem couldn't start that action", tostring(problem))
+   if verb == "review-submit" and done then done({status=1,stdout="",stderr=tostring(problem)}) end
+  end
  end
 end
 local block: BlockDef<State> = {

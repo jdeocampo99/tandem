@@ -52,8 +52,8 @@ local view = content.view(state, model, true)
 assert(view.main ~= nil)
 local calls = {}
 local frames = {}
-local cx = {pane=1,render=function() end,frame=function(_,ops) table.insert(frames,ops) end,open=function(_,url) table.insert(calls,{url=url}) end}
-local invoke = function(verb,id,payload,done) table.insert(calls,{verb=verb,id=id,payload=payload}); if done then done() end end
+local cx = {pane=1,render=function() end,frame=function(_,ops) table.insert(frames,ops) end,open=function(_,url) table.insert(calls,{url=url}) end,toast=function() end}
+local invoke = function(verb,id,payload,done) table.insert(calls,{verb=verb,id=id,payload=payload}); if done then done({status=0,stdout='{"posted":true}',stderr=''}) end end
 assert(content.event(state,model,true,{ev='action',act='pr-tab',value='Diff'},cx,invoke))
 assert(state.tab == 'Diff')
 local beforeFocus = #frames
