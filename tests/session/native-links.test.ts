@@ -106,3 +106,16 @@ test("reply links do not infer identities from task titles, counts, issue number
     ),
   ).toEqual([{ url: "tandem://pr/281", label: "PR #281" }]);
 });
+
+test("duplicate task titles and bare numbers never select a task or PR", () => {
+  const duplicate = task({ id: "104", repoPath: "/repo", title: record.title });
+  const tasks = [record, duplicate];
+  for (const text of ["Tern adapter is ready.", "102, 104 and 281.", "#102 and #281."]) {
+    expect(nativeReplyLinks([{ role: "assistant", content: text }], tasks, [], "/repo")).toEqual(
+      [],
+    );
+  }
+  expect(
+    nativeReplyLinks([{ role: "assistant", content: "Task #104 is ready." }], tasks, [], "/repo"),
+  ).toEqual([{ url: "tandem://task/104", label: "Task 104" }]);
+});
