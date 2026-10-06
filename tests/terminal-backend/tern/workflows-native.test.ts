@@ -10,6 +10,7 @@ import { onboardRepo } from "../../../src/config/repositories.ts";
 import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import {
   readRuntimeState,
   runtimeFile,
@@ -735,6 +736,78 @@ workflow(
       );
       await focusConversation();
       await escapeFullWindowView(window, project, "tandem.catchup", "Since you left", "05-catchup");
+    });
+  },
+  120_000,
+);
+
+workflow(
+  "two projects: the switcher lists both, choosing one moves to its session, and each project keeps its own alerts",
+  async () => {
+    await withTernWindow({ name: "wf-projects", driver }, async (window) => {
+      const tandem = await seedProject(window, "tandem");
+      const site = await seedProject(window, "site");
+      await seedTask(tandem, { id: "width", title: "Panel width fix", stage: "implementing" });
+      await seedTask(site, { id: "hero", title: "Hero copy", stage: "implementing" });
+      const publishBoth = async () => {
+        await tandem.publish();
+        await site.publish();
+      };
+      await publishBoth();
+      // A brief waiting for approval in tandem is a needs-you event for tandem alone.
+      await createRequestBriefStore({
+        home: window.home,
+        clock,
+        idFactory: () => "req-tern-board",
+      }).create({ repoPath: tandem.repo, content: content("Show the board in Tern") });
+      await publishBoth();
+      await site.panel();
+      await window.until("site panel", async () => (await window.screen()).includes("Hero copy"));
+      await tandem.panel();
+      const bell = async (count: number) =>
+        (await window.nodes()).some((node) => node.text === `🔔︎ ${count}`);
+      await window.until("tandem panel with its alert", async () => {
+        const screen = await window.screen();
+        return screen.includes("Panel width fix") && (await bell(1));
+      });
+      expect(await window.screen()).not.toContain("Hero copy");
+      await window.shot("06-tandem-alert");
+
+      await publishBoth();
+      await window.click((await window.nodes()).find((node) => hasClass(node, "tdp-switch")));
+      const projectNames = async () =>
+        (await window.nodes())
+          .filter((node) => hasClass(node, "tdp-project-name"))
+          .flatMap((node) => flatten(node.children ?? []).filter((child) => child.text));
+      await window.until("switcher lists both projects", async () => {
+        const names = (await projectNames()).map((node) => node.text);
+        return names.includes("tandem") && names.includes("site");
+      });
+      await window.shot("06-switcher");
+      await window.click((await projectNames()).find((node) => node.text === "site"));
+      await window.until(
+        "site conversation focused",
+        async () => (await window.focusedPane()) === site.endpoint.paneId,
+      );
+      await window.until("site panel without tandem's alert", async () => {
+        const screen = await window.screen();
+        return (
+          screen.includes("Hero copy") && !screen.includes("Panel width fix") && (await bell(0))
+        );
+      });
+      await window.shot("06-site");
+
+      await publishBoth();
+      await window.ctl("key", "cmd+2");
+      await window.until(
+        "tandem conversation focused by ⌘2",
+        async () => (await window.focusedPane()) === tandem.endpoint.paneId,
+      );
+      await window.until("tandem panel still has its alert", async () => {
+        const screen = await window.screen();
+        return screen.includes("Panel width fix") && (await bell(1));
+      });
+      await window.shot("06-back-to-tandem");
     });
   },
   120_000,
