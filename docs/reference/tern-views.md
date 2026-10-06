@@ -1,5 +1,9 @@
 # Tern native view hosting
 
+Start with [terminal.md](terminal.md) for terminal selection, backend mapping, safety guards
+and plugin consent. This reference owns the Luau API and native hosting lifecycle;
+[native-views.md](native-views.md) owns the published data contracts.
+
 View models and action decisions belong to Tandem's TypeScript layer. Tern reads derived JSON
 files and draws native elements; the CLI alone changes task state. `tern-plugin/window.luau`
 contains window key bindings, palette entries and routes, without durable state or view logic.
@@ -53,7 +57,7 @@ Use these alert kinds and title prefixes; put the task's displayed title or summ
 The backend renders title and body as single-line plain text: replace semicolons and C0/DEL
 control characters (including ESC/BEL and newlines) with spaces before framing. The kind selects
 the title prefix; it is not an extra OSC field. Backend creation, endpoint recording, delivery
-and recovery of the helper pane belong to the terminal backend worker.
+and recovery of the helper pane belong to the terminal backend.
 
 ## Shared rendering foundation
 
@@ -93,7 +97,7 @@ tern.block.define("panel", require("./panel"))
 
 The renderer also adds a matching `[[blocks]]` entry with `id = "panel"` and its title to
 `plugin.toml`. Its native block kind is `tandem.panel`. Register every declared block before
-`host.luau` finishes. The foundation has no screen-specific registrations; wave 2 adds them.
+`host.luau` finishes. Screen-specific registrations stay at the bottom of `host.luau`.
 
 The loader checks the envelope and runs the renderer's shape parser before replacing its model.
 Reads are bounded to 8 MiB, regular files only, and refuse symlinks. Missing, malformed, wrong-kind
@@ -124,7 +128,7 @@ Window and native view actions use the following CLI surface:
 ```text
 tandem native board|prs|usage|new-request|open-task CONTEXT
 tandem native open task|brief|pr ID CONTEXT
-tandem native project 1..9|prev|next CONTEXT
+tandem native project 1..9|prev|next|repo:ABSOLUTE_PATH CONTEXT
 tandem native brief-comment|brief-request-changes|brief-approve REQUEST_ID --input FILE CONTEXT
 tandem native pr-comment TASK_ID --text TEXT CONTEXT
 tandem native pr-comment TASK_ID --input FILE CONTEXT
@@ -145,9 +149,10 @@ context, for renderer registration.
 The optional window key is an opaque Tern control-window key, never a pane, tab or session id.
 It is included only when `TERN_WINDOW_KEY` is known; WindowCx has no documented key accessor.
 The backend must prove that a supplied key owns the named pane. Without a key it derives the
-unique owning window from that exact pane and refuses ambiguous targeting. The action worker
-owns `native open`; renderer workers own board/PRs/usage/project. This layer owns the calling
-convention and plugin only, without a shared native dispatcher.
+unique owning window from that exact pane and refuses ambiguous targeting. Native action
+handlers are in `src/terminal/cli-view-actions.ts`; screen command slots are
+registered in `src/terminal/native-renderers.ts`. This layer defines the calling convention
+and plugin routing.
 
 Private native opening tickets are consumed by `route.open` immediately. Ticket reads and layout
 work run in successive one-shot timers with the fresh `WindowCx` of each callback. Tern gives
@@ -211,8 +216,12 @@ user text is one argv element, including spaces and newlines.
 Copy those two fields from the displayed `PrPaneView.review.head` and `.generation`; generation
 is a nonnegative safe integer, including zero. Keep the bindings frozen with the user's choices.
 Missing/invalid bindings are refused. The service checks both against the latest authoritative
-round and checks the re-review task generation inside submission serialization before applying choices or
-posting, so stale pane choices cannot become a review of a newer round even when draft ids repeat.
+round and checks the re-review task generation before applying choices. A revision-checked
+`pendingPost` claim binds those choices before posting; a lost CAS never sends a POST.
+Network calls run outside the global store lock. A short receipt transaction updates only the
+exact reviewed head/generation, preserving concurrent changes and newer rounds. See the
+[posting contract](pr-review.md#show-edit-post). Stale pane choices cannot become a review of a
+newer round even when draft ids repeat.
 Question follow-ups retain their finished review round and its binding. The HTML page's
 `ReviewSubmission` shape stays unchanged. The CLI reuses the pinned-HEAD and no-double-post checks of
 the review page; the renderer does not publish directly.
@@ -220,7 +229,7 @@ the review page; the renderer does not publish directly.
 `restart` names the task and goes through central recovery. `steer` requires `--task TASK_ID` and
 the user's direction as one `--text` argv value; positional task ids are refused. Both carry
 the same explicit pane/cwd/window context.
-The action worker owns these handlers alongside brief/PR mutations and `native open`;
+The native CLI owns these handlers alongside brief/PR mutations and `native open`;
 renderers own collecting input, writing the action file, invoking the CLI and cleanup.
 
 ### Completion and installation
@@ -238,100 +247,9 @@ when no view opened. The `brief-review` fallback tells the action handler to use
 request-brief review workflow and verify that its pane opened. Callers do not create a second
 view or retry an open merely because warnings or a fallback are present.
 
-`ensureTernPlugin` checks the catalog and links a missing package after ready Tern is selected.
-Choosing ready Tern is consent to link its native view package. A failed or malformed catalog fails closed. One onboarding question asks before hiding Tern's sidebar and adding
-global shortcuts. These preferences affect every Tern window. Window commands register no default
-chords, so declining leaves Tern's keys unchanged while keeping the five specified commands in the palette.
-Project commands set `available = false`: Tern 0.4.5 hides these rows but still dispatches their
-consented keybind actions, verified in an isolated control window.
-Panel renderers always provide their header buttons, independent of shortcut consent.
-
-Only absent explicit keybinds inherited from the built-in Tern preset are eligible for replacement.
-Every explicit non-Tandem binding is treated conservatively as custom, including modifier aliases,
-physical digit aliases and sequences. The native `SettingsCx.describe("keymap")` schema and an
-isolated `tmux` window confirm enum presets `tern`, `ghostty`, `kitty`, `cmux`, and `tmux`, with
-`tern` as default. Alternate presets are preserved as a whole and reported by preset name, without
-mislabeling their inherited keys as custom. Skipped explicit shortcuts are listed
-with names such as "Command+Shift+B". Project actions use stable named commands
-`plugin.tandem.project-1` through `project-9`, `project-prev` and `project-next`.
-Numeric shortcuts bind both Tern's character (`cmd+1`) and physical (`cmd+digit_1`) spellings;
-its preset defines both. Configure keys before opening the project window, or reopen a window
-after adding the mappings so it reads the settings.
-`configureTernPluginSettings({ path?, configDirectory?, approved?, confirm? })` returns
-`{ configured, skipped, notice?: true, preset?: string }`. The private `settings.json.tandem.json` version-1 record stores the
-decision, exact added key/action pairs, original keybind-table presence, and sidebar's original
-presence/value plus installed value. A decline is remembered and leaves settings byte-identical.
-An approval records changes before applying them, allowing restoration after an interrupted write.
-A failed settings write removes its unchanged record only when the writer positively reports
-`PreferenceWriteNotCommittedError` before attempting atomic rename/link. Unclassified failures,
-commit-attempt failures and post-commit cleanup failures retain the record for guarded restoration,
-even if formatting or unrelated preferences changed after the commit. Byte differences never prove
-non-commit. An existing approved record reports
-`configured: true` only while its recorded settings are actually present; an interrupted write
-cannot claim application on the next launch. User edits are still never reapplied.
-Both files are regular, non-symlink files written atomically with mode 0600, and stale writes are
-refused. Existing records do not reapply removed bindings or reprompt on each launch.
-`notice` is returned only for a newly saved decision: custom-key and decline notices print once.
-The decline notice explains how to reconsider: switch to Herdr, then select Tern again in setup.
-
-`restoreTernPluginSettings({ path?, configDirectory? })` returns `{ restored, preserved }`.
-It removes only recorded keys still equal to their installed action and restores the sidebar only
-while its value remains Tandem's installed value. Later user edits and unrelated preferences remain.
-After successful restoration it removes the record. An absent record performs no writes.
-`reloadTernPlugin` refreshes an already installed package for `tandem update`; it never installs one.
-Plugin list, link and reload select an explicit executable override first, then `tern` on the
-injected environment's `PATH` (or the process `PATH`), then the macOS app bundle executable.
-
-`setup.sh` invokes `src/terminal-backend/setup.ts`, which reads the saved home terminal choice
-and runs the existing Herdr setup or the Tern installer. The terminal front door also offers
-Tern installation after project preparation saves the terminal choice and before opening a
-project window. Chat and Lavish setup use the shared coordinator host's confirmation port: after saving a Tern
-choice, `configureTerminal` awaits the injected installer outside task-store serialization before
-setup opens projects. A declined global-settings prompt retains the plugin and prints how to reach
-its palette commands and panel buttons.
-Both composition helpers read `readHomeSettingsSync(home).terminal`. An explicit Herdr choice
-attempts to restore recorded Tern preferences without daemon calls; an unset choice performs no effects.
-Restoration is best-effort: invalid settings or failed cleanup warn once per config path in the
-current process, preserve the record, and never block a Herdr launch or update.
-`installTerminalPlugin(home, dependencies, readiness?: TerminalAvailability)` returns
-`Promise<boolean>` for package readiness. A supplied readiness result avoids another probe;
-otherwise it checks availability before linking or asking about global settings. Missing,
-signed-out and unknown readiness refuse installation without plugin or setting effects.
-`reloadTerminalPlugin(home, dependencies)` returns `Promise<boolean>` for whether a package reloaded.
-The two-argument callers remain valid. Update reloads after successful coordinator updates without a
-prompt. On switching to Herdr, the shared configure callback restores preferences after saving the
-choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
-plugin consent. The Tern package stays linked for later use.
-
-## Native brief pane and request intake
-
-The `tandem.brief` Luau block reads a direct `BriefView` detail envelope. Launch arguments are
-`[detailPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, tandemHome]`. It uses the shared file loader,
-text fields, diff rows and comment cards. Hovering a line reveals a gutter `+`; the comment editor
-opens below that line. Comment saves a local pending card, Cancel discards the editor, and Remove
-removes a pending card. No comment drafts are written to Tandem state or restored after restart.
-The optional overall comment sits in the bottom bar. `browserUrl`, when supplied by the detail
-model, offers the existing "Edit in browser" page.
-
-Pending comments pin the shown brief and its stable line ids. If the detail file advances, the
-pane keeps that displayed revision and offers "Discard comments and refresh". A missing or
-malformed file leaves the last readable content visible with actions disabled. Approve copies
-only `model.approval` into its input, without recalculating any digest. Request changes carries
-the displayed revision and digests, pending line comments and the optional overall comment.
-The CLI validates the durable revision and feedback anchors.
-
-Each submit passes UTF-8 JSON on stdin to the shared `native-input.sh` caller. Its TypeScript
-helper creates a unique private directory and exclusively writes the input before invoking the
-CLI once with explicit pane/cwd/window/home context, then removes the directory in `finally`. While the
-CLI runs, another submit is disabled. Nonzero stderr becomes a toast and keeps the pane and
-comments open. After success, the CLI closes the scoped native split only while the durable
-revision and digest triplet still match. A retained pane displays success warnings and disables
-submission, so an uncertain close never invites another approval or feedback delivery. Local ×
-uses `cx:exit(0)` with hosting's default `keep_open=false`. There is no automatic retry.
-
-"Tandem: New request…" focuses the ownership-proven coordinator and sends a short intake prompt
-asking what the user wants to change. The user answers in that conversation. The action rechecks
-ownership after focusing, sends nothing if focus or proof fails, and creates no task or approval.
+Installation, sidebar/shortcut consent, custom-key preservation and preference restoration
+are defined in [terminal.md](terminal.md#plugin-consent-and-restoration). Choosing Tern links
+the package; declining global settings keeps palette commands and panel buttons available.
 
 ## Native hosting and renderer launch API
 
@@ -390,7 +308,9 @@ retirement of its predecessor. Older task intents recover replacement metadata f
 layout route, refusing missing or conflicting route evidence. Unconfirmed retirement keeps the
 intent, route, receipt and resources, without another opening mutation.
 
-All renderers use these block ids and the same five string launch arguments:
+The host accepts these layout kinds and five string launch arguments. A kind is available
+only after its block is registered in `host.luau` and `plugin.toml` and its CLI handler is
+implemented; host acceptance alone does not register a screen:
 
 | Block id | Input | Placement |
 | --- | --- | --- |
@@ -399,7 +319,7 @@ All renderers use these block ids and the same five string launch arguments:
 | `tandem.task-picker` | Root `panel` envelope | Disposable split beside the conversation |
 | `tandem.brief` | Direct `brief` envelope | Beside the conversation |
 | `tandem.pr` | Direct `pr` envelope | Beside the conversation |
-| `tandem.prs` | Root `panel` envelope | Beside the conversation |
+| `tandem.prs` | Root `panel` envelope | Reserved; `native prs` opens `tandem.pr` instead |
 | `tandem.board`, `tandem.usage`, `tandem.catchup` | Root `panel` envelope | Own full-window tab |
 | `tandem.welcome` | Root path (static welcome) | Beside the conversation |
 
@@ -426,7 +346,7 @@ The host explicitly launches renderer blocks and task replacements with `keep_op
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.
 An exited retained pane can still report `live=true`. Neither `live` nor `exited` proves closure:
 only the exact pane id's absence from a scoped `tern ls` does.
-For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0 under this default.
+For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0 with this setting.
 `BlockCx` has no other close API; renderers must not use the raw window-level layout close API.
 Successful hosting already removed its private ticket and receipt, so no host cleanup remains.
 Task pages use the Orchestrator return action instead, which restores the hidden conversation
@@ -471,7 +391,9 @@ fields and labels unknown samples as unavailable.
 `native open-task` proves the project's Tern coordinator and opens `tandem.task-picker`
 against the root index in a disposable split. It searches the saved project's tasks by
 title, id or stage; arrows choose a result and Enter or a click invokes `native open task`.
-Success closes only the picker. Cancel invokes the exact orchestrator return route.
+Success closes only the picker. Cancel/Escape uses the guarded return route to close only
+that picker and focus the existing task page when the coordinator is already floated;
+otherwise it focuses the conversation.
 Task Restart and worker messaging call `native restart` and `native steer`; a failed
 CLI action shows stderr without retrying or clearing the user's unsent direction.
 Malformed detail files keep the last readable page and disable its actions until a

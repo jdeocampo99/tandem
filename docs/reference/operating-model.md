@@ -53,8 +53,8 @@ the task brief. That explicit pin does not grant other skills or broaden OMP's r
 | Role | Workspace | Tools | Must not |
 | --- | --- | --- | --- |
 | Coordinator | OMP conversation in the clean source worktree | `read`, `ask`, `tandem`, plus MCP servers OMP loaded for this checkout and user configuration | Edit code, run shell commands, search the repo (scouts do that) |
-| Scout | Isolated Treehouse worktree, child Herdr workspace | `read`, `grep`, `glob`, `web_search`, `task` (fans broad scope out to OMP's bundled read-only `scout` subagents; other bundled agents are disabled in worker-config.yml, repository-defined agents are not blocked); `write`, `edit`, `copy_asset` only inside a presentation's artifact directory during a mockup turn | Write anywhere else, run project-wide gates, invent findings when a tool fails (report the exact failure) |
-| Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `todo` (holds its [playbook](task-lifecycle.md#playbooks) steps) | Exceed approved scope or change existing behavior the brief didn't ask for, merge, deploy, destructive cleanup, claim validation results, run a pinned validation command as written (the worker extension refuses that bash call; a focused variant such as one test file runs) |
+| Scout | Isolated Treehouse worktree, child terminal workspace | `read`, `grep`, `glob`, `web_search`, `task` (fans broad scope out to OMP's bundled read-only `scout` subagents; other bundled agents are disabled in worker-config.yml, repository-defined agents are not blocked); `write`, `edit`, `copy_asset` only inside a presentation's artifact directory during a mockup turn | Write anywhere else, run project-wide gates, invent findings when a tool fails (report the exact failure) |
+| Implementer | Assigned task worktree, child terminal workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `todo` (holds its [playbook](task-lifecycle.md#playbooks) steps) | Exceed approved scope or change existing behavior the brief didn't ask for, merge, deploy, destructive cleanup, claim validation results, run a pinned validation command as written (the worker extension refuses that bash call; a focused variant such as one test file runs) |
 | Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; submits findings and a summary; Tandem binds them to the reviewed HEAD and derives the verdict |
 
 Default policy: `maxFixRounds: 2` (src/config/policy.ts). There is no limit on how many workers run
@@ -66,16 +66,16 @@ assigned to new work.
 
 ## What guards the workflow
 
-- Prompts are guidance, not a security boundary or policy engine. Runtime checks, Herdr/Treehouse
+- Prompts are guidance, not a security boundary or policy engine. Runtime checks, terminal/Treehouse
   ownership proofs, filesystem checks, and Git/GitHub preconditions guard mutations.
 - Tool allowlists are not an OS or filesystem sandbox, and a private artifact directory is not
   credential isolation: workers inherit the local environment.
-- Tandem has no login flow and copies no credentials. OMP, Herdr, Treehouse, `gh`, and Git use
+- Tandem has no login flow and copies no credentials. OMP, the selected terminal, Treehouse, `gh`, and Git use
   their existing local configuration and authentication.
 
 ## Local limits and source of truth
 
-- Everything runs on the local machine: orchestration, durable state, workers, Herdr workspaces,
+- Everything runs on the local machine: orchestration, durable state, workers, terminal workspaces,
   Treehouse pool, Lavish control. No remote fleets, harnesses other than OMP and Claude Code
   ([harness.md](harness.md)), terminal backends other than Herdr and Tern behind the terminal port, relays, or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
   implementer's follow-up push to its own open PR touch the remote, through local `gh` and Git.
@@ -90,42 +90,10 @@ assigned to new work.
   src/tasks/lifecycle.ts (transitions), src/adapters/ (native tools), src/service/controller.ts
   (composition), src/harness/omp/, src/session/, src/instructions.ts (OMP integration).
 
-## Tern terminal backend
+## Terminal backends
 
-Onboarding and the backend's installation check share `availability.ts`'s `probeTern`, returning
-`missing`, `signedOut`, `ready` or `unknown`. It checks the account gate in a private daemon/window
-and cleans them up afterward. A version string alone never proves readiness. The isolated sign-in
-check is described in [policy.md](policy.md). Backend commands resolve Tern from PATH, then the
-app bundle, with an explicit binary override for injected runners.
-
-Tern's daemon maps to a Tandem terminal session; a Tern tab supplies both workspace and tab ids.
-A project gets a uniquely named `tandem-<project>` Tern session and workers get background tabs in
-that same session. Names and titles are display state and never prove ownership. The adapter binds
-the created shell's `TANDEM_SESSION`, `TANDEM_TERN_WORKSPACE_ID` and `TERN_PANE` to its
-acknowledged endpoint. Tern has no creation-time env flag, so a guarded shell export initializes
-them after creation; launching a command also overrides inherited stale values from the endpoint.
-It keeps u64 ids as strings, rechecks exact ids in the same scoped `tern ls --json` before mutations,
-compares acknowledgements, reads exact foreground-group argv from macOS without returning process
-environments, and refuses busy closes unless the caller explicitly authorizes force.
-Unknown outcomes keep resources and quarantine the effect rather than retrying it.
-
-Closing the last pane also sends `tern kill session` for its exact empty session. Tern 0.4.5 keeps
-its sole empty session after acknowledging that kill. An exact acknowledgement followed by no
-tabs or panes in the same scoped listing is known successful cleanup; keep the empty session
-and never retry the kill. Other unconfirmed cleanup polls for at most five seconds before
-quarantining with resources retained. The durable endpoint retains the native project session id. A coordinator relaunch reuses
-that exact session after checking its id, including an empty session retained by Tern. It creates
-a new session only when the stored id is absent; matching names never authorize reuse. Tern
-cannot reorder tabs or resize panes, so those operations return warnings. Native welcome and
-panel operations currently raise typed unavailable errors until the native view host ships.
-Task, brief and PR presentations return `opened: false` with a warning until that host ships;
-they never type view commands into a conversation or claim to have opened a view.
-Luau view blocks have no PTY. Each project session gets a dedicated background PTY helper tab;
-the coordinator's durable endpoint records its exact pane, tab and workspace in `notificationPane`.
-Relaunch reuses that helper only by its recorded identity. Coordinator closure checks both panes
-for busy processes and exact ownership before mutation, closes the helper through the same guards,
-and keeps resources when any outcome is uncertain. Alerts print OSC 777 to that helper's tty with
-exact pane and process checks. Composition resolves it through `ternNotificationEndpoint`; if it
-is gone, alerts are refused without selecting another pane. The caller supplies the alert text.
-Worker OMP completion, error and ask notifications are off; coordinator ask notifications
-stay on through its separate config overlay.
+Herdr and Tern are the two supported terminal backends, selected through
+`src/terminal-backend/compose.ts`. Both use the same terminal port and endpoint ownership
+checks. Tern adds daemon-hosted native views; it does not change task policy, approval or
+recovery. See [terminal.md](terminal.md) for selection, resource mapping, process proof,
+foreign-endpoint quarantine, native hosting and global-settings consent.
