@@ -83,7 +83,10 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   unrelated pane. Presence and absence proofs use the same window scope. Detached blocks leave
   absence ambiguous.
 - Ordinary close first proves the foreground process group and its argv against native macOS
-  evidence. A live pane without process proof is ambiguous. Busy panes refuse close unless the
+  evidence. Daemon-hosted Tandem blocks are recognized only by an exact `tandem.<block-id>`
+  program with no child, foreground group or foreground process; discovery can skip them without
+  treating them as agents or shells. Titles never prove that exception. Other live panes without
+  process proof remain ambiguous. Busy panes refuse close unless the
   caller explicitly authorizes force; force still requires ownership and exact acknowledgement.
   Project close checks both coordinator and recorded alert helper before closing either.
 - After close, prove the exact pane absent. If the session is empty, recheck its exact id and
@@ -241,7 +244,9 @@ dumps or secrets.
 
 ## Plugin consent and restoration
 
-Selecting ready Tern consents to linking Tandem's native view package. One separate question
+Plugin list, link and reload resolve an explicit executable override first, then `tern` from
+injected `PATH` (or the process `PATH`), then the macOS app bundle executable. PATH-only
+installs work without a bundle. Selecting ready Tern consents to linking Tandem's native view package. One separate question
 asks before setting global `tabs_autohide=true` and adding global shortcuts. Declining leaves
 the settings byte-identical and remembers the decision. Palette commands and panel header
 buttons remain available. To reconsider, choose Herdr, then Tern again in setup.
