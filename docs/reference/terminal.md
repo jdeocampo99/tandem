@@ -2,6 +2,7 @@
 
 Tandem supports Herdr and Tern on macOS. The terminal port owns panes, focus, process proof,
 native hosting and alerts; task policy and durable state remain in TypeScript.
+The Tern iOS app is **UNTESTED** with Tandem.
 
 Start here for terminal behavior. [Tern view hosting](tern-views.md) defines the Luau API,
 layout tickets and renderer lifecycle. [Native view data](native-views.md) defines the JSON

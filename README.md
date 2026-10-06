@@ -173,6 +173,7 @@ project switching, brief approval beside your chat, and PRs with CI, tours and c
 their diff lines. Comments on Tandem's PRs go straight to the worker as fix requests. When
 reviewing someone else's PR, choose the comments and verdict, then click Post to send the review.
 Tern's inbox brings you questions, new draft PRs and stuck tasks.
+The Tern iOS app is **UNTESTED** with Tandem.
 
 Install Tern and sign in with your Stencil account, then choose **Tern** during Tandem setup.
 Tern is a closed beta, so you need access as well as an account. Setup offers it only after
@@ -229,12 +230,12 @@ cd tandem
 ./setup.sh
 ```
 
-It installs whatever is missing, updates Herdr if it's older than 0.8.2, and offers to add Tandem's
-panel, keys, tab-bar summary, and notifications to your Herdr config (it shows the lines and asks
-first). Read
-[setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep Bun's global bin
-directory on your `PATH`. Tern users choose it during first-run setup; setup then links
-Tandem's native views and asks separately about Tern's global sidebar and shortcuts.
+The script installs Tandem's tools, including Herdr, and configures your saved terminal choice.
+For Herdr, it updates versions older than 0.8.2 and offers the panel, keys, tab-bar summary and
+notifications, showing the changes before asking. Install Tern separately and choose it during
+first-run setup to get its native views; Tandem asks separately about Tern's global sidebar and
+shortcuts. Read [setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep
+Bun's global bin directory on your `PATH`.
 
 Then, from any folder:
 

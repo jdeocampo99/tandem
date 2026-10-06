@@ -150,8 +150,7 @@ different matching project. When no readable/live candidate matches, the command
   full-window views, `prs` selects a published PR pane, and `new-request` prompts the coordinator.
   Renderer implementations receive the resolved project environment, required origin,
   normalized command input, lazy service, and existing capabilities. Relative view-file paths
-  resolve against the explicit originating pane cwd, never the plugin's process cwd. Installing
-  a renderer replaces its one registration entry; the native dispatcher stays unchanged.
+  resolve against the explicit originating pane cwd, never the plugin's process cwd.
 
 - `open task|brief|pr ID` validates the durable task or request, proves its running coordinator,
   and asks `TerminalBackend.openView` to replace the main area (task) or open a split (brief/PR).
