@@ -60,10 +60,23 @@ export type SetupWorkflowDependencies = Readonly<{
       setupCommands?: readonly string[] | undefined;
     }>,
   ) => Promise<unknown>;
+  /** Replaces the commands of a repository that is already set up; a list left undefined stays. */
+  updateRepoCommands: (
+    path: string,
+    commands: Readonly<{
+      validationCommands: readonly string[];
+      setupCommands?: readonly string[] | undefined;
+    }>,
+  ) => Promise<unknown>;
   openProject: (path: string) => Promise<unknown>;
 }>;
 
-export type SetupApplyResult = Readonly<{ message: string; complete: boolean }>;
+/** `opened` names the repositories whose chats are open after the save. */
+export type SetupApplyResult = Readonly<{
+  message: string;
+  complete: boolean;
+  opened: readonly string[];
+}>;
 
 /** Everything the view and the answer checks read, in one pass. */
 type SetupFacts = Readonly<{
@@ -219,29 +232,41 @@ export class SetupWorkflow {
         () => this.#deps.saveCodeFolders(codeFolders),
       );
     }
+    const opened: string[] = [];
     for (const repo of answer.repositories) {
-      await this.applyRepo(repo, facts, step);
+      const name = await this.applyRepo(repo, answer.mode, facts, step);
+      if (name !== undefined) opened.push(name);
     }
-    return { message: lines.join("\n"), complete };
+    return { message: lines.join("\n"), complete, opened };
   }
 
+  /** The repository's folder name once its chat is open, or undefined when it was not opened. */
   private async applyRepo(
     repo: SetupAnswerRepo,
+    mode: SetupMode,
     facts: SetupFacts,
     step: (done: string, failed: string, save: () => Promise<unknown>) => Promise<boolean>,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const check = await this.checkRepo(repo.path, facts.registered);
     const root = check.kind === "root" ? check.root : repo.path;
     const name = `${basename(root)} (${root})`;
-    const saved = await step(`${name}: settings saved.`, `${name}: not set up`, () =>
-      this.#deps.setupRepo(root, {
-        validationCommands: repo.validationCommands,
-        setupCommands: repo.setupCommands,
-      }),
-    );
-    if (!saved) return;
-    await step(`${name}: its chat is open.`, `${name}: its chat didn't open`, () =>
+    const commands = {
+      validationCommands: repo.validationCommands,
+      setupCommands: repo.setupCommands,
+    };
+    const existing = check.kind === "root" && check.setUp;
+    const saved = existing
+      ? await step(`${name}: settings saved.`, `${name}: settings were not saved`, () =>
+          this.#deps.updateRepoCommands(root, commands),
+        )
+      : await step(`${name}: settings saved.`, `${name}: not set up`, () =>
+          this.#deps.setupRepo(root, commands),
+        );
+    // Settings edits an open chat's repository in place; only setup opens every chat.
+    if (!saved || (existing && mode === "settings")) return undefined;
+    const open = await step(`${name}: its chat is open.`, `${name}: its chat didn't open`, () =>
       this.#deps.openProject(root),
     );
+    return open ? basename(root) : undefined;
   }
 }

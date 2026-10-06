@@ -1,23 +1,30 @@
+import { basename } from "node:path";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
 import { CLAUDE_CODE_PROVIDER } from "../harness/claude-code/models.ts";
 import type { ModelRecord } from "../harness/contract.ts";
-import { SETUP_ROLE_COPY } from "./setup-view.ts";
+import { SETUP_MODES, SETUP_ROLE_COPY, type SetupMode } from "./setup-view.ts";
 
 /**
  * The setup answer, and the checks it must pass before anything is saved. Pure: the caller reads
  * the catalogue and each repository's Git root, then passes them in.
  */
 export type SetupAnswer = Readonly<{
+  /** Setup opens each saved repository's chat; settings only the ones it adds. */
+  mode: SetupMode;
   models: Readonly<Record<AgentRole, ModelSpec>>;
   repositories: readonly SetupAnswerRepo[];
   selfImprovement: SelfImprovementMode;
 }>;
 
-/** One repository to set up. Omitted command lists are discovered when Tandem saves. */
+/**
+ * One repository to save: a new one is set up, one already set up has its commands updated. Every
+ * repository needs a validation command; omitted setup commands are discovered for a new one and
+ * left alone for one already set up.
+ */
 export type SetupAnswerRepo = Readonly<{
   path: string;
-  validationCommands?: readonly string[];
+  validationCommands: readonly string[];
   setupCommands?: readonly string[];
 }>;
 
@@ -44,7 +51,7 @@ export type ParsedSetupAnswer =
   | Readonly<{ ok: false; problems: readonly string[] }>;
 
 const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "report"];
-const ANSWER_KEYS = ["tandemSetup", "models", "repositories", "selfImprovement"] as const;
+const ANSWER_KEYS = ["tandemSetup", "mode", "models", "repositories", "selfImprovement"] as const;
 const REPO_KEYS = ["path", "validationCommands", "setupCommands"];
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -92,10 +99,17 @@ export function parseSetupAnswer(text: string): ParsedSetupAnswer {
   if (selfImprovement === undefined) {
     problems.push('selfImprovement must be "off", "fix", or "report".');
   }
-  if (problems.length > 0 || models === undefined || selfImprovement === undefined) {
+  const mode = SETUP_MODES.find((candidate) => candidate === value.mode);
+  if (mode === undefined) problems.push('mode must be "setup" or "settings".');
+  if (
+    problems.length > 0 ||
+    models === undefined ||
+    selfImprovement === undefined ||
+    mode === undefined
+  ) {
     return { ok: false, problems };
   }
-  return { ok: true, answer: { models, repositories, selfImprovement } };
+  return { ok: true, answer: { mode, models, repositories, selfImprovement } };
 }
 
 function parseModels(
@@ -140,15 +154,19 @@ function parseRepositories(value: unknown, problems: string[]): readonly SetupAn
       return [];
     }
     unknownKeys(entry, REPO_KEYS, where, problems);
-    const optional = (key: "validationCommands" | "setupCommands") =>
-      entry[key] === undefined
+    const setupCommands =
+      entry.setupCommands === undefined
         ? {}
-        : { [key]: stringList(entry[key], `${where}.${key}`, problems) };
+        : { setupCommands: stringList(entry.setupCommands, `${where}.setupCommands`, problems) };
     return [
       {
         path: entry.path.trim(),
-        ...optional("validationCommands"),
-        ...optional("setupCommands"),
+        // An absent list is an empty one: the gate then names the repository.
+        validationCommands:
+          entry.validationCommands === undefined
+            ? []
+            : stringList(entry.validationCommands, `${where}.validationCommands`, problems),
+        ...setupCommands,
       },
     ];
   });
@@ -182,9 +200,14 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
       problems.push(`${repo.path} is inside the repository at ${check.root}; add that folder.`);
       continue;
     }
-    if (check.setUp) problems.push(`${repo.path} is already set up.`);
     if (roots.has(check.root)) problems.push(`${repo.path} is listed twice.`);
     roots.add(check.root);
+    if (!repo.validationCommands.some((command) => command.trim().length > 0)) {
+      problems.push(`${basename(check.root)} needs a validation command.`);
+    }
+  }
+  if (answer.mode === "setup" && answer.repositories.length === 0) {
+    problems.push("Add at least one repository.");
   }
   return problems;
 }

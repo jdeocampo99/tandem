@@ -104,6 +104,10 @@ async function machine(
     },
     setupRepo: async (path, repo) =>
       record(`setup ${path} ${JSON.stringify([repo.validationCommands, repo.setupCommands])}`)(),
+    updateRepoCommands: async (path, commands) =>
+      record(
+        `update ${path} ${JSON.stringify([commands.validationCommands, commands.setupCommands])}`,
+      )(),
     openProject: async (path) => record(`open ${path}`)(),
   };
   return {
@@ -117,10 +121,12 @@ async function machine(
 
 function answerOf(
   repositories: SetupAnswer["repositories"],
+  mode: SetupAnswer["mode"] = "settings",
   scoutModel = "anthropic/opus",
 ): SetupAnswer {
   const pick = (model: string) => ({ model, thinking: "high" as const });
   return {
+    mode,
     models: {
       coordinator: pick("anthropic/opus"),
       scout: pick(scoutModel),
@@ -147,7 +153,10 @@ test("a valid answer is saved in order", async () => {
   const { workflow, saved, code } = await machine();
   const report = await workflow.apply(
     "/tandem",
-    answerOf([{ path: join(code, "api"), validationCommands: ["make check"], setupCommands: [] }]),
+    answerOf(
+      [{ path: join(code, "api"), validationCommands: ["make check"], setupCommands: [] }],
+      "setup",
+    ),
   );
   expect(saved).toEqual([
     "models anthropic",
@@ -167,19 +176,21 @@ test("approved mixed-model choices enable only the providers used by those model
     { selector: "google/gemini", id: "gemini", provider: "google", thinking: ["high"] },
   ];
   const { workflow, saved } = await machine({ availableModels });
-  await workflow.apply("/tandem", answerOf([], "openai/gpt"));
+  await workflow.apply("/tandem", answerOf([], "settings", "openai/gpt"));
   expect(saved[0]).toBe("models anthropic,openai");
 });
 
 test("a Claude Code role is saved without enabling Claude Code for spending", async () => {
   const { workflow, saved } = await machine();
-  await workflow.apply("/tandem", answerOf([], "claude-code/sonnet"));
+  await workflow.apply("/tandem", answerOf([], "settings", "claude-code/sonnet"));
   expect(saved[0]).toBe("models anthropic");
 });
 
 test("a Claude Code role is refused when Claude Code isn't installed", async () => {
   const { workflow, saved } = await machine({ claudeCode: "not-installed" });
-  await expect(workflow.apply("/tandem", answerOf([], "claude-code/sonnet"))).rejects.toThrow(
+  await expect(
+    workflow.apply("/tandem", answerOf([], "settings", "claude-code/sonnet")),
+  ).rejects.toThrow(
     "Research: claude-code/sonnet isn't available on this computer.",
   );
   expect(saved).toEqual([]);
@@ -187,7 +198,10 @@ test("a Claude Code role is refused when Claude Code isn't installed", async () 
 
 test("a pasted repo outside the scanned folders makes its parent searchable after saving", async () => {
   const { workflow, find, outside } = await machine({ outsideRepo: true });
-  await workflow.apply("/tandem", answerOf([{ path: outside }]));
+  await workflow.apply(
+    "/tandem",
+    answerOf([{ path: outside, validationCommands: ["make check"] }], "setup"),
+  );
   expect(await find("my-app")).toEqual([{ path: outside }]);
 });
 
@@ -199,10 +213,14 @@ test("saved code folders are left alone", async () => {
 
 test("a failed step is reported without undoing the others, and its chat is not opened", async () => {
   const { workflow, saved, code } = await machine({
-    fail: (code) => new Set([`mode fix`, `setup ${join(code, "api")} [null,null]`]),
+    fail: (code) => new Set([`mode fix`, `setup ${join(code, "api")} [["make check"],null]`]),
   });
-  const report = await workflow.apply("/tandem", answerOf([{ path: join(code, "api") }]));
+  const report = await workflow.apply(
+    "/tandem",
+    answerOf([{ path: join(code, "api"), validationCommands: ["make check"] }], "setup"),
+  );
   expect(report.complete).toBe(false);
+  expect(report.opened).toEqual([]);
   expect(report.message).toContain("The issue setting was not saved: mode fix broke");
   expect(report.message).toContain(`api (${join(code, "api")}): not set up:`);
   expect(saved.some((entry) => entry.startsWith("open "))).toBe(false);
@@ -214,10 +232,55 @@ test("an answer that can't be saved is refused with every problem and saves noth
   await expect(
     workflow.apply(
       "/tandem",
-      answerOf([{ path: join(code, "old") }, { path: join(code, "api", "src") }]),
+      answerOf(
+        [
+          { path: join(code, "api"), validationCommands: [" "] },
+          { path: join(code, "api", "src"), validationCommands: ["make check"] },
+        ],
+        "setup",
+      ),
     ),
   ).rejects.toThrow(
-    `The setup answer can't be saved: ${join(code, "old")} is already set up. ${join(code, "api", "src")} is inside the repository at ${join(code, "api")}; add that folder.`,
+    `The setup answer can't be saved: api needs a validation command. ${join(code, "api", "src")} is inside the repository at ${join(code, "api")}; add that folder.`,
   );
   expect(saved).toEqual([]);
+});
+
+test("a repository without a validation command names itself, even when it is already set up", async () => {
+  const { workflow, code, saved } = await machine();
+  await expect(
+    workflow.apply("/tandem", answerOf([{ path: join(code, "old"), validationCommands: [] }])),
+  ).rejects.toThrow("The setup answer can't be saved: old needs a validation command.");
+  expect(saved).toEqual([]);
+});
+
+test("settings saves an edited repository's commands in place and opens no chat for it", async () => {
+  const { workflow, saved, code } = await machine();
+  const report = await workflow.apply(
+    "/tandem",
+    answerOf([
+      { path: join(code, "old"), validationCommands: ["make check"], setupCommands: ["make deps"] },
+      { path: join(code, "api"), validationCommands: ["make check"] },
+    ]),
+  );
+  expect(saved.slice(2)).toEqual([
+    `folders ${code}`,
+    `update ${join(code, "old")} [["make check"],["make deps"]]`,
+    `setup ${join(code, "api")} [["make check"],null]`,
+    `open ${join(code, "api")}`,
+  ]);
+  expect(report.opened).toEqual(["api"]);
+});
+
+test("setup opens the chat of a repository that was already set up", async () => {
+  const { workflow, saved, code } = await machine();
+  const report = await workflow.apply(
+    "/tandem",
+    answerOf([{ path: join(code, "old"), validationCommands: ["make check"] }], "setup"),
+  );
+  expect(saved.slice(3)).toEqual([
+    `update ${join(code, "old")} [["make check"],null]`,
+    `open ${join(code, "old")}`,
+  ]);
+  expect(report.opened).toEqual(["old"]);
 });

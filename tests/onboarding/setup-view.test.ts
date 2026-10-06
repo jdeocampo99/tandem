@@ -4,7 +4,10 @@ import type { ModelRecord } from "../../src/harness/contract.ts";
 import {
   buildSetupView,
   priceLevel,
+  recommend,
   SETUP_ROLE_COPY,
+  type SetupModel,
+  type SetupView,
   type SetupViewInput,
 } from "../../src/onboarding/setup-view.ts";
 
@@ -195,4 +198,81 @@ test("a repository with nothing to suggest or detect names no source", () => {
   });
   expect(view.candidates[0]?.suggestions).toEqual([]);
   expect(view.candidates[0]?.detectedFrom).toBeUndefined();
+});
+
+const flagship: ModelRecord = {
+  selector: "openai-codex/flagship",
+  id: "flagship",
+  provider: "openai-codex",
+  reasoning: true,
+  thinking: ["low", "medium", "high", "max"],
+  cost: { input: 10, output: 50 },
+};
+
+const recommendedModels = (view: SetupView) =>
+  Object.fromEntries(
+    view.roles.map((role) => [role.id, `${role.recommended?.model.model} ${role.recommended?.model.thinking}`]),
+  );
+
+test("with Claude Code ready, Coding follows the Balanced profile and Review is Opus", () => {
+  const view = buildSetupView({ ...input, claudeCode: "ready", ompCatalogue: [flagship] });
+  expect(recommendedModels(view)).toEqual({
+    coordinator: "claude-code/fable high",
+    scout: "claude-code/sonnet medium",
+    implementer: "openai-codex/flagship max",
+    reviewer: "claude-code/opus high",
+    presentation: "claude-code/sonnet low",
+  });
+  expect(view.roles.map((role) => role.recommended?.reason)).toEqual([
+    "Its plans steer every other role.",
+    "Research is mostly reading, so speed matters more than depth.",
+    "Most of the time and cost is here.",
+    "A second model catches mistakes the first one misses.",
+    "Drawing a page needs little reasoning.",
+  ]);
+});
+
+test("with Claude Code ready and no Balanced Coding pick, Coding is Opus and Review is Fable", () => {
+  const view = buildSetupView({ ...input, claudeCode: "ready", ompCatalogue: [] });
+  expect(recommendedModels(view)).toEqual({
+    coordinator: "claude-code/fable high",
+    scout: "claude-code/sonnet medium",
+    implementer: "claude-code/opus high",
+    reviewer: "claude-code/fable high",
+    presentation: "claude-code/sonnet low",
+  });
+});
+
+test("without Claude Code, every role takes the Balanced profile's pick with the same reasons", () => {
+  const view = buildSetupView({ ...input, claudeCode: "not-installed", ompCatalogue: [flagship] });
+  expect(recommendedModels(view)).toEqual({
+    coordinator: "openai-codex/flagship high",
+    scout: "openai-codex/flagship medium",
+    implementer: "openai-codex/flagship max",
+    reviewer: "openai-codex/flagship max",
+    presentation: "openai-codex/flagship low",
+  });
+  expect(view.roles.map((role) => role.recommended?.reason)).toEqual([
+    "Its plans steer every other role.",
+    "Research is mostly reading, so speed matters more than depth.",
+    "Most of the time and cost is here.",
+    "A second model catches mistakes the first one misses.",
+    "Drawing a page needs little reasoning.",
+  ]);
+});
+
+test("a recommended thinking level the model lacks moves to the nearest one it supports", () => {
+  const lowOrHigh = ["claude-code/fable", "claude-code/opus", "claude-code/sonnet"].map(
+    (selector): SetupModel => ({
+      selector,
+      harness: "claude-code",
+      name: selector,
+      provider: "claude-code",
+      thinking: ["low", "high"],
+    }),
+  );
+  const recommended = recommend(true, { status: "unresolved", roles: {}, gaps: [] }, lowOrHigh);
+  // Medium sits one step from both; the lighter level wins the tie.
+  expect(recommended.scout?.model).toEqual({ model: "claude-code/sonnet", thinking: "low" });
+  expect(recommended.coordinator?.model).toEqual({ model: "claude-code/fable", thinking: "high" });
 });

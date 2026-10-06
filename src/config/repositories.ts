@@ -512,6 +512,100 @@ function mergingLines(choice: MergingChoice): string {
   return `${lines.join("\n")}\n`;
 }
 
+/** The index just past the TOML array opening at `open`; brackets inside strings or comments don't count. */
+function listEnd(text: string, open: number): number {
+  if (text[open] !== "[") throw new TypeError("settings.toml has a command setting that is not a list");
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '"' || char === "'") {
+      index += 1;
+      while (index < text.length && text[index] !== char) {
+        if (char === '"' && text[index] === "\\") index += 1;
+        index += 1;
+      }
+    } else if (char === "#") {
+      while (index < text.length && text[index] !== "\n") index += 1;
+    } else if (char === "[") {
+      depth += 1;
+    } else if (char === "]") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+    }
+  }
+  throw new TypeError("settings.toml has an unterminated command list");
+}
+
+/**
+ * Sets one top-level command list: in place when the file has it, over the commented example when
+ * it only has that, else just above the first table. Nothing else in the file changes.
+ */
+function withCommandList(text: string, key: string, values: readonly string[]): string {
+  const line = `${key} = ${tomlList(values)}`;
+  const tableStart = text.search(/^[ \t]*\[/mu);
+  const head = tableStart === -1 ? text : text.slice(0, tableStart);
+  const tail = text.slice(head.length);
+  const set = new RegExp(`^${key}[ \\t]*=[ \\t]*`, "mu").exec(head);
+  if (set !== null) {
+    return head.slice(0, set.index) + line + head.slice(listEnd(head, set.index + set[0].length)) + tail;
+  }
+  const example = new RegExp(`^#[ \\t]*${key}[ \\t]*=.*$`, "mu").exec(head);
+  if (example !== null) {
+    return head.slice(0, example.index) + line + head.slice(example.index + example[0].length) + tail;
+  }
+  return `${head.replace(/\n*$/u, "\n")}\n${line}\n${tail === "" ? "" : `\n${tail}`}`;
+}
+
+/**
+ * Saves new validation and setup commands into a set-up project's settings.toml, replacing only
+ * those two keys; a list left undefined stays as it is. Nothing is written when the file changed
+ * since it was read or already says the same. The file stays where it is; a symlink in the
+ * settings path is refused like any other policy read.
+ */
+export async function saveRepositoryCommands(
+  options: Readonly<{
+    repoPath: string;
+    home: string;
+    validationCommands?: readonly string[];
+    setupCommands?: readonly string[];
+  }>,
+): Promise<void> {
+  const root = await repositoryRoot(options.repoPath);
+  const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
+  if (file === undefined) {
+    throw new Error("This project has no Tandem settings yet; save its settings first.");
+  }
+  if (!file.endsWith(".toml")) {
+    throw new Error(`${file} is from before settings.toml; its commands can't be saved into it.`);
+  }
+  const edits = [
+    ["setupCommands", options.setupCommands],
+    ["validationCommands", options.validationCommands],
+  ] as const;
+  for (const [key, values] of edits) {
+    if (values?.some((command) => command.trim().length === 0)) {
+      throw new TypeError(`${key} must not have an empty command`);
+    }
+  }
+  const before = await readFile(file, "utf8");
+  readSettingsToml(before, file, root);
+  let after = before;
+  for (const [key, values] of edits) {
+    if (values !== undefined) after = withCommandList(after, key, values);
+  }
+  const saved = readSettingsToml(after, file, root);
+  for (const [key, values] of edits) {
+    if (values !== undefined && JSON.stringify(saved[key]) !== JSON.stringify(values)) {
+      throw new TypeError(`${file} did not keep ${key} as saved; nothing was written.`);
+    }
+  }
+  if (after === before) return;
+  if ((await readFile(file, "utf8")) !== before) {
+    throw new Error(`${file} changed while saving; nothing was written. Try again.`);
+  }
+  await writeTextAtomically(file, after);
+}
+
 /** Resolves central policy by canonical repository identity and pins guidance from the requested checkout. */
 export async function resolveRepoPolicy(options: PolicyResolutionOptions): Promise<ResolvedPolicy> {
   const root = await repositoryRoot(options.repoPath);

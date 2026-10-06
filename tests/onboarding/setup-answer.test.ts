@@ -22,6 +22,7 @@ const catalogue: readonly ModelRecord[] = [
 
 const answer = {
   tandemSetup: 1,
+  mode: "setup",
   models: {
     coordinator: { model: "anthropic/opus", thinking: "high" },
     scout: { model: "anthropic/opus", thinking: "high" },
@@ -35,7 +36,7 @@ const answer = {
       validationCommands: ["bun run check"],
       setupCommands: [],
     },
-    { path: "~/pasted" },
+    { path: "~/pasted", validationCommands: ["make check"] },
   ],
   selfImprovement: "fix",
 };
@@ -56,7 +57,7 @@ function parsed(value: unknown): SetupAnswer {
 
 test("a well-formed answer passes every check on this machine", () => {
   const value = parsed(answer);
-  expect(value.repositories[1]).toEqual({ path: "~/pasted" });
+  expect(value.repositories[1]).toEqual({ path: "~/pasted", validationCommands: ["make check"] });
   expect(checkSetupAnswer(value, facts)).toEqual([]);
 });
 
@@ -122,10 +123,10 @@ test("each problem on this machine is one sentence the user can act on", () => {
       presentation: { model: "nobody/model", thinking: "high" },
     },
     repositories: [
-      { path: "/code/api" },
-      { path: "/code/api/src" },
-      { path: "/tmp/plain" },
-      { path: "/code/done" },
+      { path: "/code/api", validationCommands: ["make check"] },
+      { path: "/code/api/src", validationCommands: ["make check"] },
+      { path: "/tmp/plain", validationCommands: ["make check"] },
+      { path: "/code/done", validationCommands: ["make check"] },
     ],
   });
   const problems = checkSetupAnswer(value, {
@@ -141,9 +142,42 @@ test("each problem on this machine is one sentence the user can act on", () => {
     "Mockups: nobody/model isn't available on this computer.",
     "/code/api/src is inside the repository at /code/api; add that folder.",
     "/tmp/plain is not a Git repository.",
-    "/code/done is already set up.",
   ]);
   expect(parseSetupAnswer(JSON.stringify({ ...answer, enabledProviders: ["google"] })).ok).toBe(
     false,
   );
+});
+
+test("every repository needs a non-blank validation command, and the repository is named", () => {
+  const blank = (path: string, commands: readonly string[]) => ({
+    path,
+    validationCommands: commands,
+  });
+  const value: SetupAnswer = {
+    ...parsed(answer),
+    repositories: [blank("/code/api", []), blank("~/pasted", [" ", ""]), blank("/code/done", ["x"])],
+  };
+  expect(
+    checkSetupAnswer(value, {
+      ...facts,
+      repositories: new Map([
+        ["/code/api", { kind: "root", root: "/code/api", setUp: false }],
+        ["~/pasted", { kind: "root", root: "/Users/me/pasted", setUp: false }],
+        ["/code/done", { kind: "root", root: "/code/done", setUp: true }],
+      ]),
+    }),
+  ).toEqual(["api needs a validation command.", "pasted needs a validation command."]);
+  const omitted = parseSetupAnswer(
+    JSON.stringify({ ...answer, repositories: [{ path: "/code/api" }] }),
+  );
+  expect(omitted.ok && omitted.answer.repositories).toEqual([
+    { path: "/code/api", validationCommands: [] },
+  ]);
+});
+
+test("setup needs a repository; settings may have none", () => {
+  const none = { ...parsed(answer), repositories: [] };
+  expect(checkSetupAnswer(none, facts)).toEqual(["Add at least one repository."]);
+  expect(checkSetupAnswer({ ...none, mode: "settings" }, facts)).toEqual([]);
+  expect(parseSetupAnswer(JSON.stringify({ ...answer, mode: "later" })).ok).toBe(false);
 });

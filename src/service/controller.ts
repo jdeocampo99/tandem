@@ -38,6 +38,7 @@ import {
   readCleanupCommands,
   resolveRepoPolicy,
   saveMergingChoice,
+  saveRepositoryCommands,
 } from "../config/repositories.ts";
 import { findSkills } from "../config/skills.ts";
 import type {
@@ -711,6 +712,15 @@ class TandemController {
           validationCommands: repo.validationCommands,
           setupCommands: repo.setupCommands,
         }),
+      updateRepoCommands: async (path, commands) =>
+        saveRepositoryCommands({
+          repoPath: (await this.setupTarget(path)).repoPath,
+          home: deps.home,
+          validationCommands: readTextList(commands.validationCommands, "validationCommands"),
+          ...(commands.setupCommands === undefined
+            ? {}
+            : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
+        }),
       openProject: (path) => this.openProject(path),
     });
     this.#prWatch = new PrWatcher({
@@ -1093,26 +1103,31 @@ class TandemController {
     };
   }
 
+  /** A checkout of the coordinator's own project is set up under its original path. */
+  private async setupTarget(
+    repoPath: string,
+  ): Promise<Readonly<{ repoPath: string; checkoutPath?: string }>> {
+    const sourceWorkspace = this.#deps.sourceWorkspace;
+    if (sourceWorkspace === undefined) return { repoPath };
+    const [requestedRoot, originalRoot, cleanRoot] = await Promise.all([
+      realpath(repoPath),
+      realpath(sourceWorkspace.repoPath),
+      realpath(sourceWorkspace.path),
+    ]);
+    if (requestedRoot !== originalRoot && requestedRoot !== cleanRoot) return { repoPath };
+    const source = await mapTaskSource(this.#deps.run, repoPath, sourceWorkspace);
+    return {
+      repoPath: source.repoPath,
+      ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
+    };
+  }
+
   async setupOnboard(
     repoPath: string,
     write = false,
     commands: SetupCommandEdits = {},
   ): Promise<OnboardRepoResult> {
-    let targetRepoPath = repoPath;
-    let checkoutPath: string | undefined;
-    const sourceWorkspace = this.#deps.sourceWorkspace;
-    if (sourceWorkspace !== undefined) {
-      const [requestedRoot, originalRoot, cleanRoot] = await Promise.all([
-        realpath(repoPath),
-        realpath(sourceWorkspace.repoPath),
-        realpath(sourceWorkspace.path),
-      ]);
-      if (requestedRoot === originalRoot || requestedRoot === cleanRoot) {
-        const source = await mapTaskSource(this.#deps.run, repoPath, sourceWorkspace);
-        targetRepoPath = source.repoPath;
-        checkoutPath = source.sourceRepoPath;
-      }
-    }
+    const { repoPath: targetRepoPath, checkoutPath } = await this.setupTarget(repoPath);
     return onboardRepo({
       repoPath: targetRepoPath,
       home: this.#deps.home,

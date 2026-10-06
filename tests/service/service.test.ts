@@ -877,6 +877,7 @@ test("bound task creation normalizes clean input to the original identity and pe
 test("bound setup inspects and saves a selected foreign checkout while ordinary onboarding stays source-bound", async () => {
   const setupAnswer = {
     tandemSetup: 1,
+    mode: "setup",
     models: Object.fromEntries(
       ["coordinator", "scout", "implementer", "reviewer", "presentation"].map((role) => [
         role,
@@ -995,6 +996,21 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         join(home, "pool"),
         "--no-attach",
       ]);
+
+      // Settings edits the saved repository's commands in place and opens nothing new.
+      const edited = await service.saveSetup(
+        task.repoPath,
+        JSON.stringify({
+          ...setupAnswer,
+          mode: "settings",
+          repositories: [{ path: foreign, validationCommands: ["bun test", "bun run lint"], setupCommands: [] }],
+        }),
+      );
+      expect(edited.complete).toBe(true);
+      expect(edited.opened).toEqual([]);
+      const after = await readFile(await centralConfigPath(foreign, home), "utf8");
+      expect(after).toContain('validationCommands = ["bun test", "bun run lint"]');
+      expect(after).toContain("setupCommands = []");
     },
   );
 });

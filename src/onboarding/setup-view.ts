@@ -1,6 +1,10 @@
 import { basename } from "node:path";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
-import { discoveredProviders, resolveBalancedProfile } from "../config/operating-profile.ts";
+import {
+  type BalancedProfileProposal,
+  discoveredProviders,
+  resolveBalancedProfile,
+} from "../config/operating-profile.ts";
 import {
   type AgentRole,
   type IsoTimestamp,
@@ -18,7 +22,8 @@ import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harne
  * The setup block's view model: everything it shows and every choice it offers, assembled from
  * saved state and read-only discovery. Pure; src/onboarding/setup-workflow.ts gathers the facts.
  */
-export type SetupMode = "setup" | "settings";
+export const SETUP_MODES = ["setup", "settings"] as const;
+export type SetupMode = (typeof SETUP_MODES)[number];
 
 export type SetupView = Readonly<{
   schemaVersion: 1;
@@ -28,8 +33,8 @@ export type SetupView = Readonly<{
   models: readonly SetupModel[];
   harnesses: readonly SetupHarness[];
   roles: readonly SetupRole[];
-  /** What each thinking level means, in a word or two. */
-  thinkingNotes: Readonly<Record<ThinkingLevel, string>>;
+  /** What each thinking level means, in a word or two, from the lightest level to the heaviest. */
+  thinkingLevels: readonly Readonly<{ level: ThinkingLevel; note: string }>[];
   /** Checkouts already set up, which the user may edit or remove. */
   repos: readonly SetupRepo[];
   /** Discovered checkouts not set up yet, which "Add repository" offers. */
@@ -172,6 +177,86 @@ export const THINKING_NOTES: Readonly<Record<ThinkingLevel, string>> = {
   auto: "model decides",
 };
 
+export type Recommendation = Readonly<{ model: ModelSpec; reason: string }>;
+
+const RECOMMENDATION_REASONS: Readonly<Record<AgentRole, string>> = {
+  coordinator: "Its plans steer every other role.",
+  scout: "Research is mostly reading, so speed matters more than depth.",
+  implementer: "Most of the time and cost is here.",
+  reviewer: "A second model catches mistakes the first one misses.",
+  presentation: "Drawing a page needs little reasoning.",
+};
+
+/**
+ * What each role runs on when Claude Code is ready. Coding comes from the Balanced profile when it
+ * resolves, a different model family than Review; without it Coding runs on Opus and Review moves
+ * to Fable so the two still differ.
+ */
+const CLAUDE_CODE_PICKS = {
+  coordinator: { model: "claude-code/fable", thinking: "high" },
+  scout: { model: "claude-code/sonnet", thinking: "medium" },
+  reviewer: { model: "claude-code/opus", thinking: "high" },
+  presentation: { model: "claude-code/sonnet", thinking: "low" },
+  implementerWithoutBalanced: { model: "claude-code/opus", thinking: "high" },
+  reviewerWithoutBalanced: { model: "claude-code/fable", thinking: "high" },
+} as const satisfies Readonly<Record<string, ModelSpec>>;
+
+/** The supported level closest to `wanted`; a lighter one wins a tie. */
+function nearestThinking(wanted: ThinkingLevel, supported: readonly ThinkingLevel[]): ThinkingLevel {
+  const position = (level: ThinkingLevel) => THINKING_LEVELS.indexOf(level);
+  let best = wanted;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const level of supported) {
+    const distance = Math.abs(position(level) - position(wanted));
+    if (distance < bestDistance) {
+      best = level;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/** One recommendation per role; a role is absent when neither Claude Code nor Balanced fills it. */
+export function recommend(
+  claudeCodeReady: boolean,
+  balanced: BalancedProfileProposal,
+  models: readonly SetupModel[],
+): Readonly<Partial<Record<AgentRole, Recommendation>>> {
+  const fromBalanced = (role: AgentRole): ModelSpec | undefined => balanced.roles[role]?.model;
+  const picks: Partial<Record<AgentRole, ModelSpec>> = {};
+  if (claudeCodeReady) {
+    const coding = fromBalanced("implementer");
+    picks.coordinator = CLAUDE_CODE_PICKS.coordinator;
+    picks.scout = CLAUDE_CODE_PICKS.scout;
+    picks.implementer = coding ?? CLAUDE_CODE_PICKS.implementerWithoutBalanced;
+    picks.reviewer =
+      coding === undefined ? CLAUDE_CODE_PICKS.reviewerWithoutBalanced : CLAUDE_CODE_PICKS.reviewer;
+    picks.presentation = CLAUDE_CODE_PICKS.presentation;
+  } else {
+    for (const role of MODEL_ROLE_ORDER) {
+      const pick = fromBalanced(role);
+      if (pick !== undefined) picks[role] = pick;
+    }
+  }
+  const recommended: Partial<Record<AgentRole, Recommendation>> = {};
+  for (const role of MODEL_ROLE_ORDER) {
+    const pick = picks[role];
+    if (pick === undefined) continue;
+    const supported = models.find((model) => model.selector === pick.model)?.thinking;
+    recommended[role] = {
+      model: {
+        model: pick.model,
+        thinking:
+          supported === undefined || supported.includes(pick.thinking)
+            ? pick.thinking
+            : nearestThinking(pick.thinking, supported),
+      },
+      reason: RECOMMENDATION_REASONS[role],
+    };
+  }
+  return recommended;
+}
+
 /**
  * The dearest output price, in dollars per million tokens, that still earns each level; anything
  * above the last ceiling is `$$$`. Output tokens are what an agent writing code mostly pays for.
@@ -201,11 +286,12 @@ export function setupCatalogue(
 
 export function buildSetupView(input: SetupViewInput): SetupView {
   const models = setupCatalogue(input.ompCatalogue, input.claudeCode).map(setupModel);
-  // Claude Code never spends on its own, so the recommendation comes from OMP's providers alone.
+  // Claude Code never spends on its own, so the Balanced profile reads OMP's providers alone.
   const balanced = resolveBalancedProfile({
     catalogue: input.ompCatalogue,
     enabledProviders: new Set(discoveredProviders(input.ompCatalogue)),
   });
+  const recommendations = recommend(input.claudeCode === "ready", balanced, models);
   const repos = [...input.repos]
     .sort((left, right) => left.path.localeCompare(right.path))
     .map((repo) => setupRepo(repo, input.homeFolder));
@@ -234,17 +320,15 @@ export function buildSetupView(input: SetupViewInput): SetupView {
     ],
     roles: MODEL_ROLE_ORDER.map((id) => {
       const pick = savedPick(input.savedModels?.[id], models);
-      const proposal = balanced.roles[id];
+      const recommended = recommendations[id];
       return {
         id,
         ...SETUP_ROLE_COPY[id],
         ...(pick === undefined ? {} : { pick }),
-        ...(proposal === undefined
-          ? {}
-          : { recommended: { model: proposal.model, reason: proposal.reason } }),
+        ...(recommended === undefined ? {} : { recommended }),
       };
     }),
-    thinkingNotes: THINKING_NOTES,
+    thinkingLevels: THINKING_LEVELS.map((level) => ({ level, note: THINKING_NOTES[level] })),
     repos: repos.filter((repo) => repo.setUp),
     candidates: repos.filter((repo) => !repo.setUp),
     selfImprovement: input.selfImprovement ?? "fix",
