@@ -234,6 +234,18 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_LAUNCH_N
       );
       const second = records.find((r) => r.repoPath === b);
       if (second === undefined) throw new Error("second coordinator record missing");
+      const initialSecondPanel = blocks(await commands.ls(b)).find(
+        (p) => p.block.program === "tandem.panel" && p.block.args?.[1] === second.endpoint.paneId,
+      );
+      if (initialSecondPanel === undefined) throw new Error("initial second-project panel missing");
+      await terminal.closePanel({
+        sessionId: second.endpoint.sessionId,
+        cwd: second.worktree.path,
+        panelPaneId: initialSecondPanel.block.id,
+      });
+      expect(
+        blocks(await commands.ls(b)).some((p) => p.block.id === initialSecondPanel.block.id),
+      ).toBe(false);
       const publish = async (project: string) => {
         const fixture = nativeScreensFixture();
         const panel = panelFixture(project);
@@ -316,15 +328,17 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_LAUNCH_N
       const switched = await nativeAction("project", [String(target)]);
       expect(JSON.parse(switched).project).toBe(b);
       await writeFile(join(root, "project-switch-b.json"), switched);
-      const secondPanel = blocks(await commands.ls(b)).find(
-        (p) => p.block.program === "tandem.panel" && p.block.args?.[1] === second.endpoint.paneId,
-      );
-      expect(secondPanel).toBeDefined();
-      await terminal.openPanel({
+      // Force a fresh route open after the switch, rather than reusing B's launch-time panel.
+      const secondPanelId = await terminal.openPanel({
         coordinator: second.endpoint,
         cwd: second.worktree.path,
         project: b,
       });
+      expect(secondPanelId).not.toBe(initialSecondPanel.block.id);
+      const secondPanel = blocks(await commands.ls(b)).find((p) => p.block.id === secondPanelId);
+      expect(secondPanel?.session.id).toBe(second.endpoint.terminalSessionId);
+      expect(secondPanel?.block.program).toBe("tandem.panel");
+      expect(secondPanel?.block.args?.[1]).toBe(second.endpoint.paneId);
       await publish(b);
       await terminal.focusWorkspace({
         sessionId: env.TANDEM_SESSION,
@@ -378,6 +392,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_LAUNCH_N
             repos,
             panelPaneId: plugin.block.id,
             coordinators: records,
+            initialSecondPanel,
             secondPanel,
             catchup,
             listing,
