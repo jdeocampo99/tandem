@@ -1,0 +1,58 @@
+-- Only the Tern UI and navigation boundaries are mocked. Render the real panel and board.
+local calls = {}
+local function node(kind, props, children)
+ local seen = {}
+ for _, child in children or {} do
+  local key = child.p and child.p.key
+  if key then
+   assert(not seen[key], 'duplicate child key: ' .. key)
+   seen[key] = true
+  end
+ end
+ return {kind=kind, p=props or {}, c=children or {}}
+end
+local tern = {ui={
+ node=node,
+ el=function(_tag, props, children) return node('el', props, children) end,
+ col=function(children) return node('col', {}, children) end,
+ text=function(spans) return node('text', {}, {}) end,
+ span=function(value) return value end,
+}}
+local function loadModule(name)
+ if name == './view-file' then return {} end
+ if name == './navigation' then return {
+  origin=function(args) return args end,
+  run=function(_origin, _cx, args) table.insert(calls, args) end,
+ } end
+ if name == './screen' then return {
+  header=function() return node('header') end,
+  status=function() end,
+ } end
+ if name == './components' then return {
+  button=function(label, action) return node('button', {text=label, actions={click=action}}) end,
+  text=function(value) return node('text', {text=value}) end,
+ } end
+ error('unexpected module: ' .. name)
+end
+-- MODULES
+-- MODEL
+local panel = loadPanel()
+local state = {file={model=bundle, status='ready'}, origin={}, dropdown=true, selected=1}
+local rendered = panel.view(state, {})
+assert(rendered.main and rendered.layer)
+panel.event(state, {ev='action', act='row:1'}, {})
+panel.event(state, {ev='action', act='row:2'}, {})
+assert(calls[1][1]=='open' and calls[1][2]=='task' and calls[1][3]=='blocked')
+assert(calls[2][1]=='open' and calls[2][2]=='pr' and calls[2][3]=='acme/app#284')
+panel.event(state, {ev='action', act='project:repo:/work/app'}, {})
+assert(calls[3][1]=='project' and calls[3][2]=='repo:/work/app')
+local board = loadBoard()
+assert(board.view({view={model=bundle,status='ready'},args={}}, {}).main)
+local prCard
+for _, lane in bundle.board.lanes do for _, card in lane.cards do
+ if card.key=='pr:acme/app#284' then prCard=card end
+end end
+assert(prCard and prCard.pullRequest.number==284)
+board.event({view={model=bundle,status='ready'},args={}}, {ev='action',act='pr',value=prCard.key}, {})
+assert(calls[4][1]=='board' and calls[4][2]=='pr-link' and calls[4][3]==prCard.key)
+print('Panel and board child keys and row actions pass')
