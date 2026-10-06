@@ -18,11 +18,13 @@ export async function showNativePrs(context: NativeRendererContext): Promise<Cli
   if (owned?.endpoint.terminal !== "tern")
     throw new Error("Open this project's Tern coordinator before showing PRs");
   const index = await readNativeBundle(context.environment.home, owned.repoPath);
-  const pr = Object.values(index.pullRequests).find((entry) => entry.header.taskId !== undefined);
-  if (pr?.header.taskId === undefined)
-    throw new Error("This project has no cached open pull requests yet");
+  const pr = Object.values(index.pullRequests)[0];
+  if (pr === undefined) throw new Error("This project has no cached open pull requests yet");
   return await openView({
     ...context,
-    invocation: { ...context.invocation, positionals: ["pr", pr.header.taskId] },
+    invocation: {
+      ...context.invocation,
+      positionals: ["pr", `${pr.header.repo}#${pr.header.number}`],
+    },
   });
 }

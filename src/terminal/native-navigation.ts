@@ -94,7 +94,7 @@ export async function nativeViewFile(context: NativeRendererContext) {
     );
     if (task) view = { kind: "task", taskId: task[0] };
     else if (brief) view = { kind: "brief", requestId: brief[0] };
-    else if (pr?.header.taskId) view = { kind: "pr", taskId: pr.header.taskId };
+    else if (pr) view = { kind: "pr", repo: pr.header.repo, number: pr.header.number };
     else throw new Error("This file is not a published view for the originating project");
   }
   const result = await context.capabilities.terminal.openView({
