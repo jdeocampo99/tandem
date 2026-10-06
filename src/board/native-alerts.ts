@@ -119,7 +119,7 @@ export class NativeAlerts {
         }
         continue;
       }
-      if (row.taskId !== undefined) continue;
+      if (row.taskId !== undefined && row.cause !== "pull-request") continue;
       const signature = JSON.stringify([row.key, row.text]);
       next.rows.push(signature);
       if (previous && !previous.rows.includes(signature))

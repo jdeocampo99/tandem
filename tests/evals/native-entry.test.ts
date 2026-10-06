@@ -15,7 +15,7 @@ import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
 import { state } from "../board/fixtures.ts";
 import { withScenario } from "./scenario.ts";
 
-for (const failure of ["none", "focus", "catchup"] as const) {
+for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
   test(`inbox helper entry proves and focuses its coordinator, reads alerts and runs nonfatal catch-up: ${failure}`, async () => {
     await withScenario({ terminal: "tern" }, async (world) => {
       const lease = await world.grantLease({ name: "coordinator", holder: "coordinator:test" });
@@ -27,8 +27,8 @@ for (const failure of ["none", "focus", "catchup"] as const) {
         role: "coordinator" as const,
         notificationPane: {
           paneId: helper.paneId,
-          tabId: helper.tabId,
-          workspaceId: helper.workspaceId,
+          tabId: failure === "helper-moved" ? "9999" : helper.tabId,
+          workspaceId: failure === "helper-moved" ? "9999" : helper.workspaceId,
         },
       };
       const command = [
@@ -146,11 +146,11 @@ for (const failure of ["none", "focus", "catchup"] as const) {
           stderr: () => {},
         },
       );
-      expect(result.exitCode).toBe(failure === "focus" ? 1 : 0);
-      expect(focused).toEqual(["101"]);
-      expect(opens).toBe(failure === "focus" ? 0 : 1);
+      expect(result.exitCode).toBe(failure === "focus" || failure === "helper-moved" ? 1 : 0);
+      expect(focused).toEqual(failure === "helper-moved" ? [] : ["101"]);
+      expect(opens).toBe(failure === "focus" || failure === "helper-moved" ? 0 : 1);
       expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(
-        failure === "focus" ? 1 : 0,
+        failure === "focus" || failure === "helper-moved" ? 1 : 0,
       );
       const visit = JSON.parse(
         await readFile(

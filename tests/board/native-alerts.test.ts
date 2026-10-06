@@ -256,6 +256,7 @@ test("brief and PR-watch alerts share a user cursor; concurrent reads preserve n
       key: "pr:2",
       cause: "pull-request" as const,
       name: "Fix CI",
+      taskId: "linked-own-task",
       text: "failing checks",
     };
     await alerts.observe(
