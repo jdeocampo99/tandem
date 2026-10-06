@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { lstat, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { AdapterCommandError, AdapterProtocolError } from "../../../src/adapters/primitives.ts";
 import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
@@ -24,6 +25,13 @@ for (const mode of [
   "verification-failed",
   "verification-malformed",
   "relaunch-success",
+  "relaunch-detached",
+  "relaunch-other-window",
+  "relaunch-other-window-args",
+  "relaunch-other-session",
+  "pre-focus-read-failed",
+  "pre-focus-malformed",
+  "focus-unknown",
   "relaunch-missing-receipt",
   "relaunch-no-exact-pane",
   "relaunch-legacy-ticket",
@@ -44,6 +52,8 @@ for (const mode of [
     let now = 0;
     let failVerification = true;
     let routePath = "";
+    let moved = false;
+    let listingReads = 0;
     const run: CommandRunner = async (request) => {
       const verb = request.argv[1];
       if (verb === "inspect")
@@ -57,6 +67,21 @@ for (const mode of [
           }),
         };
       if (verb === "ls") {
+        listingReads++;
+        if (
+          listingReads === 4 &&
+          (mode === "pre-focus-read-failed" || mode === "pre-focus-malformed")
+        )
+          return {
+            code: mode === "pre-focus-read-failed" ? 1 : 0,
+            stderr: "injected pre-focus read failure",
+            stdout: "malformed",
+          };
+        const hidden =
+          moved &&
+          (mode === "relaunch-detached" ||
+            mode === "relaunch-other-session" ||
+            (mode.startsWith("relaunch-other-window") && request.argv.includes("--window")));
         if (
           created &&
           failVerification &&
@@ -83,7 +108,9 @@ for (const mode of [
                     name: null,
                     blocks: [
                       { id: 3, title: "Tandem panel", cwd: home, live: true, cols: 150 },
-                      ...(created || mode === "foreign-return" || mode === "duplicate-panels"
+                      ...((created && !hidden) ||
+                      mode === "foreign-return" ||
+                      mode === "duplicate-panels"
                         ? [
                             {
                               id: 4,
@@ -100,7 +127,9 @@ for (const mode of [
                                 modelPath,
                                 mode === "foreign-return" ? "999" : "3",
                                 home,
-                                "",
+                                moved && mode === "relaunch-other-window-args"
+                                  ? "another-window"
+                                  : "",
                                 modelPath,
                               ],
                             },
@@ -140,13 +169,53 @@ for (const mode of [
                     : []),
                 ],
               },
+              ...(moved && mode === "relaunch-other-session"
+                ? [
+                    {
+                      id: 6,
+                      name: "other session",
+                      tabs: [
+                        {
+                          id: 7,
+                          name: null,
+                          blocks: [
+                            {
+                              id: 4,
+                              title: "Tandem panel",
+                              cwd: home,
+                              live: true,
+                              program: "tandem.panel",
+                              args: [modelPath, "3", home, "", modelPath],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ]
+                : []),
             ],
-            detached: [],
+            detached:
+              moved && mode === "relaunch-detached"
+                ? [
+                    {
+                      id: 4,
+                      title: "Tandem panel",
+                      cwd: home,
+                      live: true,
+                      program: "tandem.panel",
+                      args: [modelPath, "3", home, "", modelPath],
+                    },
+                  ]
+                : [],
           }),
         };
       }
       effects++;
-      if (verb === "focus") return { code: 0, stderr: "", stdout: '{"block":3}' };
+      if (verb === "focus") {
+        if (mode === "focus-unknown")
+          return { code: 1, stderr: "lost focus acknowledgement", stdout: "" };
+        return { code: 0, stderr: "", stdout: '{"block":3}' };
+      }
       if (verb === "open") {
         const path = request.argv[2];
         if (!path) throw new Error("missing route");
@@ -211,6 +280,7 @@ for (const mode of [
         const fresh = () =>
           ternBackend(run, {
             home,
+            ...(mode.startsWith("relaunch-other-window") ? { windowKey: "owned-window" } : {}),
             clock: () => now,
             wait: async (ms) => {
               now += ms;
@@ -218,8 +288,14 @@ for (const mode of [
           });
         const input = { coordinator: endpoint, cwd: home, project: home };
         const first = fresh();
-        if (mode === "relaunch-success") expect(await first.openPanel(input)).toBe("4");
-        else {
+        if (
+          mode === "relaunch-success" ||
+          mode === "relaunch-detached" ||
+          mode.startsWith("relaunch-other-")
+        ) {
+          expect(await first.openPanel(input)).toBe("4");
+          moved = mode !== "relaunch-success";
+        } else {
           await expect(first.openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
           expect(
             (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
@@ -232,7 +308,13 @@ for (const mode of [
           }
         }
         const before = effects;
-        if (mode === "relaunch-no-exact-pane") {
+        if (mode === "relaunch-detached" || mode.startsWith("relaunch-other-")) {
+          await expect(fresh().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+          expect(created).toBe(true);
+          expect(
+            (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
+          ).toEqual([]);
+        } else if (mode === "relaunch-no-exact-pane") {
           await expect(fresh().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
           expect(await Bun.file(routePath).exists()).toBe(true);
         } else {
@@ -242,6 +324,42 @@ for (const mode of [
           ).toEqual([]);
         }
         expect(effects).toBe(before);
+      } else if (
+        mode === "pre-focus-read-failed" ||
+        mode === "pre-focus-malformed" ||
+        mode === "focus-unknown"
+      ) {
+        const backend = () =>
+          ternBackend(run, {
+            home,
+            clock: () => now,
+            wait: async (ms) => {
+              now += ms;
+            },
+          });
+        const first = backend();
+        const input = { coordinator: endpoint, cwd: home, project: home };
+        if (mode === "focus-unknown") {
+          await expect(first.openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+          expect(effects).toBe(1);
+          await expect(backend().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+          expect(effects).toBe(1);
+          expect(
+            (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
+          ).toBe(true);
+        } else {
+          await expect(first.openPanel(input)).rejects.toBeInstanceOf(
+            mode === "pre-focus-read-failed" ? AdapterCommandError : AdapterProtocolError,
+          );
+          expect(effects).toBe(0);
+          expect(
+            (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
+          ).toEqual([]);
+          expect(await backend().openPanel(input)).toBe("4");
+          const before = effects;
+          expect(await first.openPanel(input)).toBe("4");
+          expect(effects).toBe(before);
+        }
       } else if (mode === "success") {
         expect(await open()).toEqual({ paneId: "4", project: home });
         const before = effects;

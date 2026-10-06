@@ -14,7 +14,7 @@ import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
 import type { TerminalBackend } from "../contract.ts";
-import { exactPane, paneMutation } from "./endpoints.ts";
+import { exactPane } from "./endpoints.ts";
 import {
   BlockAck,
   blocks,
@@ -233,10 +233,13 @@ export function ternViewHost(
           session: Id.parse(input.coordinator.terminalSessionId),
           receipt,
         });
-        await paneMutation(cmd, { endpoint: input.coordinator, cwd: input.cwd }, [
-          "focus",
-          input.coordinator.paneId,
-        ]);
+        // Keep the final exact-id read immediately before focus. A failed read safely
+        // cancels this invocation's intent because no mutation has been attempted.
+        await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+        intent.markMutationAttempted();
+        const focused = await cmd.mutate(input.cwd, ["focus", input.coordinator.paneId], BlockAck);
+        if (focused.block !== input.coordinator.paneId)
+          throw new TernOutcomeUnknownError("tern focus", "acknowledgement names another block");
         // Freshly revealed background tabs receive their real window size asynchronously.
         await options.wait(150);
         const columns = (await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd }))

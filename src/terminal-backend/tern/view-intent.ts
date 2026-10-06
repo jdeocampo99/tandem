@@ -5,7 +5,13 @@ import { z } from "zod";
 import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
-import { blocks, Id, type TernCommands, TernOutcomeUnknownError } from "./protocol.ts";
+import {
+  blocks,
+  Id,
+  type TernCommands,
+  TernOutcomeUnknownError,
+  ternCommands,
+} from "./protocol.ts";
 
 export const NativePlacement = z.enum(["panel", "split", "task", "window", "return", "inbox"]);
 const Ticket = z.object({
@@ -47,26 +53,51 @@ export async function exactNativeView(
 ) {
   if (placement === "return" || placement === "inbox") return undefined;
   const listing = await commands.ls(cwd);
-  const candidates = blocks(listing).filter(
+  const request = commands.request(cwd, []);
+  // A window-scoped listing cannot prove that no matching block exists elsewhere.
+  const all = request.argv.includes("--window")
+    ? await ternCommands(commands.run, {
+        binary: commands.binary,
+        ...(request.env === undefined ? {} : { environment: request.env }),
+      }).ls(cwd)
+    : listing;
+  const claims = blocks(all).filter(
     (entry) =>
-      entry.session.id === coordinator.terminalSessionId &&
       entry.block.program === `tandem.${kind}` &&
-      JSON.stringify(entry.block.args) === JSON.stringify(args),
+      entry.block.args?.length === args.length &&
+      entry.block.args.every((arg, index) => index === 3 || arg === args[index]),
   );
+  const exact = claims[0];
   if (
-    candidates.length > 1 ||
-    (candidates.length > 0 && listing.detached.length > 0) ||
-    candidates.some((entry) =>
-      placement === "window"
-        ? entry.tab.id === coordinator.tabId
-        : entry.tab.id !== coordinator.tabId,
-    )
+    listing.detached.length > 0 ||
+    all.detached.length > 0 ||
+    claims.length > 1 ||
+    (exact !== undefined &&
+      (exact.session.id !== coordinator.terminalSessionId ||
+        (placement === "window"
+          ? exact.tab.id === coordinator.tabId
+          : exact.tab.id !== coordinator.tabId) ||
+        JSON.stringify(exact.block.args) !== JSON.stringify(args) ||
+        !blocks(listing).some(
+          (entry) =>
+            entry.block.id === exact.block.id &&
+            entry.session.id === exact.session.id &&
+            entry.tab.id === exact.tab.id &&
+            entry.block.program === exact.block.program &&
+            JSON.stringify(entry.block.args) === JSON.stringify(args),
+        ))) ||
+    (exact === undefined &&
+      blocks(listing).some(
+        (entry) =>
+          entry.block.program === `tandem.${kind}` &&
+          JSON.stringify(entry.block.args) === JSON.stringify(args),
+      ))
   )
     throw new TernOutcomeUnknownError(
       "tern open",
-      "native view placement or identity is ambiguous",
+      "native view placement or identity is ambiguous, detached or outside the owning window",
     );
-  return candidates[0];
+  return exact;
 }
 
 /** A durable coordinator-bound fence serializes openings across CLI calls and relaunches. */
@@ -75,6 +106,7 @@ export async function withNativeOpenIntent<T>(
   commands: TernCommands,
   operation: (intent: {
     recovered: boolean;
+    markMutationAttempted: () => void;
     claim: (route: string, ticket: TicketModel) => Promise<void>;
     settle: () => Promise<void>;
   }) => Promise<T>,
@@ -96,6 +128,8 @@ export async function withNativeOpenIntent<T>(
   const path = join(directory, `${key}.intent.json`);
   const release = await acquireDarwinFileLock(join(directory, `${key}.lock`), 10000, 20);
   const pending: { route: string; ticket: TicketModel }[] = [];
+  let claimedThisCall = false;
+  let mutationAttempted = false;
   const settle = async () => {
     // Remove the fence last. Interrupted cleanup still leaves a recoverable intent.
     for (const attempt of pending) {
@@ -171,16 +205,26 @@ export async function withNativeOpenIntent<T>(
     pending.length = 0;
     return await operation({
       recovered,
+      markMutationAttempted: () => {
+        mutationAttempted = true;
+      },
       claim: async (route, ticket) => {
         await writeFile(path, JSON.stringify({ version: 1, owner, route, ticket }), {
           flag: "wx",
           mode: 0o600,
         });
         pending.push({ route, ticket });
+        claimedThisCall = true;
       },
       settle,
     });
   } catch (cause) {
+    // Only this invocation can prove that its opening was never attempted.
+    // Earlier retained attempts remain uncertain, even if recovery's reads fail.
+    if (claimedThisCall && !mutationAttempted) {
+      await settle();
+      throw cause;
+    }
     if (pending.length > 0 && !(cause instanceof TernOutcomeUnknownError))
       throw new TernOutcomeUnknownError("tern open verification", cause);
     throw cause;
