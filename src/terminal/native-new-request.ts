@@ -26,7 +26,14 @@ export async function newNativeRequest(context: NativeRendererContext): Promise<
     cwd: owned.worktree.path,
     paneId: owned.endpoint.paneId,
   };
-  if (!(await context.capabilities.terminal.focusAgent(target))) {
+  if (
+    !(await context.capabilities.terminal.focusAgent({
+      ...target,
+      origin: context.origin,
+      originCoordinator: owned.endpoint,
+      home: context.environment.home,
+    }))
+  ) {
     throw new Error("The coordinator could not be focused; the new request was not sent");
   }
   const current = await ownedCoordinator(context);

@@ -1103,17 +1103,7 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
   try {
     let starts = 0;
     const { service: _service, ...dependencies } = f.deps;
-    const commands = [
-      ["board"],
-      ["prs"],
-      ["usage"],
-      ["open-task"],
-      ...["1", "2", "3", "4", "5", "6", "7", "8", "9", "prev", "next"].map((target) => [
-        "project",
-        target,
-      ]),
-      ["view-file", join(f.root, "my view.tandem-view.json")],
-    ];
+    const commands = [["board"], ["prs"], ["usage"], ["open-task"]];
     for (const command of commands) {
       const errors: string[] = [];
       const output: string[] = [];

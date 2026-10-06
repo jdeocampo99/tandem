@@ -4,6 +4,7 @@ local files = require("./view-file")
 local fields = require("./text-field")
 local rows = require("./diff-row")
 local components = require("./components")
+local navigation = require("./navigation")
 
 type Approval = { briefRevision: number, contentDigest: string, agreementDigest: string }
 type Comment = { id: string, body: string, author: string }
@@ -12,9 +13,9 @@ type Brief = {
  requestId: string, title: string, revision: number, changes: number, approval: Approval,
  approvalState: string, abandoned: boolean, lines: { Line }, commentCount: number, browserUrl: string?,
 }
-type Draft = { line: string, text: string }
+type Draft = { lineId: string, text: string }
 type State = {
- file: files.View<Brief>, shown: Brief?, shownRevision: string?, cwd: string, origin: string, window: string,
+ file: files.View<Brief>, shown: Brief?, shownRevision: string?, cwd: string, origin: string, window: string, home: string,
  comments: { Draft }, editing: string?, editor: fields.Field, overall: fields.Field, active: string,
  busy: boolean,
 }
@@ -52,7 +53,7 @@ end
 local function saveComment(state: State)
  local line = state.editing
  if line == nil or not string.find(state.editor.text, "%S") then return end
- table.insert(state.comments, { line = line, text = state.editor.text })
+ table.insert(state.comments, { lineId = line, text = state.editor.text })
  state.editing = nil
  state.editor = fields.create(nil, true)
  state.active = "overall"
@@ -84,7 +85,7 @@ local function submit(state: State, cx: BlockCx, verb: string)
  }
  state.busy = true
  local ok, problem = pcall(function()
-  tern.process.run({ "/bin/sh", "brief-action.sh", verb, model.requestId, state.origin, state.cwd, state.window },
+  tern.process.run({ "/bin/sh", "brief-action.sh", verb, model.requestId, state.origin, state.cwd, state.window, state.home },
    { cwd = ".", stdin = tern.json.encode(payload) }, function(result)
     state.busy = false
     if result.status ~= 0 then
@@ -103,9 +104,10 @@ end
 
 local brief: BlockDef<State> = {
  init = function(cx, args)
+  local origin = navigation.origin(args)
   local state: State = {
-   file = files.create(args[1] or "", "brief", parse), cwd = args[2] or cx.cwd or "",
-   origin = args[3] or string.format("%.0f", cx.pane), window = args[4] or "",
+   file = files.create(origin.path, "brief", parse), cwd = origin.cwd,
+   origin = string.format("%.0f", cx.pane), window = origin.window, home = origin.home,
    comments = {}, editor = fields.create(nil, true), overall = fields.create(), active = "overall", busy = false,
   }
   files.refresh(state.file)
@@ -129,7 +131,7 @@ local brief: BlockDef<State> = {
    local cards: { Node } = {}
    for _, comment in line.comments do table.insert(cards, rows.card(comment.id, comment.author, comment.body)) end
    for index, comment in state.comments do
-    if comment.line == line.id then table.insert(cards, rows.card("draft-" .. index, "you · pending", comment.text, { components.button("Remove", "remove=" .. index) })) end
+    if comment.lineId == line.id then table.insert(cards, rows.card("draft-" .. index, "you · pending", comment.text, { components.button("Remove", "remove=" .. index) })) end
    end
    if state.editing == line.id then
     table.insert(cards, ui.el("div", { class = "tdm-comment" }, {
@@ -137,7 +139,7 @@ local brief: BlockDef<State> = {
      ui.row({ components.button("Comment", "comment", "accent"), components.button("Cancel", "cancel") }),
     }))
    end
-   local row = rows.row({ key = line.id, new = line.number, code = line.text, kind = "ctx" }, "add=" .. line.id, cards)
+   local row = rows.row({ key = line.id, new = line.number, code = (if line.kind == "item" then "• " else "") .. line.text, kind = "ctx" }, "add=" .. line.id, cards)
    local props = row.p or {}
    props.class = "tdm-diff-row tdm-ctx brief-row brief-" .. line.kind .. (if #cards > 0 then " brief-annotated" else "")
    row.p = props
@@ -152,7 +154,7 @@ local brief: BlockDef<State> = {
    table.insert(document, row)
   end
   local count = model.commentCount + #state.comments
-  local actions: { Node } = { components.text(tostring(count) .. " comments", "strong"), fields.node(state.overall, "overall", "Overall comment (optional)") }
+  local actions: { Node } = { components.text(tostring(count) .. (if count == 1 then " comment" else " comments"), "strong"), fields.node(state.overall, "overall", "Overall comment (optional)") }
   if state.file.status == "ready" and not model.abandoned and not state.busy then
    table.insert(actions, components.button("Approve", "approve", "success"))
    table.insert(actions, components.button("Request changes (" .. #state.comments .. ")", "changes"))

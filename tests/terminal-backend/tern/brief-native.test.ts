@@ -3,6 +3,9 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { nativeDetailPath } from "../../../src/board/snapshot.ts";
 import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { briefView } from "../../../src/requests/native-view.ts";
@@ -124,13 +127,9 @@ if [ -f '${root}/refuse' ]; then echo 'Brief revision is stale; review the lates
     );
     await writeFile(join(root, "refuse"), "stale");
     await writeFile(
-      join(plugin, "window.luau"),
-      `--!strict
-tern.command({id="proof",title="Brief proof",run=function(cx)
- local origin=cx.session:focused()
- local pane=cx:new_block("tandem.brief", {${JSON.stringify(path)}, ${JSON.stringify(root)}, tostring(origin), ""}, "beside")
- tern.fs.write(${JSON.stringify(join(root, "pane.txt"))}, tostring(pane))
-end})
+      join(root, "conversation.sh"),
+      `#!/bin/sh
+printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so Tandem can run its panes and board inside Tern.' '' 'Tandem: I drafted the brief and opened it on the right. Comment on any line, or ask me here.' '' 'You: Why only three alert types?' '' 'Tandem: Needs-you, done and stuck are the events that ask you to act. Progress stays in the panel.'
 `,
     );
     const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
@@ -190,7 +189,11 @@ end})
         return true;
       });
       await run("plugin", "link", plugin, "--json");
-      await run("new", "session", "brief-proof", "--cwd", root, "--json");
+      const created = decode(
+        await run("new", "session", "brief-proof", "--cwd", root, "--json"),
+        Created,
+        "create isolated session",
+      );
       window = Bun.spawn(
         [
           binary,
@@ -214,9 +217,50 @@ end})
       });
       await ctl("resize", "1500", "940");
       await ctl("tabs", "autohide", "on");
-      await ctl("palette", "Brief proof");
-      await until(async () => (await tree()).some((each) => each.text === "Brief proof"));
-      await clickText("Brief proof");
+      await run("run", created.block, `/bin/sh ${join(root, "conversation.sh")}`);
+      const coordinator: Endpoint = {
+        terminal: "tern",
+        sessionId: "brief-proof",
+        terminalSessionId: created.session,
+        workspaceId: created.tab,
+        tabId: created.tab,
+        paneId: created.block,
+        role: "coordinator",
+        generation: 0,
+      };
+      const runner: CommandRunner = async (request) => {
+        const child = Bun.spawn([...request.argv], {
+          env: { ...env, ...request.env },
+          cwd: request.cwd,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [stdout, stderr, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        return { stdout, stderr, code };
+      };
+      const host = ternViewHost(ternCommands(runner, { binary }), {
+        clock: Date.now,
+        wait: (ms) => Bun.sleep(ms),
+        guard: async (_key, operation) => operation(),
+      });
+      const opened = await host.open(
+        {
+          coordinator,
+          cwd: root,
+          home: env.TANDEM_HOME,
+          view: { kind: "brief", requestId: model.requestId },
+        },
+        root,
+        "brief",
+        "split",
+        path,
+      );
+      expect(opened.paneId).not.toBe(coordinator.paneId);
       await until(async () =>
         (await tree()).some((each) => each.text?.includes("rev 2 · 1 changes") === true),
       );
@@ -308,7 +352,6 @@ end})
       console.error(
         (await tree().catch(() => [])).filter((each) => each.text).map((each) => each.text),
       );
-      console.error(await readFile(join(root, "pane.txt"), "utf8").catch(() => "no pane"));
       console.error(await readFile(join(root, "daemon.log"), "utf8").catch(() => "no daemon log"));
 
       console.error(await readFile(join(root, "window.log"), "utf8").catch(() => ""));
