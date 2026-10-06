@@ -2,7 +2,7 @@ import type { TaskRecord } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import type { CoordinatorRecord } from "../coordinator/record.ts";
 import { canonicalPath } from "../coordinator/record.ts";
-import { listCoordinatorRecords } from "../coordinator/registry.ts";
+import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import { parseReviewSubmission } from "../pr-review/page.ts";
 import { type BriefFeedback, briefFeedbackPrompt, type ViewedBrief } from "../requests/feedback.ts";
 import type { TerminalView } from "../terminal-backend/contract.ts";
@@ -62,9 +62,15 @@ async function coordinator(
   repoPath: string,
 ): Promise<CoordinatorRecord> {
   const canonical = await canonicalPath(repoPath, "repoPath");
-  const candidates = (
-    await listCoordinatorRecords(context.environment.home, context.environment.sessionId)
-  ).filter((record) => record.repoPath === canonical || record.worktree.path === canonical);
+  const discovery = await discoverCoordinatorRecords({ home: context.environment.home });
+  const candidates = discovery.records
+    .filter((entry) => entry.placement === "session-directory")
+    .map((entry) => entry.record)
+    .filter(
+      (record) =>
+        record.endpoint.sessionId === context.environment.sessionId &&
+        (record.repoPath === canonical || record.worktree.path === canonical),
+    );
   if (candidates.length > 1) throw new Error("More than one coordinator claims this project");
   const originalRepo = candidates[0]?.repoPath ?? canonical;
   const owned = await findRunningCoordinator(
@@ -116,20 +122,43 @@ export async function commentOnBrief(
   const feedback = briefFeedback(requestId, input);
   const service = context.service();
   const brief = await service.requestBrief(requestId);
+  await requireBriefProject(context, brief.record.repoPath);
   const prompt = briefFeedbackPrompt(brief.record, feedback, requestChanges);
   const owned = await coordinator(context, brief.record.repoPath);
   await promptCoordinator(context, owned, prompt);
-  const view = requestChanges
-    ? await service.closeRequestBriefReview(requestId, feedback.briefRevision)
-    : brief;
+  let view = brief;
+  const warnings: string[] = [];
+  if (requestChanges) {
+    try {
+      view = await service.closeRequestBriefReview(requestId, feedback.briefRevision);
+    } catch (error) {
+      warnings.push(
+        `Feedback was delivered, but the review pane could not be retired: ${error instanceof Error ? error.message : String(error)}. Do not resubmit this feedback.`,
+      );
+    }
+  }
   return {
     value: {
       delivered: true,
       requestId,
       briefRevision: feedback.briefRevision,
       reviewPane: view.record.reviewPane,
+      warnings,
     },
   };
+}
+
+async function requireBriefProject(
+  context: CliCommandContext,
+  briefRepoPath: string,
+): Promise<void> {
+  const [briefRepo, selectedRepo] = await Promise.all([
+    canonicalPath(briefRepoPath, "brief repoPath"),
+    canonicalPath(context.environment.repo, "selected repoPath"),
+  ]);
+  if (briefRepo !== selectedRepo) {
+    throw new CliUsageError("This brief does not belong to the selected Tandem project");
+  }
 }
 
 export async function approveViewedBrief(context: CliCommandContext): Promise<CliCommandOutcome> {
@@ -143,6 +172,7 @@ export async function approveViewedBrief(context: CliCommandContext): Promise<Cl
   const intent = viewedBrief(requestId, input);
   const service = context.service();
   const before = await service.requestBrief(requestId);
+  await requireBriefProject(context, before.record.repoPath);
   const owned = await coordinator(context, before.record.repoPath);
   // The durable compare-and-swap checks all seen fields. The action itself is the user's click.
   const view = await service.approveRequestBrief(intent);
@@ -255,6 +285,7 @@ export async function openView(context: CliCommandContext): Promise<CliCommandOu
   let repoPath: string;
   if (kind === "brief") {
     repoPath = (await service.requestBrief(id)).record.repoPath;
+    await requireBriefProject(context, repoPath);
     view = { kind, requestId: id };
   } else if (kind === "task" || kind === "pr") {
     const task =

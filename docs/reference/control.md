@@ -140,6 +140,8 @@ commands are also available in the advanced action CLI (`bun src/cli.ts`).
 Every native command requires exact decimal `--pane` and absolute originating-pane `--cwd`;
 missing or invalid context is refused before handler effects. Shared non-native callers retain
 optional origin fields. `--window` is an optional opaque control window key.
+Unreadable records and sessions whose pane listing fails are non-matches; they do not disable a
+different matching project. When no readable/live candidate matches, the command refuses clearly.
 
 - The native boundary also registers `board`, `prs`, `usage`, `new-request`, `open-task`,
   `project 1..9|prev|next`, and `view-file PATH`. Each dispatches once through the typed
@@ -168,6 +170,8 @@ optional origin fields. `--window` is an optional opaque control window key.
   attempted once, with no automatic retry.
 - Brief comment, request-changes, and approval use the revision-bound paths in
   [request-briefs.md](request-briefs.md#native-brief-feedback).
+  These actions and opening a brief also require its canonical repository path to match the
+  explicitly selected project; a request id never bypasses project scope.
 - `pr-comment TASK_ID --text TEXT` sends an in-scope fix request to the implementation task's
   worker through `steer`. Only a task with an open or draft Tandem PR accepts it. It never posts a
   GitHub comment, changes scope approval, publishes, or merges. `--input FILE` instead of `--text`

@@ -107,3 +107,6 @@ src/requests/plain-language.ts
   that revision. A later revision stays open. Approval retires its projection through the existing
   ownership-safe workflow and prompts the coordinator to continue the conversation. If that
   notification fails after approval was recorded, the action returns the approval and a warning.
+  If retiring the pane fails after feedback was delivered, request changes returns a successful
+  delivery receipt with the pane warning and asks callers not to resubmit. Feedback delivery is
+  not idempotent; neither projection failure nor a caller retry may imply that nothing was sent.

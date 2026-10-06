@@ -47,10 +47,6 @@ export async function resolveViewActionEnvironment(
   const origin = viewOriginFrom(invocation);
   if (origin === undefined) return environment;
   const discovery = await discoverCoordinatorRecords({ home: environment.home });
-  if (discovery.unreadable.length > 0)
-    throw new Error(
-      "Native action cannot select a project while coordinator records are unreadable",
-    );
   let records = discovery.records
     .filter((entry) => entry.placement === "session-directory")
     .map((entry) => entry.record);
@@ -70,6 +66,7 @@ export async function resolveViewActionEnvironment(
     const repo = await canonicalPath(environment.repo, "repoPath");
     records = records.filter((record) => record.repoPath === repo || record.worktree.path === repo);
   }
+  let failedListings = 0;
   if (origin.paneId !== undefined) {
     const sessions = new Map<string, Promise<readonly PaneListing[]>>();
     for (const record of records) {
@@ -84,21 +81,29 @@ export async function resolveViewActionEnvironment(
         );
       }
     }
-    const observed = await Promise.all(
+    const observed = await Promise.allSettled(
       records.map(async (record) => ({
         record,
         panes: await sessions.get(record.endpoint.sessionId),
       })),
     );
-    records = observed
-      .filter(({ panes }) => panes?.some((pane) => pane.paneId === origin.paneId))
-      .map(({ record }) => record);
+    failedListings = observed.filter((result) => result.status === "rejected").length;
+    records = observed.flatMap((result) =>
+      result.status === "fulfilled" &&
+      result.value.panes?.some((pane) => pane.paneId === origin.paneId)
+        ? [result.value.record]
+        : [],
+    );
   }
   const record = records[0];
   if (records.length !== 1 || record === undefined) {
-    throw new Error(
-      "Native action context does not identify exactly one Tandem project; supply its pane and cwd",
-    );
+    const reason =
+      records.length === 0 && discovery.unreadable.length > 0
+        ? ": no readable matching coordinator; unreadable records were skipped"
+        : records.length === 0 && failedListings > 0
+          ? ": no live matching coordinator session; its panes could not be listed"
+          : "; supply its pane and cwd";
+    throw new Error(`Native action context does not identify exactly one Tandem project${reason}`);
   }
   return {
     ...environment,

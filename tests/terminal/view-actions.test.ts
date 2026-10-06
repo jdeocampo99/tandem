@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { runCli } from "../../src/cli.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
 import type { RequestBriefContent } from "../../src/contracts.ts";
-import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
+import { recordPath } from "../../src/coordinator/record.ts";
+import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
@@ -291,14 +292,24 @@ test("brief feedback refuses invalid anchors and a coordinator pane occupied by 
 test("brief actions resolve the coordinator's clean worktree to its original repository", async () => {
   const f = await fixture();
   try {
-    await f.store.update(f.record.id, f.record.revision, (record) => ({
-      ...record,
-      revision: record.revision + 1,
-      repoPath: f.clean,
-    }));
     await f.write({ ...f.seen, text: "A comment from the clean checkout" });
     expect(
-      (await runCli(["brief-comment", f.record.id, "--input", f.input], f.deps)).exitCode,
+      (
+        await runTerminal(
+          [
+            "native",
+            "brief-comment",
+            f.record.id,
+            "--input",
+            f.input,
+            "--pane",
+            "101",
+            "--cwd",
+            f.clean,
+          ],
+          f.deps,
+        )
+      ).exitCode,
     ).toBe(0);
     expect(f.prompts).toHaveLength(1);
   } finally {
@@ -335,6 +346,190 @@ async function createPrTask(f: Awaited<ReturnType<typeof fixture>>) {
     },
   }));
 }
+
+test("native brief actions refuse another project's request before ownership or mutation", async () => {
+  const f = await fixture();
+  try {
+    const otherRepo = join(f.root, "another-project");
+    await mkdir(otherRepo);
+    const otherStore = createRequestBriefStore({
+      home: f.home,
+      clock: () => NOW,
+      idFactory: () => "req-other-project",
+    });
+    const foreign = await otherStore.create({ repoPath: otherRepo, content });
+    const seen = {
+      briefRevision: foreign.draft.revision,
+      contentDigest: foreign.draft.contentDigest,
+      agreementDigest: foreign.draft.agreementDigest,
+    };
+    let inspections = 0;
+    for (const action of ["brief-comment", "brief-request-changes", "brief-approve", "open"]) {
+      await f.write(action === "brief-approve" ? seen : { ...seen, text: "Foreign feedback" });
+      const args =
+        action === "open"
+          ? ["open", "brief", foreign.id]
+          : [action, foreign.id, "--input", f.input];
+      const result = await runTerminal(["native", ...args, "--pane", "101", "--cwd", f.clean], {
+        ...f.deps,
+        terminal: {
+          ...f.deps.terminal,
+          inspect: async (input) => {
+            inspections += 1;
+            return f.deps.terminal.inspect(input);
+          },
+        },
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.error?.message).toContain(
+        "brief does not belong to the selected Tandem project",
+      );
+    }
+    expect(inspections).toBe(0);
+    expect((await otherStore.read(foreign.id))?.approval).toBeUndefined();
+    expect(f.prompts).toEqual([]);
+    expect(f.opened).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a corrupt unrelated record cannot disable a native action in the same session", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(recordPath(f.home, "isolated", join(f.root, "corrupt-project")), "{broken");
+    await f.write({ ...f.seen, text: "Feedback still reaches this project" });
+    const result = await runTerminal(
+      [
+        "native",
+        "brief-comment",
+        f.record.id,
+        "--input",
+        f.input,
+        "--pane",
+        "101",
+        "--cwd",
+        f.clean,
+      ],
+      f.deps,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(f.prompts).toHaveLength(1);
+    expect(f.prompts[0]).toContain("Feedback still reaches this project");
+  } finally {
+    await f.close();
+  }
+});
+
+test("an unreadable only candidate is refused clearly without opening or prompting", async () => {
+  const f = await fixture();
+  try {
+    await writeFile(recordPath(f.home, "isolated", f.repo), "{broken");
+    const result = await runTerminal(
+      ["native", "open", "brief", f.record.id, "--pane", "101", "--cwd", f.clean],
+      f.deps,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.error?.message).toContain("no readable matching coordinator");
+    expect(result.error?.message).toContain("unreadable records were skipped");
+    expect(f.opened).toEqual([]);
+    expect(f.prompts).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a dead recorded session is a non-match, while two live matches remain ambiguous", async () => {
+  const f = await fixture();
+  try {
+    const current = await readCoordinatorRecord(recordPath(f.home, "isolated", f.repo));
+    if (current === undefined) throw new Error("Fixture coordinator record is missing");
+    const otherClean = join(current.worktree.root, "other-coordinator");
+    await mkdir(otherClean);
+    await saveCoordinatorRecord(f.home, {
+      ...current,
+      endpoint: { ...current.endpoint, sessionId: "other-session" },
+      worktree: {
+        ...current.worktree,
+        path: otherClean,
+        name: "other-coordinator",
+        leaseId: "other-lease",
+        leaseHolder: "coordinator:other",
+      },
+      command: ["omp", "--cwd", otherClean, "--session-dir", join(f.home, "other-conversation")],
+    });
+    let dead = true;
+    const terminal: TerminalBackend = {
+      ...f.deps.terminal,
+      listPanes: async (input) => {
+        if (input.sessionId === "other-session" && dead) throw new Error("Session has stopped");
+        return [{ paneId: "202", workspaceId: "workspace", tabId: "tab", cwd: f.repo }];
+      },
+    };
+    const argv = ["native", "open", "brief", f.record.id, "--pane", "202", "--cwd", f.repo];
+    expect((await runTerminal(argv, { ...f.deps, terminal })).exitCode).toBe(0);
+    expect(f.opened).toHaveLength(1);
+    dead = false;
+    const ambiguous = await runTerminal(argv, { ...f.deps, terminal });
+    expect(ambiguous.exitCode).not.toBe(0);
+    expect(ambiguous.error?.message).toContain("exactly one Tandem project");
+    expect(f.opened).toHaveLength(1);
+    const unavailable = await runTerminal(argv, {
+      ...f.deps,
+      terminal: {
+        ...terminal,
+        listPanes: async () => {
+          throw new Error("Session has stopped");
+        },
+      },
+    });
+    expect(unavailable.exitCode).not.toBe(0);
+    expect(unavailable.error?.message).toContain("no live matching coordinator session");
+  } finally {
+    await f.close();
+  }
+});
+
+test("request changes reports delivered feedback when retiring the pane fails", async () => {
+  const f = await fixture();
+  try {
+    await f.write({ ...f.seen, text: "Please change this brief" });
+    let closes = 0;
+    const output: string[] = [];
+    const result = await runTerminal(
+      [
+        "native",
+        "brief-request-changes",
+        f.record.id,
+        "--input",
+        f.input,
+        "--pane",
+        "101",
+        "--cwd",
+        f.clean,
+      ],
+      {
+        ...f.deps,
+        stdout: (value) => output.push(value),
+        service: {
+          ...f.service,
+          closeRequestBriefReview: async () => {
+            closes += 1;
+            throw new Error("Pane retirement failed");
+          },
+        },
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(f.prompts).toHaveLength(1);
+    expect(closes).toBe(1);
+    expect(output.join("")).toContain('"delivered": true');
+    expect(output.join("")).toContain("Feedback was delivered");
+    expect(output.join("")).toContain("Do not resubmit this feedback");
+  } finally {
+    await f.close();
+  }
+});
 
 test("Tandem PR comments become durable worker fix requests without any GitHub call", async () => {
   const f = await fixture();
