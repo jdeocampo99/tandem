@@ -4,7 +4,8 @@ What a `pr-review` task guarantees: finding the code, the review worktree, the r
 and posting one review only with the user's approval.
 
 Code: src/pr-review/ (worktree.ts, run.ts, diff.ts, review.ts, edits.ts, page.ts,
-page-input.ts, page-feedback.ts, post.ts, service.ts, route.ts, shell.ts),
+page-input.ts, page-feedback.ts, post.ts, service.ts, route.ts, shell.ts, native-view.ts),
+src/terminal/cli-view-actions.ts, tern-plugin/pr.luau, pr-content.luau, pr-diff.luau,
 src/session/review-page.ts (the page listener), src/workers/worktree-lease.ts
 (`preparePrReviewLease`), src/workers/workflow.ts (`readPrReviewRound`),
 src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/pr-review-scenarios.test.ts.
@@ -77,14 +78,14 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
 
 - `review-show` returns the text: intent, verdict, the tour's chapters and stops, concerns, and
   drafts. For a review with a tour or more than five comments (or `page: true`) it also opens the
-  review page in Lavish. The model never writes HTML.
-- The page is built by `buildReviewPage` (page.ts) from one `ReviewPageInput`: the PR, the review,
+  review page: a native PR split in Tern, or Lavish in Herdr. The model never writes HTML.
+- The Lavish page is built by `buildReviewPage` (page.ts) from one `ReviewPageInput`: the PR, the review,
   the round's run diff (`run-N/diff.patch`), and each changed file's full text at the reviewed head
   and at the diff's start, read with `git -C <checkout> show <sha>:<path>` (the run fetched both
   commits into `refs/tandem/pr-review`). A side is absent when the file does not exist there. It is
   written as `<home>/pr-review/TASK_ID/review-N.html` beside `review-N.files.json`, the full files
   the page loads the first time someone expands past its embedded lines.
-- While a page is open, Tandem's code listens to it (src/session/review-page.ts, one listener per
+- While a Lavish page is open, Tandem's code listens to it (src/session/review-page.ts, one listener per
   page, stopped when the page ends or the coordinator stops; it works the same under OMP and Claude
   Code).
   - A submission is accepted only from a prompt row whose selector is `SUBMIT_SELECTOR` and tag is
@@ -125,6 +126,33 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   it does not permit an automatic POST. This also
   means a crash after saving the attempt but before sending it needs reconciliation rather than a
   blind repost. The receipt is saved before replies for addressed earlier comments are sent.
+
+### Native PR pane and submission
+
+- `tandem native open pr TASK_ID` opens the task's PR beside the conversation; a numeric PR id
+  resolves only when exactly one task in the selected project owns that number. `native prs`
+  opens the project selector. PRs show Description, optional Tour, Diff, cached CI and threads.
+  Read-only GitHub refreshes belong to TypeScript; the renderer makes no network reads.
+- For `pr-review`, the summary, explicit verdict and Post controls stay visible below the diff.
+  `tandem native review-submit TASK_ID --input FILE` takes the normal `ReviewSubmission`
+  (`tandemPrReview:1`, `verdict`, `summary`, `drafts:[{id,decision,body?}]`,
+  `yours:[{file,line,body}]`) plus the displayed `reviewHead` and `reviewGeneration`.
+  Draft choices and new comments remain local until Post. The Post click is the user's approval;
+  no second dialog or `--yes` is needed. The same pinned-head, serialized, durable pending-post
+  workflow applies as for the page. The user still chooses the verdict.
+- Native actions include `--pane ID --cwd ABSOLUTE_PATH [--window KEY]`; the shared
+  [private JSON transport](terminal.md#native-views-and-actions) owns input-file cleanup.
+  Nonzero stderr becomes a toast, local drafts remain available, and no outcome is retried.
+  Exit zero alone does not prove a review posted: the renderer requires the CLI's
+  `posted:true` receipt before marking it submitted and closing a standalone PR pane.
+  `posted:false` keeps the pane with its diagnostic; unreadable receipts ask the user to check
+  the PR. An embedded task PR view records success locally and leaves navigation to its host.
+- On Tandem's own implementation PRs, `native pr-comment TASK_ID --text TEXT` or
+  `--input FILE` with `{text?,comments:[{file,line,text}]}` sends a `PR fix request:` through
+  normal worker steering. It never posts to GitHub. The task must have an open/draft PR; a
+  finished worker is refused with a request to arrange follow-up in the coordinator. Feedback
+  can be saved even if the worker cannot start fixing, so a nonzero result never permits a
+  blind repeat. For someone else's reviewed PR, new comments instead stay local until Post.
 
 ### Recovering an uncertain post
 

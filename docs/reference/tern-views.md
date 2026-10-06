@@ -53,7 +53,7 @@ Use these alert kinds and title prefixes; put the task's displayed title or summ
 The backend renders title and body as single-line plain text: replace semicolons and C0/DEL
 control characters (including ESC/BEL and newlines) with spaces before framing. The kind selects
 the title prefix; it is not an extra OSC field. Backend creation, endpoint recording, delivery
-and recovery of the helper pane belong to the terminal backend worker.
+and recovery of the helper pane belong to the terminal backend.
 
 ## Shared rendering foundation
 
@@ -144,7 +144,8 @@ context, for renderer registration.
 The optional window key is an opaque Tern control-window key, never a pane, tab or session id.
 It is included only when `TERN_WINDOW_KEY` is known; WindowCx has no documented key accessor.
 The backend must prove that a supplied key owns the named pane. Without a key it derives the
-unique owning window from that exact pane and refuses ambiguous targeting. Native action handlers are in `src/terminal/cli-view-actions.ts`; screen command slots are
+unique owning window from that exact pane and refuses ambiguous targeting. Native action
+handlers are in `src/terminal/cli-view-actions.ts`; screen command slots are
 registered in `src/terminal/native-renderers.ts`. This layer defines the calling convention
 and plugin routing.
 
@@ -208,7 +209,7 @@ the review page; the renderer does not publish directly.
 `restart` names the task and goes through central recovery. `steer` requires `--task TASK_ID` and
 the user's direction as one `--text` argv value; positional task ids are refused. Both carry
 the same explicit pane/cwd/window context.
-The action worker owns these handlers alongside brief/PR mutations and `native open`;
+The native CLI owns these handlers alongside brief/PR mutations and `native open`;
 renderers own collecting input, writing the action file, invoking the CLI and cleanup.
 
 ### Completion and installation

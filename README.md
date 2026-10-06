@@ -166,13 +166,33 @@ Herdr's sidebar starts hidden, since the panel does its job; `prefix+b` shows it
 Sections are colored by what they mean: yellow waits on you, red failed, cyan is in progress,
 green is done. Piped output and `NO_COLOR` give the same layout as plain text.
 
+### In Tern
+
+[Tern](https://stencil.so/tern) gives Tandem a native panel with clickable task and PR rows,
+project switching, brief approval beside your chat, and PRs with CI, tours and comments under
+their diff lines. Comments on Tandem's PRs go straight to the worker as fix requests. When
+reviewing someone else's PR, choose the comments and verdict, then click Post to send the review.
+Tern's inbox brings you questions, new draft PRs and stuck tasks.
+
+Install Tern and sign in with your Stencil account, then choose **Tern** during Tandem setup.
+Tern is a closed beta, so you need access as well as an account. Setup offers it only after
+confirming that it is installed and signed in; the check may briefly open its own window.
+Herdr remains the default. Ask Tandem's chat to change your terminal later, after finishing or
+stopping existing tasks.
+
+Tandem asks separately before hiding Tern's sidebar and adding shortcuts for Board, PRs, Usage
+and switching projects. Decline and you can still use the panel buttons and command palette.
+Your custom keys stay yours. Choosing Herdr again restores settings Tandem changed, keeping
+any edits you made afterward. [Terminal reference](docs/reference/terminal.md) covers the details.
+
 ## Requirements
 
 - macOS
 - `git`
 - [Bun](https://bun.com/docs/installation)
 - [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi), set up with your model provider
-- [Herdr](https://herdr.dev/docs/install/) 0.8.2 or newer, which holds the agent panes
+- [Herdr](https://herdr.dev/docs/install/) 0.8.2 or newer, or [Tern](https://stencil.so/tern),
+  to hold the agent panes (Tern requires closed-beta access and a Stencil account)
 - [Treehouse](https://github.com/kunchenguid/treehouse), which creates worktrees
 - Optional: [`gh`](https://cli.github.com/), signed in, for pull requests and PR watch
 - Optional: `lavish-axi` for presentations, `TYPESAFE_API_KEY` for Jev
@@ -194,7 +214,8 @@ It installs whatever is missing, updates Herdr if it's older than 0.8.2, and off
 panel, keys, tab-bar summary, and notifications to your Herdr config (it shows the lines and asks
 first). Read
 [setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep Bun's global bin
-directory on your `PATH`.
+directory on your `PATH`. Tern users choose it during first-run setup; setup then links
+Tandem's native views and asks separately about Tern's global sidebar and shortcuts.
 
 Then, from any folder:
 
@@ -205,7 +226,8 @@ tandem
 The first run opens Tandem's own chat with a welcome popup. With Lavish installed, Tandem opens a
 one-page setup in your browser. It has four steps:
 
-1. **Models** — choose a model and thinking level for each job from the OMP catalogue.
+1. **Models** — choose a model and thinking level for each job from the OMP catalogue, and
+   choose Herdr or Tern when Tern is ready.
 2. **Repos** — choose discovered checkouts, scan another code folder, or add a checkout by its exact
    path. Review and edit the validation and install commands for each.
 3. **Self-improvement** — choose whether Tandem should investigate its own recurring problems and
@@ -213,7 +235,7 @@ one-page setup in your browser. It has four steps:
 4. **Review** — check the complete answer, including which selected providers Tandem may spend on.
 
 Save and continue is your one consent to apply the models and selected providers, code folders,
-self-improvement setting, and selected repository settings, then open a chat for each selected repo.
+self-improvement and terminal choices, and selected repository settings, then open a chat for each selected repo.
 Tandem validates the answer against the current machine before it saves anything; the coordinator
 posts a fixed success or error status in chat. The page only reports that the request was submitted
 and saving is in progress until that status arrives. Chat-based setup keeps its own approval step.
