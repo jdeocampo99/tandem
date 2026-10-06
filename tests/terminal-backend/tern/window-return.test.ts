@@ -144,12 +144,18 @@ for (const mode of [
           : 0,
       );
       if (mode === "listing-failed") {
-        expect(quarantined).toBe(true);
+        // Even the safe focus needs an exact coordinator read. An unavailable
+        // listing cannot authorize any mutation or clear the durable fence.
         await expect(back()).rejects.toThrow();
         expect(opened).toBe(1);
       }
       if (mode === "retained") {
-        await expect(back()).rejects.toThrow("quarantine");
+        const returned = await back();
+        expect(typeof returned).toBe("object");
+        if (typeof returned === "object") {
+          expect(returned.paneId).toBe("3");
+          expect(returned.warnings?.[0]).toContain("recovery record were kept");
+        }
         expect(opened).toBe(1);
       }
     } finally {

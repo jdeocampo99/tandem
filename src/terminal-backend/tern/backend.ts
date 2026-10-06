@@ -66,7 +66,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   // Durable runtime quarantines a rejected effect; this guard also prevents local blind retries.
   const quarantined = new Set<string>();
   const guard = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
-    if (quarantined.has(key))
+    if (quarantined.has(key) || quarantined.has(`native-open:${key}`))
       throw new TernOutcomeUnknownError(key, "an earlier effect is quarantined");
     try {
       return await operation();
@@ -74,6 +74,18 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       if (error instanceof TernOutcomeUnknownError) quarantined.add(key);
       throw error;
     }
+  };
+  const guardOpen = async <T>(
+    key: string,
+    operation: () => Promise<T>,
+    recoveredNativeOpen = false,
+  ): Promise<T> => {
+    // Exact native intent recovery only settles an opening, never an unrelated close.
+    const openingKey = `native-open:${key}`;
+    if (recoveredNativeOpen) quarantined.delete(openingKey);
+    if (quarantined.has(key))
+      throw new TernOutcomeUnknownError(key, "an earlier effect is quarantined");
+    return guard(openingKey, operation);
   };
   const check = (target: EndpointTarget) => inspect(commands, target);
   const endpointFor = (target: SessionTarget, entry: LocatedBlock): Endpoint => ({
@@ -223,7 +235,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       import("../../board/snapshot.ts"),
     ]);
     return {
-      views: ternViewHost(commands, { clock, wait, guard }),
+      views: ternViewHost(commands, { clock, wait, guard, guardOpen }),
       projectForView,
       nativeViewsPath,
     };
@@ -636,13 +648,45 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     },
     closePanel: async (target) =>
       guard(target.panelPaneId, async () => {
-        const entry = blocks(await commands.ls(target.cwd)).find(
-          (each) => each.block.id === target.panelPaneId,
-        );
+        const listing = await commands.ls(target.cwd);
+        if (listing.detached.length > 0)
+          throw new TernOutcomeUnknownError("panel close", "detached placement is ambiguous");
+        const entry = blocks(listing).find((each) => each.block.id === target.panelPaneId);
         if (entry === undefined) return;
         const endpoint = endpointFor(target, entry);
-        if (entry.block.program !== "tandem.panel" || entry.block.args?.[1] === undefined)
-          throw new EndpointOwnershipError(endpoint, "recorded block is not a Tandem panel");
+        if (options.home === undefined)
+          throw new EndpointOwnershipError(endpoint, "panel close requires its recorded home");
+        const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
+        const { nativeViewsPath } = await import("../../board/snapshot.ts");
+        const { exactNativeView } = await import("./view-intent.ts");
+        const owners = (await listCoordinatorRecords(options.home, target.sessionId)).filter(
+          (record) =>
+            record.endpoint.terminal === "tern" &&
+            record.endpoint.paneId !== entry.block.id &&
+            record.endpoint.paneId === entry.block.args?.[1] &&
+            record.endpoint.terminalSessionId === entry.session.id &&
+            record.endpoint.tabId === entry.tab.id &&
+            record.endpoint.workspaceId === entry.tab.id &&
+            record.worktree.path === target.cwd,
+        );
+        const owner = owners[0];
+        if (owners.length !== 1 || owner === undefined)
+          throw new EndpointOwnershipError(endpoint, "panel has no unique recorded coordinator");
+        const path = nativeViewsPath(options.home, owner.repoPath);
+        const args = [path, owner.endpoint.paneId, target.cwd, "", path];
+        const proveIdentity = async () => {
+          const current = await exactNativeView(
+            commands,
+            target.cwd,
+            owner.endpoint,
+            "panel",
+            "panel",
+            args,
+          );
+          if (current?.block.id !== endpoint.paneId)
+            throw new EndpointOwnershipError(endpoint, "pane is not the exact recorded panel");
+        };
+        await proveIdentity();
         const proc = await commands.read(target.cwd, ["process", endpoint.paneId], Processes);
         if (
           proc.pane !== endpoint.paneId ||
@@ -651,12 +695,20 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           proc.group !== null
         )
           throw new EndpointBusyError(endpoint);
-        await exactPane(commands, { endpoint, cwd: target.cwd });
+        await proveIdentity();
         const ack = await commands.mutate(target.cwd, ["close", endpoint.paneId], BlockAck);
         if (ack.block !== endpoint.paneId)
           throw new TernOutcomeUnknownError("panel close", "acknowledged another block");
-        if (blocks(await commands.ls(target.cwd)).some((each) => each.block.id === endpoint.paneId))
-          throw new TernOutcomeUnknownError("panel close", "block still present");
+        try {
+          const after = await commands.ls(target.cwd);
+          if (
+            after.detached.length > 0 ||
+            blocks(after).some((each) => each.block.id === endpoint.paneId)
+          )
+            throw new Error("closed block is still present or detached placement is ambiguous");
+        } catch (cause) {
+          throw new TernOutcomeUnknownError("panel close", cause);
+        }
       }),
     fitPanel: async (target) => ({
       fittedWidth: target.fittedWidth,
