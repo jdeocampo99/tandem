@@ -35,12 +35,18 @@ const Ticket = z.object({
   receipt: z.string(),
 });
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
-const Intent = z.object({
+const NativeIntent = z.object({
   version: z.literal(1),
   owner: z.string(),
   route: z.string(),
   ticket: Ticket,
 });
+const BrowserIntent = z.object({
+  version: z.literal(1),
+  owner: z.string(),
+  browser: z.object({ url: z.string().url(), windowId: z.string().optional() }),
+});
+const Intent = z.union([NativeIntent, BrowserIntent]);
 type TicketModel = z.infer<typeof Ticket>;
 
 async function readPrivateJson(path: string): Promise<unknown> {
@@ -119,6 +125,7 @@ export async function withNativeOpenIntent<T>(
     recovered: boolean;
     markMutationAttempted: () => void;
     claim: (route: string, ticket: TicketModel) => Promise<void>;
+    claimBrowser: (browser: z.infer<typeof BrowserIntent>["browser"]) => Promise<void>;
     settle: () => Promise<void>;
   }) => Promise<T>,
 ): Promise<T> {
@@ -140,6 +147,7 @@ export async function withNativeOpenIntent<T>(
   const release = await acquireDarwinFileLock(join(directory, `${key}.lock`), 10000, 20);
   const pending: { route: string; ticket: TicketModel }[] = [];
   let claimedThisCall = false;
+  let browserPending = false;
   let mutationAttempted = false;
   const settle = async () => {
     // Remove the fence last. Interrupted cleanup still leaves a recoverable intent.
@@ -153,6 +161,12 @@ export async function withNativeOpenIntent<T>(
     try {
       const saved = Intent.parse(await readPrivateJson(path));
       if (saved.owner !== owner) throw new Error("Native opening intent owner changed");
+      // A browser listing cannot correlate a URL or PiP owner with an unacknowledged
+      // opening. Even a matching title or newly visible browser is insufficient proof.
+      if ("browser" in saved) {
+        browserPending = true;
+        throw new Error("Earlier browser opening has no exact completion evidence");
+      }
       pending.push(saved);
     } catch (error) {
       if (!missing(error)) throw new TernOutcomeUnknownError("tern open intent", error);
@@ -227,6 +241,14 @@ export async function withNativeOpenIntent<T>(
         pending.push({ route, ticket });
         claimedThisCall = true;
       },
+      claimBrowser: async (browser) => {
+        await writeFile(path, JSON.stringify({ version: 1, owner, browser }), {
+          flag: "wx",
+          mode: 0o600,
+        });
+        browserPending = true;
+        claimedThisCall = true;
+      },
       settle,
     });
   } catch (cause) {
@@ -236,7 +258,7 @@ export async function withNativeOpenIntent<T>(
       await settle();
       throw cause;
     }
-    if (pending.length > 0 && !(cause instanceof TernOutcomeUnknownError))
+    if ((pending.length > 0 || browserPending) && !(cause instanceof TernOutcomeUnknownError))
       throw new TernOutcomeUnknownError("tern open verification", cause);
     throw cause;
   } finally {

@@ -459,27 +459,39 @@ export function ternViewHost(
         if (!Number.isSafeInteger(ownerId))
           throw new Error("Browser owner id is not exactly representable");
         await options.guard(input.coordinator.paneId, async () => {
-          const before = blocks(await cmd.ls(input.cwd));
-          await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-          const opened = await cmd.mutate(
-            input.cwd,
-            ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
-            BrowserOpened,
+          await withNativeOpenIntent(
+            { ...input, indexPath: nativeViewsPath(input.home, project) },
+            cmd,
+            async (intent) => {
+              const before = blocks(await cmd.ls(input.cwd));
+              await intent.claimBrowser({
+                url: url.href,
+                ...(input.origin?.windowId === undefined
+                  ? {}
+                  : { windowId: input.origin.windowId }),
+              });
+              await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+              intent.markMutationAttempted();
+              const opened = await cmd.mutate(
+                input.cwd,
+                ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
+                BrowserOpened,
+              );
+              const listing = await cmd.ls(input.cwd);
+              const created = blocks(listing).find((entry) => entry.block.id === opened.ok.block);
+              if (
+                listing.detached.length > 0 ||
+                !created ||
+                created.session.id !== input.coordinator.terminalSessionId ||
+                before.some((entry) => entry.block.id === opened.ok.block)
+              )
+                throw new TernOutcomeUnknownError(
+                  "tern browser",
+                  "new browser identity was not confirmed",
+                );
+              await intent.settle();
+            },
           );
-          const created = blocks(
-            await cmd.ls(input.cwd).catch((cause: unknown) => {
-              throw new TernOutcomeUnknownError("tern browser", cause);
-            }),
-          ).find((entry) => entry.block.id === opened.ok.block);
-          if (
-            !created ||
-            created.session.id !== input.coordinator.terminalSessionId ||
-            before.some((entry) => entry.block.id === opened.ok.block)
-          )
-            throw new TernOutcomeUnknownError(
-              "tern browser",
-              "new browser identity was not confirmed",
-            );
         });
         return { opened: true, warnings: [] };
       }

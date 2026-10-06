@@ -324,6 +324,15 @@ as "cannot open in a file block", even after opening them. Success therefore req
 receipt and a scoped listing proving the exact block program and launch arguments. Missing
 or conflicting evidence quarantines the opening, retaining its ticket and resources.
 A confirmed opening removes its transient ticket and receipt. No title proves ownership.
+
+Browser opens use the same private coordinator-bound intent and lock before `tern browser`
+mutates the window. A new acknowledgement and scoped listing must confirm the new block;
+failed or malformed verification retains the intent across fresh CLI invocations. An unresolved
+browser intent fences native and browser openings alike. Listings cannot correlate an earlier
+uncertain browser with its URL and picture-in-picture owner, so they never clear that fence or
+authorize another open. Panel-close verification failures likewise quarantine the close in the
+backend guard and retain resources without a second close.
+
 Before any opening mutation, the host locks a private coordinator-bound intent under
 `<home>/native-host`. For panels, it lists the scoped session and reuses exactly one block
 with the full program and five launch arguments in the intended tab placement; duplicate
