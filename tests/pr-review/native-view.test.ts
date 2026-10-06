@@ -94,7 +94,8 @@ test("native PR diff anchors both sides and replies while retaining outdated thr
   expect(view.checks[1]).toMatchObject({ duration: "9s" });
   expect(view).not.toHaveProperty("clockAt");
   expect(view.checks[0]).not.toHaveProperty("elapsedMs");
-  expect(view.commentDestination).toBe("worker");
+  expect(view.commentDestination).toBe("read-only");
+  expect(view.readOnlyReason).toContain("no Tandem task");
 });
 
 test("PRs without a tour hide its tab and reviews carry the commit and posted binding", () => {

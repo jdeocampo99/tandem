@@ -11,7 +11,14 @@ const navigationModel = z.object({
   tasks: z.record(z.object({ detailFile: z.string() })),
   briefs: z.record(z.object({ detailFile: z.string() })),
   pullRequests: z.record(
-    z.object({ detailFile: z.string(), header: z.object({ taskId: z.string().optional() }) }),
+    z.object({
+      detailFile: z.string(),
+      header: z.object({
+        taskId: z.string().optional(),
+        repo: z.string(),
+        number: z.number().int().positive(),
+      }),
+    }),
   ),
   projects: z.array(
     z.object({
