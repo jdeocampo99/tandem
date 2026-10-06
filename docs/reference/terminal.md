@@ -165,9 +165,10 @@ Every published view is `{version:1,kind,revision,model}`. The root has `kind:"p
 last readable display but disable revision-bound actions. These derived files never authorize
 an approval or post.
 
-All blocks receive two strings, `[viewPath, ctxJson]`, from `blockArgs` in
+All blocks receive three strings, `[viewPath, ctxJson, indexPath]`, from `blockArgs` in
 `src/native/contract.ts`; listings are matched only through `parseBlockArgs`. Blocks treat
-`ctxJson` as opaque and echo it back with every action, with their own pane id.
+`ctxJson` as opaque and echo it back with every action, with their own pane id. `indexPath` is
+the project's root index, which detail views also watch.
 
 Actions run once as `tandem native <verb> ... --pane <decimal id> --ctx <ctxJson>`. The CLI validates project and origin ownership before acting. JSON actions
 use `native-input.sh` and `src/terminal/native-input.ts`: stdin becomes one unique immutable UTF-8

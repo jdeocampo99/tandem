@@ -283,20 +283,35 @@ local function setup(name)
   panes[30]={tab=22,block="tandem.catchup",floating=false}
  end
 end
-local function emit(name,stage)
+-- Everything a layout effect can change: each pane's tab, kind and floating state, and the split.
+local function snapshot(): string
+ local ids={}
+ for id in panes do table.insert(ids,id) end
+ table.sort(ids)
+ local parts={}
+ for _,id in ids do
+  local pane=panes[id]
+  table.insert(parts,string.format("%d:%d:%s:%s",id,pane.tab,pane.block,tostring(pane.floating==true)))
+ end
+ return table.concat(parts,",") .. string.format("|%.6f|%.6f",ratio,span)
+end
+local function emit(name,stage,before)
  local listed={}
  for id,pane in panes do table.insert(listed,{id=id,tab=pane.tab,block=pane.block,args=pane.args}) end
- print("T4\t" .. name .. "\t" .. stage .. "\t" .. encode(writes[ticket.receipt]) .. "\t" .. encode(listed))
+ print("T4\t" .. name .. "\t" .. stage .. "\t" .. encode(writes[ticket.receipt]) .. "\t" .. encode(listed)
+  .. "\t" .. tostring(before~=snapshot()))
 end
 for _,name in SWEEP do
  local kind,placement=string.match(name,"^([^/]+)/(.+)$")
- reset(kind,placement); setup(name); open()
+ reset(kind,placement); setup(name)
+ local before=snapshot()
+ open()
  local stages=0
  drain(function(index) stages=index end)
- emit(name,0)
+ emit(name,0,before)
  for stage=1,stages do
-  reset(kind,placement); setup(name); faultAt=stage; open(); drain(); faultAt=nil
-  emit(name,stage)
+  reset(kind,placement); setup(name); before=snapshot(); faultAt=stage; open(); drain(); faultAt=nil
+  emit(name,stage,before)
  end
 end
 print("Staged layout, second-project views, fresh contexts, expiry and quarantine checks passed")

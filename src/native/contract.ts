@@ -48,9 +48,13 @@ function serialize(ctx: BlockContext): string {
   });
 }
 
-/** The only constructor of a native block's launch arguments. */
-export function blockArgs(viewPath: string, ctx: BlockContext): [string, string] {
-  return [viewPath, serialize(BlockContext.parse(ctx))];
+/**
+ * The only constructor of a native block's launch arguments: the view it draws, its opaque
+ * context, and the project index it also watches (the context's `index`, readable by Luau).
+ */
+export function blockArgs(viewPath: string, ctx: BlockContext): [string, string, string] {
+  const parsed = BlockContext.parse(ctx);
+  return [viewPath, serialize(parsed), parsed.index];
 }
 
 /** Parses an echoed context; throws when it is not exactly what `blockArgs` writes. */
@@ -64,10 +68,11 @@ export function parseBlockContext(text: string): BlockContext {
 export function parseBlockArgs(
   args: readonly string[] | undefined,
 ): Readonly<{ viewPath: string; ctx: BlockContext }> | undefined {
-  const [viewPath, ctx] = args ?? [];
-  if (args?.length !== 2 || viewPath === undefined || ctx === undefined) return undefined;
+  const [viewPath, ctx, index] = args ?? [];
+  if (args?.length !== 3 || viewPath === undefined || ctx === undefined) return undefined;
   try {
-    return { viewPath, ctx: parseBlockContext(ctx) };
+    const parsed = parseBlockContext(ctx);
+    return parsed.index === index ? { viewPath, ctx: parsed } : undefined;
   } catch {
     return undefined;
   }
@@ -92,7 +97,7 @@ export const Ticket = z
     version: z.literal(1),
     kind: ViewKind,
     placement: Placement,
-    args: z.tuple([z.string(), z.string()]),
+    args: z.tuple([z.string(), z.string(), z.string()]),
     coordinator: PaneId,
     origin: PaneId,
     session: PaneId,

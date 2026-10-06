@@ -15,6 +15,7 @@ import {
   Ticket,
   ViewKind,
 } from "../../native/contract.ts";
+import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
 import type { RetainedViewOpen, TerminalBackend, ViewOrigin } from "../contract.ts";
 import { exactPane } from "./endpoints.ts";
@@ -74,7 +75,7 @@ export type Decision =
 type ViewIdentity = Readonly<{
   kind: ViewKind;
   placement: Placement;
-  args: readonly [string, string];
+  args: readonly [string, string, string];
   session: string;
   tab: string;
 }>;
@@ -231,7 +232,7 @@ export async function exactView(
   coordinator: Endpoint,
   kind: ViewKind,
   placement: Placement,
-  args: readonly [string, string],
+  args: readonly [string, string, string],
 ): Promise<LocatedBlock | undefined> {
   const session = Id.parse(coordinator.terminalSessionId);
   const { exact, ambiguous } = matchView(await listViews(cmd, cwd), {
@@ -292,8 +293,8 @@ function coordinatorKey(coordinator: Endpoint, ctx: Pick<BlockContext, "cwd" | "
     .digest("hex");
 }
 
-function lockFor(directory: string, key: string): Promise<() => Promise<void>> {
-  return acquireDarwinFileLock(join(directory, `${key}.lock`), 10000, 20);
+function lockFor(directory: string, key: string, timeoutMs = 10000): Promise<() => Promise<void>> {
+  return acquireDarwinFileLock(join(directory, `${key}.lock`), timeoutMs, 20);
 }
 
 /** `<key>.<token>.ticket.json` and its receipt, grouped by coordinator key. */
@@ -366,7 +367,9 @@ async function recoverKey(
 
 /**
  * Settles every ticket under `home` whose outcome is now decided and removes orphaned receipts.
- * The coordinator tick calls it, so a late receipt lifts a pause without another click.
+ * The coordinator tick calls it, so a late receipt lifts a pause without another click. A key
+ * whose lock an open holds is skipped, so a click never stalls publication; the next tick
+ * decides it.
  */
 export async function recoverViewOpens(
   commands: TernCommands,
@@ -376,7 +379,13 @@ export async function recoverViewOpens(
   const directory = join(home, "native-host");
   const request = commands.request(home, []);
   for (const [key, tokens] of await ticketNames(directory)) {
-    const release = await lockFor(directory, key);
+    let release: () => Promise<void>;
+    try {
+      release = await lockFor(directory, key, 0);
+    } catch (error) {
+      if (error instanceof StoreLockTimeoutError) continue;
+      throw error;
+    }
     try {
       await recoverKey(directory, key, tokens, now, (ticket) => {
         const window = parseBlockArgs(ticket.args)?.ctx.window;

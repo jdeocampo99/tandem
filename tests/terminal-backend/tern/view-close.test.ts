@@ -78,7 +78,7 @@ for (const mode of [
                               mode === "wrong-request" ||
                               (mode === "changed" && processReads > 0) ||
                               (mode === "args-after-second-read" && processReads === 2)
-                                ? ["/foreign.json", args[1]]
+                                ? ["/foreign.json", args[1], args[2]]
                                 : args,
                           },
                         ]),
@@ -225,7 +225,7 @@ for (const kind of ["board"] as const) {
                                 mode === "foreign-program" ? "unrelated.brief" : `tandem.${kind}`,
                               args:
                                 mode === "wrong-request" || (mode === "changed" && processReads > 0)
-                                  ? ["/foreign.json", args[1]]
+                                  ? ["/foreign.json", args[1], args[2]]
                                   : args,
                             },
                           ]),

@@ -14,11 +14,14 @@ type Run = {stage: string, applied: number}
 local function host(path: string, receipt: string, run: Run): {[string]: string}
  local ok, ticket = pcall(function() return tern.json.decode(tern.fs.read(path, 16384)) end)
  if not ok or type(ticket) ~= "table" or ticket.version ~= 1 or type(ticket.kind) ~= "string"
-  or type(ticket.args) ~= "table" or #ticket.args ~= 2 or ticket.receipt ~= receipt
+  or type(ticket.args) ~= "table" or #ticket.args ~= 3 or ticket.receipt ~= receipt
   or type(ticket.expiresAt) ~= "number" then
   error("Invalid opening ticket")
  end
- -- A ticket the backend no longer waits for must not change the layout.
+ -- A ticket the backend no longer waits for must not change the layout. os.time() has
+ -- 1 s resolution, so a stage may start up to a second after `expiresAt`. That is safe: the
+ -- backend quarantines a ticket at expiry rather than settling it, and decides a late receipt
+ -- again.
  local function current()
   if os.time() * 1000 >= ticket.expiresAt then error("Opening ticket expired") end
  end

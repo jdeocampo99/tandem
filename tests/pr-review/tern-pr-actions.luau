@@ -45,7 +45,7 @@ local cx={pane=123,render=function() end,exit=function(_,code) assert(code==0); 
  toast=function(_,level,title,message) table.insert(toasts,{level=level,title=title,message=message}) end}
 -- Tandem's launch context, which the block echoes back verbatim and never reads.
 local ctx='{"coordinator":"42","cwd":"/original repo","home":"/custom home","index":"/custom home/native-views/project.json","window":"opaque-window"}'
-local args={'/custom home/native-views/project/pr-review-1.json',ctx}
+local args={'/custom home/native-views/project/pr-review-1.json',ctx,'/custom home/native-views/project.json'}
 local function create()
  local state=block.init(cx,args,nil)
  assert(views.refresh(state.view) and state.view.status=='ready')

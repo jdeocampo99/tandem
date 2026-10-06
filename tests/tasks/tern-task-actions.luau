@@ -25,7 +25,7 @@ local function hasText(node,label)
  return false
 end
 local function taskCreate()
- local s=taskBlock.init(cx,{taskPath,ctx})
+ local s=taskBlock.init(cx,{taskPath,ctx,indexPath})
  assert(s.view.status=='ready' and s.index.status=='ready')
  taskBlock.view(s,cx)
  taskBlock.event(s,{ev='action',act='tab',value='PR'},cx)

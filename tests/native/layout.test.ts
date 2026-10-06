@@ -148,12 +148,13 @@ test("layout.luau runs TS-built tickets, and decide() gives every receipt the ta
       .split("\n")
       .filter((line) => line.startsWith("T4\t"))
       .map((line) => {
-        const [, name = "", stage = "", receipt = "", panes = ""] = line.split("\t");
+        const [, name = "", stage = "", receipt = "", panes = "", changed = ""] = line.split("\t");
         return {
           name,
           stage: Number(stage),
           receipt: JSON.parse(receipt),
           panes: JSON.parse(panes),
+          changed: changed === "true",
         };
       });
     expect(new Set(runs.map((run) => run.name))).toEqual(new Set(SWEEP));
@@ -168,6 +169,10 @@ test("layout.luau runs TS-built tickets, and decide() gives every receipt the ta
       if (run.stage === 0)
         expect(`${run.name} clean ${answer}`).toBe(`${run.name} clean settle:opened`);
       if (receipt.status === "done") expect(answer).toBe("settle:opened");
+      // A failure that left the layout changed must count that effect, or decide() would settle
+      // a changed layout as never opened.
+      else if (run.changed)
+        expect(`${run.name}@${run.stage} ${answer}`).toBe(`${run.name}@${run.stage} quarantine`);
       else
         expect(`${run.name}@${run.stage} ${answer}`).toBe(
           `${run.name}@${run.stage} ${receipt.appliedEffects === 0 ? "settle:not-opened" : "quarantine"}`,

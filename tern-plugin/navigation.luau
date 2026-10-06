@@ -2,7 +2,8 @@
 -- Common CLI calling convention for screen renderers. No durable state or retries.
 local M = {}
 -- `ctx` is Tandem's opaque launch context. Blocks never read it; every action echoes it back.
-export type Origin = {path:string, ctx:string}
+-- `index` is the project's root index file, which detail views also watch.
+export type Origin = {path:string, ctx:string, index:string}
 -- Only the known catch-up warning on a proven successful entry permits callback exit.
 -- Retention and unknown warnings keep the originating pane open.
 function M.warnings(stdout: string): ({string}, boolean)
@@ -23,7 +24,7 @@ function M.warnings(stdout: string): ({string}, boolean)
  return messages,complete
 end
 function M.origin(args: {string}): Origin
- return {path=args[1] or "",ctx=args[2] or ""}
+ return {path=args[1] or "",ctx=args[2] or "",index=args[3] or ""}
 end
 -- Appends this block's origin to an action's argv: its exact pane and the echoed context.
 function M.context(argv: {string}, origin: Origin, cx: BlockCx)
@@ -46,13 +47,8 @@ function M.run(origin: Origin, cx: BlockCx, args: {string}, onSuccess: (() -> ()
  end)
  if not ok then cx:toast("error","Tandem couldn't start that action",tostring(problem)) end
 end
--- A task, brief or PR detail file lives in the directory named after its project's index file.
 function M.root(origin: Origin): string
- for _, kind in {"task","brief","pr"} do
-  local project=string.match(origin.path,"^(.*)/"..kind.."%-[^/]*%.json$")
-  if project then return project..".json" end
- end
- return origin.path
+ return origin.index
 end
 function M.back(origin: Origin,cx: BlockCx,onSuccess: (() -> ())?)
  M.run(origin,cx,{"view-file",M.root(origin) .. "#orchestrator"},onSuccess)

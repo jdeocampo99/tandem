@@ -319,7 +319,9 @@ listing, now)` gives every ticket one answer:
 `tern.fs` has no rename, so a receipt that does not parse whole counts as no receipt. Settling
 removes the receipt, then the ticket. Nothing is retried automatically; a new click is a new
 ticket. The click, the coordinator's view publication tick (`recoverViewOpens`) and `tandem fix`
-all decide retained tickets, so a late receipt settles without another click. Recovery also
+all decide retained tickets, so a late receipt settles without another click. The tick skips a
+coordinator whose open is in progress instead of waiting for its lock, so a click never stalls
+publication. Recovery also
 removes a receipt whose ticket `tandem fix` already abandoned.
 
 The host holds one lock per coordinator key for the whole open. Inside it, it decides the
@@ -370,14 +372,14 @@ implemented; host acceptance alone does not register a screen:
 | `tandem.board`, `tandem.usage`, `tandem.catchup` | Root `panel` envelope | Own full-window tab |
 | `tandem.welcome` | Root path (static welcome) | Beside the conversation |
 
-`args = blockArgs(viewPath, ctx) = [viewPath, ctxJson]`, built only by `src/native/contract.ts`
+`args = blockArgs(viewPath, ctx) = [viewPath, ctxJson, indexPath]`, built only by `src/native/contract.ts`
 and matched in listings only through `parseBlockArgs`. `ctx` holds the coordinator pane, cwd,
 home, index path and optional window key. Luau never reads it: every native CLI action echoes it
 back verbatim as `--ctx`, with the renderer's **own** `cx.pane` as `--pane`, and the CLI parses it
 with `parseBlockContext`. `tern-plugin/navigation.luau` provides `origin(args)`,
 `context(argv, origin, cx)`, `run(origin, cx, argv)`, `root(origin)` and `back(origin, cx)`
-without action policy or retries. `root` is the view path itself, or for a task, brief or PR
-detail the index file its directory is named after.
+without action policy or retries. `root` returns `indexPath`, the project's root index (equal to
+the context's `index`), so Luau never derives a path from another.
 Root inputs come from `nativeViewsPath`; detail inputs come from `nativeDetailPath`.
 Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
 board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
