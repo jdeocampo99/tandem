@@ -59,7 +59,7 @@ function M.rows(s: State, model: models.Model, file: models.File, ready: boolean
    table.insert(nodes, diff.row({ key = "r" .. index, kind = r.kind :: "add" | "del" | "ctx", old = r.old, new = r.new, code = r.text or "" }, action, cards))
   end
  end
- return components.keyed(ui.col(nodes), "rows")
+ return ui.el("div", {class="tdm-pr-rows",key="rows"}, nodes)
 end
 function M.view(s: State, model: models.Model, ready: boolean, prefix: string?): Node
  local files = {}

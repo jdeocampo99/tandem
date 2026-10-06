@@ -5,7 +5,7 @@ version = "0.1.0"
 description = "Tandem views, project keys, palette commands and task links"
 host = "host.luau"
 window = "window.luau"
-styles = ["tandem.css"]
+styles = ["tandem.css", "pr.css"]
 
 [[blocks]]
 id = "pr"

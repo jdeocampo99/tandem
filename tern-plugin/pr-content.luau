@@ -88,6 +88,7 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?):
   body = components.keyed(ui.col(nodes), "description")
  end
  local main = {components.keyed(ui.col(header), "header"), body}
+ local footer = {}
  if model.review then
   local review = model.review
   local canPost = valid and not review.posted and review.head == review.currentHead and not s.posting and not s.submitted
@@ -95,15 +96,15 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?):
   for _, verdict in {"comment", "approve", "request-changes"} do
    table.insert(buttons, components.button((if s.verdict == verdict then "✓ " else "") .. verdict, "pr-verdict=" .. verdict, if s.verdict == verdict then "accent" else "muted"))
   end
-  table.insert(main, ui.rule("Your review"))
+  table.insert(footer, ui.rule("Your review"))
   if canPost then
-   table.insert(main, components.keyed(fields.node(s.summary :: fields.Field, "pr-summary", "Overall review…"), "pr-summary"))
+   table.insert(footer, components.keyed(fields.node(s.summary :: fields.Field, "pr-summary", "Overall review…"), "pr-summary"))
    table.insert(buttons, components.button("Post", "pr-post", "accent"))
-  else table.insert(main, components.text(if review.posted or s.submitted then "Review already posted" elseif s.posting then "Posting…" else "PR changed or view unavailable. Re-review before posting.", "warn")) end
-  table.insert(main, ui.row(buttons))
-  table.insert(main, components.text("Reviewed commit " .. review.head .. " · Only drafts marked Keep and your new comments will be posted.", "muted"))
+  else table.insert(footer, components.text(if review.posted or s.submitted then "Review already posted" elseif s.posting then "Posting…" else "PR changed or view unavailable. Re-review before posting.", "warn")) end
+  table.insert(footer, ui.row(buttons))
+  table.insert(footer, components.text("Reviewed commit " .. review.head .. " · Only drafts marked Keep and your new comments will be posted.", "muted"))
  end
- return {dock=ui.col({}), main=components.keyed(ui.col(main), "content")}
+ return {dock=ui.col(footer), main=components.keyed(ui.col(main), "content")}
 end
 local function sender(s: State, model: models.Model, invoke: Invoke): diff.Send
  return function(mine, done)

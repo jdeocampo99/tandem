@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { type CliInvocation, CliUsageError, pathText, text } from "./cli-arguments.ts";
 import type { CliCommandContext, CliCommandOutcome } from "./cli-commands.ts";
+import { showNativePrs } from "./native-prs.ts";
 import { validateNativeContext, viewOriginFrom } from "./cli-view-context.ts";
 
 export type NativeRendererCommand =
@@ -35,7 +36,7 @@ async function unavailable(context: NativeRendererContext): Promise<CliCommandOu
 /** The single implementation registration point for the wave-2 renderer commands. */
 export const nativeRendererHandlers: NativeRendererHandlers = {
   board: unavailable,
-  prs: unavailable,
+  prs: showNativePrs,
   usage: unavailable,
   "new-request": unavailable,
   "open-task": unavailable,

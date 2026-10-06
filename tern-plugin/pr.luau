@@ -46,7 +46,7 @@ local block: BlockDef<State> = {
  title = function(s) return if s.view.model then "#" .. s.view.model.header.number .. " ▾" else "Pull requests" end,
  view = function(s, _cx)
   local model = s.view.model
-  local strip = ui.row({components.button(if model then "#" .. model.header.number .. " ▾" else "PRs ▾", "pr-switcher"), components.button("×", "pr-close")})
+  local strip = ui.row({components.button(if model then "#" .. model.header.number .. " ▾" else "PRs ▾", "pr-switcher"), ui.node("text", {grow=1}), components.button("×", "pr-close")})
   if not model then return {dock=strip, main=components.text("PR data unavailable. Wait for the coordinator to refresh its view.", "warn")} end
   local result = content.view(s.content, model, s.view.status == "ready")
   local top = {strip}
@@ -59,7 +59,7 @@ local block: BlockDef<State> = {
    end
   end
   table.insert(top, result.main)
-  return {main=ui.col(top)}
+  return {main=ui.col(top),dock=result.dock}
  end,
  event = function(s, ev, cx)
   if ev.ev == "action" and ev.act == "pr-close" then cx:exit(0); return end
