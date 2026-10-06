@@ -1,12 +1,19 @@
 import { expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { nativeDetailPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
+import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { briefView } from "../../../src/requests/native-view.ts";
+import { createRequestBriefStore } from "../../../src/requests/store.ts";
+import { RequestBriefWorkflow } from "../../../src/requests/workflow.ts";
+import { createTandemService } from "../../../src/service/controller.ts";
+import { executeTandemAction } from "../../../src/session/actions.ts";
+import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
@@ -28,9 +35,10 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
 );
 
 (enabled ? test : test.skip)(
-  "native brief comments stay pinned, stale approval toasts, and action files are private and removed",
+  "native brief waits for publication before enabling bound actions, reuses exact identity, and keeps comments pinned",
   async () => {
-    const root = await mkdtemp("/tmp/tdm-brief-");
+    const root = await realpath(await mkdtemp("/tmp/tdm-brief-"));
+    const repo = join(root, "repo");
     const config = join(root, "config");
     const plugin = join(root, "plugin");
     const control = join(root, "w.sock");
@@ -48,14 +56,14 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       ZDOTDIR: join(root, "zdot"),
       STENCIL_LOG_DIR: join(root, "logs"),
     };
-    await Promise.all([mkdir(config), mkdir(env.TANDEM_HOME), mkdir(env.ZDOTDIR)]);
+    await Promise.all([mkdir(config), mkdir(env.TANDEM_HOME), mkdir(env.ZDOTDIR), mkdir(repo)]);
     await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
       recursive: true,
     });
     const first = createRequestBriefRecord(
       {
         id: "req-tern",
-        repoPath: root,
+        repoPath: repo,
         content: {
           ...content(
             "Let Tandem launch and manage its coordinator and worker panes in Tern, with the task board shown natively.",
@@ -104,13 +112,12 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
     );
     // Production request briefs have no Lavish page; this fixture has no browser URL either.
     const model = briefView(second);
-    const path = nativeDetailPath(env.TANDEM_HOME, root, "brief-req-tern.json");
+    const path = nativeDetailPath(env.TANDEM_HOME, repo, "brief-req-tern.json");
     await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
     const publish = async (revision: string, value = model) =>
       writeFile(path, JSON.stringify({ version: 1, kind: "brief", revision, model: value }), {
         mode: 0o600,
       });
-    await publish("fixture-2");
     // The shared writer and scoped host close run unchanged; durable action effects use a receipt sink.
     await mkdir(join(root, "src", "terminal"), { recursive: true });
     await cp(
@@ -157,7 +164,7 @@ if (existsSync(join(root, "refuse"))) {
     coordinator, cwd: root, home: join(root, "home"),
     origin: {paneId: argv[argv.indexOf("--pane") + 1]!, ...(windowId === undefined ? {} : {windowId})},
     view: {kind: "brief", requestId: argv[2]!},
-  }, root);
+  }, ${JSON.stringify(repo)});
   console.log(JSON.stringify({warnings: closed.warnings}));
 }
 `,
@@ -277,6 +284,23 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         generation: 0,
       };
       await writeFile(join(root, "coordinator.json"), JSON.stringify(coordinator));
+      await saveCoordinatorRecord(env.TANDEM_HOME, {
+        schemaVersion: 1,
+        repoPath: repo,
+        endpoint: coordinator,
+        worktree: {
+          root,
+          path: root,
+          name: "coordinator",
+          baseHead: "fixture-head",
+          branch: "fixture-coordinator",
+          leaseId: "fixture-lease",
+          leaseHolder: "coordinator",
+          leasedAt: NOW,
+        },
+        harness: DEFAULT_HARNESS,
+        command: ["omp"],
+      });
       const runner: CommandRunner = async (request) => {
         const child = Bun.spawn([...request.argv], {
           env: { ...env, ...request.env },
@@ -302,18 +326,101 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         wait: (ms) => Bun.sleep(ms),
         guard: async (_key, operation) => operation(),
       });
-      const opened = await host.open(
-        {
-          coordinator,
-          cwd: root,
-          home: env.TANDEM_HOME,
-          view: { kind: "brief", requestId: model.requestId },
-        },
-        root,
-        "brief",
-        "split",
-        path,
+      const terminal = terminalBackend(runner, {
+        terminal: "tern",
+        home: env.TANDEM_HOME,
+        tern: { binary },
+      });
+      // A pane may be hosted before either its index or detail is published.
+      const waiting = await terminal.openView({
+        coordinator,
+        cwd: root,
+        home: env.TANDEM_HOME,
+        view: { kind: "brief", requestId: model.requestId },
+      });
+      const waitingPane = waiting.endpoint?.paneId;
+      if (waitingPane === undefined) throw new Error("Waiting brief identity missing");
+      expect(waiting.endpoint).toEqual({ ...coordinator, terminal: "tern", paneId: waitingPane });
+      expect(waitingPane).not.toBe(coordinator.paneId);
+      const waitingBlock = (await commands.ls(root)).sessions
+        .flatMap((session) => session.tabs.flatMap((tab) => tab.blocks))
+        .find((block) => block.id === waitingPane);
+      expect(waitingBlock?.program).toBe("tandem.brief");
+      await until(async () =>
+        (await tree()).some((each) => each.text?.startsWith("Loading brief…") === true),
       );
+      expect(
+        (await tree()).some(
+          (each) => each.text === "Approve" || each.text?.startsWith("Request changes"),
+        ),
+      ).toBe(false);
+      if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-loading");
+      // A partial approval triplet cannot make the unpublished brief actionable.
+      await writeFile(
+        path,
+        JSON.stringify({
+          version: 1,
+          kind: "brief",
+          revision: "partial",
+          model: {
+            ...model,
+            approval: {
+              briefRevision: model.revision,
+              contentDigest: model.approval.contentDigest,
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+      await Bun.sleep(1200);
+      expect(
+        (await tree()).some(
+          (each) => each.text === "Approve" || each.text?.startsWith("Request changes"),
+        ),
+      ).toBe(false);
+      expect(await Bun.file(join(root, "received.json")).exists()).toBe(false);
+      const workflow = new RequestBriefWorkflow({
+        home: env.TANDEM_HOME,
+        sessionId: coordinator.sessionId,
+        parentWorkspaceId: coordinator.workspaceId,
+        coordinatorPaneId: coordinator.paneId,
+        terminal,
+        clock: () => NOW,
+        store: createRequestBriefStore({
+          home: env.TANDEM_HOME,
+          clock: () => NOW,
+          idFactory: () => model.requestId,
+        }),
+        listTasks: async () => [],
+        pauseTask: async () => {
+          throw new Error("No native fixture tasks");
+        },
+        checkLanguage: async () => [],
+      });
+      const projected = await workflow.draft({
+        repoPath: repo,
+        content: first.draft.content,
+        reviewPane: true,
+      });
+      expect(projected.record.reviewPane?.endpoint).toEqual(waiting.endpoint);
+      await until(async () =>
+        (await tree()).some((each) => each.text?.includes("rev 1 ·") === true),
+      );
+      expect((await tree()).some((each) => each.text === "Approve")).toBe(true);
+      const updated = await workflow.draft({
+        repoPath: repo,
+        requestId: model.requestId,
+        content: second.draft.content,
+        reviewPane: true,
+      });
+      const opened = { paneId: updated.record.reviewPane?.endpoint.paneId ?? "" };
+      expect(opened.paneId).toBe(projected.record.reviewPane?.endpoint.paneId ?? "");
+      expect(opened.paneId).not.toBe("");
+      expect(
+        (await commands.ls(root)).sessions
+          .flatMap((session) => session.tabs.flatMap((tab) => tab.blocks))
+          .filter((block) => block.program === "tandem.brief"),
+      ).toHaveLength(1);
       expect(opened.paneId).not.toBe(coordinator.paneId);
       await until(async () =>
         (await tree()).some((each) => each.text?.includes("rev 2 · 1 changes") === true),
@@ -443,7 +550,7 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
           home: env.TANDEM_HOME,
           view: { kind: "brief", requestId: model.requestId },
         },
-        root,
+        repo,
         "brief",
         "split",
         path,
@@ -465,6 +572,52 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       expect(JSON.parse(await readFile(join(root, "received.json"), "utf8"))).toEqual(
         model.approval,
       );
+      // Conversation approval uses the same scoped retirement as the native action.
+      await writeFile(join(env.TANDEM_HOME, "settings.toml"), 'terminal = "tern"\n');
+      const service = createTandemService({
+        home: env.TANDEM_HOME,
+        sessionId: coordinator.sessionId,
+        coordinatorPaneId: coordinator.paneId,
+        run: runner,
+        clock: () => NOW,
+      });
+      try {
+        // Feedback retirement followed by the real coordinator tool action must host a native
+        // brief. Repeating that action refreshes the exact same split instead of launching a pager.
+        await service.closeRequestBriefReview(model.requestId, model.revision);
+        await executeTandemAction({ action: "brief-review", requestId: model.requestId }, service, {
+          confirm: undefined,
+        });
+        const conversationReview = await service.requestBrief(model.requestId);
+        const conversationPane = conversationReview.record.reviewPane?.endpoint.paneId;
+        if (conversationPane === undefined) throw new Error("Workflow brief pane missing");
+        await until(async () => (await tree()).some((each) => each.text === "Approve"));
+        await executeTandemAction({ action: "brief-review", requestId: model.requestId }, service, {
+          confirm: undefined,
+        });
+        expect(
+          (await service.requestBrief(model.requestId)).record.reviewPane?.endpoint.paneId,
+        ).toBe(conversationPane);
+        const briefBlocks = (await commands.ls(root)).sessions
+          .flatMap((session) => session.tabs.flatMap((tab) => tab.blocks))
+          .filter((block) => block.program === "tandem.brief");
+        expect(briefBlocks.map((block) => block.id)).toEqual([conversationPane]);
+        if (shots) await ctl("shot", "brief-coordinator-review");
+        const approved = await service.approveRequestBrief({
+          requestId: model.requestId,
+          ...model.approval,
+        });
+        expect(approved.approvalState).toBe("current");
+        expect(approved.record.reviewPane?.status).toBe("closed");
+        expect(await paneExists(conversationPane)).toBe(false);
+        expect(await paneExists(coordinator.paneId)).toBe(true);
+      } finally {
+        await service.shutdown();
+      }
+      if (shots) {
+        await Bun.sleep(1000);
+        await ctl("shot", "brief-workflow-closed");
+      }
     } catch (error) {
       if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-failed").catch(() => {});
       console.error(

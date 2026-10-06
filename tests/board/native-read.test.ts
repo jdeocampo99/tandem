@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { markNativeAlertsRead, NativeAlerts } from "../../src/board/native-alerts.ts";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
-import { nativeDetailPath, nativeViewsPath, writeNativeViews } from "../../src/board/snapshot.ts";
+import { nativeDetailPath, nativeViewsPath, publishNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import { repositoryKey } from "../../src/config/repositories.ts";
 import { reviseRequestBriefRecord } from "../../src/requests/brief.ts";
@@ -39,7 +39,7 @@ test("serialized brief detail exposes the exact native approval input for its di
       },
       world.repoPath,
     );
-    await writeNativeViews(world.home, publication);
+    await publishNativeViews(world.home, publication.bundle.project, async () => publication);
     const entry = publication.bundle.briefs[first.id];
     if (entry === undefined) throw new Error("Expected brief index");
     const detail = z
@@ -124,7 +124,7 @@ test("native bundle reads saved task inspection/timeline and writes an atomic pr
     expect(first.bundle.tasks[task.id]).not.toHaveProperty("progress");
     expect(commands).toEqual(["omp usage --json"]);
     expect(first.bundle.changeSignature).toBe(second.bundle.changeSignature);
-    await writeNativeViews(world.home, first);
+    await publishNativeViews(world.home, first.bundle.project, async () => first);
     const path = nativeViewsPath(world.home, world.repoPath);
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
       version: 1,
@@ -142,29 +142,34 @@ test("native bundle reads saved task inspection/timeline and writes an atomic pr
     });
     expect((await stat(detailPath)).mode & 0o777).toBe(0o600);
     expect((await readdir(join(world.home, "native-views"))).toSorted()).toEqual(
-      [repositoryKey(world.repoPath), `${repositoryKey(world.repoPath)}.json`].toSorted(),
+      [
+        repositoryKey(world.repoPath),
+        `${repositoryKey(world.repoPath)}.json`,
+        `${repositoryKey(world.repoPath)}.lock`,
+      ].toSorted(),
     );
     const detailStat = await stat(detailPath);
     const bundleStat = await stat(path);
-    await writeNativeViews(world.home, first);
+    await publishNativeViews(world.home, first.bundle.project, async () => first);
     expect((await stat(detailPath)).ino).toBe(detailStat.ino);
     expect((await stat(detailPath)).mtimeMs).toBe(detailStat.mtimeMs);
     expect((await stat(path)).ino).toBe(bundleStat.ino);
-    await writeNativeViews(world.home, {
+    const taskView = detail.view;
+    await publishNativeViews(world.home, world.repoPath, async () => ({
       bundle: first.bundle,
       details: [
         {
           ...detail,
           view: {
-            ...detail.view,
+            ...taskView,
             data: {
-              ...detail.view.data,
+              ...taskView.data,
               stuck: { reason: "updated stop", actions: ["restart", "steer"] },
             },
           },
         },
       ],
-    });
+    }));
     expect((await stat(detailPath)).ino).not.toBe(detailStat.ino);
     expect((await stat(path)).ino).toBe(bundleStat.ino);
     expect(nativeViewsPath(world.home, "/different/app")).not.toBe(
@@ -349,7 +354,7 @@ test("project switcher reads only other owners' published summaries without rewr
       },
       details: [],
     };
-    await writeNativeViews(world.home, other);
+    await publishNativeViews(world.home, other.bundle.project, async () => other);
     const path = nativeViewsPath(world.home, other.bundle.project);
     const before = await readFile(path, "utf8");
     const inode = (await stat(path)).ino;
@@ -374,7 +379,7 @@ test("project switcher reads only other owners' published summaries without rewr
       new Map([[world.repoPath, { terminal: "herdr", sessionId: "own-session" }]]),
     );
     expect(foreignSession.bundle.summary).not.toHaveProperty("sessionId");
-    await writeNativeViews(world.home, publication);
+    await publishNativeViews(world.home, publication.bundle.project, async () => publication);
     expect(await readFile(path, "utf8")).toBe(before);
     expect((await stat(path)).ino).toBe(inode);
     await writeFile(
@@ -418,16 +423,16 @@ test("native publication refuses cross-project details and escaping filenames be
     const detail = publication.details[0];
     if (detail === undefined) throw new Error("Expected detail");
     await expect(
-      writeNativeViews(world.home, {
+      publishNativeViews(world.home, world.repoPath, async () => ({
         ...publication,
         details: [{ ...detail, view: { ...detail.view, project: "/another/app" } }],
-      }),
+      })),
     ).rejects.toThrow("another project's detail");
     await expect(
-      writeNativeViews(world.home, {
+      publishNativeViews(world.home, world.repoPath, async () => ({
         ...publication,
         details: [{ ...detail, file: "task-../../escape.json" }],
-      }),
+      })),
     ).rejects.toThrow("filename");
     await expect(stat(nativeViewsPath(world.home, world.repoPath))).rejects.toHaveProperty(
       "code",
@@ -468,7 +473,7 @@ test("publication prunes absent task/brief/PR details only in its own project an
         world.repoPath,
       );
       expect(publication.retainedDetailFiles).toContain("pr-acme%2Fapp-4.json");
-      await writeNativeViews(world.home, publication);
+      await publishNativeViews(world.home, publication.bundle.project, async () => publication);
       const directory = join(world.home, "native-views", repositoryKey(world.repoPath));
       const stale = ["task-deleted.json", "brief-deleted.json", "pr-acme%2Fapp-3.json"];
       for (const file of [...stale, "pr-acme%2Fapp-4.json", "notes.json", "task-write.json.tmp"])
@@ -478,7 +483,7 @@ test("publication prunes absent task/brief/PR details only in its own project an
         recursive: true,
       });
       await writeFile(foreign, "another owner's content");
-      await writeNativeViews(world.home, publication);
+      await publishNativeViews(world.home, publication.bundle.project, async () => publication);
       for (const file of stale)
         await expect(stat(join(directory, file))).rejects.toHaveProperty("code", "ENOENT");
       expect(await readFile(join(directory, "pr-acme%2Fapp-4.json"), "utf8")).toBe(
@@ -490,11 +495,11 @@ test("publication prunes absent task/brief/PR details only in its own project an
         "previous content",
       );
       // When the entities disappear, even the last good cached detail goes away.
-      await writeNativeViews(world.home, {
+      await publishNativeViews(world.home, world.repoPath, async () => ({
         bundle: { ...publication.bundle, tasks: {}, briefs: {}, pullRequests: {} },
         details: [],
         retainedDetailFiles: [],
-      });
+      }));
       expect((await readdir(directory)).toSorted()).toEqual(
         ["notes.json", "task-write.json.tmp"].toSorted(),
       );

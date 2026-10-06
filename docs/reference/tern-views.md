@@ -242,7 +242,10 @@ that output does not authorize subsequent mutations. A handled link stays handle
 the plugin never retries an action, including an operation whose outcome is uncertain.
 
 The terminal port's `openView` returns `{ opened: boolean, warnings: readonly string[],
-fallback?: "brief-review" }`. The action handler carries warnings in its result and fails
+endpoint?: Endpoint, fallback?: "brief-review" }`. A confirmed native brief returns its exact
+split endpoint for the automatic request workflow's retirement receipt. Its explicit `terminal:"tern"`
+tag, terminal session, tab, workspace and pane ids come from exact native block evidence,
+including reuse, rather than a title. The action handler carries warnings in its result and fails
 when no view opened. The `brief-review` fallback tells the action handler to use the existing
 request-brief review workflow and verify that its pane opened. Callers do not create a second
 view or retry an open merely because warnings or a fallback are present.
@@ -250,6 +253,9 @@ view or retry an open merely because warnings or a fallback are present.
 Installation, sidebar/shortcut consent, custom-key preservation and preference restoration
 are defined in [terminal.md](terminal.md#plugin-consent-and-restoration). Choosing Tern links
 the package; declining global settings keeps palette commands and panel buttons available.
+
+The native brief pane and its loading, feedback and retirement behavior are defined in
+[request-briefs.md](request-briefs.md#native-brief-pane).
 
 ## Native hosting and renderer launch API
 
@@ -340,7 +346,14 @@ and completes approval/feedback first; close errors become successful-action war
 The host proves the block's program, all launch arguments, scoped session and idle state twice,
 rechecks exact identity and full arguments after the final process read immediately before
 closing, then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
-are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
+are quarantined. Automatic request projection uses the existing `reviewPane` receipt fields
+for the native split; a manual native action does not register a Markdown projection.
+Brief projection writes its detail before opening, so a new request need not wait for the
+background index publication. Native brief opens derive the stable detail filename and reuse
+exactly one matching split across revisions, without running a pager. The same exact-evidence
+reuse applies to PR, PR-list and task-picker splits; repeating an open creates no duplicate.
+The shared `projectRequestBriefPane` and `closeRequestBriefPane` entry points select this native
+path for Tern, including the coordinator's `reviewRequestBrief` action after feedback.
 
 The host explicitly launches renderer blocks and task replacements with `keep_open=false`.
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.

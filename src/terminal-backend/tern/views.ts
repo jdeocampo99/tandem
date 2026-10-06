@@ -15,6 +15,7 @@ import {
   BlockAck,
   blocks,
   Id,
+  type LocatedBlock,
   Processes,
   type TernCommands,
   TernOutcomeUnknownError,
@@ -45,6 +46,12 @@ const returnPrograms = new Set(
   ].map((kind) => `tandem.${kind}`),
 );
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
+type ViewOpeningResult = {
+  paneId: string;
+  project: string;
+  endpoint?: Endpoint;
+  warnings?: string[];
+};
 
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
   const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
@@ -155,7 +162,7 @@ export function ternViewHost(
       | "welcome",
     placement: "panel" | "split" | "task" | "window" | "return" | "inbox",
     path: string,
-  ): Promise<{ paneId: string; project: string; warnings?: string[] }> => {
+  ): Promise<ViewOpeningResult> => {
     const { ensurePrivateDirectoryTree } = await import("../../coordinator/lock.ts");
     const { nativeViewsPath } = await import("../../board/snapshot.ts");
     const cmd = await scoped(input, placement === "return");
@@ -167,12 +174,31 @@ export function ternViewHost(
       input.origin?.windowId ?? "",
       indexPath,
     ];
-    return withNativeOpenIntent(
+    const resultFor = (entry: LocatedBlock) => ({
+      paneId: entry.block.id,
+      project,
+      ...(kind === "brief" && placement === "split"
+        ? {
+            endpoint: {
+              ...input.coordinator,
+              terminal: "tern" as const,
+              terminalSessionId: entry.session.id,
+              workspaceId: entry.tab.id,
+              tabId: entry.tab.id,
+              paneId: entry.block.id,
+            },
+          }
+        : {}),
+    });
+    return withNativeOpenIntent<ViewOpeningResult>(
       { ...input, indexPath },
       cmd,
       async (intent) => {
         const reused =
-          placement === "panel" || reusableRoots.has(kind) || intent.recovered
+          placement === "panel" ||
+          placement === "split" ||
+          reusableRoots.has(kind) ||
+          intent.recovered
             ? await exactNativeView(cmd, input.cwd, input.coordinator, kind, placement, args)
             : undefined;
         if (reused !== undefined) {
@@ -194,7 +220,7 @@ export function ternViewHost(
                 "acknowledgement names another block",
               );
           }
-          return { paneId: reused.block.id, project };
+          return resultFor(reused);
         }
         let closeOrigin: string | undefined;
         let proveClosingOrigin: (() => Promise<void>) | undefined;
@@ -388,7 +414,7 @@ export function ternViewHost(
           );
         await proveTaskReplacement(cmd, input.cwd, replaced);
         await intent.settle();
-        return { paneId: result.paneId, project };
+        return confirmed === undefined ? { paneId: result.paneId, project } : resultFor(confirmed);
       },
       placement !== "return" || input.view.kind !== "orchestrator"
         ? undefined
@@ -570,15 +596,19 @@ export function ternViewHost(
         );
         return { opened: true, warnings: returned.warnings ?? [] };
       }
-      const bundle = await readNativeBundle(input.home, project);
-      const detail = detailForView(bundle, input.view);
+      const { nativeBriefFile } = await import("../../board/native-views.ts");
+      // A new draft can open before the coordinator's background index publication.
+      const detail =
+        input.view.kind === "brief"
+          ? nativeBriefFile(input.view.requestId)
+          : detailForView(await readNativeBundle(input.home, project), input.view);
       if (["task", "brief", "pr"].includes(input.view.kind) && detail === undefined)
         throw new Error(`Native ${input.view.kind} detail is not ready`);
       const path =
         detail === undefined
           ? nativeViewsPath(input.home, project)
           : nativeDetailPath(input.home, project, detail);
-      await open(
+      const opened = await open(
         input,
         project,
         input.view.kind,
@@ -592,7 +622,15 @@ export function ternViewHost(
             : "window",
         path,
       );
-      return { opened: true, warnings: [] };
+      if (input.view.kind === "brief" && opened.endpoint === undefined)
+        throw new TernOutcomeUnknownError("tern open", "native brief endpoint was not confirmed");
+      return {
+        opened: true,
+        warnings: [],
+        ...(input.view.kind === "brief" && opened.endpoint !== undefined
+          ? { endpoint: opened.endpoint }
+          : {}),
+      };
     },
   };
 }

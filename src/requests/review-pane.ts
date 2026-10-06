@@ -12,6 +12,7 @@ import {
   type TerminalBackend,
 } from "../terminal-backend/contract.ts";
 import { renderRequestBriefMarkdown } from "./markdown.ts";
+import { closeNativeBriefPane, projectNativeBriefPane } from "./native-pane.ts";
 
 /** Directory under the Tandem home holding the rendered read-only brief projections. */
 export const REQUEST_BRIEF_DIRECTORY = "request-briefs";
@@ -22,7 +23,7 @@ export type RequestReviewPaneDependencies = Readonly<{
   readonly sessionId: string;
   readonly parentWorkspaceId: string | undefined;
   /**
-   * The Herdr pane the coordinator itself runs in, when known. The review pane opens as a split
+   * The terminal pane the coordinator itself runs in, when known. The review pane opens as a split
    * beside it so the user sees the brief in the tab they are already looking at. The coordinator
    * pane is only ever the split anchor: it is never written to, rendered into, or closed.
    */
@@ -63,7 +64,8 @@ export function requestBriefWorkspaceLabel(repoPath: string): string {
 }
 
 /**
- * Brings the owned review pane up to date with the current draft: refreshes the pane this request
+ * Dispatches every caller to native hosting in Tern. Herdr brings the owned review pane up to
+ * date with the current draft: refreshes the pane this request
  * already owns, and opens a new one whenever the recorded pane is gone. A pane whose exact Herdr
  * identity no longer proves ownership is never written to; it is reported instead, and a fresh
  * owned pane takes over the projection so the user still sees the current revision.
@@ -72,6 +74,7 @@ export async function projectRequestBriefPane(
   deps: RequestReviewPaneDependencies,
   record: RequestBriefRecord,
 ): Promise<RequestReviewPane> {
+  if (deps.terminal.name === "tern") return projectNativeBriefPane(deps, record);
   const renderedPath = await writeRenderedBrief(deps.home, record);
   const existing = record.reviewPane;
   if (existing !== undefined && existing.status !== "closed") {
@@ -103,6 +106,7 @@ export async function closeRequestBriefPane(
   deps: RequestReviewPaneDependencies,
   record: RequestBriefRecord,
 ): Promise<RequestReviewPane | undefined> {
+  if (deps.terminal.name === "tern") return closeNativeBriefPane(deps, record);
   const pane = record.reviewPane;
   if (pane === undefined || pane.status === "closed") return undefined;
   const settled = (status: RequestReviewPane["status"], reason?: string): RequestReviewPane => ({
@@ -166,6 +170,11 @@ async function proveOwnedPane(
   repoPath: string,
 ): Promise<PaneOwnership> {
   const { terminal } = deps;
+  if (endpoint.terminal !== terminal.name)
+    return {
+      kind: "unowned",
+      reason: `Brief pane belongs to ${endpoint.terminal}; kept open because the active terminal is ${terminal.name}`,
+    };
   if (endpoint.paneId === deps.coordinatorPaneId) {
     return {
       kind: "unowned",

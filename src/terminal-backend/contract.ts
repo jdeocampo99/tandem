@@ -81,6 +81,8 @@ export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: st
 export type OpenViewResult = Readonly<{
   opened: boolean;
   warnings: readonly string[];
+  /** Exact native brief split identity, for its request workflow's scoped retirement. */
+  endpoint?: Endpoint;
   fallback?: "brief-review";
 }>;
 

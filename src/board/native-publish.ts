@@ -2,7 +2,7 @@ import { recordNativePublication } from "../memory/native-visits.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import { NativeAlerts } from "./native-alerts.ts";
 import { type NativeReadDependencies, NativeViewsReader } from "./native-read.ts";
-import { type BoardSnapshot, writeNativeViews } from "./snapshot.ts";
+import { type BoardSnapshot, publishNativeViews } from "./snapshot.ts";
 
 type PublicationInput = Readonly<{
   snapshot: BoardSnapshot;
@@ -40,8 +40,9 @@ export class NativeViewsPublisher {
             const session = next.sessions.get(next.project);
             if (session?.terminal === "tern")
               await this.#alerts.observe(next.snapshot, next.project, session.sessionId);
-            const view = await this.#reader.read(next.snapshot, next.project, next.sessions);
-            await writeNativeViews(this.#deps.home, view);
+            const view = await publishNativeViews(this.#deps.home, next.project, () =>
+              this.#reader.read(next.snapshot, next.project, next.sessions),
+            );
             await recordNativePublication({
               home: this.#deps.home,
               project: next.project,

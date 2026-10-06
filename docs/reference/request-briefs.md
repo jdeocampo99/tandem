@@ -57,6 +57,16 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 
 ## Review pane
 
+- In Tern, `reviewPane: true` publishes the native brief detail and calls `terminal.openView`
+  beside the recorded coordinator. Exact block evidence reuses the split across revisions;
+  the existing `reviewPane` receipt holds its native endpoint, detail path and shown revision.
+  Approval, abandonment and current-revision request changes retire it through scoped `closeView`.
+  Unknown opening outcomes keep the host's durable intent and resources quarantined; no legacy
+  shell pane or automatic retry follows. Unknown closure leaves approval or feedback standing
+  and quarantines the receipt. Tiny in-chat fixes still open no pane.
+- A review receipt tagged for another terminal is quarantined with a plain warning before any
+  terminal call. Approval, abandonment and feedback retirement preserve that receipt and its pane;
+  none closes it through the active backend or marks it closed.
 - In Herdr, `reviewPane: true` renders read-only Markdown at `<home>/request-briefs/<requestId>.md` in one
   owned temporary pane, an unfocused split right of the coordinator's pane. Without an active Herdr
   context (`HERDR_ENV`, `HERDR_PANE_ID`) in the Tandem session, it opens a separate
@@ -126,7 +136,9 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
   Comment saves a local pending card under that line. Those cards and the optional overall text
   are sent on Request changes. Local drafts never write the task store, and a new view revision
   never silently reattaches them. The user can discard them and refresh. Invalid view files disable
-  submission while keeping the last display readable.
+  submission while keeping the last display readable. Opening before detail publication shows a
+  loading message with no Approve or Request changes controls. Only a successfully parsed
+  published revision with a complete approval triplet supplies the action binding.
 - Approve sends exactly the displayed `{briefRevision,contentDigest,agreementDigest}` to
   `brief-approve`; it excludes pending feedback. The click is the approval, with no second
   dialog. Request changes sends that same binding plus `text?` and `comments:[{lineId,text}]`.
@@ -135,7 +147,8 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
   native brief split, and only if the current draft still matches the displayed revision and
   both digests. A changed draft stays open with a warning. Closure proves the exact program,
   all five launch arguments, session/tab and idle state through the terminal host; this native
-  projection does not create a legacy Markdown `reviewPane` record.
+  projection records its Tern-tagged endpoint, detail path and shown revision in `reviewPane`
+  without creating a legacy Markdown pane.
 - Approval prompts the verified coordinator to continue. Request changes delivers the user's
   feedback to that conversation. If notification or closure fails after completion, the CLI
   returns success with warnings; the renderer disables further submission on that retained pane.

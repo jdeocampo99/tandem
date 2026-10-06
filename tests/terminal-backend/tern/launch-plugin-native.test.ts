@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath, writeNativeViews } from "../../../src/board/snapshot.ts";
+import { nativeViewsPath, publishNativeViews } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { findRunningCoordinator } from "../../../src/coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
@@ -246,44 +246,49 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_LAUNCH_N
       expect(
         blocks(await commands.ls(b)).some((p) => p.block.id === initialSecondPanel.block.id),
       ).toBe(false);
-      const publish = async (project: string) => {
-        const fixture = nativeScreensFixture();
-        const panel = panelFixture(project);
-        const projects = records.map((r, index) => ({
-          terminal: "tern" as const,
-          repoPath: r.repoPath,
-          name: r.repoPath.split("/").at(-1) ?? "fixture",
-          current: r.repoPath === project,
-          offline: false,
-          running: 4,
-          needsYou: 1,
-          status: "4 running · 1 needs you",
-          shortcut: `⌘${index + 1}`,
-          sessionId: r.endpoint.sessionId,
-        }));
-        const writtenAt = new Date().toISOString();
-        await writeNativeViews(home, {
-          bundle: {
-            ...fixture,
-            project,
-            writtenAt,
-            summary: {
-              ...fixture.summary,
-              repoPath: project,
-              name: project.split("/").at(-1) ?? "fixture",
+      const publish = async (project: string) =>
+        publishNativeViews(home, project, async () => {
+          const fixture = nativeScreensFixture();
+          const panel = panelFixture(project);
+          const projects = records.map((r, index) => ({
+            terminal: "tern" as const,
+            repoPath: r.repoPath,
+            name: r.repoPath.split("/").at(-1) ?? "fixture",
+            current: r.repoPath === project,
+            offline: false,
+            running: 4,
+            needsYou: 1,
+            status: "4 running · 1 needs you",
+            shortcut: `⌘${index + 1}`,
+            sessionId: r.endpoint.sessionId,
+          }));
+          const writtenAt = new Date().toISOString();
+          return {
+            bundle: {
+              ...fixture,
+              project,
               writtenAt,
-              sessionId: env.TANDEM_SESSION,
+              summary: {
+                ...fixture.summary,
+                repoPath: project,
+                name: project.split("/").at(-1) ?? "fixture",
+                writtenAt,
+                sessionId: env.TANDEM_SESSION,
+              },
+              panel: {
+                ...panel,
+                header: {
+                  ...panel.header,
+                  title: project.split("/").at(-1) ?? "fixture",
+                  projects,
+                },
+              },
+              projects,
+              catchup: { ...fixture.catchup, project },
             },
-            panel: {
-              ...panel,
-              header: { ...panel.header, title: project.split("/").at(-1) ?? "fixture", projects },
-            },
-            projects,
-            catchup: { ...fixture.catchup, project },
-          },
-          details: [],
+            details: [],
+          };
         });
-      };
       // Switch through the actual CLI. An aged, changed visit must automatically open B's catch-up.
       await visitNativeProject(
         {

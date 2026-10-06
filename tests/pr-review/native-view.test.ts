@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFile, stat } from "node:fs/promises";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
 import { nativePrFile } from "../../src/board/native-views.ts";
-import { nativeDetailPath, writeNativeViews } from "../../src/board/snapshot.ts";
+import { nativeDetailPath, publishNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import {
   type CachedPullRequest,
@@ -162,7 +162,7 @@ test("publication clock advances leave running CI detail bytes, inode and mtime 
         world.repoPath,
       );
       const model = prPaneView({ cached: pr });
-      await writeNativeViews(world.home, {
+      await publishNativeViews(world.home, world.repoPath, async () => ({
         bundle: {
           ...publication.bundle,
           pullRequests: {
@@ -174,7 +174,7 @@ test("publication clock advances leave running CI detail bytes, inode and mtime 
           },
         },
         details: [{ file, view: { version: 1, project: world.repoPath, kind: "pr", data: model } }],
-      });
+      }));
     };
     try {
       await publish(cached);

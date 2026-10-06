@@ -22,6 +22,12 @@ const endpoint: Endpoint = {
 };
 for (const mode of [
   "success",
+  "brief-success",
+  "brief-unknown",
+  "pr-success",
+  "pr-unknown",
+  "prs-success",
+  "task-picker-success",
   "verification-failed",
   "verification-malformed",
   "relaunch-success",
@@ -47,6 +53,15 @@ for (const mode of [
   test(`native opening ${mode} retains exact identity and never falls back to a title`, async () => {
     const home = await mkdtemp("/tmp/tandem-host-test-");
     const modelPath = nativeViewsPath(home, home);
+    const splitKind = mode.startsWith("brief-")
+      ? "brief"
+      : mode.startsWith("pr-")
+        ? "pr"
+        : mode === "prs-success"
+          ? "prs"
+          : mode === "task-picker-success"
+            ? "task-picker"
+            : undefined;
     let created = false;
     let effects = 0;
     let now = 0;
@@ -122,7 +137,9 @@ for (const mode of [
                                   ? "tandem.task"
                                   : mode === "wrong-kind"
                                     ? "unrelated.panel"
-                                    : "tandem.panel",
+                                    : splitKind !== undefined
+                                      ? `tandem.${splitKind}`
+                                      : "tandem.panel",
                               args: [
                                 modelPath,
                                 mode === "foreign-return" ? "999" : "3",
@@ -214,7 +231,7 @@ for (const mode of [
       if (verb === "focus") {
         if (mode === "focus-unknown")
           return { code: 1, stderr: "lost focus acknowledgement", stdout: "" };
-        return { code: 0, stderr: "", stdout: '{"block":3}' };
+        return { code: 0, stderr: "", stdout: JSON.stringify({ block: request.argv[2] }) };
       }
       if (verb === "open") {
         const path = request.argv[2];
@@ -227,6 +244,8 @@ for (const mode of [
         if (
           ![
             "unknown",
+            "brief-unknown",
+            "pr-unknown",
             "relaunch-missing-receipt",
             "relaunch-no-exact-pane",
             "relaunch-legacy-ticket",
@@ -272,8 +291,8 @@ for (const mode of [
               : {}),
         },
         home,
-        "panel",
-        mode === "foreign-return" ? "return" : "panel",
+        splitKind ?? "panel",
+        splitKind !== undefined ? "split" : mode === "foreign-return" ? "return" : "panel",
         modelPath,
       );
     try {
@@ -361,16 +380,32 @@ for (const mode of [
           expect(await first.openPanel(input)).toBe("4");
           expect(effects).toBe(before);
         }
-      } else if (mode === "success") {
-        expect(await open()).toEqual({ paneId: "4", project: home });
+      } else if (mode === "success" || (splitKind !== undefined && mode.endsWith("-success"))) {
+        const expected = {
+          paneId: "4",
+          project: home,
+          ...(mode === "brief-success"
+            ? {
+                endpoint: {
+                  ...endpoint,
+                  terminal: "tern" as const,
+                  terminalSessionId: "1",
+                  paneId: "4",
+                },
+              }
+            : {}),
+        };
+        expect(await open()).toEqual(expected);
         const before = effects;
-        expect(await open()).toEqual({ paneId: "4", project: home });
-        expect(effects).toBe(before);
+        expect(await open()).toEqual(expected);
+        expect(effects).toBe(before + (mode === "prs-success" ? 1 : 0));
       } else {
         await expect(open()).rejects.toThrow();
         if (
           [
             "unknown",
+            "brief-unknown",
+            "pr-unknown",
             "wrong-kind",
             "verification-failed",
             "verification-malformed",
@@ -378,8 +413,19 @@ for (const mode of [
           ].includes(mode)
         ) {
           const before = effects;
-          if (["verification-failed", "verification-malformed", "unknown"].includes(mode)) {
-            expect((await open()).paneId).toBe("4");
+          if (
+            [
+              "verification-failed",
+              "verification-malformed",
+              "unknown",
+              "brief-unknown",
+              "pr-unknown",
+            ].includes(mode)
+          ) {
+            const recovered = await open();
+            expect(recovered.paneId).toBe("4");
+            if (mode === "brief-unknown")
+              expect(recovered.endpoint).toEqual({ ...endpoint, paneId: "4" });
             expect(await Bun.file(routePath).exists()).toBe(false);
             expect(
               (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
