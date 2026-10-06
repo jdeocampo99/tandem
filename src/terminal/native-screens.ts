@@ -83,7 +83,12 @@ export async function nativeBoard(context: NativeRendererContext) {
   if (action === "catchup-dismiss" || action === "catchup-open-needs") {
     if (value !== undefined) throw new CliUsageError("Unexpected catch-up arguments");
     const owner = await screenOwner(context);
-    const model = await screenSummary(context.environment.home, owner.repoPath);
+    // Returning must remain available when a new publication is missing or malformed.
+    const model =
+      action === "catchup-dismiss"
+        ? await screenSummary(context.environment.home, owner.repoPath).catch(() => undefined)
+        : await screenSummary(context.environment.home, owner.repoPath);
+    if (model === undefined) return showScreen(context, { kind: "orchestrator" });
     let view: TerminalView = { kind: "orchestrator" };
     if (action === "catchup-open-needs") {
       const needs = model.catchup.needsYou[0];

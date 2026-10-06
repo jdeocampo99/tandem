@@ -12,8 +12,8 @@ import {
   saveCoordinatorRecord,
 } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
-import type { TerminalView } from "../../src/terminal-backend/contract.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import type { TerminalView } from "../../src/terminal-backend/contract.ts";
 
 async function fixture(): Promise<{ root: string; home: string; record: CoordinatorRecord }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-coordinator-panel-")));

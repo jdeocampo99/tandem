@@ -105,6 +105,11 @@ test("PR link clicks resolve saved project identities, never arbitrary caller UR
     expect(opened).toEqual([{ kind: "browser", url: "https://github.com/acme/app/pull/281" }]);
     expect((await call("board", "pr-link", "https://attacker.invalid")).exitCode).not.toBe(0);
     expect(opened).toHaveLength(1);
+    const merged = "https://github.com/acme/app/pull/276";
+    expect((await call("board", "merged-link", merged)).exitCode).toBe(0);
+    expect(opened[1]).toEqual({ kind: "browser", url: merged });
+    expect((await call("board", "merged-link", "https://attacker.invalid")).exitCode).not.toBe(0);
+    expect(opened).toHaveLength(2);
   });
 });
 
@@ -119,5 +124,13 @@ test("Open what needs me returns to the orchestrator and opens the saved brief",
       JSON.parse(await readFile(join(home, "native-visits", record ?? ""), "utf8"))
         .dismissedSignature,
     ).toBe("after");
+  });
+});
+
+test("catch-up dismissal still returns when a live publication becomes malformed", async () => {
+  await withScreens(async ({ call, opened, home, repo }) => {
+    await writeFile(nativeViewsPath(home, repo), "{broken");
+    expect((await call("board", "catchup-dismiss")).exitCode).toBe(0);
+    expect(opened).toEqual([{ kind: "orchestrator" }]);
   });
 });
