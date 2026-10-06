@@ -31,7 +31,6 @@ import {
   TernOutcomeUnknownError,
   ternCommands,
 } from "./protocol.ts";
-import { abandonRetainedNativeOpen, listRetainedNativeOpens } from "./view-intent.ts";
 
 export type TernBackendOptions = TernOptions &
   Readonly<{
@@ -270,8 +269,11 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     name: "tern",
     openView: async (input) => (await native()).views.openView(input),
     closeView: async (input) => (await native()).views.closeView(input),
-    retainedViewOpens: listRetainedNativeOpens,
-    abandonViewOpen: abandonRetainedNativeOpen,
+    // Loaded on use, as native() is, to keep native hosting out of every backend load.
+    retainedViewOpens: async (home) =>
+      (await import("./view-intent.ts")).listRetainedNativeOpens(home),
+    abandonViewOpen: async (open, conclusive) =>
+      (await import("./view-intent.ts")).abandonRetainedNativeOpen(open, conclusive),
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>
