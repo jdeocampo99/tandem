@@ -156,3 +156,18 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   Both resume the same conversation in the same worktree.
 - `review-close` marks the review closed, and cleanup removes the worktree and its refs. A
   cancelled review is cleaned the same way.
+
+
+## Native thread replies
+
+Native submissions may include `replies:[{threadId,commentId,replyTo,body}]`, separately from new
+root comments in `yours`. The exact thread node, root comment node and positive REST database id
+must match a fresh paginated thread read at the reviewed head, including outdated/out-of-diff
+threads. Every posting path checks these identities before saving the selected round. The saved
+round retains the replies before any GitHub effect. Only the caller that records the review receipt
+owns the follow-up replies. Each reply uses `in_reply_to`, the pinned `commit_id`, and its own
+hidden task/generation/index marker; unreadable head or marker reads refuse posting. A lost
+response reconciles the marker without retrying. Unconfirmed replies are reported explicitly and
+are never automatically retried, including after restart. A review receipt does not certify every
+follow-up reply succeeded. Replies on Tandem-owned PRs preserve thread context in worker fix
+requests and never post to GitHub. Taskless watched PR views are read-only.

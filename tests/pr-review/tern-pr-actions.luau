@@ -127,3 +127,38 @@ assert(pending[7].opts.stdin==nil)
 pending[7].callback({status=0,stdout='{}',stderr=''})
 assert(exits==0 and #pending==7)
 print('PR action result, home forwarding and draft retention checks passed')
+
+local savedModel=table.clone(model)
+savedModel.header=table.clone(model.header)
+-- Reply chooses the exact second thread, including an outdated thread without a line.
+model.files={{path='port.ts',additions=1,deletions=0,commentCount=2,rows={{id='r1',row={kind='add',new=1,text='guard();'},drafts={},threads={
+ {id='thread-1',file='port.ts',line=1,side='RIGHT',resolved=false,outdated=false,comments={{id='node-11',databaseId=11,author='sam',at='today',body='First'}}},
+ {id='thread-2',file='port.ts',line=1,side='RIGHT',resolved=false,outdated=false,comments={{id='node-22',databaseId=22,author='jules',at='today',body='Second'}}},
+}}}}}
+model.unanchoredThreads={{id='old-thread',file='removed.ts',side='LEFT',resolved=false,outdated=true,comments={{id='node-33',databaseId=33,author='alex',at='yesterday',body='Removed'}}}}
+local replies=create(); replies.content.diff.yours={}
+assert(content.event(replies.content,model,true,{ev='action',act='pr-reply',value='thread-2'},cx,function() error('Draft must not post') end))
+replies.content.diff.editor.text='Second thread reply'
+content.event(replies.content,model,true,{ev='action',act='pr-save'},cx,function() error('Draft must not post') end)
+assert(replies.content.diff.yours[1].reply.threadId=='thread-2' and replies.content.diff.yours[1].reply.replyTo==22)
+content.event(replies.content,model,true,{ev='action',act='pr-reply',value='old-thread'},cx,function() end)
+replies.content.diff.editor.text='Outdated reply'
+content.event(replies.content,model,true,{ev='action',act='pr-save'},cx,function() end)
+local payload=nil
+content.event(replies.content,model,true,{ev='action',act='pr-post'},cx,function(_,_,input) payload=input end)
+assert(#payload.yours==0 and #payload.replies==2)
+assert(payload.replies[2].threadId=='old-thread' and payload.replies[2].commentId=='node-33' and payload.replies[2].replyTo==33)
+model.header.taskId=nil;model.review=nil;model.commentDestination='read-only';model.readOnlyReason='Read-only: no Tandem task'
+local readonly=content.create();content.view(readonly,model,true)
+assert(not content.event(readonly,model,true,{ev='action',act='pr-line',value='1'},cx,function() error('Read-only mutation') end))
+assert(not content.event(readonly,model,true,{ev='action',act='pr-reply',value='old-thread'},cx,function() error('Read-only mutation') end))
+assert(not content.event(readonly,model,true,{ev='action',act='pr-post'},cx,function() error('Read-only mutation') end))
+local switch=block.init(cx,args,nil)
+views.refresh(switch.view)
+switch.index.status='ready';switch.index.model={pullRequests={external={header={repo='acme/app',number=282,title='Watched external PR'},detailFile='pr-282.json'}}}
+block.event(switch,{ev='action',act='pr-select',value='acme/app#282'},cx)
+assert(string.find(table.concat(pending[#pending].argv,'|'),'native|open|pr|acme/app#282|'))
+print('Exact thread replies and taskless read-only guards passed')
+
+for key in model do model[key]=nil end
+for key,value in savedModel do model[key]=value end
