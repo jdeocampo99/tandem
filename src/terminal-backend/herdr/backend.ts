@@ -69,6 +69,10 @@ export function herdrBackend(
     abandonViewOpen: async () => {
       throw new Error("Herdr keeps no native view opens to abandon");
     },
+    quarantinedPanes: async () => [],
+    clearPaneQuarantine: async () => {
+      throw new Error("Herdr keeps no pane quarantine records to clear");
+    },
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),
     sendKeys: (target) => sendKeys(run, target),

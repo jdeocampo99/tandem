@@ -5,7 +5,6 @@ import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.t
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { blockArgs } from "../../../src/native/contract.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
-import { TernQuarantinedError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 for (const mode of [
@@ -142,8 +141,9 @@ for (const mode of [
         await expect(close()).rejects.toThrow();
         expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
         if (mode === "unknown") {
-          // A later click is a new process; only the durable quarantine can refuse it.
-          await expect(close()).rejects.toBeInstanceOf(TernQuarantinedError);
+          // The brief is now absent from an exact listing, so a later click finds it closed
+          // without repeating the close.
+          expect(await close()).toEqual({ closed: true, warnings: [] });
           expect(closeCalls).toBe(1);
         }
       }

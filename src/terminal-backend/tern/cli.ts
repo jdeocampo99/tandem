@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,12 +25,18 @@ import {
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
-import type { CommandResult, CommandRunner, Endpoint } from "../../contracts.ts";
+import {
+  type CommandResult,
+  type CommandRunner,
+  type Endpoint,
+  MODEL_ROLE_ORDER,
+} from "../../contracts.ts";
 import type { Receipt } from "../../native/contract.ts";
 import {
   type EndpointInspection,
   type EndpointTarget,
   isWorkerProcess,
+  type QuarantinedPane,
   type TerminalAvailability,
 } from "../contract.ts";
 import type { TernEndpoint } from "../identity.ts";
@@ -179,6 +194,18 @@ const QuarantineRecord = z.object({
   operation: z.string(),
   reason: z.string(),
   at: z.string(),
+  /** The exact pane the effect targeted, so `tandem fix` can prove it gone or idle. */
+  endpoint: z.object({
+    terminal: z.literal("tern"),
+    sessionId: z.string(),
+    terminalSessionId: Id.optional(),
+    workspaceId: z.string(),
+    tabId: z.string(),
+    paneId: Id,
+    role: z.enum(MODEL_ROLE_ORDER),
+    generation: z.number().int().nonnegative(),
+  }),
+  cwd: z.string(),
 });
 
 export function missing(endpoint: Endpoint): EndpointOwnershipError {
@@ -193,37 +220,48 @@ function paneKey(endpoint: Endpoint): string {
   return `pane:${endpoint.terminalSessionId ?? ""}:${endpoint.paneId}`;
 }
 
-/** The durable keys whose quarantine refuses an op, and the one its unknown outcome records. */
-function subjects(op: TernOp): Readonly<{ refused: readonly string[]; recorded?: string }> {
+type Subjects = Readonly<{
+  /** Durable keys whose record refuses the op. */
+  refused: readonly string[];
+  /** The key and pane an unknown outcome of the op is recorded against. */
+  recorded?: Readonly<{ key: string; endpoint: Endpoint }>;
+}>;
+
+function subjects(op: TernOp): Subjects {
   switch (op.verb) {
     case "split":
       return {
         refused: [paneKey(op.endpoint), `split:${paneKey(op.endpoint)}`],
-        recorded: `split:${paneKey(op.endpoint)}`,
+        recorded: { key: `split:${paneKey(op.endpoint)}`, endpoint: op.endpoint },
       };
     case "newTab":
       return {
-        refused: [
-          `session:${op.session}`,
-          ...(op.beside !== undefined && "endpoint" in op.beside
-            ? [paneKey(op.beside.endpoint)]
-            : []),
-        ],
+        refused:
+          op.beside !== undefined && "endpoint" in op.beside ? [paneKey(op.beside.endpoint)] : [],
       };
     case "newSession":
       return { refused: [] };
     case "killSession":
       // The kill finishes the close of `closed`; its doubt belongs to that pane.
-      return { refused: [paneKey(op.closed)], recorded: paneKey(op.closed) };
+      return {
+        refused: [paneKey(op.closed)],
+        recorded: { key: paneKey(op.closed), endpoint: op.closed },
+      };
     case "notify":
-      return { refused: [paneKey(op.helper)], recorded: paneKey(op.helper) };
+      return {
+        refused: [paneKey(op.helper)],
+        recorded: { key: paneKey(op.helper), endpoint: op.helper },
+      };
     case "close":
       return {
         refused: [paneKey(op.endpoint), ...(op.owner === undefined ? [] : [paneKey(op.owner)])],
-        recorded: paneKey(op.endpoint),
+        recorded: { key: paneKey(op.endpoint), endpoint: op.endpoint },
       };
     default:
-      return { refused: [paneKey(op.endpoint)], recorded: paneKey(op.endpoint) };
+      return {
+        refused: [paneKey(op.endpoint)],
+        recorded: { key: paneKey(op.endpoint), endpoint: op.endpoint },
+      };
   }
 }
 
@@ -244,8 +282,28 @@ function endpointsOf(op: TernOp): readonly Endpoint[] {
   }
 }
 
-function quarantinePath(home: string, key: string): string {
-  return join(home, QUARANTINE_DIRECTORY, `${createHash("sha256").update(key).digest("hex")}.json`);
+function quarantineFile(key: string): string {
+  return `${createHash("sha256").update(key).digest("hex")}.json`;
+}
+
+/** One lock per record, shared by the writer, the absent-pane close and `tandem fix`. */
+async function withRecordLock<T>(directory: string, file: string, body: () => Promise<T>) {
+  // Loaded on use, as the coordinator notes are, to keep worker startup light.
+  const [{ ensurePrivateDirectoryTree }, { acquireDarwinFileLock }] = await Promise.all([
+    import("../../coordinator/lock.ts"),
+    import("../../tasks/store-lock.ts"),
+  ]);
+  await ensurePrivateDirectoryTree(directory, "Tern quarantine directory");
+  const release = await acquireDarwinFileLock(
+    join(directory, `${file.slice(0, -".json".length)}.lock`),
+    10_000,
+    20,
+  );
+  try {
+    return await body();
+  } finally {
+    await release();
+  }
 }
 
 /** Refuses an op whose subject or coordinator holds a durable quarantine, in any process. */
@@ -255,7 +313,7 @@ async function refuseQuarantined(home: string | undefined, op: TernOp): Promise<
     let record: z.infer<typeof QuarantineRecord>;
     try {
       record = QuarantineRecord.parse(
-        JSON.parse(await readFile(quarantinePath(home, key), "utf8")),
+        JSON.parse(await readFile(join(home, QUARANTINE_DIRECTORY, quarantineFile(key)), "utf8")),
       );
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
@@ -289,24 +347,98 @@ async function refuseQuarantined(home: string | undefined, op: TernOp): Promise<
 
 async function recordQuarantine(
   home: string,
-  key: string,
+  subject: NonNullable<Subjects["recorded"]>,
+  cwd: string,
   error: TernOutcomeUnknownError,
 ): Promise<void> {
-  // Loaded on use, as the coordinator notes are, to keep worker startup light.
-  const { ensurePrivateDirectoryTree } = await import("../../coordinator/lock.ts");
   const directory = join(home, QUARANTINE_DIRECTORY);
-  await ensurePrivateDirectoryTree(directory, "Tern quarantine directory");
-  const path = quarantinePath(home, key);
-  const temporary = `${path}.${randomUUID()}.tmp`;
+  const file = quarantineFile(subject.key);
   const record: z.infer<typeof QuarantineRecord> = {
     version: 1,
-    key,
+    key: subject.key,
     operation: error.operation,
     reason: error.cause instanceof Error ? error.cause.message : String(error.cause),
     at: new Date().toISOString(),
+    endpoint: QuarantineRecord.shape.endpoint.parse(subject.endpoint),
+    cwd,
   };
-  await writeFile(temporary, JSON.stringify(record), { flag: "wx", mode: 0o600 });
-  await rename(temporary, path);
+  await withRecordLock(directory, file, async () => {
+    const temporary = join(directory, `${file}.${randomUUID()}.tmp`);
+    await writeFile(temporary, JSON.stringify(record), { flag: "wx", mode: 0o600 });
+    await rename(temporary, join(directory, file));
+  });
+}
+
+/** An exact pane proven absent can never repeat the doubted effect, so its record goes. */
+async function forgetQuarantine(home: string | undefined, endpoint: Endpoint): Promise<void> {
+  if (home === undefined) return;
+  const directory = join(home, QUARANTINE_DIRECTORY);
+  for (const key of [paneKey(endpoint), `split:${paneKey(endpoint)}`]) {
+    const file = quarantineFile(key);
+    if (!(await Bun.file(join(directory, file)).exists())) continue;
+    await withRecordLock(directory, file, () => rm(join(directory, file), { force: true }));
+  }
+}
+
+/** Every record under `<home>/tern-quarantine/`, read without changing anything. */
+export async function listTernQuarantine(home: string): Promise<QuarantinedPane[]> {
+  const directory = join(home, QUARANTINE_DIRECTORY);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+    throw error;
+  }
+  const panes: QuarantinedPane[] = [];
+  for (const name of names.filter((each) => /^[\da-f]{64}\.json$/u.test(each)).toSorted()) {
+    const path = join(directory, name);
+    try {
+      const record = await readFile(path, "utf8");
+      const { endpoint, version: _version, ...parsed } = QuarantineRecord.parse(JSON.parse(record));
+      const { terminalSessionId, ...placement } = endpoint;
+      panes.push({
+        status: "readable",
+        path,
+        record,
+        ...parsed,
+        endpoint: {
+          ...placement,
+          ...(terminalSessionId === undefined ? {} : { terminalSessionId }),
+        },
+      });
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
+      panes.push({
+        status: "unreadable",
+        path,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return panes;
+}
+
+/** Removes one record under its lock, only while it is unchanged and `conclusive` re-proves it. */
+export async function clearTernQuarantine(
+  pane: Extract<QuarantinedPane, Readonly<{ status: "readable" }>>,
+  conclusive: () => Promise<boolean>,
+): Promise<"cleared" | "settled" | "changed" | "unproven"> {
+  const file = quarantineFile(pane.key);
+  const directory = pane.path.slice(0, pane.path.length - file.length - 1);
+  return withRecordLock(directory, file, async () => {
+    let current: string;
+    try {
+      current = await readFile(pane.path, "utf8");
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return "settled";
+      throw error;
+    }
+    if (current !== pane.record) return "changed";
+    if (!(await conclusive())) return "unproven";
+    await rm(pane.path, { force: true });
+    return "cleared";
+  });
 }
 
 type Core = Readonly<{
@@ -658,8 +790,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
       if (!blocks(listing).some((entry) => entry.block.id === op.endpoint.paneId)) {
         if (listing.detached.length > 0)
           throw new EndpointOwnershipError(op.endpoint, "detached panes make closure ambiguous");
-        // An absent pane counts as closed only when no earlier effect on it is in doubt.
-        await refuseQuarantined(core.home, op);
+        await forgetQuarantine(core.home, op.endpoint);
         return { absent: true };
       }
       before = await proveView(core, { ...op.view, endpoint: op.endpoint, cwd: op.cwd });
@@ -673,7 +804,8 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
           error instanceof EndpointOwnershipError &&
           error.reason === "missing"
         ) {
-          await refuseQuarantined(core.home, op);
+          // exactPane reports missing only from an exact scoped listing with no detached blocks.
+          await forgetQuarantine(core.home, op.endpoint);
           return { absent: true };
         }
         throw error;
@@ -844,16 +976,16 @@ async function mutate<O extends TernOp>(core: Core, op: O): Promise<Results[O["v
   try {
     return await handler(core, op);
   } catch (error) {
-    const key = subjects(op).recorded;
+    const subject = subjects(op).recorded;
     if (
       error instanceof TernOutcomeUnknownError &&
       QUARANTINES[op.verb] &&
-      key !== undefined &&
+      subject !== undefined &&
       core.home !== undefined &&
       !(error instanceof TernQuarantinedError)
     ) {
       try {
-        await recordQuarantine(core.home, key, error);
+        await recordQuarantine(core.home, subject, op.cwd, error);
       } catch (cause) {
         throw new TernOutcomeUnknownError(
           error.operation,

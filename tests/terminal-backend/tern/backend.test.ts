@@ -558,7 +558,8 @@ test("a killed session with an unconfirmed tab times out and quarantines another
     const target = { endpoint, cwd: world.repoPath };
     await expect(terminal().close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     expect(now).toBe(5_000);
-    await expect(terminal().close(target)).rejects.toBeInstanceOf(TernQuarantinedError);
+    // The closed pane is proven absent, so a later close settles without another kill.
+    await terminal().close(target);
     expect(kills).toBe(1);
     expect(world.trace().filter((event) => event.action === "tern close")).toHaveLength(1);
   });

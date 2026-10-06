@@ -121,20 +121,29 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   only by its recorded identity in that session.
 - Every Tern effect goes through `mutate(op)` in `tern/cli.ts`, the only module that runs the
   Tern CLI (including `tern plugin` and the readiness probe) or writes the alert helper's tty.
-  Biome forbids importing the command runner anywhere else under `tern/`. The op union is closed
+  Biome forbids importing the command runner, `node:child_process` or the `Bun` global anywhere
+  else under `tern/` (`process-reader.ts`, which runs `ps` for the process proof, is the one
+  exception for `Bun`). The op union is closed
   (`focus`, `run`, `send`, `rename`, `split`, `newTab`, `newSession`, `close`, `killSession`,
   `open`, `browser`, `notify`) and takes only a `TernEndpoint`, which `identity.ts` narrows from a
   tag-checked endpoint. Each op rechecks the exact id, proves destructive targets idle, reads the
   durable quarantine, spawns, then checks the acknowledged id (the receipt for `open`).
 - Failed mutation responses, malformed acknowledgements and unconfirmed verification can follow
   a completed effect. They raise `TernOutcomeUnknownError`. For `run`, `send`, `rename`, `split`,
-  `close`, `killSession` and `notify`, `mutate` writes a durable record under
-  `<home>/tern-quarantine/` against the exact pane, and every later op on that pane, in any
+  `close`, `killSession` and `notify`, `mutate` writes a record to
+  `<home>/tern-quarantine/<sha256(key)>.json`. The record holds the pane key, operation, reason,
+  time, exact endpoint and cwd. A brief close, panel close or view-retirement close records
+  against the view pane it targeted. While a record exists, every later op on that pane, in any
   process, refuses with `TernQuarantinedError` before spawning. Ops also refuse when the pane or
   its owning coordinator has a coordinator quarantine note. A focus is idempotent and records
-  nothing; opens record their own outcome as a ticket, creations as their launch reservation.
-  Never infer non-commit from a nonzero exit. Inspect saved state and use
-  [central recovery](recovery.md), rather than clearing the owner.
+  nothing. Opens record their own outcome as a ticket, and creations as their launch
+  reservation. A record goes away in two ways. A close that finds its pane absent from an exact
+  scoped listing with no detached blocks returns absent and drops the record, so replacing a
+  coordinator or helper still succeeds. `tandem fix` lists every record and, with `--yes`,
+  clears one only after proving its pane gone or idle at the exact id, through
+  `quarantinedPanes`/`clearPaneQuarantine` (Herdr has none; see
+  [reconciliation](reconciliation.md#tandem-fix)). Never infer non-commit from a nonzero exit.
+  Inspect saved state and use [central recovery](recovery.md), rather than clearing the owner.
 
 Native hosting (`tern/host.ts`) writes one durable ticket per open under a per-coordinator lock
 and reads the receipt `layout.luau` always writes. A pure `decide()` settles a ticket whose

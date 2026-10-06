@@ -146,6 +146,7 @@ function entryRow(entry: ReconcileReportEntry, outcome: Outcome, details: FixDet
     if (outcome === "cleaned") return [label, "unproven open record · panes kept"];
     return [label, shortReason(entry.reason)];
   }
+  if (entry.kind === "tern-quarantine") return ["Quarantined Tern pane", shortReason(entry.reason)];
   if (outcome === "cleaned") return ["Old note about a returned worktree"];
   return [`Note about a held worktree${repoName(entry)}`, shortReason(entry.reason)];
 }

@@ -12,6 +12,8 @@ import { blockArgs, parseBlockArgs } from "../../native/contract.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import { type TernEndpoint, ternEndpoint } from "../identity.ts";
 import {
+  clearTernQuarantine,
+  listTernQuarantine,
   missing,
   probeTern,
   type TernCli,
@@ -245,6 +247,8 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       (await import("./host.ts")).abandonRetainedNativeOpen(open, conclusive),
     recoverViewOpens: async (home) =>
       (await import("./host.ts")).recoverViewOpens(cli, home, cli.clock()),
+    quarantinedPanes: listTernQuarantine,
+    clearPaneQuarantine: clearTernQuarantine,
     inspect: check,
     runCommand: (target) =>
       cli.mutate({
