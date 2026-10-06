@@ -272,3 +272,30 @@ The two-argument callers remain valid. Update reloads after successful coordinat
 prompt. On switching to Herdr, the shared configure callback restores preferences after saving the
 choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
 plugin consent. The Tern package stays linked for later use.
+
+## Native brief pane and request intake
+
+The `tandem.brief` Luau block reads a direct `BriefView` detail envelope. Launch arguments are
+`[detailPath, coordinatorCwd, originatingPaneId, windowKey?]`. It uses the shared file loader,
+text fields, diff rows and comment cards. Hovering a line reveals a gutter `+`; the comment editor
+opens below that line. Comment saves a local pending card, Cancel discards the editor, and Remove
+removes a pending card. No comment drafts are written to Tandem state or restored after restart.
+The optional overall comment sits in the bottom bar. `browserUrl`, when supplied by the detail
+model, offers the existing "Edit in browser" page.
+
+Pending comments pin the shown brief and its stable line ids. If the detail file advances, the
+pane keeps that displayed revision and offers "Discard comments and refresh". A missing or
+malformed file leaves the last readable content visible with actions disabled. Approve copies
+only `model.approval` into its input, without recalculating any digest. Request changes carries
+the displayed revision and digests, pending line comments and the optional overall comment.
+The CLI validates the durable revision and feedback anchors.
+
+Each submit writes a unique private input file through `brief-action.sh`: exclusive `mktemp`
+creation under umask 077, UTF-8 JSON on stdin, then read-only mode 0400. The shell invokes the
+CLI once with explicit pane/cwd/window context and removes the input on completion. While the
+CLI runs, another submit is disabled. Nonzero stderr becomes a toast and keeps the pane and
+comments open; a successful result ends the native block. There is no automatic retry.
+
+"Tandem: New request…" focuses the ownership-proven coordinator and sends a short intake prompt
+asking what the user wants to change. The user answers in that conversation. The action rechecks
+ownership after focusing, sends nothing if focus or proof fails, and creates no task or approval.

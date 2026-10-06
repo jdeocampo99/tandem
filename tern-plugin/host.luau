@@ -7,3 +7,5 @@ require("./diff-row")
 require("./components")
 
 -- Block registrations: one tern.block.define(id, require("./block-file")) line per renderer.
+
+tern.block.define("brief", require("./brief"))
