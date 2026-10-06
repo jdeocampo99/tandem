@@ -7,12 +7,8 @@ import {
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
-import { type NativeNavigationModel, readNativeBundle } from "../../board/native-file.ts";
-import { nativeBriefFile } from "../../board/native-views.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
+import type { NativeNavigationModel } from "../../board/native-file.ts";
 import type { Endpoint } from "../../contracts.ts";
-import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
-import { listCoordinatorRecords } from "../../coordinator/registry.ts";
 import type { TerminalBackend } from "../contract.ts";
 import { exactPane, paneMutation } from "./endpoints.ts";
 import {
@@ -45,6 +41,7 @@ type HostedCloseInput = Omit<Parameters<TerminalBackend["closeView"]>[0], "view"
 };
 
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
+  const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
   const records = (await listCoordinatorRecords(home, coordinator.sessionId)).filter(
     (record) =>
       record.endpoint.terminal === "tern" &&
@@ -131,6 +128,8 @@ export function ternViewHost(
     placement: "panel" | "split" | "task" | "window" | "return" | "inbox",
     path: string,
   ) => {
+    const { ensurePrivateDirectoryTree } = await import("../../coordinator/lock.ts");
+    const { nativeViewsPath } = await import("../../board/snapshot.ts");
     const cmd = await scoped(input);
     return options.guard(input.coordinator.paneId, async () => {
       const indexPath = nativeViewsPath(input.home, project);
@@ -333,6 +332,8 @@ export function ternViewHost(
     });
   };
   const close = async (input: HostedCloseInput, project: string) => {
+    const { nativeDetailPath, nativeViewsPath } = await import("../../board/snapshot.ts");
+    const { nativeBriefFile } = await import("../../board/native-views.ts");
     if (input.origin.paneId === input.coordinator.paneId)
       throw new EndpointOwnershipError(
         input.coordinator,
@@ -404,6 +405,7 @@ export function ternViewHost(
     });
   };
   const toggleBoard = async (input: ViewHostingInput, project: string): Promise<boolean> => {
+    const { nativeViewsPath } = await import("../../board/snapshot.ts");
     const cmd = await scoped(input);
     const source = blocks(await cmd.ls(input.cwd)).find(
       (entry) => entry.block.id === (input.origin?.paneId ?? input.coordinator.paneId),
@@ -420,6 +422,8 @@ export function ternViewHost(
     closeView: async (input: Parameters<TerminalBackend["closeView"]>[0]) =>
       close(input, await projectForView(input.home, input.coordinator)),
     openView: async (input: ViewHostingInput) => {
+      const { nativeDetailPath, nativeViewsPath } = await import("../../board/snapshot.ts");
+      const { readNativeBundle } = await import("../../board/native-file.ts");
       const project = await projectForView(input.home, input.coordinator);
       if (input.view.kind === "browser") {
         const url = new URL(input.view.url);
