@@ -5,7 +5,7 @@ version = "0.1.0"
 description = "Tandem views, project keys, palette commands and task links"
 host = "host.luau"
 window = "window.luau"
-styles = ["tandem.css", "panel.css", "board-usage.css"]
+styles = ["tandem.css", "panel.css", "board-usage.css", "brief.css", "pr.css"]
 
 [[blocks]]
 id = "panel"
@@ -30,4 +30,14 @@ palette = false
 [[blocks]]
 id = "catchup"
 title = "Tandem catchup"
+palette = false
+
+[[blocks]]
+id = "brief"
+title = "Tandem brief"
+palette = false
+
+[[blocks]]
+id = "pr"
+title = "Pull request"
 palette = false

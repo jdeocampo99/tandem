@@ -254,7 +254,6 @@ export class NativeViewsReader {
       prViews[key] = prPaneView({
         ...(linkedTask === undefined ? {} : { taskId: linkedTask.id }),
         cached,
-        now,
         ...(watch === undefined ? {} : { watch }),
         ...(review === undefined ? {} : { review }),
       });

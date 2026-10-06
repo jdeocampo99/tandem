@@ -148,7 +148,7 @@ convention and plugin only, without a shared native dispatcher.
 
 JSON actions pass `--input` and an absolute file path as separate argv elements. Renderers
 finish writing one UTF-8 JSON object before spawning the CLI, with a new file for each action
-in a private Tandem-owned directory supplied by the TypeScript view producer. The directory
+in a new private temporary directory owned by the shared TypeScript caller. The directory
 uses `0700`; TypeScript-created input files use `0600`. Never put action input in the plugin
 package, a repository, an environment variable, or an interpolated shell command. The file
 stays unchanged until that invocation finishes; the caller owns cleanup after completion or
@@ -285,6 +285,36 @@ prompt. On switching to Herdr, the shared configure callback restores preference
 choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
 plugin consent. The Tern package stays linked for later use.
 
+## Native brief pane and request intake
+
+The `tandem.brief` Luau block reads a direct `BriefView` detail envelope. Launch arguments are
+`[detailPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, tandemHome]`. It uses the shared file loader,
+text fields, diff rows and comment cards. Hovering a line reveals a gutter `+`; the comment editor
+opens below that line. Comment saves a local pending card, Cancel discards the editor, and Remove
+removes a pending card. No comment drafts are written to Tandem state or restored after restart.
+The optional overall comment sits in the bottom bar. `browserUrl`, when supplied by the detail
+model, offers the existing "Edit in browser" page.
+
+Pending comments pin the shown brief and its stable line ids. If the detail file advances, the
+pane keeps that displayed revision and offers "Discard comments and refresh". A missing or
+malformed file leaves the last readable content visible with actions disabled. Approve copies
+only `model.approval` into its input, without recalculating any digest. Request changes carries
+the displayed revision and digests, pending line comments and the optional overall comment.
+The CLI validates the durable revision and feedback anchors.
+
+Each submit passes UTF-8 JSON on stdin to the shared `native-input.sh` caller. Its TypeScript
+helper creates a unique private directory and exclusively writes the input before invoking the
+CLI once with explicit pane/cwd/window/home context, then removes the directory in `finally`. While the
+CLI runs, another submit is disabled. Nonzero stderr becomes a toast and keeps the pane and
+comments open. After success, the CLI closes the scoped native split only while the durable
+revision and digest triplet still match. A retained pane displays success warnings and disables
+submission, so an uncertain close never invites another approval or feedback delivery. Local ×
+uses `cx:exit(0)` with hosting's default `keep_open=false`. There is no automatic retry.
+
+"Tandem: New request…" focuses the ownership-proven coordinator and sends a short intake prompt
+asking what the user wants to change. The user answers in that conversation. The action rechecks
+ownership after focusing, sends nothing if focus or proof fails, and creates no task or approval.
+
 ## Native hosting and renderer launch API
 
 The Tern backend opens private, unique `<home>/native-host/<uuid>.tandem-open.json`
@@ -376,6 +406,59 @@ rows, re-proves the destination coordinator, and uses an exact-block `tern focus
 switch. Supplied window keys are independently scoped and must contain the originating pane.
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
+
+### Reusing the native PR components
+
+`tern-plugin/pr-model.luau` exports `parse` for the direct PR model and `parseIndex` for
+the panel's PR index. `taskDetailPath(taskDetailPath, taskId, indexModel)` resolves exactly
+one `header.taskId` association supplied by TypeScript to its sibling PR file. Missing or
+ambiguous associations and unsafe relative filenames return `nil`; PR numbers alone are
+not associations. `forTask(taskDetailPath, taskId, indexModel)` returns a refreshed
+`view-file.View<Model>` or `nil` when there is no safe association. It also checks that the
+loaded PR model names the same task. A missing, malformed or mismatched file returns a view
+with `status="unavailable"`; callers may retain and watch it with `view-file.watch`.
+Use `taskDetailPath` before reusing an existing watched view or cancelling it when the path
+changes. Pass the task model's `header.id` and the ready index at launch argument five.
+
+`tern-plugin/pr-content.luau` exports `create`, `view`, `event`, `key`, and `ready`.
+`view(state, model, ready, prefix?, strip?)` returns `{main,dock}`. Mount `dock` for the review
+summary, explicit verdict and Post controls. Set `prefix` to the actual embedded content root
+(default `main.content`); the shared diff uses it for comment focus and thread reveal.
+The optional strip is rendered inside the PR header. `pr-diff.luau` exports `create`,
+`view`, `rows`, `jump`, `event`, and `key`; both modules use `pr-model.luau` wire types.
+For the task's Diff tab set the content state's `tab="Diff"`; for its PR tab set
+`tab="Description"`. Pass readiness from both the task/index and PR detail views to
+`view` and `event`. Retain the same content state while navigating to preserve local drafts.
+The shared `Invoke` completion receives the process result `{status,stdout,stderr}`. For
+`review-submit`, callers invoke it after every settled outcome, including a nonzero exit,
+missing origin or spawn failure. Other action completions remain success-only. Content clears
+`posting` on completion, retains drafts on failure/refusal, and marks `submitted` only for
+exit zero with decoded CLI stdout containing `posted: true`. A `posted: false` result displays
+its message; an unreadable receipt asks the user to check the PR. No outcome retries an action.
+The standalone PR block calls `cx:exit(0)` only after that confirmed posted receipt, as it does
+for its close control. Embedded content records success locally; its task host owns navigation.
+Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
+for wheel and keyboard input; the review dock remains visible while the content scrolls.
+PR line numbers use muted text color rather than element opacity, avoiding a compositing
+target per visible gutter in Tern 0.5.0. The shared diff-row renderer stays unchanged.
+Running CI uses the stable `checks[].startedAtMs` epoch timestamp derived by TypeScript from
+`startedAt`. Content state anchors wall time once to `tern.now()` and supplies the current age
+only when drawing an `elapsed` node; Tern then ticks the text itself. No Lua timer is scheduled
+for CI and no `clockAt` or sampled `elapsedMs` is published. Clock-only publications preserve
+the PR detail bytes, inode and modification time, including while checks are running.
+
+PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. The shared
+`src/terminal/native-input.ts` helper creates one exclusive 0600 file in a private unique
+0700 directory, makes it read-only (0400) before invoking the native action once, and removes
+the directory in `finally` after that invocation settles. The wrapper accepts `VERB ID` plus
+explicit `--pane`, `--cwd`, optional `--window` and `--home` arguments, preserving their argv
+boundaries and the child's stdout, stderr and exit status. The native CLI owns the verb
+allow-list and all context, JSON and domain validation. Draft decisions and new review comments remain
+local until Post; displayed HEAD/generation are included in the submission for authority checks.
+Pass `native-input.sh` the verb, task/request ID, and the native CLI context flags
+(`--pane`, `--cwd`, optional `--window` and `--home`), with the JSON object on stdin.
+It supports `brief-comment`, `brief-request-changes`, `brief-approve`, `pr-comment`, and
+`review-submit`. Callers use this shared writer rather than adding a screen-specific one.
 
 
 ## Board, usage and catch-up actions

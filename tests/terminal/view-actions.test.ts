@@ -78,6 +78,7 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
   const prompts: string[] = [];
   const opened: TerminalView[] = [];
   const focused: string[] = [];
+  const closed: Parameters<TerminalBackend["closeView"]>[0][] = [];
   let ownsCoordinator = true;
   const run = async (): Promise<never> => {
     throw new Error("No external commands expected");
@@ -104,7 +105,12 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
         ],
       },
     }),
-    listPanes: async () => [{ ...endpoint, cwd: clean, foregroundCwd: clean }],
+    listPanes: async () => [
+      { ...endpoint, cwd: clean, foregroundCwd: clean },
+      ...(terminalName === "tern"
+        ? [{ ...endpoint, paneId: "102", cwd: clean, foregroundCwd: clean }]
+        : []),
+    ],
     focusAgent: async (target) => {
       focused.push(target.paneId ?? "");
       return true;
@@ -115,6 +121,10 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     openView: async (target) => {
       opened.push(target.view);
       return { opened: true, warnings: [] };
+    },
+    closeView: async (target) => {
+      closed.push(target);
+      return { closed: true, warnings: [] };
     },
   };
   let nextId = 0;
@@ -162,6 +172,8 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     prompts,
     opened,
     focused,
+    closed,
+    endpoint,
     setOwner: (owns: boolean) => {
       ownsCoordinator = owns;
     },
@@ -1240,7 +1252,7 @@ test("published wave-2 argv dispatches a registered renderer without starting a 
   try {
     let starts = 0;
     const { service: _service, ...dependencies } = f.deps;
-    const commands = [["board"], ["prs"], ["usage"], ["new-request"], ["open-task"]];
+    const commands = [["board"], ["usage"], ["open-task"]];
     for (const command of commands) {
       const errors: string[] = [];
       const output: string[] = [];
@@ -1367,6 +1379,116 @@ test("renderer commands reject missing context and invalid project/file input be
   }
 });
 
+test("New request focuses the owned coordinator and asks for conversational intake", async () => {
+  const f = await fixture();
+  const focused: string[] = [];
+  try {
+    const result = await runTerminal(["native", "new-request", "--pane", "101", "--cwd", f.clean], {
+      ...f.deps,
+      terminal: {
+        ...f.deps.terminal,
+        focusAgent: async (target) => {
+          focused.push(target.paneId);
+          return true;
+        },
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(focused).toEqual(["101"]);
+    expect(f.prompts).toEqual([
+      "I'd like to start a new request. Ask me what I want to change, then help me plan it in this conversation.",
+    ]);
+    expect(await f.service.list()).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("New request refuses an occupied coordinator and sends nothing after failed focus", async () => {
+  const f = await fixture();
+  try {
+    f.setOwner(false);
+    const unrelated = await runTerminal(
+      ["native", "new-request", "--pane", "101", "--cwd", f.clean],
+      f.deps,
+    );
+    expect(unrelated.error).toBeDefined();
+    expect(f.prompts).toEqual([]);
+    f.setOwner(true);
+    const failed = await runTerminal(["native", "new-request", "--pane", "101", "--cwd", f.clean], {
+      ...f.deps,
+      terminal: { ...f.deps.terminal, focusAgent: async () => false },
+    });
+    expect(failed.error?.message).toContain("could not be focused");
+    expect(f.prompts).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("New request rechecks coordinator ownership after focusing before sending input", async () => {
+  const f = await fixture();
+  try {
+    const result = await runTerminal(["native", "new-request", "--pane", "101", "--cwd", f.clean], {
+      ...f.deps,
+      terminal: {
+        ...f.deps.terminal,
+        focusAgent: async () => {
+          f.setOwner(false);
+          return true;
+        },
+      },
+    });
+    expect(result.error).toBeDefined();
+    expect(f.prompts).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Show PRs opens the indexed durable task in the originating project without fetching GitHub", async () => {
+  const f = await fixture("tern");
+  try {
+    const task = await createPrTask(f);
+    const path = nativeViewsPath(f.home, f.repo);
+    await mkdir(join(f.home, "native-views"), { recursive: true });
+    const model = {
+      version: 1,
+      project: f.repo,
+      writtenAt: NOW,
+      tasks: {},
+      briefs: {},
+      projects: [],
+      pullRequests: {
+        "owner/repo#42": { header: { taskId: task.id }, detailFile: "pr-owner%2Frepo-42.json" },
+      },
+    };
+    await writeFile(path, nativeViewText("panel", model));
+    const result = await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps);
+    expect(result.exitCode).toBe(0);
+    expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+    await writeFile(path, nativeViewText("panel", { ...model, pullRequests: {} }));
+    expect(
+      (await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps)).exitCode,
+    ).toBe(1);
+    expect(f.opened).toHaveLength(1);
+    // Ownership is proved before reading the cache, even with a valid locating pane/cwd.
+    f.deps.terminal = {
+      ...f.deps.terminal,
+      inspect: async () => {
+        throw new Error("Cannot prove coordinator ownership");
+      },
+    };
+    await writeFile(path, "{broken");
+    const refused = await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.error?.message).toContain("Cannot prove coordinator ownership");
+    expect(f.opened).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
 test("native navigation selects published projects and details, refusing stale or foreign inputs", async () => {
   const f = await fixture("tern");
   try {
@@ -1424,6 +1546,136 @@ test("native navigation selects published projects and details, refusing stale o
     expect((await action("project", "1")).exitCode).not.toBe(0);
     expect(focused).toHaveLength(1);
     expect(f.opened).toHaveLength(2);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const action of ["brief-approve", "brief-request-changes"] as const) {
+  test(`${action} closes only its native brief origin after recording or delivering the action`, async () => {
+    const f = await fixture("tern");
+    try {
+      await f.write(action === "brief-approve" ? f.seen : { ...f.seen, text: "Narrow this scope" });
+      const result = await runTerminal(
+        [
+          "native",
+          action,
+          f.record.id,
+          "--input",
+          f.input,
+          "--pane",
+          "102",
+          "--cwd",
+          f.clean,
+          "--window",
+          "brief-window",
+        ],
+        f.deps,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(f.prompts).toHaveLength(1);
+      expect(f.closed).toEqual([
+        {
+          coordinator: f.endpoint,
+          cwd: f.clean,
+          home: f.home,
+          origin: { paneId: "102", windowId: "brief-window" },
+          view: { kind: "brief", requestId: f.record.id },
+        },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  test(`${action} keeps a newer native brief open when the coordinator revises it during delivery`, async () => {
+    const f = await fixture("tern");
+    const output: string[] = [];
+    try {
+      await f.write(action === "brief-approve" ? f.seen : { ...f.seen, text: "Narrow this scope" });
+      const result = await runTerminal(
+        ["native", action, f.record.id, "--input", f.input, "--pane", "102", "--cwd", f.clean],
+        {
+          ...f.deps,
+          stdout: (text) => output.push(text),
+          terminal: {
+            ...f.deps.terminal,
+            promptAgent: async (target) => {
+              f.prompts.push(target.text);
+              await f.service.draftRequestBrief({
+                requestId: f.record.id,
+                repoPath: f.repo,
+                content: { ...content, goal: "A newer draft" },
+                reviewPane: false,
+              });
+            },
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(f.prompts).toHaveLength(1);
+      expect(f.closed).toEqual([]);
+      expect(output.join("")).toContain("current brief was left open");
+      expect((await f.store.read(f.record.id))?.draft.revision).toBe(2);
+    } finally {
+      await f.close();
+    }
+  });
+
+  test(`${action} reports an uncertain native close as a success warning without retrying delivery or closure`, async () => {
+    const f = await fixture("tern");
+    const output: string[] = [];
+    let attempts = 0;
+    try {
+      await f.write(action === "brief-approve" ? f.seen : { ...f.seen, text: "Narrow this scope" });
+      const result = await runTerminal(
+        ["native", action, f.record.id, "--input", f.input, "--pane", "102", "--cwd", f.clean],
+        {
+          ...f.deps,
+          stdout: (text) => output.push(text),
+          terminal: {
+            ...f.deps.terminal,
+            closeView: async () => {
+              attempts++;
+              throw new Error("native close acknowledgement was lost");
+            },
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(attempts).toBe(1);
+      expect(f.prompts).toHaveLength(1);
+      expect(output.join("")).toContain("Do not resubmit this action");
+      if (action === "brief-approve")
+        expect((await f.store.read(f.record.id))?.approval).toBeDefined();
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test("a refused native approval never closes the brief or prompts the coordinator", async () => {
+  const f = await fixture("tern");
+  try {
+    await f.write({ ...f.seen, contentDigest: "stale" });
+    const result = await runTerminal(
+      [
+        "native",
+        "brief-approve",
+        f.record.id,
+        "--input",
+        f.input,
+        "--pane",
+        "102",
+        "--cwd",
+        f.clean,
+      ],
+      f.deps,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(f.closed).toEqual([]);
+    expect(f.prompts).toEqual([]);
+    expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
   } finally {
     await f.close();
   }

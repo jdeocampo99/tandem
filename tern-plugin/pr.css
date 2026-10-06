@@ -1,0 +1,32 @@
+.tdm-pr-pane {
+  display: flex;
+  flex-direction: column;
+}
+.tdm-pr-strip {
+  flex-shrink: 0;
+  padding-bottom: 6px;
+}
+.tdm-pr-content {
+  display: flex;
+  flex-direction: column;
+}
+.tdm-pr-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0 12px;
+  flex-shrink: 0;
+}
+.tdm-pr-header .sf-text {
+  font-family: system-ui;
+}
+.tdm-pr-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* Muted line numbers without a separate opacity render target for each visible row. */
+.tdm-pr-rows .tdm-gutter {
+  opacity: 1;
+  color: #888;
+}
