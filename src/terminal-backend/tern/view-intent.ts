@@ -35,20 +35,40 @@ const Ticket = z.object({
   receipt: z.string(),
   replaced: Id.optional(),
 });
-const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
-const NativeIntent = z.object({
+/** The host writes exactly one receipt per ticket, on success and on every failure. */
+export const Receipt = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("done"), paneId: Id, tabId: Id, sessionId: Id }),
+  z.object({
+    status: z.literal("failed"),
+    stage: z.string(),
+    appliedEffects: z.number().int().nonnegative(),
+    reason: z.string(),
+  }),
+]);
+export type Receipt = z.infer<typeof Receipt>;
+const Intent = z.object({
   version: z.literal(1),
   owner: z.string(),
   route: z.string(),
   ticket: Ticket,
 });
-const BrowserIntent = z.object({
-  version: z.literal(1),
-  owner: z.string(),
-  browser: z.object({ url: z.string().url(), windowId: z.string().optional() }),
-});
-const Intent = z.union([NativeIntent, BrowserIntent]);
 type TicketModel = z.infer<typeof Ticket>;
+
+/** The host failed before any layout effect, so the open settled and the user can retry it. */
+export class NativeViewNotOpenedError extends Error {
+  constructor() {
+    super("The Tandem view did not open and nothing changed. Open it again.");
+    this.name = "NativeViewNotOpenedError";
+  }
+}
+
+/** Tern applied layout effects before failing, so their outcome must stay quarantined. */
+export function partialOpenFailure(receipt: Extract<Receipt, { status: "failed" }>): Error {
+  return new TernOutcomeUnknownError(
+    "tern open",
+    `host failed at ${receipt.stage} after ${receipt.appliedEffects} layout effects: ${receipt.reason}`,
+  );
+}
 
 async function readPrivateJson(path: string): Promise<unknown> {
   const stat = await lstat(path);
@@ -58,6 +78,18 @@ async function readPrivateJson(path: string): Promise<unknown> {
 }
 function missing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+/**
+ * Tern's fs has no rename, so a receipt may be read mid-write. Only a whole receipt parses;
+ * anything else throws and the caller keeps waiting or keeps the intent.
+ */
+export async function readReceipt(path: string): Promise<Receipt | undefined> {
+  try {
+    return Receipt.parse(await readPrivateJson(path));
+  } catch (error) {
+    if (missing(error)) return undefined;
+    throw error;
+  }
 }
 
 /** The new task's identity cannot prove that retiring its predecessor succeeded. */
@@ -142,7 +174,6 @@ export async function withNativeOpenIntent<T>(
     recovered: boolean;
     markMutationAttempted: () => void;
     claim: (route: string, ticket: TicketModel) => Promise<void>;
-    claimBrowser: (browser: z.infer<typeof BrowserIntent>["browser"]) => Promise<void>;
     settle: () => Promise<void>;
   }) => Promise<T>,
   onUnresolved?: (cause: TernOutcomeUnknownError) => Promise<T>,
@@ -166,7 +197,6 @@ export async function withNativeOpenIntent<T>(
   const release = await acquireDarwinFileLock(join(directory, `${key}.lock`), 10000, 20);
   const pending: { route: string; ticket: TicketModel }[] = [];
   let claimedThisCall = false;
-  let browserPending = false;
   let mutationAttempted = false;
   let recovering = true;
   const settle = async () => {
@@ -176,17 +206,12 @@ export async function withNativeOpenIntent<T>(
       await rm(attempt.ticket.receipt, { force: true });
     }
     await rm(path, { force: true });
+    pending.length = 0;
   };
   try {
     try {
       const saved = Intent.parse(await readPrivateJson(path));
       if (saved.owner !== owner) throw new Error("Native opening intent owner changed");
-      // A browser listing cannot correlate a URL or PiP owner with an unacknowledged
-      // opening. Even a matching title or newly visible browser is insufficient proof.
-      if ("browser" in saved) {
-        browserPending = true;
-        throw new Error("Earlier browser opening has no exact completion evidence");
-      }
       pending.push(saved);
     } catch (error) {
       if (!missing(error)) throw new TernOutcomeUnknownError("tern open intent", error);
@@ -205,6 +230,11 @@ export async function withNativeOpenIntent<T>(
           attempt.ticket.args[4] !== input.indexPath
         )
           throw new Error("Native opening evidence owner or paths changed");
+        const receipt = await readReceipt(attempt.ticket.receipt);
+        if (receipt?.status === "failed") {
+          if (receipt.appliedEffects > 0) throw partialOpenFailure(receipt);
+          continue;
+        }
         const exact = await exactNativeView(
           commands,
           input.cwd,
@@ -216,24 +246,19 @@ export async function withNativeOpenIntent<T>(
         if (exact === undefined)
           throw new Error("Earlier opening has no exact native block evidence");
         await proveTaskReplacement(commands, input.cwd, attempt.ticket.replaced);
-        try {
-          const receipt = Receipt.parse(await readPrivateJson(attempt.ticket.receipt));
-          if (
-            receipt.paneId !== exact.block.id ||
+        if (
+          receipt !== undefined &&
+          (receipt.paneId !== exact.block.id ||
             receipt.tabId !== exact.tab.id ||
-            receipt.sessionId !== exact.session.id
-          )
-            throw new Error("Retained receipt conflicts with exact native block evidence");
-        } catch (error) {
-          if (!missing(error)) throw error;
-        }
+            receipt.sessionId !== exact.session.id)
+        )
+          throw new Error("Retained receipt conflicts with exact native block evidence");
       } catch (cause) {
         throw new TernOutcomeUnknownError("tern open recovery", cause);
       }
     }
     const recovered = pending.length > 0;
     if (recovered) await settle();
-    pending.length = 0;
     recovering = false;
     const invoke = () =>
       operation({
@@ -249,14 +274,6 @@ export async function withNativeOpenIntent<T>(
           pending.push({ route, ticket });
           claimedThisCall = true;
         },
-        claimBrowser: async (browser) => {
-          await writeFile(path, JSON.stringify({ version: 1, owner, browser }), {
-            flag: "wx",
-            mode: 0o600,
-          });
-          browserPending = true;
-          claimedThisCall = true;
-        },
         settle,
       });
     return await (runOperation === undefined ? invoke() : runOperation(invoke, recovered));
@@ -267,7 +284,7 @@ export async function withNativeOpenIntent<T>(
       await settle();
       throw cause;
     }
-    if ((pending.length > 0 || browserPending) && !(cause instanceof TernOutcomeUnknownError))
+    if (pending.length > 0 && !(cause instanceof TernOutcomeUnknownError))
       throw new TernOutcomeUnknownError("tern open verification", cause);
     if (recovering && cause instanceof TernOutcomeUnknownError && onUnresolved !== undefined)
       return await onUnresolved(cause);

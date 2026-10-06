@@ -251,7 +251,7 @@ for (const mode of [
         )
           await writeFile(
             ticket.receipt,
-            JSON.stringify({ paneId: "4", tabId: "2", sessionId: "1" }),
+            JSON.stringify({ status: "done", paneId: "4", tabId: "2", sessionId: "1" }),
           );
         return { code: 1, stderr: "cannot open in a file block", stdout: "" };
       }

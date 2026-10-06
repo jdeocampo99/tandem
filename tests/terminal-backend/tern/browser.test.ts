@@ -1,15 +1,16 @@
 import { expect, test } from "bun:test";
-import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 
-// Regression from the #282 safety verifier's browser-relaunch.test.ts:
-// independent native CLI backends must not repeat the same uncertain opening.
+// A browser opening can never be proved or disproved later, and it is never re-invoked. A
+// process that dies right after `tern browser`, or a reply that never proves the new browser,
+// must not leave anything that pauses the user's next open.
 for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirmed"] as const) {
-  test(`browser ${mode} persists quarantine across fresh backend instances`, async () => {
+  test(`browser ${mode} is reported once and never pauses later opens`, async () => {
     const root = await realpath(await mkdtemp("/tmp/tandem-browser-"));
     const home = join(root, "home");
     const repo = join(root, "repo");
@@ -36,25 +37,26 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
         return { code: 0, stderr: "", stdout: '{"block":"3"}' };
       }
       if (verb === "browser") {
-        const intents = (await readdir(join(home, "native-host"))).filter((name) =>
-          name.endsWith(".intent.json"),
-        );
-        expect(intents).toHaveLength(1);
-        const path = join(home, "native-host", intents[0] ?? "");
-        expect((await lstat(path)).mode & 0o777).toBe(0o600);
-        expect(JSON.parse(await readFile(path, "utf8")).browser.url).toBe(
-          "https://example.invalid/pull/281",
-        );
+        // A crash here leaves no durable record behind.
+        expect(
+          (await readdir(join(home, "native-host"))).filter((name) =>
+            name.endsWith(".intent.json"),
+          ),
+        ).toEqual([]);
         expect(JSON.parse(request.argv[2] ?? "")).toEqual({
           op: "open",
           owner: 3,
           url: "https://example.invalid/pull/281",
         });
         opens++;
-        loseListing = mode !== "confirmed";
-        if (mode === "lost-ack")
+        loseListing = mode.endsWith("-listing") && opens === 1;
+        if (mode === "lost-ack" && opens === 1)
           return { code: 1, stderr: "lost browser acknowledgement", stdout: "" };
-        return { code: 0, stderr: "", stdout: '{"ok":{"block":"4"}}' };
+        return {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({ ok: { block: String(3 + opens) } }),
+        };
       }
       if (verb !== "ls") throw new Error(`Unexpected browser proof command ${verb}`);
       if (loseListing) {
@@ -77,9 +79,13 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
                   name: null,
                   blocks: [
                     { id: "3", title: "Coordinator", cwd: repo, live: true },
-                    ...(opens > 0
-                      ? [{ id: "4", title: "PR", cwd: repo, live: false, program: "browser" }]
-                      : []),
+                    ...Array.from({ length: opens }, (_, index) => ({
+                      id: String(4 + index),
+                      title: "PR",
+                      cwd: repo,
+                      live: false,
+                      program: "browser",
+                    })),
                   ],
                 },
               ],
@@ -116,62 +122,28 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
           origin: { paneId: "3", cwd: repo },
           view: { kind: "browser", url: "https://example.invalid/pull/281" },
         });
+      const intents = async () =>
+        (await readdir(join(home, "native-host"))).filter((name) => name.endsWith(".intent.json"));
       if (mode === "confirmed") {
         expect(await open()).toEqual({ opened: true, warnings: [] });
-        expect(
-          (await readdir(join(home, "native-host"))).filter((name) =>
-            name.endsWith(".intent.json"),
-          ),
-        ).toHaveLength(0);
-      } else {
-        await expect(open()).rejects.toThrow("outcome is unknown");
-        loseListing = false;
-        await expect(open(ternBackend(run, { home, binary: "tern" }))).rejects.toThrow(
-          "quarantine",
-        );
-        await expect(open()).rejects.toThrow("quarantine");
-        // Reads now succeed and the created browser is visible, but they cannot
-        // prove the URL/owner of an earlier uncertain operation.
-        loseListing = false;
-        await expect(open(ternBackend(run, { home, binary: "tern" }))).rejects.toThrow(
-          "outcome is unknown",
-        );
-        await expect(
-          ternBackend(run, { home, binary: "tern" }).openPanel({
-            coordinator,
-            cwd: repo,
-            project: repo,
-          }),
-        ).rejects.toThrow("outcome is unknown");
-        expect(
-          (await readdir(join(home, "native-host"))).filter((name) =>
-            name.endsWith(".intent.json"),
-          ),
-        ).toHaveLength(1);
-        const name = (await readdir(join(home, "native-host"))).find((name) =>
-          name.endsWith(".intent.json"),
-        );
-        const intentPath = join(home, "native-host", name ?? "");
-        const fence = await readFile(intentPath, "utf8");
-        for (const backend of [terminal, ternBackend(run, { home, binary: "tern" })]) {
-          const returned = await backend.openView({
-            coordinator,
-            cwd: repo,
-            home,
-            origin: { paneId: "3", cwd: repo },
-            view: { kind: "orchestrator" },
-          });
-          expect(returned.opened).toBe(true);
-          expect(returned.warnings[0]).toContain("Returned to your conversation");
-          expect(returned.warnings[0]).toContain("tab switcher");
-          expect(await readFile(intentPath, "utf8")).toBe(fence);
-        }
-        expect(focuses).toEqual(["3", "3"]);
-        await expect(open(ternBackend(run, { home, binary: "tern" }))).rejects.toThrow(
-          "outcome is unknown",
-        );
+        expect(await intents()).toEqual([]);
+        expect(opens).toBe(1);
+        return;
       }
+      await expect(open()).rejects.toThrow(
+        "Tern did not confirm the PR opened in its browser. Tandem did not retry",
+      );
       expect(opens).toBe(1);
+      expect(await intents()).toEqual([]);
+      expect(focuses).toEqual([]);
+      // The user's next click is a new opening, in this process or a fresh one.
+      expect(await open()).toEqual({ opened: true, warnings: [] });
+      expect(await open(ternBackend(run, { home, binary: "tern" }))).toEqual({
+        opened: true,
+        warnings: [],
+      });
+      expect(opens).toBe(3);
+      expect(await intents()).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

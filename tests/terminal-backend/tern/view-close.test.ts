@@ -251,7 +251,7 @@ for (const kind of ["board"] as const) {
           if (mode === "unknown") return { code: 1, stderr: "lost acknowledgment", stdout: "" };
           await writeFile(
             ticket.receipt,
-            JSON.stringify({ paneId: "3", tabId: "2", sessionId: "1" }),
+            JSON.stringify({ status: "done", paneId: "3", tabId: "2", sessionId: "1" }),
           );
           return { code: 1, stderr: "cannot open in a file block", stdout: "" };
         } else throw new Error(`unexpected ${verb}`);
