@@ -9,7 +9,13 @@ import { applyEdits, type PrReviewEdits, submissionEdits } from "./edits.ts";
 import { buildReviewPage, parseReviewSubmission, type ReviewSubmission } from "./page.ts";
 import { readPageComment, readSubmissionText } from "./page-feedback.ts";
 import { readPageSources, reviewPageInput } from "./page-input.ts";
-import { postReview, type ReviewVerdict, replyToComment, reviewMarker } from "./post.ts";
+import {
+  findPostedReview,
+  postReview,
+  type ReviewVerdict,
+  replyToComment,
+  reviewMarker,
+} from "./post.ts";
 import {
   acknowledgement,
   findPullRequestRef,
@@ -240,6 +246,9 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         `This review was already posted at ${round.posted.url}; ask for a re-review instead.`,
       );
     }
+    if (round.pendingPost !== undefined) {
+      throw new Error("This review has an uncertain post; reconcile it before editing.");
+    }
     const edited: PrReviewRound = {
       ...round,
       review: applyEdits(round.review, edits, await commentable(task.id, round)),
@@ -252,7 +261,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
   /**
    * Posts what the user chose on the page. The click on Submit is the user's approval, so this
    * posts without asking again; it still pins to the reviewed commit and refuses if the PR moved.
-   * Nothing is saved unless the post lands, so a refused submission can be sent again.
+   * The exact submission is saved before posting; an uncertain outcome must be reconciled.
    */
   async function submit(
     taskId: string,
@@ -271,6 +280,9 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     }
     if (round.posted !== undefined) {
       throw new Error(`This review was already posted at ${round.posted.url}.`);
+    }
+    if (round.pendingPost !== undefined) {
+      return publish(task, state, round, round.pendingPost.verdict);
     }
     const review = applyEdits(
       round.review,
@@ -298,20 +310,44 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     return publish(task, state, round, verdict);
   }
 
-  /** Posts the round as given and, once GitHub has it, saves the round as posted. */
+  /** Records the submitted round before posting, then saves or reconciles its receipt. */
   async function publish(
     task: TaskRecord,
     state: PrReviewState,
     round: PrReviewRound,
     verdict: ReviewVerdict,
   ): Promise<PostPrReviewResult> {
-    const outcome = await postReview(deps.run, {
+    const input = {
       ref: state.ref,
       review: round.review,
-      verdict,
+      verdict: round.pendingPost?.verdict ?? verdict,
       marker: reviewMarker(task.id, round.generation),
       cwd: state.checkout,
-    });
+    };
+    let postingTask = task;
+    const outcome =
+      round.pendingPost === undefined
+        ? await postReview(deps.run, input, async () => {
+            postingTask = await deps.updatePrReview(
+              task,
+              replaceLatestRound(state, {
+                ...round,
+                pendingPost: { verdict, attemptedAt: deps.clock() },
+              }),
+            );
+          })
+        : await findPostedReview(deps.run, input);
+    if (
+      outcome.kind === "absent" ||
+      outcome.kind === "unreadable" ||
+      outcome.kind === "uncertain"
+    ) {
+      return {
+        taskId: task.id,
+        posted: false,
+        message: `The review post is uncertain; another review will not be sent. Retry only to reconcile its marker.${outcome.kind === "absent" ? " GitHub has not returned the saved marker yet." : ` ${outcome.message}`}`,
+      };
+    }
     if (outcome.kind === "moved") {
       return {
         taskId: task.id,
@@ -323,17 +359,18 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       return {
         taskId: task.id,
         posted: false,
-        message: `GitHub didn't take the review: ${outcome.message}`,
+        message: `The review was not sent: ${outcome.message}`,
       };
     }
-    const replies = await postReplies(state, round);
+    const { pendingPost: _pendingPost, ...confirmed } = round;
     await deps.updatePrReview(
-      task,
+      postingTask,
       replaceLatestRound(state, {
-        ...round,
-        posted: { url: outcome.url, verdict, postedAt: deps.clock() },
+        ...confirmed,
+        posted: { url: outcome.url, verdict: input.verdict, postedAt: deps.clock() },
       }),
     );
+    const replies = await postReplies(state, confirmed);
     return {
       taskId: task.id,
       posted: true,

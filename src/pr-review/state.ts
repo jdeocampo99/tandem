@@ -25,6 +25,8 @@ export type PrReviewRound = Readonly<{
   review: PrReview;
   notes: readonly string[];
   posted?: PostedReview;
+  /** Saved before GitHub is called; retained until its marker proves the review landed. */
+  pendingPost?: Readonly<{ verdict: ReviewVerdict; attemptedAt: string }>;
 }>;
 
 /** The durable part of a `pr-review` task, stored on its task record. */
@@ -126,6 +128,22 @@ function parseRound(value: unknown, source: string): PrReviewRound {
     ...(record.posted === undefined
       ? {}
       : { posted: parsePosted(record.posted, `${source}.posted`) }),
+    ...(record.pendingPost === undefined
+      ? {}
+      : { pendingPost: parsePendingPost(record.pendingPost, `${source}.pendingPost`) }),
+  };
+}
+
+function parsePendingPost(
+  value: unknown,
+  source: string,
+): NonNullable<PrReviewRound["pendingPost"]> {
+  const record = recordAt(value, source);
+  const verdict = textAt(record.verdict, `${source}.verdict`);
+  if (!VERDICTS.has(verdict)) throw new TypeError(`${source}.verdict is not a known verdict`);
+  return {
+    verdict: verdict as ReviewVerdict,
+    attemptedAt: textAt(record.attemptedAt, `${source}.attemptedAt`),
   };
 }
 
