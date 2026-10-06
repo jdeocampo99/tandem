@@ -132,6 +132,7 @@ if [ -f '${root}/refuse' ]; then echo 'Brief revision is stale; review the lates
 printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so Tandem can run its panes and board inside Tern.' '' 'Tandem: I drafted the brief and opened it on the right. Comment on any line, or ask me here.' '' 'You: Why only three alert types?' '' 'Tandem: Needs-you, done and stuck are the events that ask you to act. Progress stays in the panel.'
 `,
     );
+    await writeFile(join(root, "conversation.sh"), "read -r synthetic_reply\n", { flag: "a" });
     const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
       env,
       cwd: root,
@@ -190,7 +191,18 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       });
       await run("plugin", "link", plugin, "--json");
       const created = decode(
-        await run("new", "session", "brief-proof", "--cwd", root, "--json"),
+        await run(
+          "new",
+          "session",
+          "brief-proof",
+          "--cwd",
+          root,
+          "--keep-open",
+          "--json",
+          "--",
+          "/bin/sh",
+          join(root, "conversation.sh"),
+        ),
         Created,
         "create isolated session",
       );
@@ -217,7 +229,6 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       });
       await ctl("resize", "1500", "940");
       await ctl("tabs", "autohide", "on");
-      await run("run", created.block, `/bin/sh ${join(root, "conversation.sh")}`);
       const coordinator: Endpoint = {
         terminal: "tern",
         sessionId: "brief-proof",
