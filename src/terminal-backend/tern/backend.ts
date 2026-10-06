@@ -582,7 +582,6 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       }
     },
     openWelcome: async (target) => {
-      const { nativeViewsPath } = await import("../../board/snapshot.ts");
       if (options.home === undefined) throw new Error("Tern welcome requires a Tandem home");
       const { views, projectForView, nativeViewsPath } = await native();
       const coordinator = await byId(target, target.paneId);
@@ -605,7 +604,6 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       ]);
     },
     openPanel: async (input) => {
-      const { nativeViewsPath } = await import("../../board/snapshot.ts");
       if (options.home === undefined) throw new Error("Tern panel requires a Tandem home");
       const { views, nativeViewsPath } = await native();
       return (
