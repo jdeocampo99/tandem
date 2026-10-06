@@ -104,9 +104,12 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   are saved with `pendingPost`; a later submission reconciles those saved choices without replacing
   them with new choices.
 - Native `review-submit` input also requires the displayed `reviewHead` and `reviewGeneration`.
-  These travel separately from `ReviewSubmission` to the submit workflow. The service serializes
-  every chat/page/native posting entry point with task mutations through the authoritative read,
-  GitHub posting and saving the receipt; it refuses a
+  These travel separately from `ReviewSubmission` to the submit workflow. Every chat/page/native
+  posting path claims its durable `pendingPost` with a revision-checked store update before sending.
+  GitHub calls run outside the store lock, so a slow POST cannot block other tasks. The receipt is
+  settled under a short lock on the exact posted head/generation, preserving other changes and
+  newer review rounds. A competing caller cannot send another POST; it only reconciles a saved
+  pending attempt. Submission refuses a
   head/round generation mismatch or an advanced re-review task generation before applying draft choices.
   Question follow-ups retain the same finished review round, so its unchanged binding remains valid.
   A stale pane must reopen before submitting. The HTML submission shape remains unchanged.

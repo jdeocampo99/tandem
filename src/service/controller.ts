@@ -824,6 +824,20 @@ class TandemController {
           updatedAt: deps.clock(),
           prReview: next,
         })),
+      mutatePrReview: (taskId, update) =>
+        deps.store.exclusive(async (store) => {
+          const task = await store.read(taskId);
+          if (task === undefined) throw new Error(`Task ${taskId} was not found`);
+          const next = update(task);
+          if (next === task.prReview) return { task, changed: false };
+          const updated = await store.update(task.id, task.revision, (current) => ({
+            ...current,
+            revision: current.revision + 1,
+            updatedAt: deps.clock(),
+            prReview: next,
+          }));
+          return { task: updated, changed: true };
+        }),
       runAgain: async (task) => {
         const followUp = await this.transition(task.id, { type: "follow-up-research" });
         await this.reconcileTask(followUp);
@@ -1040,13 +1054,9 @@ class TandemController {
         this.#prReviews.listen(assertTaskId(id), signal, reply),
       reviewEdit: (id, edits) => this.#prReviews.edit(assertTaskId(id), edits),
       reviewPost: (id, input) =>
-        this.#deps.store.serialized(() =>
-          this.#prReviews.post(assertTaskId(id), input.verdict, input.approved, input.recovery),
-        ),
+        this.#prReviews.post(assertTaskId(id), input.verdict, input.approved, input.recovery),
       reviewSubmit: (id, submission, expected) =>
-        this.#deps.store.serialized(() =>
-          this.#prReviews.submit(assertTaskId(id), submission, expected),
-        ),
+        this.#prReviews.submit(assertTaskId(id), submission, expected),
       reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       board: () => readBoard(this.#deps.home, this.#deps.clock),
@@ -1238,9 +1248,13 @@ class TandemController {
     };
   }
 
-  async openProject(
-    repoPath: string,
-  ): Promise<Readonly<{ readonly repoPath: string; readonly focused: boolean }>> {
+  async openProject(repoPath: string): Promise<
+    Readonly<{
+      readonly repoPath: string;
+      readonly focused: boolean;
+      readonly warnings?: readonly string[];
+    }>
+  > {
     const onboarded = await this.setupOnboard(repoPath, false);
     if (!onboarded.existingConfig) {
       throw new Error(`${onboarded.repoPath} has no saved Tandem settings yet; save them first`);
@@ -1248,13 +1262,13 @@ class TandemController {
     if (!onboarded.modelSettings.configured) {
       throw new Error("no model choices are saved yet; save them first");
     }
-    const { focused } = await openProject(this.#deps.run, this.#deps.terminal, {
+    const opened = await openProject(this.#deps.run, this.#deps.terminal, {
       repoPath: onboarded.repoPath,
       home: this.#deps.home,
       sessionId: this.#deps.sessionId,
       poolRoot: this.#deps.poolRoot,
     });
-    return { repoPath: onboarded.repoPath, focused };
+    return { repoPath: onboarded.repoPath, ...opened };
   }
 
   /**
