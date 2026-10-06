@@ -1,9 +1,9 @@
 import type { BoardView } from "../board/view.ts";
 import type { CatchUpView } from "../memory/workstream.ts";
-import type { TodoItem } from "../playbooks/progress.ts";
 import type { TaskMessageBatch } from "../tasks/communication-protocol.ts";
 import type { AgentStatusReporter } from "../terminal-backend/contract.ts";
 import type { ReplyUsage } from "../workers/terminal.ts";
+import type { TodoItem } from "../workers/todos.ts";
 
 /** What the running harness can do. The core checks these, never the harness name. */
 export type Capabilities = Readonly<{

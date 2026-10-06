@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
-import { openSteps, type TodoItem } from "../playbooks/progress.ts";
+import { openSteps, type TodoItem } from "../workers/todos.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { findingHeadline } from "../tasks/findings.ts";

@@ -1,8 +1,8 @@
-import type { TodoItem } from "../../playbooks/progress.ts";
 import type { SessionEffect, SessionHost, ToolCall, ToolKind } from "../../session/events.ts";
 import { type NativeReplyLink, nativeLinkLine } from "../../session/native-links.ts";
 import { WorkerOutputError } from "../../workers/protocol.ts";
 import { COPY_ASSET_TOOL, type ReplyUsage, SUBMIT_REPORT_TOOL } from "../../workers/terminal.ts";
+import type { TodoItem } from "../../workers/todos.ts";
 import { CLAUDE_CODE_PROVIDER } from "./models.ts";
 import type {
   SidecarEvent,

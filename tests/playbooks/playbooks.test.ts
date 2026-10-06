@@ -3,7 +3,6 @@ import type { JevEvaluationResponse, JevGateway } from "../../src/adapters/types
 import { buildAgentBrief } from "../../src/instructions.ts";
 import { PLAYBOOKS } from "../../src/playbooks/catalog.ts";
 import { classifyPlaybook } from "../../src/playbooks/classify.ts";
-import { openSteps, todoItems } from "../../src/playbooks/progress.ts";
 import { playbookForRun, selectPlaybook } from "../../src/playbooks/selection.ts";
 
 test("selection pins each confident job type, and general for other, low confidence, or no pick", () => {
@@ -69,32 +68,6 @@ test("classification goes through the configured Jev gateway", async () => {
     },
   );
   expect(used).toEqual(gateway);
-});
-
-const steps = ["Measure a baseline", "Find the cause", "Measure again"];
-const result = (tasks: ReadonlyArray<{ content: string; status: string }>) => ({
-  details: { op: "done", phases: [{ name: "Playbook", tasks }] },
-});
-
-test("progress: completed and abandoned steps close; open, blocked, and missing ones stay open", () => {
-  const all = todoItems(
-    result([
-      { content: "Measure a baseline", status: "completed" },
-      { content: "Find the cause", status: "abandoned" },
-      { content: "Measure again", status: "completed" },
-    ]),
-  );
-  expect(openSteps(steps, all)).toEqual([]);
-
-  const partial = todoItems(
-    result([
-      { content: "Measure a baseline", status: "completed" },
-      { content: "Find the cause", status: "blocked" },
-    ]),
-  );
-  expect(openSteps(steps, partial)).toEqual(["Find the cause", "Measure again"]);
-  expect(openSteps(steps, undefined)).toEqual(steps);
-  expect(todoItems({ details: { phases: [{ tasks: [{ content: 1 }] }] } })).toBeUndefined();
 });
 
 test("only a brief given a playbook carries its steps", () => {

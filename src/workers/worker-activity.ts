@@ -1,8 +1,8 @@
 import { dirname, join } from "node:path";
 import type { IsoTimestamp, WorkerReceipt } from "../contracts.ts";
-import type { TodoItem } from "../playbooks/progress.ts";
 import { readPrivateJson, writePrivateJson } from "../tasks/communication-persistence.ts";
 import { toolName } from "./control-protocol.ts";
+import type { TodoItem } from "./todos.ts";
 
 /**
  * What a worker is doing, for display only. It sits in its own file beside the receipt so the

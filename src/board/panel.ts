@@ -1,8 +1,8 @@
 import type { BlockCauseKind, TaskStage, TerminalName } from "../contracts.ts";
-import type { TodoItem } from "../playbooks/progress.ts";
 import { elapsed } from "../pr-watch/view.ts";
 import { nativeDurationLabel } from "../runtime/usage-display.ts";
 import type { LimitMeter } from "../runtime/usage-view.ts";
+import type { TodoItem } from "../workers/todos.ts";
 import type { WorkerActivity } from "../workers/worker-activity.ts";
 import type { BoardSnapshot } from "./snapshot.ts";
 import type {
