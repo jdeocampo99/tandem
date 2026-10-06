@@ -13,6 +13,7 @@ import {
 } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import type { TerminalView } from "../../src/terminal-backend/contract.ts";
 
 async function fixture(): Promise<{ root: string; home: string; record: CoordinatorRecord }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-coordinator-panel-")));
@@ -25,6 +26,7 @@ async function fixture(): Promise<{ root: string; home: string; record: Coordina
     schemaVersion: 1,
     repoPath,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: "tandem",
       workspaceId: "w1",
       tabId: "w1:t1",
@@ -149,6 +151,34 @@ test("an unreadable panel file counts as no recorded panel", async () => {
     const file = recordPath(home, "tandem", record.repoPath).replace(/\.json$/u, ".panel");
     await writeFile(file, "{not json");
     expect(await readPanelPaneId(home, record)).toBeUndefined();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reopening a retained Tern panel leaves project navigation to the caller", async () => {
+  const { root, home, record } = await fixture();
+  try {
+    const calls: TerminalView[] = [];
+    let panels = 0;
+    const terminal = {
+      ...terminalBackend(async () => ok({})),
+      name: "tern" as const,
+      openPanel: async () => {
+        panels += 1;
+        return "202";
+      },
+      isPanelOpen: async () => true,
+      openView: async (input: { view: TerminalView }) => {
+        calls.push(input.view);
+        return { opened: false, warnings: [] };
+      },
+    };
+    expect(await openPanelBeside(terminal, home, record)).toBeUndefined();
+    expect(await openPanelBeside(terminal, home, record)).toBeUndefined();
+    expect(panels).toBe(1);
+    expect(calls).toEqual([]);
+    expect(await readPanelPaneId(home, record)).toBe("202");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

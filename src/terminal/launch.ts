@@ -40,6 +40,12 @@ export function panelFailureNotice(repoPath: string, launch: unknown): string | 
   return `Tandem's panel did not open beside ${repoPath} (${launch.panelFailure}); tandem panel --popup shows it anywhere.\n`;
 }
 
+/** Catch-up is optional; report its warning separately from a panel opening failure. */
+export function catchUpWarningNotice(repoPath: string, launch: unknown): string | undefined {
+  if (!isRecord(launch) || typeof launch.catchUpWarning !== "string") return undefined;
+  return `${repoPath}: ${launch.catchUpWarning}\n`;
+}
+
 /** Reads a coordinator launch result's workspace retirement report, if it carried one. */
 export function workspaceRetirementFromLaunch(
   value: unknown,

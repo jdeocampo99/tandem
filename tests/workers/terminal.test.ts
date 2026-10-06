@@ -39,6 +39,7 @@ function fixture(root: string) {
     jobPath: join(root, "job.json"),
   };
   const endpoint: Endpoint = {
+    terminal: "herdr" as const,
     sessionId: "owned-session",
     workspaceId: "owned-workspace",
     tabId: "owned-tab",
@@ -407,18 +408,24 @@ test("closing a finished Claude Code worker sends Claude Code's two exit keys at
       return native(request);
     };
     // The worker takes the close request and says it is closing, as its session does.
-    const answering = setInterval(async () => {
-      const command = await readWorkerTerminalCommand(job.jobPath, job);
-      if (command?.action === "close") {
-        await writeWorkerTerminal(job.jobPath, {
-          ...state,
-          phase: "closing",
-          commandId: command.id,
-        });
-      }
+    let acknowledgements = Promise.resolve();
+    const answering = setInterval(() => {
+      acknowledgements = acknowledgements.then(async () => {
+        const command = await readWorkerTerminalCommand(job.jobPath, job);
+        if (command?.action === "close") {
+          await writeWorkerTerminal(job.jobPath, {
+            ...state,
+            phase: "closing",
+            commandId: command.id,
+          });
+        }
+      });
     }, 10);
-    await prepareWorkerTerminal(terminalBackend(run), { endpoint, cwd: root, job }).finally(() =>
-      clearInterval(answering),
+    await prepareWorkerTerminal(terminalBackend(run), { endpoint, cwd: root, job }).finally(
+      async () => {
+        clearInterval(answering);
+        await acknowledgements;
+      },
     );
     expect(sent).toEqual([["ctrl+d", "ctrl+d"]]);
   } finally {

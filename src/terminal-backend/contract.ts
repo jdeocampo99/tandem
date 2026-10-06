@@ -1,5 +1,5 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
-import type { AgentRole, Endpoint } from "../contracts.ts";
+import type { AgentRole, Endpoint, TerminalName } from "../contracts.ts";
 import type { ToolCheck } from "../onboarding/tools.ts";
 
 /** A pane Tandem owns, and the directory the backend's commands run from. */
@@ -7,18 +7,6 @@ export type EndpointTarget = Readonly<{ endpoint: Endpoint; cwd: string }>;
 
 /** A session-wide request, and the directory the backend's commands run from. */
 export type SessionTarget = Readonly<{ sessionId: string; cwd: string }>;
-/** The socket request used to move a workspace; composition may replace the socket effect. */
-export type WorkspaceMoveRequest = Readonly<{
-  readonly socketPath: string;
-  readonly workspaceId: string;
-  readonly insertIndex: number;
-}>;
-
-/** Injected workspace movement, primarily for composition roots and tests. */
-export type WorkspaceMover = (request: WorkspaceMoveRequest) => Promise<unknown>;
-
-export type TerminalBackendOptions = Readonly<{ readonly moveWorkspace?: WorkspaceMover }>;
-
 export type ForegroundProcess = Readonly<{
   pid: number;
   name: string;
@@ -77,6 +65,38 @@ export type FocusResult =
   | Readonly<{ focused: true }>
   | Readonly<{ focused: false; code: number; detail: string }>;
 
+/** A durable identity to show. The CLI validates it before asking a backend to present it. */
+export type TerminalView =
+  | Readonly<{ kind: "browser"; url: string }>
+  | Readonly<{
+      kind: "board" | "usage" | "prs" | "catchup" | "orchestrator" | "inbox" | "task-picker";
+    }>
+  | Readonly<{ kind: "task" | "pr"; taskId: string }>
+  | Readonly<{ kind: "brief"; requestId: string }>
+  | Readonly<{ kind: "pr"; repo: string; number: number }>;
+
+/** Presentation context from the initiating view; it grants no pane ownership. */
+export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
+
+export type OpenViewResult = Readonly<{
+  opened: boolean;
+  warnings: readonly string[];
+  /** Exact native brief split identity, for its request workflow's scoped retirement. */
+  endpoint?: Endpoint;
+  fallback?: "brief-review";
+}>;
+
+/** Installation and account readiness proved before offering a terminal in setup. */
+export type TerminalAvailability =
+  | Readonly<{ status: "missing" | "signedOut" | "ready" }>
+  | Readonly<{ status: "unknown"; reason: string }>;
+
+/** The last proven window width, and any limitation that prevented fitting the panel. */
+export type PanelFitResult = Readonly<{
+  fittedWidth: number | undefined;
+  warnings: readonly string[];
+}>;
+
 export type AgentState = "idle" | "working" | "blocked" | "unknown";
 
 /** Presentation-only lifecycle state for the pane an agent runs in; it never grants ownership. */
@@ -108,7 +128,7 @@ export type SplitAnchor =
  */
 export type TerminalBackend = Readonly<{
   /** What doctor checks and messages call this terminal. */
-  name: string;
+  name: TerminalName;
 
   /** Reads the pane's identity and foreground processes, proving it is still `endpoint`. */
   inspect(target: EndpointTarget): Promise<EndpointInspection>;
@@ -160,10 +180,12 @@ export type TerminalBackend = Readonly<{
         env?: Readonly<Record<string, string>>;
         parentWorkspaceId?: string;
         insertIndex?: number;
+        /** Previous durable identity, when reconnecting to a retained native project session. */
+        previousEndpoint?: Endpoint;
       }>,
   ): Promise<Readonly<{ endpoint: Endpoint; warnings: readonly string[] }>>;
   /**
-   * Opens a pane right of an anchor, without focus, proven to share its workspace and tab. An
+   * Opens a pane beside an anchor, without focus, proven to share its workspace and tab. An
    * anchor known only by pane id is read first; nothing is ever written to the anchor.
    */
   splitBeside(
@@ -209,7 +231,45 @@ export type TerminalBackend = Readonly<{
       Readonly<{ workspaceId: string; env?: Readonly<Record<string, string>> }>,
   ): Promise<FocusResult>;
   /** Focuses the exact pane; false when the terminal would not, which callers may ignore. */
-  focusAgent(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
+  focusAgent(
+    target: SessionTarget &
+      Readonly<{
+        paneId: string;
+        origin?: ViewOrigin;
+        originCoordinator?: Endpoint;
+        home?: string;
+      }>,
+  ): Promise<boolean>;
+
+  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
+   * Supplied origin window/pane context must be honored or refused; never target another window.
+   * A windowId is an opaque control window key. Without it, derive the unique owning control
+   * window from the exact origin pane or refuse ambiguous mutation; never select the first window.
+   * Unsupported presentations return an explicit warning and never type into the conversation.
+   */
+  openView(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      view: TerminalView;
+      origin?: ViewOrigin;
+    }>,
+  ): Promise<OpenViewResult>;
+
+  /** Retires only the originating native brief split. The caller owns revision/action policy.
+   * Missing panes count as closed; foreign, busy and unknown outcomes retain the pane.
+   * This never retires a process-oriented Markdown reviewPane or the conversation.
+   */
+  closeView(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      origin: ViewOrigin & Readonly<{ paneId: string }>;
+      view: Extract<TerminalView, { kind: "brief" }>;
+    }>,
+  ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;
@@ -224,11 +284,11 @@ export type TerminalBackend = Readonly<{
 
   /** Tells the user something new needs them, through the terminal's notification settings. */
   notify(target: SessionTarget & Readonly<{ title: string; body: string }>): Promise<void>;
-  /** Opens the welcome popup over the session; Enter in it prompts the agent in `paneId`. */
+  /** Opens Tandem's welcome view; accepting it prompts the agent in `paneId`. */
   openWelcome(target: SessionTarget & Readonly<{ paneId: string }>): Promise<void>;
   /** Submits a prompt to the agent in a pane, or types it and presses Enter when none is known. */
   promptAgent(target: SessionTarget & Readonly<{ paneId: string; text: string }>): Promise<void>;
-  /** Opens Tandem's panel for `project` right of the coordinator, without focus; its pane id. */
+  /** Opens Tandem's panel beside the coordinator, without focus; its pane id. */
   openPanel(
     input: Readonly<{ coordinator: Endpoint; cwd: string; project: string }>,
   ): Promise<string>;
@@ -239,13 +299,13 @@ export type TerminalBackend = Readonly<{
   /** Closes a panel; one already gone counts as closed. */
   closePanel(target: SessionTarget & Readonly<{ panelPaneId: string }>): Promise<void>;
   /**
-   * Brings the panel back to `columns` wide, once per window width: returns the window width it
-   * fitted for, or `fittedWidth` unchanged when there was nothing to do or the terminal refused.
+   * Brings the panel back to `columns` wide, once per window width. Retains `fittedWidth` when
+   * nothing changed or fitting was refused; terminals can report a limitation as a warning.
    */
   fitPanel(
     target: SessionTarget &
       Readonly<{ paneId: string; columns: number; fittedWidth: number | undefined }>,
-  ): Promise<number | undefined>;
+  ): Promise<PanelFitResult>;
   /** Publishes the agent's state on the pane this process inherited, or undefined outside one. */
   agentStatusReporter(
     input: Readonly<{
@@ -279,7 +339,7 @@ export type TerminalContext = Readonly<{
   focus(environment: TandemEnvironmentSource): TerminalFocus;
   /** The panel's own pane, when this process is the panel the terminal opened beside a coordinator. */
   panelPaneId(environment: TandemEnvironmentSource): string | undefined;
-  /** The pane the welcome popup prompts, when this process is that popup. */
+  /** The agent pane targeted by the welcome view, when this process hosts that view. */
   welcomePaneId(environment: TandemEnvironmentSource): string | undefined;
 }>;
 

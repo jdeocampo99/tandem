@@ -285,3 +285,13 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
   Readers must accept events recorded before usage existed.
 - Background: [prompt-routing PRD](../jev-prompt-routing-prd.md), [integration overview](../jev-prd.md),
   [evaluation plan](../jev-evaluation.md).
+
+## Choosing the terminal
+
+The home setting `terminal = "herdr"` or `terminal = "tern"` applies across projects; absent
+means Herdr. Onboarding offers Tern only after a ready sign-in probe. A switch requires no
+unfinished work or retained uncertain resources. Selecting Tern links the view package; a
+separate consent controls global sidebar and shortcut changes. See
+[terminal.md](terminal.md#choosing-a-terminal) for the authoritative selection and probe rules,
+and [plugin consent and restoration](terminal.md#plugin-consent-and-restoration) for guarded
+settings changes. Task policy and model/harness choices are independent of the terminal.

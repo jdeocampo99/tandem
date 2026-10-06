@@ -1,0 +1,53 @@
+schema = 1
+id = "tandem"
+name = "Tandem"
+version = "0.1.0"
+description = "Tandem views, project keys, palette commands and task links"
+host = "host.luau"
+window = "window.luau"
+styles = ["tandem.css", "panel.css", "task.css", "board-usage.css", "brief.css", "pr.css"]
+
+[[blocks]]
+id = "panel"
+title = "Tandem panel"
+palette = false
+
+[[blocks]]
+id = "welcome"
+title = "Tandem welcome"
+palette = false
+
+[[blocks]]
+id = "board"
+title = "Tandem board"
+palette = false
+
+[[blocks]]
+id = "usage"
+title = "Tandem usage"
+palette = false
+
+[[blocks]]
+id = "catchup"
+title = "Tandem catchup"
+palette = false
+
+[[blocks]]
+id = "task"
+title = "Task"
+palette = false
+
+[[blocks]]
+id = "task-picker"
+title = "Open task…"
+palette = false
+
+[[blocks]]
+id = "brief"
+title = "Tandem brief"
+palette = false
+
+[[blocks]]
+id = "pr"
+title = "Pull request"
+palette = false

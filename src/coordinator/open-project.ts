@@ -1,7 +1,9 @@
 import { join } from "node:path";
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
+import { tryShowCatchUp } from "../memory/native-visits.ts";
 import { terminalContext } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
+import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
 import { listCoordinatorRecords } from "./registry.ts";
 import { TANDEM_CHECKOUT } from "./tandem-checkout.ts";
 
@@ -55,7 +57,7 @@ export async function openProject(
   run: CommandRunner,
   terminal: TerminalBackend,
   input: OpenProjectInput,
-): Promise<Readonly<{ readonly focused: boolean }>> {
+): Promise<Readonly<{ readonly focused: boolean; readonly warnings?: readonly string[] }>> {
   const result = await run(openProjectCommand(input));
   if (result.code !== 0) {
     const detail = (result.stderr.trim() || result.stdout.trim()).replace(/^tandem: /u, "");
@@ -66,10 +68,15 @@ export async function openProject(
   const records = await listCoordinatorRecords(input.home, input.sessionId);
   const record = records.find((candidate) => candidate.repoPath === input.repoPath);
   if (record === undefined) return { focused: false };
+  assertTerminalEndpoint(terminal.name, record.endpoint);
   const focus = await terminal.focusWorkspace({
     sessionId: input.sessionId,
     cwd: input.repoPath,
     workspaceId: record.endpoint.workspaceId,
   });
+  if (focus.focused) {
+    const { warning } = await tryShowCatchUp(terminal, { home: input.home, record });
+    return { focused: true, ...(warning === undefined ? {} : { warnings: [warning] }) };
+  }
   return { focused: focus.focused };
 }

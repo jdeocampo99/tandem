@@ -6,7 +6,8 @@ one coordinator per repository, and what `update`, `reset`, and `reset --hard` p
 Code: src/main.ts, src/terminal/arguments.ts, src/terminal/launch.ts, src/terminal/hard-reset.ts,
 src/config/environment.ts, src/coordinator/launch.ts, src/coordinator/ownership.ts,
 src/coordinator/registry.ts, src/coordinator/record.ts, src/coordinator/lock.ts,
-src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/workspace.ts,
+src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/quarantine.ts,
+src/coordinator/workspace.ts,
 src/coordinator/restart.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
 src/coordinator/renest.ts, src/harness/contract.ts (the launch port), src/harness/resolve.ts,
 src/harness/omp/launch.ts, src/harness/claude-code/launch.ts.
@@ -146,7 +147,13 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   `--session` explicitly for the target session. It accepts any saved canonical project after
   checking its settings and model choices; ordinary task creation, model lookup, and `onboard`
   remain bound to the coordinator's source context. Afterwards it focuses the project's coordinator
-  workspace from its record; a failed focus is reported, not an error.
+  workspace from its record; a failed focus is reported, not an error. After confirmed focus,
+  optional Tern catch-up failures return warnings while preserving the successful open result.
+  Catch-up never selects an arbitrary window, and a failed catch-up leaves the visit unacknowledged.
+  All visible entry paths share `tryShowCatchUp`; launch/reconnect return `catchUpWarning`
+  separately from `panelFailure`, and the front door prints it. Native project/inbox entries
+  return successful results with warning toasts. Launch/ownership/focus errors stay outside
+  the optional catch-up boundary.
 - At each session start, while no saved project other than the Tandem checkout exists, it opens
   the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
   `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`
@@ -204,6 +211,9 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   refuses and tells the user to stop it and relaunch (`legacyCoordinatorGuidance` in ownership.ts).
   An unrecorded `claude` loading Tandem's adapter plugin can't be tied to a repository, so launch
   refuses beside it too.
+  Discovery skips daemon-hosted Tandem Tern blocks only when their native `program` is an exact
+  `tandem.<block-id>` and their child, foreground group and foreground process are all absent.
+  Titles never prove this identity; a live childless shell or unknown block still fails closed.
 - Each record names the coordinator's `harness` (see [harness.md](harness.md)); a record saved
   before that field is OMP. Only a new coordinator takes its harness from its model
   (`harnessOf`), and launch refuses it before checking files or starting anything when Tandem
@@ -312,6 +322,13 @@ decides from that evidence alone:
   Treehouse refusal) becomes a durable note under `<home>/coordinator-quarantine/` naming lease,
   pane, and reason, and the launch error names that note.
 - A lease the previous record still points at is never rolled back; the record stays its owner.
+- A durable Tern endpoint quarantine fences launch and restart for that repository across sessions,
+  before retirement, lease acquisition or owner replacement, even when the old pane or tab is gone.
+  The parallel-coordinator setting does not bypass it. The refusal names the note and `tandem fix`;
+  fix reports the quarantined coordinator and retains its lease instead of retrying its effects.
+  The shared fence lives in `quarantine.ts`; lease acquisition/reuse and release, registry writes
+  and removal, ownership lookup and workspace retirement enforce it themselves. Startup rollback
+  therefore retains the exact lease even if the quarantined conversation tab has disappeared.
 - A previous lease that cannot be released becomes a quarantine note rather than blocking launch.
   No coordinator lease is left untracked, and the user is never locked out of their coordinator.
 
@@ -422,7 +439,11 @@ Effects:
 3. Persist stopped jobs and released reservations. Active tasks become cancelled; selected
    presentations become failed. Completed history and tasks awaiting approval are kept.
 4. Close exact owned coordinator panes, rechecking native ownership before each close and verifying
-   the pane disappeared. Then resume normal launch with fresh chats.
+   the pane disappeared. For Tern, preflight every coordinator-owned native view before closing
+   its coordinator, then retire those views by exact id and full argument/placement proof.
+   Busy or changed views refuse; unknown close outcomes quarantine the lease and preserve its
+   recorded owner. Brief, Board and Usage views retire along with the panel. Then resume normal
+   launch with fresh chats.
 
 Failure: if a coordinator changes state or a close fails after others in the batch already closed,
 reset stops closing, errors naming what closed and what stopped it, and does not force-close, retry,

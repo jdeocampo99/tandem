@@ -4,7 +4,8 @@ The durable request brief, how approval binds to one revision, and the read-only
 
 Code: src/requests/brief.ts, src/requests/store.ts, src/requests/store-codec.ts,
 src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts,
-src/requests/plain-language.ts
+src/requests/plain-language.ts, src/requests/native-view.ts,
+src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 
 ## Brief record
 
@@ -36,9 +37,14 @@ src/requests/plain-language.ts
 
 ## Approval
 
-- An explicit, human-confirmed main-conversation decision recording request id, revision, content
-  digest, and agreement digest. Refused unless id, revision, and content digest match the current
-  draft, so it never carries to another revision or request.
+- An explicit, human-confirmed decision in the main conversation or an Approve click in the native
+  brief view records request id, revision, content digest, and agreement digest. The native click
+  is the user's confirmation, like Submit on the PR review page; it needs no second dialog or
+  `--yes`. `tandem native brief-approve REQUEST_ID --input FILE` requires `briefRevision`,
+  `contentDigest`, and `agreementDigest` copied from the displayed view. All must match the current
+  durable draft inside the approval compare-and-swap. A stale click records nothing and never
+  approves a revision the user did not see. Conversation approval still requires the exact id,
+  revision, and content digest, with the agreement digest recorded from that draft.
 - An agreement change makes approval non-current: dispatch is refused and running work is paused
   via ownership-safe pause until reapproval. Annotation-only edits keep approval current.
 - `brief-abandon` records `abandonedAt` when the user drops a request before approving it. Only a
@@ -51,7 +57,19 @@ src/requests/plain-language.ts
 
 ## Review pane
 
-- `reviewPane: true` renders read-only Markdown at `<home>/request-briefs/<requestId>.md` in one
+- In Tern, `reviewPane: true` publishes the native brief detail and calls `terminal.openView`
+  beside the recorded coordinator. Exact block evidence reuses the split across revisions;
+  the existing `reviewPane` receipt holds its native endpoint, detail path and shown revision.
+  That endpoint records only the brief's terminal, session, workspace, tab, pane, role and
+  generation identity. The coordinator's `notificationPane` stays on its own endpoint for alerts.
+  Approval, abandonment and current-revision request changes retire it through scoped `closeView`.
+  Unknown opening outcomes keep the host's durable intent and resources quarantined; no legacy
+  shell pane or automatic retry follows. Unknown closure leaves approval or feedback standing
+  and quarantines the receipt. Tiny in-chat fixes still open no pane.
+- A review receipt tagged for another terminal is quarantined with a plain warning before any
+  terminal call. Approval, abandonment and feedback retirement preserve that receipt and its pane;
+  none closes it through the active backend or marks it closed.
+- In Herdr, `reviewPane: true` renders read-only Markdown at `<home>/request-briefs/<requestId>.md` in one
   owned temporary pane, an unfocused split right of the coordinator's pane. Without an active Herdr
   context (`HERDR_ENV`, `HERDR_PANE_ID`) in the Tandem session, it opens a separate
   `Tandem request brief · <repo>` workspace. Tiny fixes use an in-chat brief and no pane.
@@ -87,3 +105,54 @@ src/requests/plain-language.ts
 - Pane failures never close an unrelated pane or lose the brief: SQLite keeps the record, history,
   and referring tasks, and the Markdown is rewritten regardless. A pane receipt never changes a task
   stage or scope approval.
+
+## Native brief feedback
+
+- `tandem native brief-comment REQUEST_ID --input FILE` and `brief-request-changes` carry the
+  displayed `briefRevision`, `contentDigest`, and `agreementDigest`, plus optional overall `text`
+  and `comments: [{lineId, text}]`. Copy each stable string `lineId` from the displayed
+  `briefView.lines[].id`; numeric Markdown line anchors are refused. At least
+  one line comment or nonempty overall text is required; there are at most 100 line comments
+  and 64,000 bytes of feedback.
+- Feedback names the revision the user saw. A preserved older revision is accepted only with its
+  matching digests and valid line ids. The CLI rebuilds `briefView` for that exact historical
+  revision and resolves ids in that view, so a newer draft never supplies the quoted text or
+  changes an anchor. Unknown ids, unpreserved revisions, and mismatched digests are refused clearly.
+  It reaches the ownership-proven running coordinator as
+  user input prefixed with "From the open review page:", with the request, revision, quoted lines,
+  and comments. It never changes or approves the brief itself.
+- Request changes retires the owned brief projection after delivery, only while it still shows
+  that revision. A later revision stays open. Approval retires its projection through the existing
+  ownership-safe workflow and prompts the coordinator to continue the conversation. If that
+  notification fails after approval was recorded, the action returns the approval and a warning.
+  If retiring the pane fails after feedback was delivered, request changes returns a successful
+  delivery receipt with the pane warning and asks callers not to resubmit. Feedback delivery is
+  not idempotent; neither projection failure nor a caller retry may imply that nothing was sent.
+
+## Native brief pane
+
+- `tandem native open brief REQUEST_ID` opens `tandem.brief` beside the verified project's
+  conversation. All native actions include `--pane ID --cwd ABSOLUTE_PATH [--window KEY]`;
+  JSON inputs use the private immutable transport in [terminal.md](terminal.md#native-views-and-actions).
+- The pane shows the title, revision, change count and NEW lines. Hover `+` opens a line editor;
+  Comment saves a local pending card under that line. Those cards and the optional overall text
+  are sent on Request changes. Local drafts never write the task store, and a new view revision
+  never silently reattaches them. The user can discard them and refresh. Invalid view files disable
+  submission while keeping the last display readable. Opening before detail publication shows a
+  loading message with no Approve or Request changes controls. Only a successfully parsed
+  published revision with a complete approval triplet supplies the action binding.
+- Approve sends exactly the displayed `{briefRevision,contentDigest,agreementDigest}` to
+  `brief-approve`; it excludes pending feedback. The click is the approval, with no second
+  dialog. Request changes sends that same binding plus `text?` and `comments:[{lineId,text}]`.
+  `brief-comment` is also available through the CLI for feedback without closing the pane.
+- After durable approval or delivered request changes, the CLI retires only the originating
+  native brief split, and only if the current draft still matches the displayed revision and
+  both digests. A changed draft stays open with a warning. Closure proves the exact program,
+  all five launch arguments, session/tab and idle state through the terminal host; this native
+  projection records its Tern-tagged endpoint, detail path and shown revision in `reviewPane`
+  without creating a legacy Markdown pane.
+- Approval prompts the verified coordinator to continue. Request changes delivers the user's
+  feedback to that conversation. If notification or closure fails after completion, the CLI
+  returns success with warnings; the renderer disables further submission on that retained pane.
+  Never resubmit to repair a display or notification failure. A nonzero result shows stderr as
+  a toast and causes no automatic retry. The local × closes only its block.

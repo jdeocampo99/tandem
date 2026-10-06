@@ -41,8 +41,8 @@ quiet bun install
 quiet bun link
 echo "✓ tandem"
 
-# Herdr >= 0.8.2 for the status popup, tab bar, and notifications; asks before editing its config.
-bun src/terminal-backend/herdr/setup.ts
+# Configure the saved terminal's Tandem plugin; asks before linking or editing shortcuts.
+bun src/terminal-backend/setup.ts
 
 if ! grep -qs '.bun/bin' "$HOME/.zshrc"; then
   echo

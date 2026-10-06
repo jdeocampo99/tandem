@@ -1,10 +1,15 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../src/adapters/commands.ts";
+import { nativeViewText } from "../../src/board/native-views.ts";
+import { nativeViewsPath } from "../../src/board/snapshot.ts";
+import { repositoryKey } from "../../src/config/repositories.ts";
 import type { CommandRequest } from "../../src/contracts.ts";
 import { openProject, openProjectCommand } from "../../src/coordinator/open-project.ts";
+import { listCoordinatorRecords, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
+import { visitNativeProject } from "../../src/memory/native-visits.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { saveCoordinator } from "./fake-workspace-order.ts";
@@ -96,6 +101,100 @@ test("a failed open names the project and the front door's reason", async () => 
   );
   expect(requests).toHaveLength(1);
 });
+
+for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"] as const) {
+  test(`Tern project open preserves its focus result when catch-up is ${outcome}`, async () => {
+    const focused = outcome !== "unfocused";
+    const warning =
+      outcome === "ambiguous-window"
+        ? "Native view needs a unique owning Tern window; supply --window when several are open"
+        : outcome === "unavailable"
+          ? "Tern could not open project catch-up"
+          : undefined;
+    const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-open-project-")));
+    const home = join(root, "home");
+    const repo = join(root, "api");
+    try {
+      await saveCoordinator(home, repo, "201");
+      const saved = (await listCoordinatorRecords(home, input.sessionId))[0];
+      if (!saved) throw new Error("Missing fixture coordinator");
+      const record = {
+        ...saved,
+        endpoint: {
+          ...saved.endpoint,
+          terminal: "tern" as const,
+          terminalSessionId: "17",
+          paneId: "101",
+          tabId: "201",
+        },
+      };
+      await saveCoordinatorRecord(home, record);
+      const path = nativeViewsPath(home, repo);
+      await mkdir(join(path, ".."), { recursive: true });
+      await writeFile(
+        path,
+        nativeViewText("panel", {
+          version: 1,
+          project: repo,
+          writtenAt: new Date().toISOString(),
+          changeSignature: "after",
+          tasks: {},
+          briefs: {},
+          pullRequests: {},
+          projects: [],
+        }),
+      );
+      await visitNativeProject(
+        {
+          home,
+          project: repo,
+          now: new Date(Date.now() - 2 * 3600000).toISOString(),
+          signature: "before",
+        },
+        async () => {},
+      );
+      const visitPath = join(home, "native-visits", `${repositoryKey(repo)}.json`);
+      const previousVisit = await readFile(visitPath, "utf8");
+      const events: string[] = [];
+      const run = async () => {
+        events.push("launch --no-attach");
+        return { code: 0, stdout: "", stderr: "" };
+      };
+      const terminal = {
+        ...terminalBackend(run),
+        name: "tern" as const,
+        focusWorkspace: async () => {
+          events.push("focus");
+          return focused
+            ? { focused: true as const }
+            : { focused: false as const, code: 1, detail: "offline" };
+        },
+        openView: async (view: Parameters<ReturnType<typeof terminalBackend>["openView"]>[0]) => {
+          events.push(view.view.kind);
+          expect(view.coordinator).toEqual(record.endpoint);
+          expect(view.origin).toEqual({ paneId: "101", cwd: record.worktree.path });
+          if (outcome === "ambiguous-window") throw new Error(warning);
+          if (outcome === "unavailable") return { opened: false, warnings: [] };
+          return { opened: true, warnings: [] };
+        },
+      };
+      expect(await openProject(run, terminal, { ...input, home, repoPath: repo })).toEqual({
+        focused,
+        ...(warning === undefined
+          ? {}
+          : { warnings: [`Project opened, but catch-up is unavailable: ${warning}`] }),
+      });
+      expect(events).toEqual(
+        focused ? ["launch --no-attach", "focus", "catchup"] : ["launch --no-attach", "focus"],
+      );
+      if (warning !== undefined) {
+        expect(await readFile(visitPath, "utf8")).toBe(previousVisit);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("the service refuses to open a project whose settings are not saved", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-open-project-")));

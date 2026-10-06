@@ -1,3 +1,4 @@
+import { parseReviewReplies, type ReviewReply } from "./review.ts";
 /**
  * The PR review page: one JSON input in, one self-contained HTML page plus a sibling data file
  * out, and one JSON submission back from the page. Nothing here imports Tandem's task, service,
@@ -13,6 +14,7 @@ import {
 } from "shiki";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { assemblePage, embedJson, escapeHtml } from "../pages/assemble.ts";
+import { type FileDiff, type LineRow, parsePatch } from "./patch.ts";
 
 export type PageSeverity = "blocking" | "question" | "suggestion" | "nit";
 
@@ -72,6 +74,7 @@ export type SubmissionVerdict = "comment" | "approve" | "request-changes";
 
 /** What the page's Submit sends through `window.lavish.queuePrompt`, as JSON text. */
 export type ReviewSubmission = Readonly<{
+  replies?: readonly ReviewReply[];
   tandemPrReview: 1;
   verdict: SubmissionVerdict;
   summary: string;
@@ -98,81 +101,6 @@ const PAGE_TEMPLATE_URL = new URL("./page.html", import.meta.url);
 const EMBEDDED_LINES = 40;
 
 const SEVERITY_ORDER: readonly PageSeverity[] = ["blocking", "question", "suggestion", "nit"];
-
-type LineRow =
-  | Readonly<{ kind: "add"; text: string; new: number }>
-  | Readonly<{ kind: "del"; text: string; old: number }>
-  | Readonly<{ kind: "ctx"; text: string; old: number; new: number }>;
-
-type HunkRow = Readonly<{
-  kind: "hunk";
-  oldStart: number;
-  oldCount: number;
-  newStart: number;
-  newCount: number;
-  label: string;
-}>;
-
-type DiffRow = LineRow | HunkRow;
-
-type FileDiff = Readonly<{ path: string; rows: readonly DiffRow[]; adds: number; dels: number }>;
-
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
-
-/**
- * Walks hunks by their declared line counts so a removed line that starts with "-- " is not
- * mistaken for a file header.
- */
-function parsePatch(patch: string): FileDiff[] {
-  const files: { path: string; rows: DiffRow[]; adds: number; dels: number }[] = [];
-  let file: (typeof files)[number] | undefined;
-  let oldNo = 0;
-  let newNo = 0;
-  let oldLeft = 0;
-  let newLeft = 0;
-  for (const line of patch.split("\n")) {
-    if (oldLeft > 0 || newLeft > 0) {
-      if (line.startsWith("\\") || file === undefined) continue;
-      const text = line.slice(1);
-      if (line.startsWith("+") && newLeft > 0) {
-        file.rows.push({ kind: "add", text, new: newNo++ });
-        file.adds++;
-        newLeft--;
-      } else if (line.startsWith("-") && oldLeft > 0) {
-        file.rows.push({ kind: "del", text, old: oldNo++ });
-        file.dels++;
-        oldLeft--;
-      } else if (oldLeft > 0 && newLeft > 0 && (line.startsWith(" ") || line === "")) {
-        file.rows.push({ kind: "ctx", text, old: oldNo++, new: newNo++ });
-        oldLeft--;
-        newLeft--;
-      }
-      continue;
-    }
-    if (line.startsWith("diff --git ")) {
-      const path = line.slice(line.lastIndexOf(" b/") + 3);
-      file = { path, rows: [], adds: 0, dels: 0 };
-      files.push(file);
-      continue;
-    }
-    const hunk = HUNK_HEADER.exec(line);
-    if (hunk === null || file === undefined) continue;
-    const [, oldStart, oldCount, newStart, newCount, label] = hunk;
-    oldNo = Number(oldStart);
-    newNo = Number(newStart);
-    oldLeft = Number(oldCount ?? 1);
-    newLeft = Number(newCount ?? 1);
-    file.rows.push({
-      kind: "hunk",
-      oldStart: oldNo,
-      oldCount: oldLeft,
-      newStart: newNo,
-      newCount: newLeft,
-      label: label ?? "",
-    });
-  }
-  return files;
-}
 
 type Highlighter = Awaited<ReturnType<typeof createHighlighter>>;
 
@@ -549,7 +477,7 @@ export function parseReviewSubmission(text: string): ParsedSubmission {
 
   const problems = unknownKeys(
     raw,
-    ["tandemPrReview", "verdict", "summary", "drafts", "yours"],
+    ["tandemPrReview", "verdict", "summary", "drafts", "yours", "replies"],
     "submission",
   );
   if (raw.tandemPrReview !== 1) problems.push("submission: tandemPrReview must be 1.");
@@ -591,6 +519,14 @@ export function parseReviewSubmission(text: string): ParsedSubmission {
     }
   }
 
+  let replies: readonly ReviewReply[] | undefined;
+  if (raw.replies !== undefined) {
+    try {
+      replies = parseReviewReplies(raw.replies);
+    } catch (error) {
+      problems.push(String(error));
+    }
+  }
   const yours: ReviewSubmission["yours"][number][] = [];
   if (!Array.isArray(raw.yours)) {
     problems.push("submission: yours must be an array.");
@@ -624,6 +560,13 @@ export function parseReviewSubmission(text: string): ParsedSubmission {
   }
   return {
     ok: true,
-    submission: { tandemPrReview: 1, verdict, summary: raw.summary, drafts, yours },
+    submission: {
+      tandemPrReview: 1,
+      verdict,
+      summary: raw.summary,
+      drafts,
+      yours,
+      ...(replies === undefined ? {} : { replies }),
+    },
   };
 }

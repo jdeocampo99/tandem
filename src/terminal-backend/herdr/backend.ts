@@ -1,5 +1,5 @@
 import type { CommandRunner } from "../../contracts.ts";
-import type { TerminalBackend, TerminalBackendOptions } from "../contract.ts";
+import type { TerminalBackend } from "../contract.ts";
 import {
   close,
   closeOwned,
@@ -32,10 +32,11 @@ import {
   sessionDetail,
   sessionRunning,
   snapshot,
+  type WorkspaceMover,
   workspaceLabel,
 } from "./workspaces.ts";
 
-export type HerdrBackendOptions = TerminalBackendOptions;
+export type HerdrBackendOptions = Readonly<{ moveWorkspace?: WorkspaceMover }>;
 
 /** The terminal port over `herdr --session <session>` commands sent through `run`. */
 export function herdrBackend(
@@ -44,6 +45,25 @@ export function herdrBackend(
 ): TerminalBackend {
   return {
     name: "herdr",
+    openView: async ({ view, origin }) =>
+      origin?.windowId !== undefined
+        ? {
+            opened: false,
+            warnings: ["Herdr cannot target an opaque Tern control window key."],
+          }
+        : {
+            opened: false,
+            ...(view.kind === "brief" ? { fallback: "brief-review" as const } : {}),
+            warnings: [
+              view.kind === "brief"
+                ? "Opening Tandem's existing request review pane in Herdr."
+                : `Herdr cannot display a native ${view.kind} view. Use the conversation or tandem status instead.`,
+            ],
+          },
+    closeView: async () => ({
+      closed: false,
+      warnings: ["Herdr has no native brief split; retire its owned request review pane instead."],
+    }),
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),
     sendKeys: (target) => sendKeys(run, target),
@@ -73,7 +93,10 @@ export function herdrBackend(
     openPanel: (input) => openPanel(run, input),
     isPanelOpen: (input) => isPanelOpen(run, input),
     closePanel: (target) => closePanel(run, target),
-    fitPanel: (target) => fitPanel(run, target),
+    fitPanel: async (target) => ({
+      fittedWidth: await fitPanel(run, target),
+      warnings: [],
+    }),
     agentStatusReporter: (input) => agentStatusReporter(run, input),
   };
 }

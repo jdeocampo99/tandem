@@ -19,13 +19,13 @@ import {
   coordinatorRepositoryLockPath,
   withCoordinatorRepositoryLock,
 } from "../../src/coordinator/lock.ts";
+import { listCoordinatorQuarantineRecords } from "../../src/coordinator/quarantine.ts";
 import { digest, recordPath, registrySessionDirectory } from "../../src/coordinator/record.ts";
 import {
   type DiscoveredCoordinatorRecord,
   discoverCoordinatorRecords,
   readCoordinatorRecord,
 } from "../../src/coordinator/registry.ts";
-import { listCoordinatorQuarantineRecords } from "../../src/coordinator/resources.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { FIRST_HEAD, fakePool, type Pool, TASK_LEASE_ID } from "./fake-pool.ts";
@@ -120,6 +120,7 @@ function foundRecord(
       schemaVersion: 1,
       repoPath: "/repo",
       endpoint: {
+        terminal: "herdr" as const,
         sessionId: values.sessionId,
         workspaceId: "workspace-a",
         tabId: "tab-a",
@@ -161,6 +162,7 @@ function ghostRecord(repoPath: string, poolRoot: string): Readonly<Record<string
     schemaVersion: 1,
     repoPath,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: "tandem-ghost",
       workspaceId: "workspace-ghost",
       tabId: "tab-ghost",

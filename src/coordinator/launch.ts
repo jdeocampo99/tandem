@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { quoteShellCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
 import { AdapterCommandError } from "../adapters/primitives.ts";
-import { acquireWorktree } from "../adapters/treehouse.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { readModelSettings } from "../config/models.ts";
 import type {
@@ -25,11 +24,12 @@ import {
 } from "../harness/contract.ts";
 import { launchIo } from "../harness/launch-io.ts";
 import { harnessFor } from "../harness/resolve.ts";
+import { tryShowCatchUp } from "../memory/native-visits.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
 import { mergeInheritedEnvironment } from "../terminal/cli-process.ts";
-import { terminalContext } from "../terminal-backend/compose.ts";
+import { terminalContextFor, terminalLaunchEnvironment } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import {
   type CoordinatorSessionReconciliation,
@@ -42,6 +42,7 @@ import { openPanelBeside } from "./panel.ts";
 import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
+  acquireCoordinatorLease,
   applyCoordinatorReplacement,
   type CoordinatorResourceOutcome,
   decideCoordinatorReplacement,
@@ -125,6 +126,8 @@ export type CoordinatorLaunchResult = Readonly<{
   readonly otherSessionReconciliations?: readonly CoordinatorSessionReconciliation[];
   /** Why the Tandem panel could not open beside the coordinator, when it could not. */
   readonly panelFailure?: string;
+  /** An optional catch-up warning after a successful visible launch or reconnect. */
+  readonly catchUpWarning?: string;
 }>;
 
 export type CoordinatorLaunchDependencies = Readonly<{
@@ -330,14 +333,14 @@ async function validateBoundCoordinatorSource(
   return normalizedBoundSourcePath;
 }
 
-async function acquireCoordinatorLease(
+async function acquireCoordinatorSourceLease(
   request: CoordinatorLaunchRequest,
   paths: CoordinatorPaths,
   dependencies: CoordinatorLaunchDependencies,
   sourceHead: string,
 ): Promise<WorktreeLease> {
   const identity = coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead);
-  return acquireWorktree(dependencies.run, {
+  return acquireCoordinatorLease(dependencies.run, paths.home, {
     repo: paths.repo,
     root: paths.poolRoot,
     tandemId: identity.tandemId,
@@ -632,7 +635,9 @@ export async function launchCoordinatorUnlocked(
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorLaunchResult> {
   const paths = coordinatorPaths(request);
-  const inherited = terminalContext.inheritedPane(dependencies.processEnvironment);
+  const inherited = terminalContextFor(dependencies.terminal.name).inheritedPane(
+    dependencies.processEnvironment,
+  );
   if (inherited.status === "invalid") throw new Error(inherited.reason);
   const context: InsidePane | undefined =
     inherited.status === "inside"
@@ -657,9 +662,17 @@ export async function launchCoordinatorUnlocked(
     await assertRunningCoordinatorSource(request, dependencies, running, context);
     if (request.restart !== true) {
       const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, running);
+      const catchUp = headless
+        ? undefined
+        : await tryShowCatchUp(dependencies.terminal, {
+            home: paths.home,
+            record: running,
+            now: (dependencies.clock ?? defaultClock)(),
+          });
       return {
         ...coordinatorResultFromRecord(running),
         ...(panelFailure === undefined ? {} : { panelFailure }),
+        ...(catchUp?.warning === undefined ? {} : { catchUpWarning: catchUp.warning }),
       };
     }
   }
@@ -679,7 +692,7 @@ export async function launchCoordinatorUnlocked(
     sourceHead,
     context,
   );
-  const worktree = await acquireCoordinatorLease(request, paths, dependencies, sourceHead);
+  const worktree = await acquireCoordinatorSourceLease(request, paths, dependencies, sourceHead);
   // A lease the previous record still names is not this launch's to undo.
   const rollbackEligible = previous === undefined || previous.worktree.leaseId !== worktree.leaseId;
   let ownedEndpoint: Endpoint | undefined;
@@ -727,6 +740,7 @@ export async function launchCoordinatorUnlocked(
       : { workspaceRetirement: startup.workspaceRetirement }),
     ...(previousResources === undefined ? {} : { previousResources }),
     ...(startup.panelFailure === undefined ? {} : { panelFailure: startup.panelFailure }),
+    ...(startup.catchUpWarning === undefined ? {} : { catchUpWarning: startup.catchUpWarning }),
   };
 }
 
@@ -794,6 +808,7 @@ type CoordinatorStartupResult = Readonly<{
   readonly processExitCode?: number;
   readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
   readonly panelFailure?: string;
+  readonly catchUpWarning?: string;
 }>;
 
 function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): LaunchIo {
@@ -935,11 +950,20 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       : {};
   if (context !== undefined && !headless) {
     const environment = withoutVariables(
-      mergeInheritedEnvironment(dependencies.processEnvironment, {
-        ...sourceEnvironment,
-        ...harness.launchEnvironment,
-        ...jevOverride,
-      }),
+      terminalLaunchEnvironment(
+        dependencies.terminal.name,
+        mergeInheritedEnvironment(dependencies.processEnvironment, {
+          ...sourceEnvironment,
+          ...(dependencies.terminal.name === "tern"
+            ? {
+                TANDEM_SESSION: request.sessionId,
+                TANDEM_TERN_WORKSPACE_ID: context.workspaceId,
+              }
+            : {}),
+          ...harness.launchEnvironment,
+          ...jevOverride,
+        }),
+      ),
       harness.clearedEnvironment,
     );
     const processExitCode = await runDirectCoordinator(dependencies, harness, started, {
@@ -960,9 +984,9 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
   const terminalLauncher = headless
     ? dependencies.terminal.serverCommand(request.sessionId)
     : dependencies.terminal.clientCommand(request.sessionId);
-  const serverEnvironment = mergeInheritedEnvironment(
-    dependencies.processEnvironment,
-    sourceEnvironment,
+  const serverEnvironment = terminalLaunchEnvironment(
+    dependencies.terminal.name,
+    mergeInheritedEnvironment(dependencies.processEnvironment, sourceEnvironment),
   );
   if (
     context === undefined &&
@@ -1014,6 +1038,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       role: "coordinator",
       generation: 0,
       env: serverEnvironment,
+      ...(previous === undefined ? {} : { previousEndpoint: previous.endpoint }),
     }),
   );
   startup.onEndpointCreated(endpoint);
@@ -1026,6 +1051,12 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     ),
     ...harness.launchEnvironment,
     ...jevOverride,
+    ...(endpoint.terminal === "tern"
+      ? {
+          TANDEM_SESSION: endpoint.sessionId,
+          TANDEM_TERN_WORKSPACE_ID: endpoint.workspaceId,
+        }
+      : {}),
   };
   const resumeArgv = argvFor(true, undefined);
   const bootstrapPath = await writeCoordinatorBootstrap(paths, request, argv, resumeArgv, {
@@ -1037,7 +1068,10 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       endpoint,
       cwd: coordinatorCwd,
       command: ["/bin/sh", bootstrapPath],
-      env: mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
+      env: terminalLaunchEnvironment(
+        dependencies.terminal.name,
+        mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
+      ),
     }),
   );
   await saveCoordinatorRecord(paths.home, {
@@ -1058,6 +1092,13 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     paths.repo,
   );
   const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, owned);
+  const catchUp = headless
+    ? undefined
+    : await tryShowCatchUp(dependencies.terminal, {
+        home: paths.home,
+        record: owned,
+        now: (dependencies.clock ?? defaultClock)(),
+      });
   return {
     command: argv,
     direct: false,
@@ -1066,6 +1107,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     paneId: endpoint.paneId,
     ...(workspaceRetirement === undefined ? {} : { workspaceRetirement }),
     ...(panelFailure === undefined ? {} : { panelFailure }),
+    ...(catchUp?.warning === undefined ? {} : { catchUpWarning: catchUp.warning }),
   };
 }
 

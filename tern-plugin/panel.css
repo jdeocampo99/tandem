@@ -1,0 +1,200 @@
+.tdp-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #20242b;
+  font-family: system-ui;
+  font-size: 12px;
+  color: #d7dbe3;
+}
+.tdp-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 8px;
+  border-bottom: 1px solid #ffffff16;
+  flex-shrink: 0;
+}
+.tdp-switch {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.tdp-project-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tdp-limit {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 80px;
+  cursor: pointer;
+  font-size: 10px;
+}
+.tdp-meter {
+  display: flex;
+  height: 3px;
+  background: #ffffff18;
+  margin-top: 3px;
+}
+.tdp-meter-fill {
+  height: 3px;
+  background: #8aaeff;
+}
+.tdp-icon {
+  cursor: pointer;
+  font-size: 15px;
+  white-space: nowrap;
+}
+.tdp-count {
+  background: #f1aa55;
+  color: #201507;
+  border-radius: 8px;
+  padding: 0 4px;
+  font-size: 10px;
+}
+.tdp-section {
+  border-top: 1px solid #ffffff12;
+  margin: 12px 8px 4px;
+  padding-top: 8px;
+  color: #87909e;
+  font-size: 11px;
+}
+.tdp-needs {
+  color: #f1aa55;
+  font-weight: 600;
+}
+.tdp-row {
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  cursor: pointer;
+  gap: 4px;
+}
+.tdp-row:hover,
+.tdp-selected {
+  background: #ffffff06;
+}
+.tdp-primary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.tdp-name {
+  flex: 1;
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.tdp-stage,
+.tdp-time {
+  color: #9ba3b0;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.tdp-second {
+  display: flex;
+  gap: 5px;
+  margin-left: 14px;
+}
+.tdp-secondary {
+  color: #87909e;
+  font-size: 11px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tdp-dot {
+  font-size: 8px;
+  flex-shrink: 0;
+}
+.tdp-yellow {
+  color: #f1aa55;
+}
+.tdp-red {
+  color: #ee7d7d;
+}
+.tdp-blue {
+  color: #8aaeff;
+}
+.tdp-magenta {
+  color: #bda2f2;
+}
+.tdp-green {
+  color: #81c995;
+}
+.tdp-pr {
+  color: #929dac;
+  flex-shrink: 0;
+  cursor: pointer;
+  font-size: 11px;
+  text-decoration: underline;
+}
+.tdp-footer {
+  color: #87909e;
+  font-size: 10px;
+  padding: 12px 8px;
+  margin-top: auto;
+}
+.tdp-unavailable {
+  color: #f1aa55;
+  padding: 10px;
+}
+.tdp-dropdown {
+  pointer-events: auto;
+  position: absolute;
+  top: 46px;
+  left: 8px;
+  right: 8px;
+  background: #252a33;
+  border: 1px solid #ffffff28;
+  border-radius: 8px;
+  padding: 4px;
+  font-family: system-ui;
+  font-size: 12px;
+}
+.tdp-project-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 6px;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.tdp-project-row:hover,
+.tdp-project-open:hover {
+  background: #ffffff0c;
+}
+.tdp-check {
+  width: 14px;
+  color: #8aaeff;
+}
+.tdp-project-copy {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.tdp-dim {
+  color: #87909e;
+  font-size: 10px;
+}
+.tdp-shortcut {
+  color: #87909e;
+  font-size: 10px;
+}
+.tdp-project-open {
+  padding: 9px 8px;
+  border-top: 1px solid #ffffff16;
+  cursor: pointer;
+}
+.tdp-project-hint {
+  padding: 2px 8px 8px;
+  color: #87909e;
+  font-size: 10px;
+}

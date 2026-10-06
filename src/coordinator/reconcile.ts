@@ -29,6 +29,12 @@ import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import {
+  type CoordinatorQuarantineRecord,
+  coordinatorQuarantineDirectory,
+  isCoordinatorEffectQuarantine,
+  listCoordinatorQuarantineRecords,
+} from "./quarantine.ts";
+import {
   COORDINATOR_LEASE_HOLDER_PREFIX,
   canonicalHome,
   canonicalPath,
@@ -42,11 +48,8 @@ import {
 import {
   applyCoordinatorReplacement,
   type CoordinatorCheckoutObservation,
-  type CoordinatorQuarantineRecord,
-  coordinatorQuarantineDirectory,
   decideCoordinatorLeaseSettlement,
   judgeCoordinatorCheckout,
-  listCoordinatorQuarantineRecords,
   observeCoordinatorCheckout,
   quarantineCoordinatorLease,
   readCoordinatorLeasePresence,
@@ -601,6 +604,13 @@ function planCoordinator(
     found,
     noted,
   });
+  const effect = quarantines.find(
+    (note) =>
+      isCoordinatorEffectQuarantine(note) &&
+      note.lease.leaseId === found.record.worktree.leaseId &&
+      note.lease.path === found.record.worktree.path,
+  );
+  if (effect !== undefined) return item("quarantine", effect.reason);
   if (found.placement === "foreign-directory") {
     return item(
       "quarantine",
@@ -654,7 +664,10 @@ function orphanedCoordinatorLease(observed: ObservedPoolLease): WorktreeLease | 
   };
 }
 
-function planPoolLease(observed: ObservedPoolLease): ReconcilePlanItem {
+function planPoolLease(
+  observed: ObservedPoolLease,
+  quarantines: readonly CoordinatorQuarantineRecord[],
+): ReconcilePlanItem {
   const lease = orphanedCoordinatorLease(observed);
   const item = (action: ReconcileAction, reason: string): ReconcilePlanItem => ({
     kind: "worktree-lease",
@@ -664,6 +677,13 @@ function planPoolLease(observed: ObservedPoolLease): ReconcilePlanItem {
     observed,
     lease,
   });
+  const effect = quarantines.find(
+    (note) =>
+      isCoordinatorEffectQuarantine(note) &&
+      note.lease.leaseId === observed.leaseId &&
+      note.lease.path === observed.path,
+  );
+  if (effect !== undefined) return item("quarantine", effect.reason);
   const checkout = observed.checkout;
   if (checkout === undefined) {
     return item(
@@ -774,7 +794,7 @@ export function planTandemReconciliation(
     ...observation.coordinators.map((observed) =>
       planCoordinator(observed, observation.quarantines),
     ),
-    ...observation.leases.map(planPoolLease),
+    ...observation.leases.map((lease) => planPoolLease(lease, observation.quarantines)),
     ...observation.scouts.map(planScout),
     ...(observation.implementationTasks ?? []).map((task) =>
       planImplementationTask(task, freeSuperseded),
@@ -875,7 +895,11 @@ async function applyLeaseItem(
   }
   let released: Awaited<ReturnType<typeof releaseCoordinatorLease>>;
   try {
-    released = await releaseCoordinatorLease(input.run, { repoPath: item.repoPath, lease });
+    released = await releaseCoordinatorLease(input.run, {
+      home: input.home,
+      repoPath: item.repoPath,
+      lease,
+    });
   } catch (error) {
     if (!(error instanceof WorktreeInUseError)) throw error;
     return { item, outcome: "retained", reason: error.message };

@@ -8,12 +8,12 @@ import {
   type CoordinatorLaunchRequest,
   launchCoordinator,
 } from "../../src/coordinator/launch.ts";
+import { listCoordinatorQuarantineRecords } from "../../src/coordinator/quarantine.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import {
   type CoordinatorCheckoutObservation,
   decideCoordinatorReplacement,
-  listCoordinatorQuarantineRecords,
 } from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
@@ -114,6 +114,7 @@ function previousRecord(
     repoPath: "/repo",
     harness: DEFAULT_HARNESS,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: SESSION_ID,
       workspaceId: "workspace-a",
       tabId: "tab-a",

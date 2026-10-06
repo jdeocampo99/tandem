@@ -15,6 +15,7 @@ const OMP_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const COORDINATOR_EXTENSION_PATH = join(OMP_DIRECTORY, "extension.ts");
 const WORKER_EXTENSION_PATH = join(OMP_DIRECTORY, "worker-control.ts");
 const CONFIG_PATH = join(OMP_DIRECTORY, "worker-config.yml");
+const COORDINATOR_CONFIG_PATH = join(OMP_DIRECTORY, "coordinator-config.yml");
 /** Coordinators launched before the OMP code moved under harness/omp/ still name this path. */
 const PRE_HARNESS_COORDINATOR_EXTENSION_PATH = join(OMP_DIRECTORY, "..", "..", "extension.ts");
 
@@ -98,6 +99,8 @@ function coordinatorCommand(spec: LaunchSpec): readonly string[] {
     ...modelFlags(spec),
     "--config",
     CONFIG_PATH,
+    "--config",
+    COORDINATOR_CONFIG_PATH,
     "--no-extensions",
     "--extension",
     COORDINATOR_EXTENSION_PATH,

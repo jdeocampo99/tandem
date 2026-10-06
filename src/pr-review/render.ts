@@ -1,5 +1,31 @@
 import type { PrReviewRound, PrReviewState } from "./state.ts";
 
+/** An uncertain submission needs the user's inspection and explicit choice before another POST. */
+export function uncertainPostMessage(prUrl: string, detail?: string): string {
+  return `GitHub may or may not have received this review; check the PR: ${prUrl}. Ask Tandem to post the saved review again (which may duplicate it), or mark it as posted with the review link you checked. Both require your confirmation.${detail === undefined ? "" : ` ${detail}`}`;
+}
+
+/** Saved reply text, receipts and recovery choices survive process/task reloads. */
+export function replyPostNotes(prUrl: string, round: PrReviewRound): readonly string[] {
+  return (round.review.replies ?? []).map((reply, index) => {
+    const post = round.replyPosts?.find((saved) => saved.index === index);
+    const label = `Reply ${index} to thread ${reply.threadId} (root ${reply.commentId}, GitHub ${reply.replyTo}): ${reply.body}`;
+    if (post?.kind === "posted") return `${label}\nPosted: ${post.url}`;
+    if (round.posted === undefined && post === undefined)
+      return `${label}\nSaved with this review; not yet sent.`;
+    const detail = post?.kind === "uncertain" || post?.kind === "failed" ? ` ${post.message}` : "";
+    return `${label}\nThis reply has no confirmed receipt. GitHub may or may not have received it; check the PR: ${prUrl}. Tandem will not automatically retry. Ask to post saved reply ${index} again (which may duplicate it), or mark it as posted with the reply link you checked. Both require your confirmation.${detail}`;
+  });
+}
+
+export function reviewPostNotes(prUrl: string, round: PrReviewRound): readonly string[] {
+  return [
+    ...(round.pendingPost === undefined ? [] : [uncertainPostMessage(prUrl)]),
+    ...replyPostNotes(prUrl, round),
+    ...round.notes,
+  ];
+}
+
 /** Small reviews read fine in chat; anything with a tour or many comments gets the page. */
 export function wantsPage(round: PrReviewRound): boolean {
   return round.review.tour.length > 0 || round.review.comments.length > 5;
@@ -14,6 +40,7 @@ export function renderReviewText(state: PrReviewState, round: PrReviewRound): st
     "What it does and why",
     review.intent,
   ];
+  if (round.pendingPost !== undefined) lines.unshift(uncertainPostMessage(state.url), "");
   if (review.verdict !== undefined) lines.push("", `Verdict: ${review.verdict}`);
   if (review.tour.length > 0) {
     lines.push("", "Code tour");
@@ -47,7 +74,8 @@ export function renderReviewText(state: PrReviewState, round: PrReviewRound): st
   if (review.summaryComment.length > 0) {
     lines.push("", "Review summary to post", review.summaryComment);
   }
-  if (round.notes.length > 0) lines.push("", ...round.notes);
+  const notes = [...replyPostNotes(state.url, round), ...round.notes];
+  if (notes.length > 0) lines.push("", ...notes);
   if (round.posted !== undefined) lines.push("", `Posted: ${round.posted.url}`);
   return `${lines.join("\n")}\n`;
 }

@@ -3,13 +3,20 @@ import { basename, join } from "node:path";
 import { listenPresentation, openPresentation } from "../adapters/lavish.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
+import { readNativeThreads } from "../pr-watch/native-cache.ts";
 import { checkoutQuestion, findCheckout, type RepoLocation } from "../repos/locate.ts";
 import { commentableLines } from "./diff.ts";
 import { applyEdits, type PrReviewEdits, submissionEdits } from "./edits.ts";
 import { buildReviewPage, parseReviewSubmission, type ReviewSubmission } from "./page.ts";
 import { readPageComment, readSubmissionText } from "./page-feedback.ts";
 import { readPageSources, reviewPageInput } from "./page-input.ts";
-import { postReview, type ReviewVerdict, replyToComment, reviewMarker } from "./post.ts";
+import {
+  findPostedReview,
+  postReview,
+  type ReviewVerdict,
+  replyToComment,
+  reviewMarker,
+} from "./post.ts";
 import {
   acknowledgement,
   findPullRequestRef,
@@ -17,7 +24,9 @@ import {
   type PullRequestFacts,
   readPullRequest,
 } from "./pull-request.ts";
-import { renderReviewText, wantsPage } from "./render.ts";
+import { renderReviewText, replyPostNotes, uncertainPostMessage, wantsPage } from "./render.ts";
+import { validateThreadReplies } from "./replies.ts";
+import { createReplyPosting } from "./reply-posting.ts";
 import type { ReviewLens } from "./review.ts";
 import {
   latestRound,
@@ -77,9 +86,21 @@ export type PostPrReviewResult = Readonly<{
   url?: string;
 }>;
 
+/** The finished review round the native pane displayed when the user clicked Submit. */
+export type ReviewSubmissionBinding = Readonly<{ head: string; generation: number }>;
+
+/** One explicitly confirmed recovery of the exact task revision the user inspected. */
+export type ReviewPostRecovery =
+  | Readonly<{ kind: "post-again"; taskRevision: number }>
+  | Readonly<{ kind: "mark-posted"; taskRevision: number; url: string }>
+  | Readonly<{ kind: "post-reply-again"; taskRevision: number; replyIndex: number }>
+  | Readonly<{ kind: "mark-reply-posted"; taskRevision: number; replyIndex: number; url: string }>;
+
 /** What the review workflow needs from the task service; everything else it does itself. */
 export type PrReviewDependencies = Readonly<{
   home: string;
+  /** Tern presents the same reviewed result in a native PR split instead of Lavish. */
+  openNativePage?: (task: TaskRecord) => Promise<void>;
   run: CommandRunner;
   clock: Clock;
   /** Folders crawled for a checkout, read on each use; see `projectRoots` in repos/locate.ts. */
@@ -90,6 +111,11 @@ export type PrReviewDependencies = Readonly<{
     input: Readonly<{ repoPath: string; objective: string; prReview: PrReviewState }>,
   ) => Promise<TaskRecord>;
   updatePrReview: (task: TaskRecord, next: PrReviewState) => Promise<TaskRecord>;
+  /** Applies a pure review mutation under a short store lock, preserving other task changes. */
+  mutatePrReview: (
+    taskId: string,
+    update: (task: TaskRecord) => PrReviewState,
+  ) => Promise<Readonly<{ task: TaskRecord; changed: boolean }>>;
   /** Moves a completed review back to queued for another run, and starts it. */
   runAgain: (task: TaskRecord) => Promise<void>;
   /** Releases a settled task's pane and, once closed, its worktree. */
@@ -99,6 +125,7 @@ export type PrReviewDependencies = Readonly<{
 export function createPrReviewWorkflow(deps: PrReviewDependencies) {
   /** Tasks whose review page this process opened and has not seen close. */
   const openPages = new Set<string>();
+  const replyPosting = createReplyPosting(deps);
 
   async function start(input: StartPrReviewInput): Promise<StartPrReviewResult> {
     const ref = findPullRequestRef(input.pullRequest);
@@ -155,6 +182,10 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     const { task, state, round } = await reviewed(taskId);
     const text = renderReviewText(state, round);
     if (options.page !== true && !(options.page === undefined && wantsPage(round))) {
+      return { taskId: task.id, text };
+    }
+    if (deps.openNativePage !== undefined) {
+      await deps.openNativePage(task);
       return { taskId: task.id, text };
     }
     const patch = await readFile(prReviewRunDiffPath(deps.home, task.id, round.generation), "utf8");
@@ -237,6 +268,9 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         `This review was already posted at ${round.posted.url}; ask for a re-review instead.`,
       );
     }
+    if (round.pendingPost !== undefined) {
+      throw new Error("This review has an uncertain post; reconcile it before editing.");
+    }
     const edited: PrReviewRound = {
       ...round,
       review: applyEdits(round.review, edits, await commentable(task.id, round)),
@@ -249,15 +283,34 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
   /**
    * Posts what the user chose on the page. The click on Submit is the user's approval, so this
    * posts without asking again; it still pins to the reviewed commit and refuses if the PR moved.
-   * Nothing is saved unless the post lands, so a refused submission can be sent again.
+   * The exact submission is saved before posting; an uncertain outcome must be reconciled.
    */
-  async function submit(taskId: string, submission: ReviewSubmission): Promise<PostPrReviewResult> {
+  async function submit(
+    taskId: string,
+    submission: ReviewSubmission,
+    expected?: ReviewSubmissionBinding,
+  ): Promise<PostPrReviewResult> {
     const { task, state, round } = await reviewed(taskId);
+    if (
+      expected !== undefined &&
+      (round.head !== expected.head ||
+        round.generation !== expected.generation ||
+        // Question follow-ups retain the same finished review; a re-review replaces it.
+        (state.mode !== "question" && task.generation !== expected.generation))
+    ) {
+      throw new Error("The displayed PR review is stale; reopen the pane before submitting.");
+    }
     if (round.posted !== undefined) {
       throw new Error(`This review was already posted at ${round.posted.url}.`);
     }
+    if (round.pendingPost !== undefined) {
+      return publish(task, state, round, round.pendingPost.verdict);
+    }
     const review = applyEdits(
-      round.review,
+      {
+        ...round.review,
+        ...(submission.replies === undefined ? {} : { replies: submission.replies }),
+      },
       submissionEdits(round.review, submission),
       await commentable(task.id, round),
     );
@@ -268,78 +321,228 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     taskId: string,
     verdict: ReviewVerdict,
     approved: boolean,
+    recovery?: ReviewPostRecovery,
   ): Promise<PostPrReviewResult> {
     if (!approved) throw new ApprovalRequiredError("posting a PR review needs the user's approval");
     const { task, state, round } = await reviewed(taskId);
+    if (recovery !== undefined) {
+      if (!Number.isSafeInteger(recovery.taskRevision) || task.revision !== recovery.taskRevision) {
+        throw new Error(
+          "The review changed since you checked it; inspect it again before confirming recovery.",
+        );
+      }
+      if (recovery.kind === "post-reply-again" || recovery.kind === "mark-reply-posted") {
+        const index = recovery.replyIndex;
+        if (
+          round.posted === undefined ||
+          !Number.isSafeInteger(index) ||
+          index < 0 ||
+          round.review.replies?.[index] === undefined
+        )
+          throw new Error("Recovery must name a saved reply on a posted review.");
+        if (verdict !== round.posted.verdict)
+          throw new Error("Recovery must keep the saved review verdict.");
+        if (round.replyPosts?.find((post) => post.index === index)?.kind === "posted")
+          throw new Error("This reply already has a posted receipt.");
+        if (recovery.kind === "mark-reply-posted") {
+          await replyPosting.markPosted(
+            task,
+            round,
+            index,
+            confirmedReviewUrl(recovery.url, state, true),
+          );
+        } else {
+          await replyPosting.attempt(task.id, round, index, true, recovery.taskRevision);
+        }
+        return postedResult(task.id, round, "Saved review posted");
+      }
+      if (round.pendingPost === undefined)
+        throw new Error("This review has no uncertain post to recover.");
+      if (verdict !== round.pendingPost.verdict)
+        throw new Error("Recovery must keep the saved review verdict and choices.");
+      if (recovery.kind === "post-again") {
+        // The saved attempt remains durable until preflight succeeds and a fresh attempt is saved.
+        const { pendingPost: _pendingPost, ...retry } = round;
+        return publish(task, state, retry, verdict, true);
+      }
+      const url = confirmedReviewUrl(recovery.url, state);
+      const { pendingPost: _pendingPost, ...confirmed } = round;
+      await deps.updatePrReview(
+        task,
+        replaceLatestRound(state, {
+          ...confirmed,
+          posted: { url, verdict, postedAt: deps.clock(), confirmedByUser: true },
+        }),
+      );
+      return postedResult(
+        task.id,
+        round,
+        "Marked your saved review as posted using the link you confirmed",
+      );
+    }
     if (round.posted !== undefined) {
-      return {
-        taskId: task.id,
-        posted: true,
-        url: round.posted.url,
-        message: `Already posted: ${round.posted.url}`,
-      };
+      await replyPosting.reconcile(task.id, round);
+      return postedResult(task.id, round, "Already posted");
     }
     return publish(task, state, round, verdict);
   }
 
-  /** Posts the round as given and, once GitHub has it, saves the round as posted. */
+  /** Records the submitted round before posting, then saves or reconciles its receipt. */
   async function publish(
     task: TaskRecord,
     state: PrReviewState,
     round: PrReviewRound,
     verdict: ReviewVerdict,
+    recovering = false,
   ): Promise<PostPrReviewResult> {
-    const outcome = await postReview(deps.run, {
+    if (round.pendingPost === undefined && round.review.replies?.length) {
+      validateThreadReplies(
+        round.review.replies,
+        await readNativeThreads(deps.run, state.ref, state.checkout, round.head),
+      );
+    }
+    const input = {
       ref: state.ref,
       review: round.review,
-      verdict,
+      verdict: round.pendingPost?.verdict ?? verdict,
       marker: reviewMarker(task.id, round.generation),
       cwd: state.checkout,
-    });
+    };
+    const outcome =
+      round.pendingPost === undefined
+        ? await postReview(deps.run, input, async () => {
+            // The revision-checked update is the exclusive claim. A losing caller never POSTs.
+            await deps.updatePrReview(
+              task,
+              replaceLatestRound(state, {
+                ...round,
+                pendingPost: { verdict, attemptedAt: deps.clock() },
+              }),
+            );
+          })
+        : await findPostedReview(deps.run, input);
+    if (
+      outcome.kind === "absent" ||
+      outcome.kind === "unreadable" ||
+      outcome.kind === "uncertain"
+    ) {
+      return {
+        taskId: task.id,
+        posted: false,
+        message: uncertainPostMessage(
+          state.url,
+          outcome.kind === "absent"
+            ? "GitHub has not returned the saved marker yet."
+            : outcome.message,
+        ),
+      };
+    }
     if (outcome.kind === "moved") {
       return {
         taskId: task.id,
         posted: false,
-        message: `The PR moved to ${outcome.head.slice(0, 12)} since this review, so the comments could land on the wrong lines. Ask for a re-review first.`,
+        message: recovering
+          ? uncertainPostMessage(
+              state.url,
+              `A new post was refused because the PR moved to ${outcome.head.slice(0, 12)}.`,
+            )
+          : `The PR moved to ${outcome.head.slice(0, 12)} since this review, so the comments could land on the wrong lines. Ask for a re-review first.`,
       };
     }
     if (outcome.kind === "failed") {
       return {
         taskId: task.id,
         posted: false,
-        message: `GitHub didn't take the review: ${outcome.message}`,
+        message: recovering
+          ? uncertainPostMessage(state.url, `A new post was refused: ${outcome.message}`)
+          : `The review was not sent: ${outcome.message}`,
       };
     }
-    const replies = await postReplies(state, round);
-    await deps.updatePrReview(
-      task,
-      replaceLatestRound(state, {
-        ...round,
-        posted: { url: outcome.url, verdict, postedAt: deps.clock() },
-      }),
+    const postedAt = deps.clock();
+    const settled = await deps.mutatePrReview(task.id, (current) => {
+      const live = requireState(current);
+      const index = live.rounds.findIndex(
+        (candidate) => candidate.generation === round.generation && candidate.head === round.head,
+      );
+      const saved = live.rounds[index];
+      if (
+        live.ref.repo !== state.ref.repo ||
+        live.ref.number !== state.ref.number ||
+        saved === undefined
+      ) {
+        throw new Error(`The posted review round changed; check the PR: ${outcome.url}`);
+      }
+      if (saved.posted !== undefined) return live;
+      const { pendingPost, ...confirmed } = saved;
+      return {
+        ...live,
+        rounds: live.rounds.map((candidate, i) =>
+          i === index
+            ? {
+                ...confirmed,
+                posted: {
+                  url: outcome.url,
+                  verdict: pendingPost?.verdict ?? input.verdict,
+                  postedAt,
+                },
+              }
+            : candidate,
+        ),
+      };
+    });
+    const confirmedState = requireState(settled.task);
+    const confirmed = confirmedState.rounds.find(
+      (candidate) => candidate.generation === round.generation && candidate.head === round.head,
     );
+    if (confirmed?.posted === undefined) throw new Error("The review receipt was not saved.");
+    // Only the caller recording the review receipt initiates the selected reply effects.
+    if (settled.changed) await postReplies(task.id, confirmedState, confirmed);
+    else await replyPosting.reconcile(task.id, confirmed);
+    return postedResult(
+      task.id,
+      confirmed,
+      `Posted ${confirmed.review.comments.length} comment${confirmed.review.comments.length === 1 ? "" : "s"}`,
+    );
+  }
+
+  async function postedResult(
+    taskId: string,
+    binding: PrReviewRound,
+    label: string,
+  ): Promise<PostPrReviewResult> {
+    const current = await deps.getTask(taskId);
+    const state = requireState(current);
+    const round = state.rounds.find(
+      (candidate) => candidate.generation === binding.generation && candidate.head === binding.head,
+    );
+    if (round?.posted === undefined) throw new Error("The review receipt was not saved.");
+    const count = round.replyPosts?.filter((post) => post.kind === "posted").length ?? 0;
+    const notes = replyPostNotes(state.url, round);
     return {
-      taskId: task.id,
+      taskId,
       posted: true,
-      url: outcome.url,
-      message: `Posted ${round.review.comments.length} comment${round.review.comments.length === 1 ? "" : "s"}${replies === 0 ? "" : ` and ${replies} ${replies === 1 ? "reply" : "replies"}`}: ${outcome.url}`,
+      url: round.posted.url,
+      message: `${label}${count === 0 ? "" : ` with ${count} ${count === 1 ? "reply" : "replies"}`}: ${round.posted.url}${notes.length === 0 ? "" : `\n${notes.join("\n")}`}`,
     };
   }
 
-  /** Short replies on earlier threads the author addressed; a failed reply never blocks the review. */
-  async function postReplies(state: PrReviewState, round: PrReviewRound): Promise<number> {
-    let posted = 0;
+  /** The review receipt is saved first; each native reply claims and settles its own effect. */
+  async function postReplies(
+    taskId: string,
+    state: PrReviewState,
+    round: PrReviewRound,
+  ): Promise<void> {
+    for (const index of (round.review.replies ?? []).keys())
+      await replyPosting.attempt(taskId, round, index, true);
     for (const prior of round.review.priorComments) {
       if (prior.status !== "addressed" || prior.reply === undefined) continue;
-      const ok = await replyToComment(deps.run, {
+      await replyToComment(deps.run, {
         ref: state.ref,
         commentId: prior.commentId,
         body: prior.reply,
         cwd: state.checkout,
       });
-      if (ok) posted += 1;
     }
-    return posted;
   }
 
   /** Reviews the author's new pushes, checking each of the user's earlier comments. */
@@ -448,4 +651,25 @@ function replaceLatestRound(state: PrReviewState, round: PrReviewRound): PrRevie
 function requireState(task: TaskRecord): PrReviewState {
   if (task.prReview === undefined) throw new Error(`Task ${task.id} is not a PR review.`);
   return task.prReview;
+}
+
+function confirmedReviewUrl(value: string, state: PrReviewState, reply = false): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Use the GitHub review link you checked on this PR.");
+  }
+  if (
+    url.origin !== "https://github.com" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.pathname.toLowerCase() !== `/${state.ref.repo}/pull/${state.ref.number}`.toLowerCase() ||
+    !(reply ? /^#discussion_r[1-9][0-9]*$/u : /^#pullrequestreview-[1-9][0-9]*$/u).test(url.hash)
+  )
+    throw new Error(
+      `Use a GitHub ${reply ? "reply" : "review"} link for this same PR, including its ${reply ? "discussion" : "review"} anchor.`,
+    );
+  return url.href;
 }

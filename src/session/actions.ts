@@ -1,14 +1,19 @@
 import { isBoardView } from "../board/view.ts";
-
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
-import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
+import type {
+  CreatableTaskKind,
+  RepoPolicy,
+  RequestBriefContent,
+  TerminalName,
+} from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
 import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
 import type { CommentEdit, NewComment } from "../pr-review/edits.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
+import type { ReviewPostRecovery } from "../pr-review/service.ts";
 import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
@@ -40,6 +45,7 @@ export type TandemAction =
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
   | Readonly<{ readonly action: "open-project"; readonly repoPath: string }>
   | Readonly<{ readonly action: "find-repo"; readonly name: string }>
+  | Readonly<{ readonly action: "terminal-setting"; readonly terminal: TerminalName }>
   | Readonly<{ readonly action: "save-code-folders"; readonly folders: readonly string[] }>
   | Readonly<{ readonly action: "self-improvement"; readonly mode: SelfImprovementMode }>
   | Readonly<{ readonly action: "check-tools" }>
@@ -201,6 +207,7 @@ export type TandemAction =
       readonly action: "review-post";
       readonly taskId: string;
       readonly verdict: ReviewVerdict;
+      readonly recovery?: ReviewPostRecovery | undefined;
     }>
   | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
   | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
@@ -311,6 +318,7 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "open-project" ||
     action.action === "save-code-folders" ||
     action.action === "self-improvement" ||
+    action.action === "terminal-setting" ||
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
@@ -363,6 +371,12 @@ async function approvalPrompt(
       message: action.folders.map((folder) => `- ${folder}`).join("\n"),
     };
   }
+  if (action.action === "terminal-setting")
+    return {
+      title: `Use ${action.terminal === "tern" ? "Tern" : "Herdr"} for Tandem?`,
+      message:
+        "Applies across this Tandem home. Running tasks prevent switching. If Tern is missing or signed out, Herdr is saved instead.",
+    };
   if (action.action === "self-improvement") {
     return {
       title: SELF_IMPROVEMENT_TITLES[action.mode],
@@ -466,6 +480,31 @@ async function approvalPrompt(
         message: `${capitalize(action.method)}, once checks pass.`,
       };
     case "review-post": {
+      if (action.recovery !== undefined) {
+        if (action.recovery.kind === "post-reply-again")
+          return {
+            title: `Post saved reply ${action.recovery.replyIndex} for ${name} again?`,
+            message:
+              "Check the PR first. GitHub may already have it; this can create a duplicate reply.",
+          };
+        if (action.recovery.kind === "mark-reply-posted")
+          return {
+            title: `Mark saved reply ${action.recovery.replyIndex} for ${name} as posted?`,
+            message:
+              "Use the reply link you checked on the PR. This records your confirmation without posting to GitHub.",
+          };
+        return action.recovery.kind === "post-again"
+          ? {
+              title: `Post the saved review for ${name} again?`,
+              message:
+                "Check the PR first. GitHub may already have it; this can create a duplicate review.",
+            }
+          : {
+              title: `Mark the saved review for ${name} as posted?`,
+              message:
+                "Use the review link you checked on the PR. This records your confirmation without posting to GitHub.",
+            };
+      }
       const round = task.prReview?.rounds.at(-1);
       const count = round?.review.comments.length ?? 0;
       const target =
@@ -557,6 +596,10 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   },
   "save-code-folders": async (action, service) =>
     actionResult(await service.saveProjectRoots(action.folders), action.action, {
+      approved: true,
+    }),
+  "terminal-setting": async (action, service) =>
+    actionResult(await service.configureTerminal(action.terminal), action.action, {
       approved: true,
     }),
   "self-improvement": async (action, service) =>
@@ -775,7 +818,11 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     ),
   "review-post": async (action, service) =>
     actionResult(
-      await service.reviewPost(action.taskId, { verdict: action.verdict, approved: true }),
+      await service.reviewPost(action.taskId, {
+        verdict: action.verdict,
+        approved: true,
+        ...(action.recovery === undefined ? {} : { recovery: action.recovery }),
+      }),
       action.action,
       { approved: true },
     ),

@@ -5,6 +5,7 @@ import type { PanelFocus } from "./board/panel.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
 import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
+import { runCli } from "./cli.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -25,7 +26,9 @@ import {
   type TerminalRunResult,
 } from "./terminal/arguments.ts";
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
+import { parseCliArgs } from "./terminal/cli-arguments.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
+import { validateNativeContext } from "./terminal/cli-view-context.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
 import {
   fixCleanupCount,
@@ -37,6 +40,7 @@ import {
 } from "./terminal/fix-report.ts";
 import { applyHardReset, planHardReset, renderHardResetPlan } from "./terminal/hard-reset.ts";
 import {
+  catchUpWarningNotice,
   launchProjects,
   otherSessionReconciliationNotices,
   panelFailureNotice,
@@ -46,6 +50,11 @@ import {
   workspaceRetirementFromLaunch,
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
+import {
+  isNativeCommand,
+  type NativeRendererHandlers,
+  nativeCommandNames,
+} from "./terminal/native-renderers.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
 import { type PanelAction, runPanel, runPanelAction } from "./terminal/panel.ts";
 import {
@@ -71,8 +80,13 @@ import {
 } from "./terminal/projects.ts";
 import { readTandemStatus, tandemCodeVersion } from "./terminal/status.ts";
 import { runWelcome } from "./terminal/welcome.ts";
-import { terminalBackend, terminalContext } from "./terminal-backend/compose.ts";
-import type { TerminalBackend, WorkspaceMover } from "./terminal-backend/contract.ts";
+import {
+  installTerminalPlugin,
+  reloadTerminalPlugin,
+  terminalBackend,
+  terminalContext,
+} from "./terminal-backend/compose.ts";
+import type { TerminalBackend } from "./terminal-backend/contract.ts";
 
 const HELP_TEXT = `Tandem
 
@@ -100,6 +114,7 @@ Usage:
                            --popup closes on Esc or after going somewhere
   tandem panel home|prev|next
                            Go to this project's chat, or the previous or next project
+  tandem native COMMAND    Run a native action or view (requires --pane ID --cwd PATH)
   tandem welcome           Show the welcome message again
 
 Options:
@@ -113,6 +128,7 @@ Options:
 `;
 
 export type TerminalMainDependencies = Readonly<{
+  readonly nativeRendererHandlers?: Partial<NativeRendererHandlers>;
   readonly cwd?: string;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly run?: CommandRunner;
@@ -131,8 +147,6 @@ export type TerminalMainDependencies = Readonly<{
   readonly resetCoordinators?: typeof resetCoordinators;
   /** The Tandem checkout, whose coordinator always opens; tests inject a temporary one. */
   readonly tandemCheckout?: string;
-  /** Sends workspace.move; tests inject one so they never reach a live socket. */
-  readonly moveWorkspace?: WorkspaceMover;
   /** The terminal Tandem drives; built from `run` when absent. */
   readonly terminal?: TerminalBackend;
 }>;
@@ -718,6 +732,35 @@ async function runProjectFlow({
       sessionId: environment.sessionId,
     };
   }
+  const pluginDependencies = {
+    run,
+    cwd: environment.cwd,
+    print: stdout,
+    env: {
+      ...(environment.source.TERN_CONFIG_DIR === undefined
+        ? {}
+        : { TERN_CONFIG_DIR: environment.source.TERN_CONFIG_DIR }),
+      ...(environment.source.TERN_DAEMON_SOCKET === undefined
+        ? {}
+        : { TERN_DAEMON_SOCKET: environment.source.TERN_DAEMON_SOCKET }),
+    },
+    ...(interactive && prompter !== undefined
+      ? {
+          confirm: async (question: string) =>
+            (await prompter.ask(question, {
+              choices: [
+                { name: "Yes", value: "yes" },
+                { name: "Not now", value: "not-now" },
+              ],
+              default: "not-now",
+            })) === "yes",
+        }
+      : {}),
+  };
+  if (invocation.command !== "update") {
+    if (!(await installTerminalPlugin(environment.home, pluginDependencies)))
+      stdout("Tandem left Tern's views and shortcuts unchanged. Run setup.sh to add them later.\n");
+  }
   closeInteraction();
   if (invocation.command === "reset") {
     const stopped = await (dependencies.resetCoordinators ?? resetCoordinators)(run, terminal, {
@@ -753,10 +796,12 @@ async function runProjectFlow({
     terminal,
     renestAfterLaunches,
   );
+  const terminalLabel = terminal.name === "tern" ? "Tern" : "Herdr";
   stdout(
-    `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
+    `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared ${terminalLabel} session ${environment.sessionId}.\n`,
   );
   if (invocation.command === "update") {
+    await reloadTerminalPlugin(environment.home, pluginDependencies);
     stdout(`Coordinators now run ${await tandemCodeVersion(run, TANDEM_CHECKOUT)}.\n`);
   }
   for (const [index, launch] of launches.entries()) {
@@ -773,6 +818,8 @@ async function runProjectFlow({
     for (const notice of otherSessionReconciliationNotices(repoPath, launch)) stdout(notice);
     const panelNotice = panelFailureNotice(repoPath, launch);
     if (panelNotice !== undefined) stdout(panelNotice);
+    const catchUpNotice = catchUpWarningNotice(repoPath, launch);
+    if (catchUpNotice !== undefined) stdout(catchUpNotice);
   }
   return {
     exitCode: 0,
@@ -806,6 +853,35 @@ export async function runTerminal(
 ): Promise<TerminalRunResult> {
   const { stdout, stderr } = createTerminalOutput(dependencies);
   try {
+    if (argv[0] === "native") {
+      const action = argv[1];
+      if (action === undefined || !isNativeCommand(action)) {
+        throw new Error(`tandem native requires one of: ${nativeCommandNames.join(", ")}`);
+      }
+      validateNativeContext(parseCliArgs(argv.slice(1)));
+      const result = await runCli(argv.slice(1), {
+        ...(dependencies.nativeRendererHandlers === undefined
+          ? {}
+          : { nativeRendererHandlers: dependencies.nativeRendererHandlers }),
+        ...(dependencies.cwd === undefined ? {} : { cwd: dependencies.cwd }),
+        ...(dependencies.processEnvironment === undefined
+          ? {}
+          : { processEnvironment: dependencies.processEnvironment }),
+        ...(dependencies.run === undefined ? {} : { run: dependencies.run }),
+        ...(dependencies.terminal === undefined ? {} : { terminal: dependencies.terminal }),
+        ...(dependencies.service === undefined ? {} : { service: dependencies.service }),
+        ...(dependencies.createService === undefined
+          ? {}
+          : { createService: dependencies.createService }),
+        stdout,
+        stderr,
+      });
+      return {
+        exitCode: result.exitCode,
+        status: result.error === undefined ? "native" : "error",
+        ...(result.error === undefined ? {} : { error: result.error }),
+      };
+    }
     const invocation = parseTerminalArgs(argv);
     if (invocation.help) {
       stdout(HELP_TEXT);
@@ -813,14 +889,7 @@ export async function runTerminal(
     }
     const environment = resolveTerminalEnvironment(invocation, dependencies);
     const run = dependencies.run ?? runCommand;
-    const terminal =
-      dependencies.terminal ??
-      terminalBackend(
-        run,
-        dependencies.moveWorkspace === undefined
-          ? {}
-          : { moveWorkspace: dependencies.moveWorkspace },
-      );
+    const terminal = dependencies.terminal ?? terminalBackend(run, { home: environment.home });
     if (invocation.command === "status") {
       return await handleStatus({ invocation, environment, dependencies, run, stdout });
     }

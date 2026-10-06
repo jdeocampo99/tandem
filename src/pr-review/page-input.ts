@@ -1,5 +1,6 @@
 import type { CommandRunner } from "../contracts.ts";
 import type { ReviewPageInput } from "./page.ts";
+import { reviewPostNotes } from "./render.ts";
 import type { PrReviewRound, PrReviewState } from "./state.ts";
 
 export type PageSources = ReviewPageInput["sources"];
@@ -31,7 +32,7 @@ export function reviewPageInput(
     chapters: review.tour,
     drafts: review.comments,
     concerns: review.concerns,
-    notes: round.notes,
+    notes: reviewPostNotes(state.url, round),
     patch,
     sources,
   };

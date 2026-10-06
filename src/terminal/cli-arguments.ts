@@ -1,9 +1,14 @@
 import type { CreatableTaskKind, ThinkingLevel } from "../contracts.ts";
+import type { NativeRendererCommand } from "./native-renderers.ts";
 
-const PATH_OPTIONS: Readonly<Record<string, true>> = {
+/** Paths and opaque native identifiers preserve their literal argv spelling. */
+const LITERAL_OPTIONS: Readonly<Record<string, true>> = {
   "--home": true,
   "--pool-root": true,
   "--repo": true,
+  "--cwd": true,
+  "--pane": true,
+  "--window": true,
   "--extension": true,
   "--input": true,
   "--config": true,
@@ -29,6 +34,19 @@ const MERGE_METHODS: Readonly<Record<MergeMethod, true>> = {
   rebase: true,
 };
 const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
+  board: "board",
+  prs: "prs",
+  usage: "usage",
+  "new-request": "new-request",
+  "open-task": "open-task",
+  project: "project",
+  "view-file": "view-file",
+  "brief-comment": "brief-comment",
+  "brief-request-changes": "brief-request-changes",
+  "brief-approve": "brief-approve",
+  "pr-comment": "pr-comment",
+  open: "open",
+  "review-submit": "review-submit",
   launch: "launch",
   restart: "restart",
   models: "models",
@@ -67,6 +85,19 @@ const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
   merge: "merge",
 };
 const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
+  board: 2,
+  prs: 0,
+  usage: 0,
+  "new-request": 0,
+  "open-task": 0,
+  project: 1,
+  "view-file": 1,
+  "brief-comment": 1,
+  "brief-request-changes": 1,
+  "brief-approve": 1,
+  "pr-comment": 1,
+  open: 2,
+  "review-submit": 1,
   launch: 0,
   restart: 1,
   models: 0,
@@ -102,6 +133,13 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
 export type MergeMethod = "merge" | "squash" | "rebase";
 
 export type CliCommand =
+  | NativeRendererCommand
+  | "brief-comment"
+  | "brief-request-changes"
+  | "brief-approve"
+  | "pr-comment"
+  | "open"
+  | "review-submit"
   | "launch"
   | "restart"
   | "models"
@@ -161,6 +199,9 @@ export type CliOptions = Readonly<{
   readonly objective?: string;
   readonly text?: string;
   readonly questionId?: string;
+  readonly viewPaneId?: string;
+  readonly viewWindowId?: string;
+  readonly viewCwd?: string;
   readonly supersedes: readonly string[];
   readonly title?: string;
   readonly base?: string;
@@ -247,7 +288,7 @@ function optionValue(
 ): Readonly<{ value: string; nextIndex: number }> {
   const token = argv[index];
   if (token === undefined) throw new CliUsageError(`${name} requires a value`);
-  const readValue = PATH_OPTIONS[name] === true ? pathText : text;
+  const readValue = LITERAL_OPTIONS[name] === true ? pathText : text;
   const equalsIndex = token.indexOf("=");
   if (equalsIndex >= 0) {
     const value = token.slice(equalsIndex + 1);
@@ -306,6 +347,9 @@ type MutableCliOptions = {
   objective?: string;
   text?: string;
   questionId?: string;
+  viewPaneId?: string;
+  viewWindowId?: string;
+  viewCwd?: string;
   supersedes: string[];
   title?: string;
   base?: string;
@@ -434,6 +478,15 @@ const OPTION_SPECS: Readonly<Record<string, OptionSpec>> = {
   }),
   "--task-id": valued((options, value) => {
     options.taskId = value;
+  }),
+  "--pane": valued((options, value) => {
+    options.viewPaneId = value;
+  }),
+  "--window": valued((options, value) => {
+    options.viewWindowId = value;
+  }),
+  "--cwd": valued((options, value) => {
+    options.viewCwd = value;
   }),
   "--text": valued((options, value) => {
     options.text = value;

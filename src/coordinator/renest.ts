@@ -251,6 +251,14 @@ export async function renestWorkspaces(
     records = await listCoordinatorRecords(input.home, input.sessionId);
     // No recorded coordinator means nothing to nest under, so Herdr is not even asked.
     if (records.length === 0) return EMPTY;
+    for (const record of records) {
+      if (record.endpoint.terminal !== terminal.name)
+        warnings.push(
+          `quarantined ${record.endpoint.terminal} coordinator ${record.repoPath} under ${terminal.name}`,
+        );
+    }
+    records = records.filter((record) => record.endpoint.terminal === terminal.name);
+    if (records.length === 0) return { ...EMPTY, warnings };
     durable = await readDurable(input.home, input.lockWaitMs ?? STATE_LOCK_WAIT_MS);
   } catch (error) {
     return failed("Tandem's task records", error);
@@ -262,7 +270,14 @@ export async function renestWorkspaces(
     return failed("Herdr workspaces", error);
   }
   const liveOrder = live.map((workspace) => workspace.workspaceId);
-  const owned = taskWorkspaces(durable);
+  const recorded = taskWorkspaces(durable);
+  for (const { endpoint } of recorded) {
+    if (endpoint.terminal !== terminal.name)
+      warnings.push(
+        `quarantined ${endpoint.terminal} pane ${endpoint.paneId} under ${terminal.name}`,
+      );
+  }
+  const owned = recorded.filter(({ endpoint }) => endpoint.terminal === terminal.name);
   const leftovers = leftoverWorkspaces(
     live,
     records.map((record) => record.endpoint.workspaceId),

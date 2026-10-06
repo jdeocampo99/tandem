@@ -19,6 +19,7 @@ import {
   parsePanelInput,
   renderPanel,
   runPanel,
+  runPanelAction,
 } from "../../src/terminal/panel.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { NOW, state, watch } from "../board/fixtures.ts";
@@ -270,7 +271,7 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
   expect(
     navigationSteps({ kind: "go", target: { kind: "chat", repoPath: APP } }, COORDINATORS),
   ).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
   expect(
@@ -279,14 +280,14 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
       COORDINATORS,
     ),
   ).toEqual([
-    { kind: "workspace", workspaceId: "w3", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w3", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w3:p2" },
   ]);
   expect(navigationSteps({ kind: "go", target: { kind: "url", url: "https://x/1" } }, [])).toEqual([
     { kind: "url", url: "https://x/1", failure: "⚠ couldn't open the link" },
   ]);
   expect(navigationSteps({ kind: "switch", repoPath: TANDEM }, COORDINATORS)).toEqual([
-    { kind: "workspace", workspaceId: "w1", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w1", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w1:p1" },
   ]);
   expect(navigationSteps({ kind: "switch", repoPath: "/offline" }, COORDINATORS)).toEqual([]);
@@ -302,20 +303,20 @@ test("Herdr's focus names the project: its coordinator's or worker's workspace, 
 test("the home key goes to the focused project's chat; prev and next wrap around open projects", () => {
   const inWorker = { workspaceId: "w3", cwd: "/pool/wt-2" };
   expect(panelActionSteps("home", SNAPSHOT, inWorker)).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
   expect(panelActionSteps("next", SNAPSHOT, inWorker)).toEqual([
-    { kind: "workspace", workspaceId: "w1", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w1", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w1:p1" },
   ]);
   expect(panelActionSteps("prev", SNAPSHOT, { workspaceId: "w1", cwd: "/" })).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
   const alone = { ...SNAPSHOT, coordinators: COORDINATORS.slice(0, 1) };
   expect(panelActionSteps("next", alone, inWorker)).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
 });
@@ -427,6 +428,34 @@ test("a signal closes the panel and puts the terminal back", async () => {
   expect(terminal.written.at(-1)).toContain("\x1b[?1049l");
 });
 
+test("a terminal that cannot resize the panel explains the limitation in its footer", async () => {
+  const terminal = fakeTerminal();
+  const deps = terminal.deps();
+  const { promise: warned, resolve: warningShown } = Promise.withResolvers<void>();
+  const running = runPanel({
+    ...deps,
+    paneId: "panel",
+    terminal: {
+      ...deps.terminal,
+      fitPanel: async (input) => ({
+        fittedWidth: input.fittedWidth,
+        warnings: ["Cannot resize this pane."],
+      }),
+    },
+    write: (text) => {
+      deps.write(text);
+      if (text.includes("Cannot resize this pane.")) warningShown();
+    },
+  });
+  try {
+    await warned;
+    expect(terminal.written.join("")).toContain("Cannot resize this pane.");
+  } finally {
+    terminal.stop();
+    await running;
+  }
+});
+
 test("a drawing failure still puts the terminal back before it surfaces", async () => {
   const terminal = fakeTerminal();
   let calls = 0;
@@ -513,3 +542,27 @@ test("the tool line cuts its target from the left, keeping the file name, to fit
   expect(Bun.stringWidth(lines[at] ?? "")).toBe(46);
   expect(lines[at - 1]).toBe("    Write the test");
 });
+
+for (const terminalName of ["herdr", "tern"] as const) {
+  test(`the ${terminalName} panel refuses the other terminal's coordinator navigation`, async () => {
+    const calls: unknown[] = [];
+    const run = async (request: unknown) => {
+      calls.push(request);
+      throw new Error("foreign navigation reached the runner");
+    };
+    const foreign = terminalName === "herdr" ? "tern" : "herdr";
+    const result = await runPanelAction("home", {
+      run,
+      terminal: { ...terminalBackend(run), name: terminalName },
+      sessionId: "test",
+      cwd: APP,
+      focus: { cwd: APP },
+      readSnapshot: async () => ({
+        ...SNAPSHOT,
+        coordinators: COORDINATORS.map((coordinator) => ({ ...coordinator, terminal: foreign })),
+      }),
+    });
+    expect(result).toContain("couldn't focus");
+    expect(calls).toEqual([]);
+  });
+}

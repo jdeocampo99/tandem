@@ -15,7 +15,7 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
-import { COORDINATOR_QUARANTINE_DIRECTORY } from "../../src/coordinator/resources.ts";
+import { COORDINATOR_QUARANTINE_DIRECTORY } from "../../src/coordinator/quarantine.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type {
   DurableJob,
@@ -60,7 +60,15 @@ export const SCENARIO_POLICY: ResolvedPolicy = {
 };
 
 /** Every external boundary a scenario is allowed to touch. */
-export type ScenarioBoundary = "herdr" | "treehouse" | "git" | "omp" | "ps" | "typesafe" | "github";
+export type ScenarioBoundary =
+  | "tern"
+  | "herdr"
+  | "treehouse"
+  | "git"
+  | "omp"
+  | "ps"
+  | "typesafe"
+  | "github";
 
 /** One CI check on a scripted pull request or branch. */
 export type ScenarioCheck = Readonly<{
@@ -174,8 +182,12 @@ export type ScenarioSnapshot = Readonly<{
 
 type PaneState = {
   present: boolean;
+  title?: string;
+  blockProgram?: string;
+  ternSessionId?: string;
   workspaceId: string;
   tabId: string;
+  blockArgs?: readonly string[];
   foregroundCwd: string;
   shellPid: number;
   processes: readonly Readonly<{ pid: number; name: string; argv: readonly string[] }>[];
@@ -212,8 +224,18 @@ export type ScenarioWorld = Readonly<{
   readonly store: TaskStore;
   readonly failAt: (failure: ScenarioFailure) => void;
   readonly openPane: (
-    input: Readonly<{ readonly paneId: string; readonly cwd: string }>,
+    input: Readonly<{
+      readonly paneId: string;
+      readonly cwd: string;
+      /** A daemon-hosted Tern block, with no PTY child or foreground process. */
+      readonly blockProgram?: string;
+      readonly blockArgs?: readonly string[];
+      readonly anchor?: Endpoint;
+      readonly terminalSessionId?: string;
+    }>,
   ) => Endpoint;
+  readonly removePane: (paneId: string) => void;
+  readonly titlePane: (paneId: string, title: string) => void;
   readonly paneIsPresent: (paneId: string) => boolean;
   /** Replaces a pane's foreground, as when its agent exits and someone starts another by hand. */
   readonly replaceForeground: (paneId: string, argv: readonly string[]) => void;
@@ -247,6 +269,8 @@ function describeCommand(argv: readonly string[]): Readonly<{
   readonly action: string;
 }> {
   const program = argv[0];
+  if (program?.endsWith("/tern") === true || program === "tern")
+    return { boundary: "tern", action: `tern ${argv[1] ?? ""}` };
   if (program === "herdr") {
     const words = positionalArguments(argv.slice(3)).slice(0, 2);
     return { boundary: "herdr", action: `herdr ${words.join(" ")}`.trim() };
@@ -262,6 +286,8 @@ function describeCommand(argv: readonly string[]): Readonly<{
     return { boundary: "git", action: `git ${verb}${qualifier}` };
   }
   if (program === "omp") return { boundary: "omp", action: `omp ${argv[1] ?? ""}`.trim() };
+  if (argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts"))
+    return { boundary: "ps", action: "Tern foreground process proof" };
   if (program === "ps") return { boundary: "ps", action: "ps" };
   if (program === "kill") return { boundary: "ps", action: "kill" };
   if (program === "gh") return { boundary: "github", action: githubAction(argv) };
@@ -376,7 +402,13 @@ function persistentForeground(argv: readonly string[]): string | undefined {
 }
 
 async function bootstrapProcessArgv(command: string): Promise<readonly string[]> {
-  const tokens = parseQuotedCommand(command);
+  const quoted = parseQuotedCommand(command);
+  let commandStart = quoted[0] === "env" ? 1 : 0;
+  if (commandStart > 0) {
+    while (quoted[commandStart] === "-u") commandStart += 2;
+    while (quoted[commandStart]?.includes("=") === true) commandStart += 1;
+  }
+  const tokens = quoted.slice(commandStart);
   const scriptPath = tokens[1];
   if (tokens[0] !== "/bin/sh" || scriptPath === undefined) return tokens;
   const script = await readFile(scriptPath, "utf8");
@@ -394,6 +426,9 @@ async function bootstrapProcessArgv(command: string): Promise<readonly string[]>
 
 export type ScenarioWorldOptions = Readonly<{
   readonly sessionId?: string;
+  readonly terminal?: "herdr" | "tern";
+  /** Model Tern keeping its acknowledged last empty session alive. */
+  readonly retainEmptyTernSessions?: boolean;
   /** What `git remote get-url origin` prints in every checkout; empty when unset. */
   readonly origin?: string;
   readonly ompModels?: readonly unknown[];
@@ -417,6 +452,7 @@ export async function createScenarioWorld(
   const failures: { failure: ScenarioFailure; remaining: number }[] = [];
   const panes = new Map<string, PaneState>();
   const workspaceLabels = new Map<string, string>();
+  const ternSessions = new Map<string, string>();
   const leases = new Map<string, LeaseState>();
   const checkouts = new Map<string, CheckoutState>();
   let nextPaneNumber = 0;
@@ -440,23 +476,38 @@ export async function createScenarioWorld(
   };
   checkoutFor(repoPath).branch = "main";
 
-  const openPane = (
-    input: Readonly<{ readonly paneId: string; readonly cwd: string }>,
-  ): Endpoint => {
+  const openPane = (input: Parameters<ScenarioWorld["openPane"]>[0]): Endpoint => {
     nextPaneNumber += 1;
     nextPid += 1;
-    const workspaceId = `workspace-${nextPaneNumber}`;
-    const tabId = `tab-${nextPaneNumber}`;
+    const workspaceId =
+      input.anchor?.workspaceId ??
+      (options.terminal === "tern" ? String(1000 + nextPaneNumber) : `workspace-${nextPaneNumber}`);
+    const tabId = options.terminal === "tern" ? workspaceId : `tab-${nextPaneNumber}`;
+    if (options.terminal === "tern") ternSessions.set("100", "tandem-scenario");
     panes.set(input.paneId, {
       present: true,
+      ...(input.blockProgram === undefined ? {} : { blockProgram: input.blockProgram }),
+      ...(input.blockArgs === undefined ? {} : { blockArgs: input.blockArgs }),
+      ...(options.terminal === "tern"
+        ? { ternSessionId: input.terminalSessionId ?? input.anchor?.terminalSessionId ?? "100" }
+        : {}),
       workspaceId,
       tabId,
       foregroundCwd: input.cwd,
       shellPid: nextPid,
-      processes: [{ pid: nextPid, name: "sh", argv: ["sh"] }],
+      processes:
+        input.blockProgram === undefined ? [{ pid: nextPid, name: "sh", argv: ["sh"] }] : [],
     });
     workspaceLabels.set(workspaceId, `scenario ${input.paneId}`);
-    return { sessionId, workspaceId, tabId, paneId: input.paneId, role: "scout", generation: 0 };
+    return {
+      terminal: options.terminal ?? "herdr",
+      sessionId,
+      workspaceId,
+      tabId,
+      paneId: input.paneId,
+      role: "scout",
+      generation: 0,
+    };
   };
 
   const grantLease = async (
@@ -654,6 +705,103 @@ export async function createScenarioWorld(
       );
     }
     throw new Error(`unexpected herdr command ${JSON.stringify(argv)}`);
+  };
+
+  // The same pane ledger drives both terminal boundaries. Deliberately model Tern's unsafe
+  // title fallback so scenarios prove the backend prevents it from reaching the CLI.
+  const tern = async (request: CommandRequest): Promise<CommandResult> => {
+    const argv = request.argv;
+    const verb = argv[1];
+    const present = () => [...panes.entries()].filter(([, pane]) => pane.present);
+    const ok = (value: unknown) => commandResult(JSON.stringify(value));
+    if (verb === "ls")
+      return ok({
+        sessions: [...ternSessions].map(([id, name]) => ({
+          id,
+          name,
+          tabs: [
+            ...new Set(
+              present()
+                .filter(([, p]) => p.ternSessionId === id)
+                .map(([, p]) => p.tabId),
+            ),
+          ].map((tabId) => ({
+            id: tabId,
+            name: workspaceLabels.get(tabId) ?? null,
+            blocks: present()
+              .filter(([, p]) => p.tabId === tabId)
+              .map(([paneId, p]) => ({
+                id: paneId,
+                title: p.title ?? paneId,
+                cwd: p.foregroundCwd,
+                live: true,
+                ...(p.blockProgram === undefined ? {} : { program: p.blockProgram }),
+                ...(p.blockArgs === undefined ? {} : { args: p.blockArgs }),
+              })),
+          })),
+        })),
+        detached: [],
+      });
+    if (verb === "kill") {
+      if (!ternSessions.has(argv[3] ?? ""))
+        return commandResult("", 1, "no session is called that id");
+      if (!options.retainEmptyTernSessions) ternSessions.delete(argv[3] ?? "");
+      return ok({ session: argv[3] });
+    }
+    if (verb === "new") {
+      const created = openPane({ paneId: String(10001 + nextPaneNumber), cwd: request.cwd });
+      const pane = panes.get(created.paneId);
+      if (pane === undefined) throw new Error("missing new scenario pane");
+      const session = argv[2] === "session" ? String(100000 + nextPaneNumber) : (argv[3] ?? "");
+      if (argv[2] === "session") ternSessions.set(session, argv[3] ?? "");
+      pane.ternSessionId = session;
+      return ok({ session, tab: pane.tabId, block: created.paneId });
+    }
+    const found =
+      present().find(([id]) => id === argv[2]) ?? present().find(([, p]) => p.title === argv[2]);
+    if (found === undefined) return commandResult("", 1, "no block is called that id");
+    const [paneId, pane] = found;
+    if (verb === "process") {
+      const foreground = pane.processes[0];
+      return ok({
+        pane: paneId,
+        child:
+          pane.blockProgram === undefined
+            ? { pid: pane.shellPid, name: "sh", argv: ["sh"], cwd: pane.foregroundCwd }
+            : null,
+        group: foreground?.pid ?? null,
+        foreground: foreground === undefined ? null : { ...foreground, cwd: pane.foregroundCwd },
+      });
+    }
+    if (verb === "close") pane.present = false;
+    else if (verb === "rename") workspaceLabels.set(pane.tabId, argv[3] ?? "");
+    else if (verb === "send") pane.processes = [{ pid: pane.shellPid, name: "sh", argv: ["sh"] }];
+    else if (verb === "run") {
+      const command = await bootstrapProcessArgv(argv[3] ?? "");
+      let start = command[0] === "env" ? 1 : 0;
+      while (start > 0 && command[start]?.includes("=")) start += 1;
+      const launched = command.slice(start);
+      const foreground = persistentForeground(launched);
+      if (foreground !== undefined) {
+        nextPid += 1;
+        pane.processes = [{ pid: nextPid, name: foreground, argv: launched }];
+      }
+    } else if (verb === "split") {
+      nextPaneNumber += 1;
+      nextPid += 1;
+      const splitId = String(10000 + nextPaneNumber);
+      panes.set(splitId, {
+        present: true,
+        workspaceId: pane.workspaceId,
+        tabId: pane.tabId,
+        ...(pane.ternSessionId === undefined ? {} : { ternSessionId: pane.ternSessionId }),
+        foregroundCwd: request.cwd,
+        shellPid: nextPid,
+        processes: [{ pid: nextPid, name: "sh", argv: ["sh"] }],
+      });
+      return ok({ session: pane.ternSessionId, tab: pane.tabId, block: splitId });
+    } else if (verb !== "focus") throw new Error(`unexpected tern command ${JSON.stringify(argv)}`);
+    return ok({ block: paneId });
   };
 
   const treehouse = async (request: CommandRequest): Promise<CommandResult> => {
@@ -1007,10 +1155,18 @@ export async function createScenarioWorld(
     const program = request.argv[0];
     if (program === "gh") return gh(request);
     if (program === "herdr") return herdr(request);
+    if (program?.endsWith("/tern") === true || program === "tern") return tern(request);
     if (program === "treehouse") return treehouse(request);
     if (program === "git") return git(request);
     if (program === "omp") {
       return commandResult(JSON.stringify({ models: options.ompModels ?? [] }));
+    }
+    if (request.argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts")) {
+      const group = Number(request.argv[2]);
+      const pane = [...panes.values()].find(
+        (entry) => entry.present && entry.processes[0]?.pid === group,
+      );
+      return commandResult(JSON.stringify(pane?.processes ?? []));
     }
     if (program === "ps") {
       const lines = [...panes.values()]
@@ -1089,6 +1245,16 @@ export async function createScenarioWorld(
       failures.push({ failure, remaining: failure.times ?? 1 });
     },
     openPane,
+    removePane: (paneId) => {
+      const pane = panes.get(paneId);
+      if (pane === undefined) throw new Error("unknown pane");
+      pane.present = false;
+    },
+    titlePane: (paneId, title) => {
+      const pane = panes.get(paneId);
+      if (pane === undefined) throw new Error("unknown pane");
+      pane.title = title;
+    },
     paneIsPresent: (paneId) => panes.get(paneId)?.present === true,
     replaceForeground: (paneId, argv) => {
       const pane = panes.get(paneId);

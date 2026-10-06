@@ -53,8 +53,8 @@ the task brief. That explicit pin does not grant other skills or broaden OMP's r
 | Role | Workspace | Tools | Must not |
 | --- | --- | --- | --- |
 | Coordinator | OMP conversation in the clean source worktree | `read`, `ask`, `tandem`, plus MCP servers OMP loaded for this checkout and user configuration | Edit code, run shell commands, search the repo (scouts do that) |
-| Scout | Isolated Treehouse worktree, child Herdr workspace | `read`, `grep`, `glob`, `web_search`, `task` (fans broad scope out to OMP's bundled read-only `scout` subagents; other bundled agents are disabled in worker-config.yml, repository-defined agents are not blocked); `write`, `edit`, `copy_asset` only inside a presentation's artifact directory during a mockup turn | Write anywhere else, run project-wide gates, invent findings when a tool fails (report the exact failure) |
-| Implementer | Assigned task worktree, child Herdr workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `todo` (holds its [playbook](task-lifecycle.md#playbooks) steps) | Exceed approved scope or change existing behavior the brief didn't ask for, merge, deploy, destructive cleanup, claim validation results, run a pinned validation command as written (the worker extension refuses that bash call; a focused variant such as one test file runs) |
+| Scout | Isolated Treehouse worktree, child terminal workspace | `read`, `grep`, `glob`, `web_search`, `task` (fans broad scope out to OMP's bundled read-only `scout` subagents; other bundled agents are disabled in worker-config.yml, repository-defined agents are not blocked); `write`, `edit`, `copy_asset` only inside a presentation's artifact directory during a mockup turn | Write anywhere else, run project-wide gates, invent findings when a tool fails (report the exact failure) |
+| Implementer | Assigned task worktree, child terminal workspace | `read`, `grep`, `glob`, `edit`, `write`, `bash`, `todo` (holds its [playbook](task-lifecycle.md#playbooks) steps) | Exceed approved scope or change existing behavior the brief didn't ask for, merge, deploy, destructive cleanup, claim validation results, run a pinned validation command as written (the worker extension refuses that bash call; a focused variant such as one test file runs) |
 | Reviewer | Fresh read-only pane in the task worktree | `read`, `grep`, `glob` | Edit or write a report file; submits findings and a summary; Tandem binds them to the reviewed HEAD and derives the verdict |
 
 Default policy: `maxFixRounds: 2` (src/config/policy.ts). There is no limit on how many workers run
@@ -66,18 +66,18 @@ assigned to new work.
 
 ## What guards the workflow
 
-- Prompts are guidance, not a security boundary or policy engine. Runtime checks, Herdr/Treehouse
+- Prompts are guidance, not a security boundary or policy engine. Runtime checks, terminal/Treehouse
   ownership proofs, filesystem checks, and Git/GitHub preconditions guard mutations.
 - Tool allowlists are not an OS or filesystem sandbox, and a private artifact directory is not
   credential isolation: workers inherit the local environment.
-- Tandem has no login flow and copies no credentials. OMP, Herdr, Treehouse, `gh`, and Git use
+- Tandem has no login flow and copies no credentials. OMP, the selected terminal, Treehouse, `gh`, and Git use
   their existing local configuration and authentication.
 
 ## Local limits and source of truth
 
-- Everything runs on the local machine: orchestration, durable state, workers, Herdr workspaces,
+- Everything runs on the local machine: orchestration, durable state, workers, terminal workspaces,
   Treehouse pool, Lavish control. No remote fleets, harnesses other than OMP and Claude Code
-  ([harness.md](harness.md)), alternate terminal backends beyond the Herdr implementation of the terminal port, relays, or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
+  ([harness.md](harness.md)), terminal backends other than Herdr and Tern behind the terminal port, relays, or hosted state. Only the automatic draft at ready, explicitly requested PR publish/merge, and an
   implementer's follow-up push to its own open PR touch the remote, through local `gh` and Git.
 - macOS only. The task-store lock is a Darwin native `O_EXLOCK` lock on the task-store directory
   with a 5-second default acquisition timeout (`DEFAULT_LOCK_TIMEOUT_MS`). Coordinator locks under
@@ -89,3 +89,11 @@ assigned to new work.
 - Authoritative contracts are in code: src/contracts.ts (types and roles), src/config/ (policy),
   src/tasks/lifecycle.ts (transitions), src/adapters/ (native tools), src/service/controller.ts
   (composition), src/harness/omp/, src/session/, src/instructions.ts (OMP integration).
+
+## Terminal backends
+
+Herdr and Tern are the two supported terminal backends, selected through
+`src/terminal-backend/compose.ts`. Both use the same terminal port and endpoint ownership
+checks. Tern adds daemon-hosted native views; it does not change task policy, approval or
+recovery. See [terminal.md](terminal.md) for selection, resource mapping, process proof,
+foreign-endpoint quarantine, native hosting and global-settings consent.

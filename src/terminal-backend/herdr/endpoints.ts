@@ -33,10 +33,9 @@ import {
   type ProcessInfo,
   type SplitAnchor,
   type TerminalBackend,
-  type WorkspaceMover,
 } from "../contract.ts";
 import { errorCode, herdrRequest, isPaneMissing, isPaneNotFound, parseAnswer } from "./protocol.ts";
-import { orderWorkspaceAfter } from "./workspaces.ts";
+import { orderWorkspaceAfter, type WorkspaceMover } from "./workspaces.ts";
 
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 5_000;
 const DEFAULT_INTERRUPT_POLL_MS = 100;
@@ -282,6 +281,7 @@ function parseCreatedEndpoint(
   const tabId = requiredString(tab.tab_id, "result.tab.tab_id", operation, response);
   const paneId = requiredString(rootPane.pane_id, "result.root_pane.pane_id", operation, response);
   return {
+    terminal: "herdr",
     sessionId: checkedText(sessionId, "sessionId"),
     workspaceId,
     tabId,
@@ -320,6 +320,7 @@ function parseSplitEndpoint(
     throw new AdapterProtocolError(operation, "split reused the anchor pane id", response);
   }
   return {
+    terminal: "herdr",
     sessionId: anchor.sessionId,
     workspaceId,
     tabId,
@@ -430,6 +431,7 @@ export async function splitBeside(
   const payload = requiredRecord(root.result, "result", operation, result.stdout);
   const pane = requiredRecord(payload.pane, "result.pane", operation, result.stdout);
   const anchor: Endpoint = {
+    terminal: "herdr",
     sessionId: checkedText(input.sessionId, "sessionId"),
     workspaceId: requiredString(
       pane.workspace_id,

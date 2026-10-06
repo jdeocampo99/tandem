@@ -42,6 +42,7 @@ export type TerminalInvocation = Readonly<{
 export type TerminalRunResult = Readonly<{
   readonly exitCode: number;
   readonly status:
+    | "native"
     | "help"
     | "launched"
     | "configured"

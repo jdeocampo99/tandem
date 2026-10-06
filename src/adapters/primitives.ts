@@ -59,7 +59,7 @@ export class EndpointOwnershipError extends AdapterError {
   constructor(endpoint: Endpoint, message: string, reason: "missing" | "mismatch" = "mismatch") {
     super(
       `endpoint ownership refused for pane ${endpoint.paneId}: ${message}`,
-      "herdr endpoint ownership",
+      `${endpoint.terminal} endpoint ownership`,
     );
     this.name = "EndpointOwnershipError";
     this.endpoint = endpoint;

@@ -422,6 +422,7 @@ export function taskNameFor(task: TaskRecord): string {
 }
 export function endpointLaunchFor(
   reservation: DurableReservation,
+  terminal: Endpoint["terminal"],
   sessionId: string,
   taskName: string,
   workspaceLabel: string,
@@ -434,6 +435,7 @@ export function endpointLaunchFor(
 ): DurableEndpointLaunch {
   return {
     schemaVersion: 1,
+    terminal,
     reservationId: reservation.id,
     ...(operationId === undefined ? {} : { operationId }),
     sessionId,
