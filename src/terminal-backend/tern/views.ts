@@ -93,6 +93,40 @@ export function ternViewHost(
     const { ensurePrivateDirectoryTree } = await import("../../coordinator/lock.ts");
     const cmd = await scoped(input);
     return options.guard(input.coordinator.paneId, async () => {
+      if (
+        placement === "return" &&
+        input.origin?.paneId !== undefined &&
+        input.origin.paneId !== input.coordinator.paneId
+      ) {
+        const source = blocks(await cmd.ls(input.cwd)).find(
+          (entry) => entry.block.id === input.origin?.paneId,
+        );
+        if (
+          source?.block.program !== "tandem.task" ||
+          source.block.args?.[1] !== input.coordinator.paneId ||
+          source.block.args?.[4] !== input.home
+        )
+          throw new EndpointOwnershipError(
+            input.coordinator,
+            "return origin is not this coordinator's task block",
+          );
+      }
+      const existingTasks =
+        placement === "task"
+          ? blocks(await cmd.ls(input.cwd)).filter(
+              (entry) =>
+                entry.tab.id === input.coordinator.tabId &&
+                entry.block.program === "tandem.task" &&
+                entry.block.args?.[1] === input.coordinator.paneId &&
+                entry.block.args?.[4] === input.home,
+            )
+          : [];
+      if (existingTasks.length > 1)
+        throw new EndpointOwnershipError(
+          input.coordinator,
+          "several task blocks claim this coordinator",
+        );
+      const replaced = existingTasks[0]?.block.id;
       const directory = join(input.home, "native-host");
       await ensurePrivateDirectoryTree(directory, "native route directory");
       const token = randomUUID();
@@ -125,6 +159,7 @@ export function ternViewHost(
           coordinator: input.coordinator.paneId,
           session: input.coordinator.terminalSessionId,
           receipt,
+          replaced,
         }),
         { flag: "wx", mode: 0o600 },
       );

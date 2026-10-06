@@ -20,28 +20,38 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
   return {handled=true}
  end
  local session = tonumber(ticket.session)
- local same = false
- for _, tab in cx.session:tabs() do if tab.id == owner.tab and tab.session == session then same=true end end
- if not same then return {handled=true} end
+ local same, sameOrigin = false, false
+ for _, tab in cx.session:tabs() do
+  if tab.id == owner.tab and tab.session == session then same=true end
+  if tab.id == source.tab and tab.session == session then sameOrigin=true end
+ end
+ if not same or not sameOrigin then return {handled=true} end
  local pane: number?
  if ticket.placement=="inbox" then
   cx:command("inbox")
   pane=origin
  elseif ticket.placement=="return" then
-  if source.block=="tandem.task-picker" and not owner.floating then
-   -- A picker is a disposable split; returning never docks or closes the coordinator.
-  elseif source.block=="tandem.task" and owner.floating then
+  if source.block=="tandem.task-picker" then
+   cx.layout:close(origin)
+  elseif owner.floating then
+   if source.block~="tandem.task" then return {handled=true} end
    if not cx.layout:dock(coordinator,origin,"right",{focus=false}) then return {handled=true} end
-  else return {handled=true} end
-  cx.layout:close(origin)
+   cx.layout:close(origin)
+  end
   cx.layout:focus(coordinator)
   pane=coordinator
  else
+  local previous=if ticket.replaced then tonumber(ticket.replaced) else nil
   if ticket.placement=="task" then
    local layout=cx.session:layout(owner.tab)
-   if owner.floating or not layout or #layout.floats>0 then return {handled=true} end
+   if not layout then return {handled=true} end
+   if owner.floating then
+    local old=if previous then cx.session:pane(previous) else nil
+    if #layout.floats~=1 or layout.floats[1].pane~=coordinator or not old
+     or old.tab~=owner.tab or old.block~="tandem.task" or old.floating then return {handled=true} end
+   elseif #layout.floats>0 or previous then return {handled=true} end
   end
-  cx.layout:focus(coordinator)
+  cx.layout:focus(if ticket.placement=="task" and owner.floating then previous else coordinator)
   pane=cx:new_block("tandem." .. ticket.kind,ticket.args,if ticket.placement=="window" then "tab" else "beside",{focus=ticket.placement~="panel"})
   if not pane then return {handled=true} end
   if ticket.placement=="panel" then
@@ -50,6 +60,7 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
    cx.layout:focus(coordinator)
   elseif ticket.placement=="task" then
    if not cx.layout:float(coordinator,pane,"br",{focus=false}) then return {handled=true} end
+   if previous then cx.layout:close(previous) end
    cx:command("pip_stash_all")
    cx.layout:focus(pane)
   end

@@ -1,4 +1,5 @@
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
+import { NativeAlerts } from "./native-alerts.ts";
 import { type NativeReadDependencies, NativeViewsReader } from "./native-read.ts";
 import { type BoardSnapshot, writeNativeViews } from "./snapshot.ts";
 
@@ -12,6 +13,7 @@ type PublicationInput = Readonly<{
 export class NativeViewsPublisher {
   readonly #deps: NativeReadDependencies;
   readonly #reader: NativeViewsReader;
+  readonly #alerts: NativeAlerts;
   #pending: PublicationInput | undefined;
   #running: Promise<void> = Promise.resolve();
   #busy = false;
@@ -20,6 +22,7 @@ export class NativeViewsPublisher {
   constructor(deps: NativeReadDependencies) {
     this.#deps = deps;
     this.#reader = new NativeViewsReader(deps);
+    this.#alerts = new NativeAlerts(deps);
   }
 
   schedule(input: PublicationInput): void {
@@ -33,6 +36,9 @@ export class NativeViewsPublisher {
           const next = this.#pending;
           this.#pending = undefined;
           try {
+            const session = next.sessions.get(next.project);
+            if (session?.terminal === "tern")
+              await this.#alerts.observe(next.snapshot, next.project, session.sessionId);
             const view = await this.#reader.read(next.snapshot, next.project, next.sessions);
             await writeNativeViews(this.#deps.home, view);
           } catch (error) {

@@ -1591,9 +1591,14 @@ class TandemController {
     return this.#source.scopedTasks();
   }
 
-  /** Outside Herdr there is no coordinator pane, and nowhere to notify. */
+  /** Herdr arrival notifications; Tern consumes durable transitions through its native publisher. */
   async notifyNeedsYou(repoPath: string, rows: readonly BoardRow[]): Promise<void> {
-    if (this.#deps.coordinatorPaneId === undefined || rows.length === 0) return;
+    if (
+      this.#deps.terminal.name === "tern" ||
+      this.#deps.coordinatorPaneId === undefined ||
+      rows.length === 0
+    )
+      return;
     await this.#deps.terminal.notify({
       sessionId: this.#deps.sessionId,
       cwd: absoluteDirectory(repoPath, "repoPath"),

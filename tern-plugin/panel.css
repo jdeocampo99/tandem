@@ -35,6 +35,7 @@
   font-size: 10px;
 }
 .tdp-meter {
+  display: flex;
   height: 3px;
   background: #ffffff18;
   margin-top: 3px;
