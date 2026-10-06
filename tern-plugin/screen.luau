@@ -12,7 +12,7 @@ function M.path(args: {string}, saved: unknown): string
  return M.args(args, saved)[1] or ""
 end
 function M.back(args: {string}, cx: BlockCx)
- navigation.back(navigation.origin(args), cx)
+ navigation.back(navigation.origin(args), cx, function() cx:exit(0) end)
 end
 function M.header(title: string, detail: string?): Node
  return tern.ui.el("div", {class="tdm-screen-header"}, {

@@ -48,12 +48,12 @@ local block: BlockDef<State> = {
   table.insert(children, ui.el("div", {class="tdm-catchup-actions"}, buttons))
   return {main=ui.col({ui.el("div", {class="tdm-catchup-screen"}, children)})}
  end,
- key = function(state, key, cx) if key.name ~= "escape" then return false end navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"}); return true end,
+ key = function(state, key, cx) if key.name ~= "escape" then return false end navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"}, function() cx:exit(0) end); return true end,
  event = function(state, ev, cx)
   if ev.ev ~= "action" then return end
-  if ev.act == "dismiss" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"})
+  if ev.act == "dismiss" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"}, function() cx:exit(0) end)
   elseif state.view.status == "ready" then
-   if ev.act == "open-needs" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-open-needs"})
+   if ev.act == "open-needs" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-open-needs"}, function() cx:exit(0) end)
    elseif ev.act == "merged" then navigation.run(navigation.origin(state.args), cx, {"board", "merged-link", ev.value}) end
   end
  end,

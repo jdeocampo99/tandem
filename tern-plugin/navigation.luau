@@ -7,7 +7,7 @@ function M.origin(args: {string}): Origin
  local home=string.match(indexPath,"^(.*)/native%-views/[^/]+%.json$") or ""
  return {path=args[1] or "",coordinator=args[2] or "",cwd=args[3] or "",window=args[4] or "",indexPath=indexPath,home=home}
 end
-function M.run(origin: Origin, cx: BlockCx, args: {string})
+function M.run(origin: Origin, cx: BlockCx, args: {string}, onSuccess: (() -> ())?)
  if string.sub(origin.cwd,1,1)~="/" or string.sub(origin.home,1,1)~="/" then cx:toast("error","Tandem action unavailable","Originating cwd or index path is missing"); return end
  local argv={"/bin/sh","tandem.sh","native"}
  for _, arg in args do table.insert(argv,arg) end
@@ -17,7 +17,8 @@ function M.run(origin: Origin, cx: BlockCx, args: {string})
  if origin.window~="" then table.insert(argv,"--window"); table.insert(argv,origin.window) end
  local ok,problem=pcall(function()
   tern.process.run(argv,{cwd="."},function(result)
-   if result.status~=0 then cx:toast("error","Tandem couldn't run that action",result.stderr) end
+   if result.status~=0 then cx:toast("error","Tandem couldn't run that action",result.stderr)
+   elseif onSuccess then onSuccess() end
   end)
  end)
  if not ok then cx:toast("error","Tandem couldn't start that action",tostring(problem)) end
@@ -25,7 +26,7 @@ end
 function M.root(origin: Origin): string
  return origin.indexPath
 end
-function M.back(origin: Origin,cx: BlockCx)
- M.run(origin,cx,{"view-file",M.root(origin) .. "#orchestrator"})
+function M.back(origin: Origin,cx: BlockCx,onSuccess: (() -> ())?)
+ M.run(origin,cx,{"view-file",M.root(origin) .. "#orchestrator"},onSuccess)
 end
 return M
