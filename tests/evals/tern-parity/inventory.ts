@@ -1449,4 +1449,89 @@ export const inventory: readonly InventoryEntry[] = [
         expect(blockKinds(world)).toEqual(["tandem.panel"]);
       }),
   },
+  {
+    view: "Generic",
+    item: "Tandem view did not open; Tandem kept an uncertain view; paused-views warning on return",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        await panel.click(/^● Port the terminal/);
+        const task = host.screen(host.pane("task"));
+        await host.fault("newBlock", true);
+        let mark = host.events.length;
+        await panel.click(/^● Fix login/);
+        const failed = host.toasts(mark);
+        expect(failed.map((toast) => toast.title)).toEqual([
+          "Tandem view did not open",
+          "Tandem couldn't run that action",
+        ]);
+        expect(failed[0]?.message).toEndWith("Native block could not open");
+        expect(failed[1]?.message).toBe(
+          "tandem: tern open outcome is unknown; quarantine and keep resources\n",
+        );
+        await host.fault("newBlock", false);
+        mark = host.events.length;
+        await task.click("← Orchestrator");
+        expect(host.toasts(mark)).toEqual([
+          {
+            pane: task.pane,
+            level: "warning",
+            title: "Tandem kept an uncertain view",
+            message:
+              "Returned to your conversation. An earlier view could not be verified, so its views and recovery record were kept. Continue here or use Tern's tab switcher; opening new native views stays paused until exact recovery evidence is available.",
+          },
+        ]);
+        expect(blockKinds(world)).toEqual(["tandem.panel", "tandem.task"]);
+      }),
+  },
+  {
+    view: "Setup",
+    item: "One consent for sidebar autohide and keys",
+    run: () =>
+      withParity(
+        async ({ world }) => {
+          const consent = async (directory: string, answer: boolean) => {
+            const questions: string[] = [];
+            const result = await configureTernPluginSettings({
+              configDirectory: join(world.home, directory),
+              confirm: async (question) => {
+                questions.push(question);
+                return answer;
+              },
+            });
+            const settings: unknown = await readFile(
+              join(world.home, directory, "settings.json"),
+              "utf8",
+            ).then(
+              (text) => JSON.parse(text),
+              () => undefined,
+            );
+            return { questions, configured: result.configured, settings };
+          };
+          const question =
+            "Hide Tern's sidebar and use Tandem's board, PR, usage and project shortcuts? These settings apply to every Tern window. Your custom shortcuts stay unchanged. Palette commands and panel buttons work either way.";
+          const installed = { ...JSON.parse(planTernPluginKeys("{}").text), tabs_autohide: true };
+          expect(await consent("approved", true)).toEqual({
+            questions: [question],
+            configured: true,
+            settings: installed,
+          });
+          expect(await consent("approved", false)).toEqual({
+            questions: [],
+            configured: true,
+            settings: installed,
+          });
+          expect(await consent("declined", false)).toEqual({
+            questions: [question],
+            configured: false,
+            settings: undefined,
+          });
+          expect(await consent("declined", true)).toEqual({
+            questions: [],
+            configured: false,
+            settings: undefined,
+          });
+        },
+        { seed: false, publish: false },
+      ),
+  },
 ];
