@@ -5,6 +5,7 @@ import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { withPrWatches } from "../../../src/pr-watch/store.ts";
+import { type PrReviewRound, prReviewRunDiffPath } from "../../../src/pr-review/state.ts";
 import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import { nativeReplyLinks } from "../../../src/session/native-links.ts";
@@ -14,9 +15,11 @@ import {
 } from "../../../src/terminal-backend/tern/plugin.ts";
 import { content } from "../../board/fixtures.ts";
 import {
+  type ScenarioPullRequest,
   type ScenarioTernProject,
   type ScenarioWorld,
   seedScenarioTask,
+  SCENARIO_POLICY,
   seedTernProject,
   withScenario,
 } from "../scenario.ts";
@@ -52,6 +55,72 @@ export function briefs(world: ScenarioWorld) {
   });
 }
 
+/** A finished pr-review task on someone else's PR #290: one tour chapter, a concern and a draft. */
+export async function seedReview(world: ScenarioWorld): Promise<ScenarioPullRequest> {
+  const pr = world.github.openPullRequest({
+    repo: "acme/app",
+    number: 290,
+    title: "Add retries",
+    body: "Retries flaky calls.",
+    patch: PATCH,
+  });
+  const round: PrReviewRound = {
+    generation: 0,
+    head: pr.head,
+    from: pr.head,
+    notes: [],
+    review: {
+      head: pr.head,
+      intent: "Check the retry guard",
+      tour: [
+        {
+          title: "The guard",
+          why: "Every call now passes the guard.",
+          stops: [{ file: "src/port.ts", from: 2, to: 2, title: "Guard", body: "Runs first." }],
+        },
+      ],
+      concerns: [
+        { title: "No backoff", detail: "Retries run back to back.", severity: "suggestion" },
+      ],
+      comments: [
+        { id: "d1", file: "src/port.ts", line: 2, body: "Name the guard.", severity: "nit" },
+      ],
+      summaryComment: "Looks good overall",
+      priorComments: [],
+    },
+  };
+  const created = await world.store.create({
+    id: "review-290",
+    repoPath: world.repoPath,
+    kind: "pr-review",
+    objective: "Review #290",
+    acceptanceCriteria: [],
+    surfaces: [],
+    policy: SCENARIO_POLICY,
+    prReview: {
+      ref: { repo: "acme/app", number: 290 },
+      url: "https://github.com/acme/app/pull/290",
+      title: "Add retries",
+      author: "sam",
+      baseRef: "main",
+      checkout: world.repoPath,
+      remote: "origin",
+      lens: { kind: "full" },
+      mode: "review",
+      rounds: [round],
+    },
+  });
+  await world.store.update(created.id, created.revision, (task) => ({
+    ...task,
+    revision: task.revision + 1,
+    stage: "completed",
+  }));
+  const diff = prReviewRunDiffPath(world.home, created.id, 0);
+  await mkdir(dirname(diff), { recursive: true });
+  await writeFile(diff, PATCH);
+  return pr;
+}
+
 /** A project mid-flight: one task in each panel section, a brief to approve and a watched PR. */
 async function seedWork(world: ScenarioWorld): Promise<string> {
   await seedScenarioTask(world, {
@@ -78,7 +147,7 @@ async function seedWork(world: ScenarioWorld): Promise<string> {
     kind: "implementation",
     stage: "completed",
   });
-  world.github.openPullRequest({
+  const shipped = world.github.openPullRequest({
     repo: "acme/app",
     number: 281,
     title: "Ship the port",
@@ -124,7 +193,7 @@ async function seedWork(world: ScenarioWorld): Promise<string> {
       number: 281,
       url: PR_URL,
       state: "open",
-      head: "feature-281",
+      head: shipped.head,
       base: "main",
     },
   });
@@ -165,7 +234,9 @@ export async function withParity(
   body: (parity: Parity) => Promise<void>,
   options: Readonly<{ seed?: boolean; publish?: boolean }> = {},
 ): Promise<void> {
-  await withScenario({ terminal: "tern", now: new Date().toISOString() }, async (world) => {
+  // Switcher staleness and visit gaps read the wall clock, so the scenario clock starts at it.
+  const now = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
+  await withScenario({ terminal: "tern", now }, async (world) => {
     const project = await seedTernProject(world, { coordinatorPaneId: "101", helperPaneId: "102" });
     const briefId = options.seed === false ? "" : await seedWork(world);
     const host = await TernParityHost.start(world, project);
@@ -210,6 +281,10 @@ function styleOf(view: Rendered, text: string): string {
   const span = view.spans.find((entry) => entry.text === text);
   if (span === undefined) throw new Error(`"${text}" is not drawn`);
   return span.style;
+}
+
+function opened(host: TernParityHost, mark: number): readonly string[] {
+  return host.since(mark).flatMap((event) => (event.open ? [event.open.url] : []));
 }
 
 function traceSince(world: ScenarioWorld, mark: number): readonly string[] {
@@ -324,9 +399,7 @@ export const inventory: readonly InventoryEntry[] = [
         ]);
         const mark = host.events.length;
         await panel.click("#281 ↗");
-        expect(host.since(mark).flatMap((event) => (event.open ? [event.open.url] : []))).toEqual([
-          PR_URL,
-        ]);
+        expect(opened(host, mark)).toEqual([PR_URL]);
       }),
   },
   {
@@ -921,5 +994,299 @@ export const inventory: readonly InventoryEntry[] = [
         const reopened = await host.screen(host.pane("brief")).render();
         expect(reopened.text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
       }),
+  },
+  {
+    view: "PR pane",
+    item: "Header with title, draft badge, Open PR ↗, who-acts-next, unresolved jump, commits, +/−",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        world.github.openPullRequest({
+          repo: "acme/app",
+          number: 284,
+          title: "Draft work",
+          draft: true,
+          patch: PATCH,
+        });
+        await withPrWatches(world.home, ({ put }) => {
+          put({
+            ref: { repo: "acme/app", number: 284 },
+            origin: "user",
+            repoPath: world.repoPath,
+            startedAt: world.clock(),
+            log: [],
+          });
+        });
+        await host.publish();
+        await host.refresh();
+        await panel.click("⎇");
+        const pr = host.screen(host.pane("pr"));
+        const view = await pr.render();
+        expect(view.title).toBe("#281 ▾");
+        expect(view.text.slice(0, 6)).toEqual([
+          "#281 ▾",
+          "×",
+          "#281 Ship the port",
+          "open",
+          "Open PR ↗",
+          "Waiting for PR watch",
+        ]);
+        expect(view.text.slice(11, 16)).toEqual([
+          "1 unresolved comments",
+          "task ship ↗",
+          "1 commits · +1 −0",
+          "Description",
+          "Diff",
+        ]);
+        let mark = host.events.length;
+        await pr.click("Open PR ↗");
+        expect(opened(host, mark)).toEqual([PR_URL]);
+        mark = host.events.length;
+        await pr.click("1 unresolved comments");
+        expect(host.since(mark).flatMap((event) => (event.frame ? [event.frame] : []))).toEqual([
+          { pane: pr.pane, operations: [["reveal", "main.content.body.diff.rows.r3", "start"]] },
+        ]);
+        expect((await pr.render()).text).toContain("Why guard here?");
+        await pr.click("#281 ▾");
+        expect((await pr.render()).text.slice(0, 3)).toEqual([
+          "#281 Ship the port",
+          "#282 Bump deps",
+          "#284 Draft work",
+        ]);
+        await pr.click("#284 Draft work");
+        expect(blockKinds(world)).toEqual(["tandem.panel", "tandem.pr"]);
+        const draft = await host.screen(host.pane("pr")).render();
+        expect(draft.title).toBe("#284 ▾");
+        expect(draft.text.slice(2, 6)).toEqual([
+          "#284 Draft work",
+          "draft",
+          "Open PR ↗",
+          "Waiting on you: publish it (draft → ready)",
+        ]);
+        expect(draft.text).toContain(
+          "Read-only: this watched PR has no Tandem task. Start a PR review task to comment or post a review.",
+        );
+        await host.screen(host.pane("pr")).click("#284 ▾");
+        await host.screen(host.pane("pr")).click("#281 Ship the port");
+        await host.screen(host.pane("pr")).click("task ship ↗");
+        expect((await host.screen(host.pane("task")).render()).title).toBe("Ship the port");
+      }),
+  },
+  {
+    view: "PR pane",
+    item: "CI pills: passed, running spinner with live elapsed, failed with view log",
+    run: () =>
+      withParity(async ({ host, panel }) => {
+        await panel.click("⎇");
+        const pr = host.screen(host.pane("pr"));
+        const view = await pr.render();
+        expect(view.text.slice(6, 11)).toEqual([
+          "✓ lint",
+          "e2e · running",
+          "1:30",
+          "✗ unit",
+          "view log",
+        ]);
+        expect(styleOf(view, "✓ lint")).toContain("success");
+        expect(styleOf(view, "✗ unit")).toContain("danger");
+        await host.refresh();
+        await host.refresh();
+        expect((await pr.render()).text[8]).toBe("1:32");
+        const mark = host.events.length;
+        await pr.click("view log");
+        expect(opened(host, mark)).toEqual(["https://ci.example/unit"]);
+      }),
+  },
+  {
+    view: "PR pane",
+    item: "Description with Conversation; Tour only when a tour exists; Diff with file switcher, own rows, thread cards, Reply, new comment cards, worker-destination hint",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        const ship = await world.store.read("ship");
+        if (ship === undefined) throw new Error("missing seeded task");
+        await world.store.update(ship.id, ship.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          stage: "implementing",
+        }));
+        await host.publish();
+        await host.refresh();
+        await panel.click("⎇");
+        const pr = host.screen(host.pane("pr"));
+        const body = async () => {
+          const view = await pr.render();
+          return view.text.slice(view.text.indexOf("Diff") + 1);
+        };
+        expect(
+          labels(await pr.render()).filter((label) =>
+            ["Description", "Tour", "Diff"].includes(label),
+          ),
+        ).toEqual(["Description", "Diff"]);
+        expect(await body()).toEqual([
+          "Ports the terminal backend.",
+          "Conversation",
+          `sam · ${world.clock()}`,
+          "Looks close.",
+        ]);
+        await pr.click("Diff");
+        expect(await body()).toEqual([
+          "src/port.ts ●1",
+          "+1 −0 · src/port.ts",
+          "@@ -1 +1 @@ ",
+          "1",
+          "1",
+          "export function port() {",
+          "+",
+          "2",
+          "  guard();",
+          "+",
+          `jules · ${world.clock()}`,
+          "Why guard here?",
+          "unresolved",
+          "Reply",
+          "2",
+          "3",
+          "}",
+          "+",
+          "Hover a line and click + to comment. Your comments go to the worker as fix requests.",
+        ]);
+        await pr.click("Reply");
+        expect(await body()).toContain("Comment…");
+        await pr.type("Because the port can race");
+        await pr.click("Comment");
+        await pr.click("+", { nth: 1 });
+        await pr.type("Rename port");
+        await pr.click("Comment");
+        const sent = await body();
+        expect(sent.filter((text) => text.startsWith("you · "))).toEqual([
+          "you · sent to worker",
+          "you · sent to worker",
+        ]);
+        const task = await world.store.read("ship");
+        expect(
+          task?.communication?.messages.map((message) => message.text.split(" This task's")[0]),
+        ).toEqual([
+          "PR fix request: Reply to acme/app#281 thread thread-1, root comment n1 (GitHub 11), src/port.ts:2: Because the port can race",
+          "PR fix request: src/port.ts:1: Rename port",
+        ]);
+        await seedReview(world);
+        await host.publish();
+        await host.refresh();
+        await host.screen(host.pane("pr")).click("×");
+        expect(await host.link("tandem://pr/290")).toBe(true);
+        const review = host.screen(host.pane("pr"));
+        expect(
+          labels(await review.render()).filter((label) =>
+            ["Description", "Tour", "Diff"].includes(label),
+          ),
+        ).toEqual(["Description", "Tour", "Diff"]);
+        await review.click("Tour");
+        const tour = await review.render();
+        expect(
+          tour.text.slice(tour.text.indexOf("Diff") + 1, tour.text.indexOf("Your review")),
+        ).toEqual([
+          "1 · The guard",
+          "Every call now passes the guard.",
+          "src/port.ts:2–2 Guard: Runs first.",
+          "src/port.ts:2–2",
+          "2",
+          "  guard();",
+          "Reviewer · nit",
+          "Name the guard.",
+        ]);
+      }),
+  },
+  {
+    view: "PR pane",
+    item: "pr-review verdict and Post; Posting…; Review already posted; posted or unconfirmed toasts",
+    run: async () => {
+      await withParity(async ({ host, world }) => {
+        const reviewed = await seedReview(world);
+        await host.publish();
+        await host.refresh();
+        await host.link("tandem://pr/290");
+        let pr = host.screen(host.pane("pr"));
+        const footer = async () => {
+          const view = await pr.render();
+          return view.text.slice(view.text.indexOf("Your review"));
+        };
+        expect((await pr.render()).text[5]).toBe(
+          "Waiting on you: choose comments and post your review",
+        );
+        expect(await footer()).toEqual([
+          "Your review",
+          "Looks good overall",
+          "Overall review…",
+          "✓ comment",
+          "approve",
+          "request-changes",
+          "Post",
+          `Reviewed commit ${reviewed.head} · Only drafts marked Keep and your new comments will be posted.`,
+        ]);
+        await pr.click("Diff");
+        await pr.click("Keep");
+        await pr.click("approve");
+        await pr.click("Post", { hold: true });
+        expect((await footer()).slice(0, 5)).toEqual([
+          "Your review",
+          "Posting…",
+          "comment",
+          "✓ approve",
+          "request-changes",
+        ]);
+        const mark = host.events.length;
+        await host.settle();
+        expect(host.toasts(mark)).toEqual([
+          {
+            pane: pr.pane,
+            level: "info",
+            title: "Review posted",
+            message: "Posted 1 comment: https://github.com/acme/app/pull/290#pullrequestreview-1",
+          },
+        ]);
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+        expect(reviewed.postedReviews.map((review) => review.url)).toEqual([
+          "https://github.com/acme/app/pull/290#pullrequestreview-1",
+        ]);
+        const task = await world.store.read("review-290");
+        expect(task?.prReview?.rounds.at(-1)?.posted?.verdict).toBe("approve");
+        await host.publish();
+        await host.refresh();
+        await host.link("tandem://pr/290");
+        pr = host.screen(host.pane("pr"));
+        expect((await pr.render()).text[5]).toBe("You posted this review");
+        expect(await footer()).toContain("Review already posted");
+        expect(labels(await pr.render())).not.toContain("Post");
+      });
+      await withParity(async ({ host, world }) => {
+        const reviewed = await seedReview(world);
+        await host.publish();
+        await host.refresh();
+        await host.link("tandem://pr/290");
+        const pr = host.screen(host.pane("pr"));
+        const moved = world.github.push(reviewed);
+        const mark = host.events.length;
+        await pr.click("Post");
+        expect(host.toasts(mark)).toEqual([
+          {
+            pane: pr.pane,
+            level: "info",
+            title: "Review wasn't confirmed as posted",
+            message: `The PR moved to ${moved.slice(0, 12)} since this review, so the comments could land on the wrong lines. Ask for a re-review first.`,
+          },
+        ]);
+        expect(reviewed.postedReviews).toEqual([]);
+        await host.publish();
+        await host.refresh();
+        expect((await pr.render()).text[5]).toBe(
+          "Waiting on you: choose comments and post your review",
+        );
+        const again = host.events.length;
+        await pr.click("Post");
+        expect(host.toasts(again).map((toast) => toast.title)).toEqual([
+          "Review wasn't confirmed as posted",
+        ]);
+        expect(reviewed.postedReviews).toEqual([]);
+      });
+    },
   },
 ];
