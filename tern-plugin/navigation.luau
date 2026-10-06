@@ -9,6 +9,7 @@ function M.run(origin: Origin, cx: BlockCx, args: {string})
  if string.sub(origin.cwd,1,1)~="/" then cx:toast("error","Tandem action unavailable","Originating cwd is missing"); return end
  local argv={"/bin/sh","tandem.sh","native"}
  for _, arg in args do table.insert(argv,arg) end
+ if origin.home~="" then table.insert(argv,"--home"); table.insert(argv,origin.home) end
  table.insert(argv,"--pane"); table.insert(argv,string.format("%.0f",cx.pane))
  table.insert(argv,"--cwd"); table.insert(argv,origin.cwd)
  if origin.window~="" then table.insert(argv,"--window"); table.insert(argv,origin.window) end

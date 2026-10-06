@@ -122,6 +122,22 @@ export function ternViewHost(
             "return requires this coordinator's exact native view",
           );
       }
+      const existingTasks =
+        placement === "task"
+          ? blocks(await cmd.ls(input.cwd)).filter(
+              (entry) =>
+                entry.tab.id === input.coordinator.tabId &&
+                entry.block.program === "tandem.task" &&
+                entry.block.args?.[1] === input.coordinator.paneId &&
+                entry.block.args?.[4] === input.home,
+            )
+          : [];
+      if (existingTasks.length > 1)
+        throw new EndpointOwnershipError(
+          input.coordinator,
+          "several task blocks claim this coordinator",
+        );
+      const replaced = existingTasks[0]?.block.id;
       const directory = join(input.home, "native-host");
       await ensurePrivateDirectoryTree(directory, "native route directory");
       const token = randomUUID();
@@ -154,6 +170,7 @@ export function ternViewHost(
           coordinator: input.coordinator.paneId,
           session: input.coordinator.terminalSessionId,
           receipt,
+          replaced,
         }),
         { flag: "wx", mode: 0o600 },
       );

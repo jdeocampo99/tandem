@@ -22,10 +22,13 @@ export async function nativeProject(context: NativeRendererContext) {
   const current = await owner(context);
   const model = await readNativeBundle(context.environment.home, current.repoPath);
   if (
-    Date.now() - Date.parse(model.writtenAt) > 10000 ||
+    Math.abs(Date.now() - Date.parse(model.writtenAt)) > 10000 ||
     !Number.isFinite(Date.parse(model.writtenAt))
   )
     throw new Error("Project switcher is stale; wait for the coordinator snapshot");
+  const currentProjects = model.projects.filter((project) => project.current);
+  if (currentProjects.length !== 1 || currentProjects[0]?.repoPath !== current.repoPath)
+    throw new Error("Project switcher has no unique originating project");
   const index = model.projects.findIndex((project) => project.current);
   const target = context.input.target;
   const number =
