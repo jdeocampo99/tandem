@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readHomeSettings, saveTerminalChoice } from "../../../src/config/home-settings.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
@@ -9,6 +9,7 @@ import {
   reloadTerminalPlugin,
 } from "../../../src/terminal-backend/compose.ts";
 import { ensureTernPlugin, reloadTernPlugin } from "../../../src/terminal-backend/tern/plugin.ts";
+import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin-settings.ts";
 
 function runner(catalogs: readonly string[]) {
   const calls: CommandRequest[] = [];
@@ -29,15 +30,21 @@ const ready = JSON.stringify({
   problems: [],
 });
 
-test("onboarding checks without consent and links only after a yes", async () => {
-  const declined = runner([missing]);
-  expect(await ensureTernPlugin({ ...declined, cwd: "/tmp", confirm: async () => false })).toBe(
-    false,
-  );
-  expect(declined.calls).toHaveLength(1);
+test("onboarding links palette actions even when global preferences are declined", async () => {
+  const declined = runner([missing, ready]);
   const approved = runner([missing, ready]);
   const root = await mkdtemp("/tmp/tandem-plugin-");
   try {
+    expect(
+      await ensureTernPlugin({
+        ...declined,
+        cwd: root,
+        settingsPath: join(root, "declined.json"),
+        confirm: async () => false,
+      }),
+    ).toBe(true);
+    expect(declined.calls.map((call) => call.argv[2])).toEqual(["list", "link", "list"]);
+    expect(await Bun.file(join(root, "declined.json")).exists()).toBe(false);
     expect(
       await ensureTernPlugin({
         ...approved,
@@ -114,14 +121,17 @@ test("installer and update read the saved choice without contacting unselected t
       "list",
     ]);
     await saveTerminalChoice(home, "herdr");
+    expect(await installTerminalPlugin(home, deps)).toBe(true);
     expect(await reloadTerminalPlugin(home, deps)).toBe(false);
     expect(selected.calls).toHaveLength(6);
+    expect(JSON.parse(await readFile(deps.settingsPath, "utf8"))).toEqual({});
+    expect(await Bun.file(`${deps.settingsPath}.tandem.json`).exists()).toBe(false);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
 });
 
-test("chat and setup terminal selection awaits plugin consent after saving the Tern choice", async () => {
+test("chat and setup terminal selection awaits plugin preferences after saving either choice", async () => {
   const home = await mkdtemp("/tmp/tandem-plugin-onboarding-");
   const observed: (string | undefined)[] = [];
   const run: CommandRunner = async (request) => ({
@@ -134,15 +144,16 @@ test("chat and setup terminal selection awaits plugin consent after saving the T
     sessionId: "test",
     run,
     installTerminalPlugin: async () => {
-      observed.push((await readHomeSettings(home)).terminal);
-      return false;
+      const selected = (await readHomeSettings(home)).terminal;
+      observed.push(selected);
+      return selected === "herdr";
     },
   });
   try {
     await service.configureTerminal("herdr");
-    expect(observed).toEqual([]);
+    expect(observed).toEqual(["herdr"]);
     const selected = await service.configureTerminal("tern");
-    expect(observed).toEqual(["tern"]);
+    expect(observed).toEqual(["herdr", "tern"]);
     expect(selected.terminal).toBe("tern");
     expect(selected.reason).toContain("left unchanged");
   } finally {
@@ -202,6 +213,63 @@ test("missing Tern skips the onboarding plugin hook and saves Herdr", async () =
     expect(linked).toBe(false);
   } finally {
     await service.shutdown();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("invalid Tern preferences never block Herdr launch or update and warn only once", async () => {
+  const home = await mkdtemp("/tmp/tandem-plugin-invalid-restore-");
+  const path = join(home, "settings.json");
+  const selected = runner([]);
+  const notices: string[] = [];
+  try {
+    await configureTernPluginSettings({ path, approved: true });
+    await writeFile(path, '{"tabs_autohide":"yes"}');
+    await saveTerminalChoice(home, "herdr");
+    const deps = {
+      ...selected,
+      cwd: home,
+      settingsPath: path,
+      print: (text: string) => notices.push(text),
+    };
+    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    expect(await reloadTerminalPlugin(home, deps)).toBe(false);
+    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    expect(selected.calls).toHaveLength(0);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain("Herdr will still open");
+    expect(await readFile(path, "utf8")).toBe('{"tabs_autohide":"yes"}');
+    expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(true);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("declined global preferences print once and explain how to change the decision later", async () => {
+  const home = await mkdtemp("/tmp/tandem-plugin-notices-");
+  const path = join(home, "settings.json");
+  const selected = runner([ready, ready]);
+  const notices: string[] = [];
+  let prompts = 0;
+  try {
+    await writeFile(path, '{"keybinds":{"cmd+shift+b":"palette"}}');
+    const deps = {
+      ...selected,
+      cwd: home,
+      settingsPath: path,
+      print: (text: string) => notices.push(text),
+      confirm: async () => {
+        prompts++;
+        return false;
+      },
+    };
+    expect(await ensureTernPlugin(deps)).toBe(true);
+    expect(await ensureTernPlugin(deps)).toBe(true);
+    expect(prompts).toBe(1);
+    expect(notices).toHaveLength(2);
+    expect(notices[0]).toContain("custom Tern shortcuts: Command+Shift+B");
+    expect(notices[1]).toContain("switch to Herdr and select Tern again");
+  } finally {
     await rm(home, { recursive: true, force: true });
   }
 });
