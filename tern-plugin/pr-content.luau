@@ -5,10 +5,10 @@ local components = require("./components")
 local fields = require("./text-field")
 local diff = require("./pr-diff")
 local M = {}
-export type State = { tab: string, chapter: number, stop: number, diff: diff.State, summary: fields.Field?, verdict: string, head: string?, generation: number?, clock: number, readAt: string?, posting: boolean, submitted: boolean, focus: string, prefix: string, identity: string? }
+export type State = { tab: string, chapter: number, stop: number, diff: diff.State, summary: fields.Field?, verdict: string, head: string?, generation: number?, clock: number, epoch: number, posting: boolean, submitted: boolean, focus: string, prefix: string, identity: string? }
 export type Invoke = (string, string, unknown?, (() -> ())?) -> ()
 function M.create(): State
- return { tab = "Description", chapter = 1, stop = 1, diff = diff.create(), verdict = "comment", clock = tern.now(), posting = false, submitted = false, focus = "comment", prefix = "main.content" }
+ return { tab = "Description", chapter = 1, stop = 1, diff = diff.create(), verdict = "comment", clock = tern.now(), epoch = os.time() * 1000, posting = false, submitted = false, focus = "comment", prefix = "main.content" }
 end
 local function identity(model: models.Model): string
  return model.header.repo .. "#" .. model.header.number .. ":" .. (model.header.taskId or "") .. ":" .. model.commentDestination
@@ -23,7 +23,6 @@ local function bind(s: State, model: models.Model)
   s.generation = model.review.generation
   s.summary = fields.create(model.review.summary, true)
  end
- if s.readAt ~= model.clockAt then s.clock = tern.now(); s.readAt = model.clockAt end
 end
 function M.view(s: State, model: models.Model, ready: boolean, prefix: string?, strip: Node?): { dock: Node, main: Node }
  s.prefix = prefix or "main.content"
@@ -35,7 +34,7 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?, 
   local parts = {}
   if check.state == "running" then
    table.insert(parts, ui.node("spinner", {style="braille", label=check.name .. " · running"}))
-   if check.elapsedMs ~= nil then table.insert(parts, ui.node("elapsed", {key="timer" .. i, age=check.elapsedMs + tern.now() - s.clock, format="clock"})) end
+   if check.startedAtMs ~= nil then table.insert(parts, ui.node("elapsed", {key="timer" .. i, age=math.max(0, s.epoch + tern.now() - s.clock - check.startedAtMs), format="clock"})) end
   elseif check.state == "passed" then table.insert(parts, ui.node("badge", {text="✓ " .. check.name .. (if check.duration then " · " .. check.duration else ""), tone="success"}))
   elseif check.state == "failed" then
    table.insert(parts, components.text("✗ " .. check.name, "danger"))

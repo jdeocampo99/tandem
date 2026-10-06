@@ -6,6 +6,23 @@ local fields = require('./text-field')
 local model = models.parse(tern.json.decode(tern.fs.read('fixture.json')).model)
 assert(model ~= nil)
 assert(models.parse({header={}}) == nil)
+local function elapsed(node: Node): Node?
+ if node.k == 'elapsed' then return node end
+ for _, child in node.c or {} do
+  local found = elapsed(child)
+  if found then return found end
+ end
+ return nil
+end
+local timerModel = table.clone(model)
+timerModel.checks = {{name='live CI',state='running',startedAtMs=(os.time()-120)*1000}}
+local timerState = content.create()
+local firstTimer = elapsed(content.view(timerState,timerModel,true).main)
+assert(firstTimer ~= nil and firstTimer.p ~= nil and firstTimer.p.age >= 120000)
+timerState.clock -= 3000
+local laterTimer = elapsed(content.view(timerState,timerModel,true).main)
+assert(laterTimer ~= nil and laterTimer.p ~= nil and laterTimer.p.age >= firstTimer.p.age + 3000)
+assert(firstTimer.p.format == 'clock' and firstTimer.p.key == 'timer1')
 local taskPath = tern.fs.read('task-path.txt')
 local index = models.parseIndex({pullRequests={target={header=model.header,detailFile='pr-fixture.json'}}})
 assert(index ~= nil)

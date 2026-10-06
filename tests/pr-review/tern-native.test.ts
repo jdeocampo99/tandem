@@ -60,7 +60,6 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         "pr",
         prPaneView({
           taskId: "task-98",
-          now: "2030-01-01T12:00:00Z",
           cached: {
             repo: "acme/app",
             number: 281,

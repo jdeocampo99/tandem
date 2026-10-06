@@ -416,6 +416,11 @@ Include `pr.css` with the foundation stylesheet. The pane uses Tern's native sur
 for wheel and keyboard input; the review dock remains visible while the content scrolls.
 PR line numbers use muted text color rather than element opacity, avoiding a compositing
 target per visible gutter in Tern 0.5.0. The shared diff-row renderer stays unchanged.
+Running CI uses the stable `checks[].startedAtMs` epoch timestamp derived by TypeScript from
+`startedAt`. Content state anchors wall time once to `tern.now()` and supplies the current age
+only when drawing an `elapsed` node; Tern then ticks the text itself. No Lua timer is scheduled
+for CI and no `clockAt` or sampled `elapsedMs` is published. Clock-only publications preserve
+the PR detail bytes, inode and modification time, including while checks are running.
 
 PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. The shared
 `src/terminal/native-input.ts` helper creates one exclusive 0600 file in a private unique
