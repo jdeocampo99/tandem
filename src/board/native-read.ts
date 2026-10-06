@@ -34,6 +34,7 @@ import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { parseWorkerJob } from "../workers/jobs.ts";
 import { readWorkerActivity } from "../workers/worker-activity.ts";
 import { nativeBoardView } from "./native.ts";
+import { nativeAlertCounts } from "./native-alerts.ts";
 import {
   type NativeProjectSummary,
   type NativeViewsPublication,
@@ -380,9 +381,7 @@ export class NativeViewsReader {
           now,
           tasks: summaries,
           projects,
-          bellCount: saved.tasks.flatMap((task) =>
-            task.notifications.filter((notification) => !notification.acknowledged),
-          ).length,
+          bellCount: (await nativeAlertCounts(deps.home, project)).unread,
           ...(fiveHour === undefined ? {} : { fiveHour }),
         }),
         projects,

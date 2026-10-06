@@ -1,7 +1,8 @@
+import { markNativeAlertsRead, nativeAlertCounts } from "../board/native-alerts.ts";
 import { readNativeBundle } from "../board/native-file.ts";
 import { nativeDetailPath, nativeViewsPath } from "../board/snapshot.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
-import { maybeShowCatchUp } from "../memory/native-visits.ts";
+import { recordNativeVisibility, tryShowCatchUp } from "../memory/native-visits.ts";
 import type { NativeRendererContext } from "./native-renderers.ts";
 
 async function owner(
@@ -18,8 +19,74 @@ async function owner(
     throw new Error("Open this project's Tern coordinator before navigating");
   return record;
 }
+/** A focus event is a project entry only inside its exact recorded native session. */
+async function lifecycle(context: NativeRendererContext, action: "entry" | "away" | "visible") {
+  const current = await owner(context);
+  if (current.endpoint.terminalSessionId === undefined)
+    throw new Error("Project visibility needs its recorded native session identity");
+  const panes = await context.capabilities.terminal.listPanes({
+    sessionId: current.endpoint.sessionId,
+    cwd: current.worktree.path,
+    complete: true,
+  });
+  const origin = panes.find((pane) => pane.paneId === context.origin.paneId);
+  if (!origin) throw new Error("Originating pane disappeared");
+  await context.capabilities.terminal.inspect({
+    endpoint: {
+      ...current.endpoint,
+      paneId: origin.paneId,
+      tabId: origin.tabId,
+      workspaceId: origin.workspaceId,
+    },
+    cwd: current.worktree.path,
+  });
+  if (action !== "entry") {
+    const model = await readNativeBundle(context.environment.home, current.repoPath);
+    await recordNativeVisibility({
+      home: context.environment.home,
+      project: current.repoPath,
+      now: new Date().toISOString(),
+      heartbeat: action === "visible",
+      ...(model.changeSignature === undefined ? {} : { signature: model.changeSignature }),
+    });
+    return { value: { visible: action === "visible" } };
+  }
+  const helper = current.endpoint.notificationPane;
+  if (context.origin.paneId === helper?.paneId) {
+    if (helper.paneId === current.endpoint.paneId)
+      throw new Error("Alert helper must be independent of its coordinator");
+    await context.capabilities.terminal.inspect({
+      endpoint: { ...current.endpoint, ...helper },
+      cwd: current.worktree.path,
+    });
+    const cursor = await nativeAlertCounts(context.environment.home, current.repoPath);
+    const focused = await context.capabilities.terminal.focusAgent({
+      sessionId: current.endpoint.sessionId,
+      cwd: current.worktree.path,
+      paneId: current.endpoint.paneId,
+      origin: context.origin,
+      originCoordinator: current.endpoint,
+      home: context.environment.home,
+    });
+    if (!focused) throw new Error("Tern could not focus the alert's exact project coordinator");
+    await markNativeAlertsRead(context.environment.home, current.repoPath, cursor.delivered);
+  }
+  const { warning } = await tryShowCatchUp(context.capabilities.terminal, {
+    home: context.environment.home,
+    record: current,
+    ...(context.origin.windowId === undefined ? {} : { windowId: context.origin.windowId }),
+  });
+  return { value: { entered: true, ...(warning === undefined ? {} : { warnings: [warning] }) } };
+}
+
 export async function nativeProject(context: NativeRendererContext) {
   if (context.input.kind !== "project") throw new Error("Expected project navigation");
+  if (
+    context.input.target === "entry" ||
+    context.input.target === "away" ||
+    context.input.target === "visible"
+  )
+    return lifecycle(context, context.input.target);
   const current = await owner(context);
   const model = await readNativeBundle(context.environment.home, current.repoPath);
   if (
@@ -33,9 +100,16 @@ export async function nativeProject(context: NativeRendererContext) {
   const index = model.projects.findIndex((project) => project.current);
   const target = context.input.target;
   const number =
-    typeof target === "number"
-      ? target - 1
-      : (index + (target === "prev" ? -1 : 1) + model.projects.length) % model.projects.length;
+    typeof target === "object"
+      ? model.projects.findIndex((project) => project.repoPath === target.repoPath)
+      : typeof target === "number"
+        ? target - 1
+        : (index + (target === "prev" ? -1 : 1) + model.projects.length) % model.projects.length;
+  if (
+    typeof target === "object" &&
+    model.projects.filter((project) => project.repoPath === target.repoPath).length !== 1
+  )
+    throw new Error("Project identity is missing or ambiguous");
   const project = model.projects[number];
   if (!project || project.offline || !project.sessionId)
     throw new Error("That project is offline or unavailable");
@@ -49,12 +123,25 @@ export async function nativeProject(context: NativeRendererContext) {
     home: context.environment.home,
   });
   if (!focused) throw new Error("Tern could not focus the exact project coordinator");
-  await maybeShowCatchUp(context.capabilities.terminal, {
+  if (destination.repoPath !== current.repoPath)
+    await recordNativeVisibility({
+      home: context.environment.home,
+      project: current.repoPath,
+      now: new Date().toISOString(),
+      ...(model.changeSignature === undefined ? {} : { signature: model.changeSignature }),
+    }).catch(() => {});
+  const { warning } = await tryShowCatchUp(context.capabilities.terminal, {
     home: context.environment.home,
     record: destination,
     ...(context.origin.windowId === undefined ? {} : { windowId: context.origin.windowId }),
   });
-  return { value: { focused: true, project: project.repoPath } };
+  return {
+    value: {
+      focused: true,
+      project: project.repoPath,
+      ...(warning === undefined ? {} : { warnings: [warning] }),
+    },
+  };
 }
 
 /** Native files select a known view only; arbitrary paths cannot grant block or terminal ownership. */
@@ -97,6 +184,10 @@ export async function nativeViewFile(context: NativeRendererContext) {
     else if (pr) view = { kind: "pr", repo: pr.header.repo, number: pr.header.number };
     else throw new Error("This file is not a published view for the originating project");
   }
+  const alerts =
+    view.kind === "inbox"
+      ? await nativeAlertCounts(context.environment.home, current.repoPath)
+      : undefined;
   const result = await context.capabilities.terminal.openView({
     coordinator: current.endpoint,
     cwd: current.worktree.path,
@@ -105,5 +196,7 @@ export async function nativeViewFile(context: NativeRendererContext) {
     view,
   });
   if (!result.opened) throw new Error(result.warnings.join("; "));
+  if (alerts)
+    await markNativeAlertsRead(context.environment.home, current.repoPath, alerts.delivered);
   return { value: result };
 }

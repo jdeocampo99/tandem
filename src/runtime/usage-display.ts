@@ -70,7 +70,7 @@ export function usageDisplay(
       remaining:
         meter.remainingPercent === "unavailable"
           ? "limit unavailable"
-          : `${meter.remainingPercent}% left`,
+          : `${Math.round(meter.remainingPercent)}% left`,
       reset:
         meter.resetInMs === "unavailable"
           ? "reset unavailable"

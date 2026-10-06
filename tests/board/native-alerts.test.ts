@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { NativeAlerts } from "../../src/board/native-alerts.ts";
+import {
+  markNativeAlertsRead,
+  NativeAlerts,
+  nativeAlertCounts,
+} from "../../src/board/native-alerts.ts";
 import { boardView } from "../../src/board/view.ts";
 import type { DurableExecutionRoutingPause } from "../../src/runtime/schema.ts";
 import { transitionStoredTask } from "../../src/tasks/store.ts";
@@ -101,6 +105,15 @@ test("durable native alerts emit each blocked/question/draft transition once, in
     await observe();
     await observe();
     expect(notices).toHaveLength(4);
+    expect(await nativeAlertCounts(world.home, world.repoPath)).toEqual({
+      delivered: 3,
+      unread: 3,
+    });
+    await markNativeAlertsRead(world.home, world.repoPath, 2);
+    expect(await nativeAlertCounts(world.home, world.repoPath)).toEqual({
+      delivered: 3,
+      unread: 1,
+    });
   });
 });
 
@@ -206,3 +219,71 @@ for (const stage of ["queued", "scouting"] as const) {
     });
   });
 }
+
+test("brief and PR-watch alerts share a user cursor; concurrent reads preserve newer arrivals", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const terminal = {
+      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+      notify: async () => {},
+    };
+    const alerts = new NativeAlerts({
+      home: world.home,
+      clock: world.clock,
+      run: world.run,
+      terminal,
+    });
+    const snapshot = {
+      version: 1 as const,
+      writtenAt: world.clock(),
+      coordinators: [],
+      board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+    };
+    await alerts.observe(snapshot, world.repoPath, world.sessionId);
+    const row = {
+      key: "brief:1",
+      cause: "brief" as const,
+      repoPath: world.repoPath,
+      project: "fixture",
+      mark: "?",
+      name: "Approve Tern brief",
+      text: "approval needed",
+    };
+    const brief = { ...snapshot, board: { ...snapshot.board, needsYou: [row] } };
+    await alerts.observe(brief, world.repoPath, world.sessionId);
+    const captured = await nativeAlertCounts(world.home, world.repoPath);
+    const pr = {
+      ...row,
+      key: "pr:2",
+      cause: "pull-request" as const,
+      name: "Fix CI",
+      taskId: "linked-own-task",
+      text: "failing checks",
+    };
+    await alerts.observe(
+      { ...snapshot, board: { ...snapshot.board, needsYou: [row, pr] } },
+      world.repoPath,
+      world.sessionId,
+    );
+    await markNativeAlertsRead(world.home, world.repoPath, captured.delivered);
+    expect(await nativeAlertCounts(world.home, world.repoPath)).toEqual({
+      delivered: 2,
+      unread: 1,
+    });
+    await new NativeAlerts({
+      home: world.home,
+      clock: world.clock,
+      run: world.run,
+      terminal,
+    }).observe(
+      { ...snapshot, board: { ...snapshot.board, needsYou: [row, pr] } },
+      world.repoPath,
+      world.sessionId,
+    );
+    expect(await nativeAlertCounts(world.home, world.repoPath)).toEqual({
+      delivered: 2,
+      unread: 1,
+    });
+    await markNativeAlertsRead(world.home, world.repoPath, 2);
+    expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(0);
+  });
+});

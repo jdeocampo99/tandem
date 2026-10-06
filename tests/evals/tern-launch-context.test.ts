@@ -7,6 +7,7 @@ import { repositoryKey } from "../../src/config/repositories.ts";
 import { launchCoordinator } from "../../src/coordinator/launch.ts";
 import { findRunningCoordinator } from "../../src/coordinator/ownership.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
+import { catchUpWarningNotice } from "../../src/terminal/launch.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "./scenario.ts";
 
@@ -72,11 +73,14 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
     );
     world.advanceClock(60);
     let opened = 0;
+    let catchUpFails = true;
     const terminal = {
       ...terminalBackend(world.run, { home: world.home }),
       openView: async () => {
         opened++;
-        return { opened: true, warnings: [] };
+        return catchUpFails
+          ? { opened: false, warnings: ["fixture optional catch-up failure"] }
+          : { opened: true, warnings: [] };
       },
     };
     const reconnect = (background: boolean) =>
@@ -108,9 +112,94 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
     expect(opened).toBe(0);
     const visitPath = join(world.home, "native-visits", `${repositoryKey(world.repoPath)}.json`);
     expect(JSON.parse(await readFile(visitPath, "utf8")).previousSignature).toBe("before");
+    const unacknowledged = await readFile(visitPath, "utf8");
+    const warned = await reconnect(false);
+    expect(warned.reused).toBe(true);
+    expect(warned.catchUpWarning).toBe(
+      "Project opened, but catch-up is unavailable: fixture optional catch-up failure",
+    );
+    expect(warned.panelFailure ?? "").not.toContain("fixture optional catch-up failure");
+    expect(await readFile(visitPath, "utf8")).toBe(unacknowledged);
+    catchUpFails = false;
     await reconnect(false);
-    expect(opened).toBe(1);
+    expect(opened).toBe(2);
     expect(JSON.parse(await readFile(visitPath, "utf8")).previousSignature).toBe("after");
+  });
+});
+
+test("a fresh Tern launch preserves its coordinator and visit when optional catch-up throws", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    const path = nativeViewsPath(world.home, world.repoPath);
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(
+      path,
+      nativeViewText("panel", {
+        version: 1,
+        project: world.repoPath,
+        writtenAt: world.clock(),
+        changeSignature: "after",
+        tasks: {},
+        briefs: {},
+        pullRequests: {},
+        projects: [],
+      }),
+    );
+    await visitNativeProject(
+      { home: world.home, project: world.repoPath, now: world.clock(), signature: "before" },
+      async () => {},
+    );
+    const visitPath = join(world.home, "native-visits", `${repositoryKey(world.repoPath)}.json`);
+    const previous = await readFile(visitPath, "utf8");
+    world.advanceClock(60);
+    let opens = 0;
+    const terminal = {
+      ...terminalBackend(world.run, { home: world.home }),
+      openView: async () => {
+        opens++;
+        throw new Error("fixture catch-up exception");
+      },
+    };
+    const launched = await launchCoordinator(
+      {
+        cwd: world.repoPath,
+        repo: world.repoPath,
+        home: world.home,
+        poolRoot: world.poolRoot,
+        sessionId: world.sessionId,
+        model: undefined,
+        continueSession: true,
+        headless: false,
+        noAttach: false,
+      },
+      {
+        run: world.run,
+        terminal,
+        startPersistent: async () => undefined,
+        runInteractive: async () => {
+          throw new Error("must launch in a Tern pane");
+        },
+        sleep: async () => {},
+        clock: world.clock,
+        processEnvironment: {},
+      },
+    );
+    expect(launched.reused).toBeUndefined();
+    expect(opens).toBe(1);
+    expect(launched.catchUpWarning).toBe(
+      "Project opened, but catch-up is unavailable: fixture catch-up exception",
+    );
+    expect(catchUpWarningNotice(world.repoPath, launched)).toBe(
+      `${world.repoPath}: ${launched.catchUpWarning}\n`,
+    );
+    expect(await readFile(visitPath, "utf8")).toBe(previous);
+    expect(
+      await findRunningCoordinator(world.run, terminal, {
+        home: world.home,
+        sessionId: world.sessionId,
+        repoPath: world.repoPath,
+      }),
+    ).toBeDefined();
   });
 });
 

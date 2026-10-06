@@ -35,7 +35,11 @@ one inbox entry with the helper's exact pane id and a waiting badge on its tab. 
 has no pty. Do not type an alert command into the coordinator or worker's interactive input and
 do not write directly to a guessed tty. The backend proves and records the helper's endpoint,
 uses exact-id guards, and restores it through ordinary resource recovery after a daemon restart.
-Clicking the helper's inbox entry lands on its tab; the panel remains the project navigator.
+Clicking the helper's inbox entry first selects its tab. The window focus hook invokes
+`native project entry`; the CLI proves the exact recorded helper/session and coordinator, then
+focuses that coordinator in the originating window. Its existing panel and conversation are the
+destination. The helper remains an owned, idle OSC source. Titles never grant ownership; a
+failed focus keeps the alert unread and performs no catch-up.
 
 The UTF-8 wire sequence is `\u001b]777;notify;TITLE;BODY\u0007` (ESC, `]`, the payload, BEL).
 Use these alert kinds and title prefixes; put the task's displayed title or summary in `BODY`:
@@ -535,18 +539,47 @@ The active window scope is independent of the view's immutable launch window arg
 Hosting passes `keep_open=false`. Screen success callbacks invoke captured `cx:exit(0)`; nonzero
 results toast stderr and never invoke callback exit. Shared `navigation.run/back` accept an optional
 success callback. Uncertain opening or closure is quarantined without retries.
+Warnings suppress callback exit unless the result proves successful project entry (`entered: true`
+or `focused: true`) and every warning has the catch-up boundary's fixed
+`Project opened, but catch-up is unavailable: ` prefix. These informational warnings still toast
+and complete entry. Retention, mixed, unknown and malformed warnings preserve the originating pane;
+warning text alone cannot authorize callback exit without the successful-entry result.
 
-`maybeShowCatchUp` in `src/memory/native-visits.ts` owns the project-visit trigger. Visible front-door
-launches/reconnects, `coordinator/open-project.ts` after confirmed focus, and the project-switch
-handler invoke it. Background `--no-attach` launches defer the visit to the caller's focus hook.
-The function reads the root signature and the Tandem-owned visit record, applies
-`shouldAutoShowCatchUp`, then opens `view:{kind:"catchup"}` through the hosting port. An explicit
-catch-up view opens the screen without that rule. Panel opening and polling never record visits.
-Opening before the first publication still saves the visit timestamp. The first successful root
-publication fills its missing signature without advancing that timestamp; subsequent publications
-leave the saved baseline intact.
-`native board catchup-dismiss` returns and records dismissal; `catchup-open-needs` returns, opens
-the first saved needs-you destination (brief, task or inbox), then records dismissal.
+`tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger
+with the single non-fatal boundary shared by every entry path. Visible
+front-door launches/reconnects, `coordinator/open-project.ts`, dropdown/shortcut switches, and
+window focus entries (including inbox helper activation) invoke it. Background launches defer
+to visible entry. Opening failures remain non-fatal to successful project navigation and do not
+acknowledge the changed signature. Launch/reconnect return a distinct catch-up warning printed
+by the front door, open-project returns it to the conversation, and native project/inbox entries
+return successful CLI results with warnings shown as Tern toasts, including lifecycle callbacks.
+Launch, ownership and focus failures remain outside this boundary and retain their normal errors.
+An explicit catch-up opens without the automatic rule.
+
+`native project entry|away|visible` are internal lifecycle calls carrying the exact originating
+pane/cwd/window. The CLI proves the running coordinator and originating pane in its recorded Tern
+session before writing presentation state. Luau serializes focus departure/entry callbacks and
+sends a last-visible heartbeat every minute for the currently selected pane. TypeScript skips
+heartbeats unless the saved last-visible time advances by at least one minute, including across
+windows. Focus/away transitions can update sooner; duplicate values skip the atomic write, and
+timestamps never move backwards. Only the private visit record changes; lifecycle heartbeats do
+not rewrite task authority or root/detail view files. These calls
+never start a task or change policy. Non-project focus callbacks quietly refuse.
+
+The private locked visit record retains `lastOpenedAt` for entry history and uses `lastVisibleAt`
+for the one-hour gate. Visible heartbeats and departure capture the current signature; continuous
+work for hours followed by an immediate switch back stays quiet. A closed/disconnected window
+stops heartbeats; its last persisted sample is the baseline. A pulse within a minute of a
+transition is skipped, so the next persisted sample can lag by almost two minutes.
+Visibility means the selected project in a Tern window, rather than time since launch or keyboard
+inactivity. Away time starts when you select a different Tern project or close its last visible
+Tern window. Tern 0.5 exposes pane focus, not macOS application activation; a selected window
+continues to count as visible while another application is active. Another window's heartbeats
+keep that project visible. Old records with no last-visible baseline stay quiet on first entry.
+Panel file polling never changes visits. The first publication fills a missing signature only.
+The changed-signature rule still excludes repaints/timer changes and unchanged work.
+`native board catchup-dismiss` and `catchup-open-needs` acknowledge the current signature only
+after confirmed navigation.
 
 `native board pr-link CARD_KEY` and `merged-link URL` resolve only PR identities present in the
 originating project's current root model. `openView({view:{kind:"browser",url}})` requires HTTPS
@@ -570,3 +603,26 @@ These cursors are presentation delivery state, not task authority.
 Tern groups notifications from the same helper pane into one inbox entry, increasing its count
 and showing the latest title/body. Each of the three kinds therefore appears as that entry's
 latest alert, with the helper tab's waiting badge. Herdr retains its existing arrival notifications.
+
+### Panel bell and user read semantics
+
+The bell is the originating project's confirmed Tandem alert deliveries since its user read
+cursor, persisted beside the transition cursor in `<home>/native-alerts/<repositoryKey>.json`.
+Only successful `notify` calls increment `delivered`: needs-you (including brief revisions and
+PR-watch rows), done (new draft PR), and stuck. Initial historical baselines, coordinator delivery
+backlogs, coordinator acknowledgements, failed or uncertain notification calls, and unrelated
+Tern/OMP notifications do not count. Claimed unknown deliveries are never retried.
+
+Opening the inbox through this project's panel bell, or successfully activating its owned inbox
+helper and focusing its coordinator, marks the deliveries captured before navigation as read.
+The lock merges that cursor with later deliveries, so arrivals during navigation remain unread.
+This also clears the bell, without dismissing tasks or changing coordinator acknowledgements.
+Tern's own grouped inbox count can differ: it retains grouped history and unrelated alerts and
+has no plugin read/clear event. Clearing an entry solely through Tern's built-in inbox control
+therefore does not clear Tandem's bell; use the panel bell or activate the entry. Cursor state
+survives coordinator restarts; corrupt cursors refuse publication rather than inventing a zero.
+
+Dropdown rows send `native project repo:ABSOLUTE_REPO_PATH`. The CLI resolves the unique
+published identity, checks freshness/offline status, re-proves its coordinator, and focuses it.
+Every online row is clickable, including rows after nine and after order changes. Numeric
+`project 1..9` is reserved for the matching keyboard shortcuts; previous/next retain cycle behavior.

@@ -274,6 +274,7 @@ export function taskScreenPublication(project: string, review = false): NativeVi
     changeSignature: "fixture",
     panel: {
       header: {
+        fiveHourLabel: "5h unavailable",
         title: "tandem",
         project,
         projects: [projectRow],

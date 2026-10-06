@@ -14,6 +14,7 @@ const visit = z.object({
   version: z.literal(1),
   project: z.string(),
   lastOpenedAt: z.string().datetime(),
+  lastVisibleAt: z.string().datetime().optional(),
   previousSignature: z.string().min(1).optional(),
   dismissedSignature: z.string().optional(),
 });
@@ -72,6 +73,19 @@ export async function maybeShowCatchUp(
   );
 }
 
+/** Optional catch-up never changes a successful entry into a failure or acknowledges a failed open. */
+export async function tryShowCatchUp(
+  terminal: TerminalBackend,
+  input: Parameters<typeof maybeShowCatchUp>[1],
+): Promise<Readonly<{ shown: boolean; warning?: string }>> {
+  try {
+    return { shown: await maybeShowCatchUp(terminal, input) };
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { shown: false, warning: `Project opened, but catch-up is unavailable: ${detail}` };
+  }
+}
+
 async function readVisit(path: string, project: string): Promise<NativeVisit | undefined> {
   try {
     const stat = await lstat(path);
@@ -122,7 +136,9 @@ export async function visitNativeProject(
         ...(previous === undefined
           ? {}
           : {
-              lastOpenedAt: previous.lastOpenedAt,
+              ...(previous.lastVisibleAt === undefined
+                ? {}
+                : { lastVisibleAt: previous.lastVisibleAt }),
               ...(previous.previousSignature === undefined
                 ? {}
                 : { previousSignature: previous.previousSignature }),
@@ -137,6 +153,7 @@ export async function visitNativeProject(
       version: 1,
       project: input.project,
       lastOpenedAt: input.now,
+      lastVisibleAt: input.now,
       ...(signature === undefined ? {} : { previousSignature: signature }),
     };
   });
@@ -162,7 +179,34 @@ export async function dismissNativeCatchUp(input: NativeVisitInput): Promise<voi
     version: 1,
     project: input.project,
     lastOpenedAt: input.now,
+    lastVisibleAt: input.now,
     previousSignature: input.signature,
     dismissedSignature: input.signature,
   }));
+}
+
+/** Heartbeats advance at most once a minute; transitions capture visibility without opening a view. */
+export async function recordNativeVisibility(
+  input: Omit<NativeVisitInput, "signature"> &
+    Readonly<{ signature?: string; heartbeat?: boolean }>,
+): Promise<void> {
+  await updateVisit(input, async (previous) => {
+    const elapsed =
+      previous?.lastVisibleAt === undefined
+        ? undefined
+        : Date.parse(input.now) - Date.parse(previous.lastVisibleAt);
+    if (input.heartbeat && elapsed !== undefined && elapsed < 60_000) return undefined;
+    const signature = input.signature ?? previous?.previousSignature;
+    const lastVisibleAt =
+      elapsed !== undefined && elapsed <= 0 ? (previous?.lastVisibleAt ?? input.now) : input.now;
+    if (previous?.lastVisibleAt === lastVisibleAt && previous.previousSignature === signature)
+      return undefined;
+    return {
+      version: 1,
+      project: input.project,
+      lastOpenedAt: previous?.lastOpenedAt ?? input.now,
+      lastVisibleAt,
+      ...(signature === undefined ? {} : { previousSignature: signature }),
+    };
+  });
 }

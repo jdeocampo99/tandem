@@ -25,7 +25,7 @@ import {
 } from "../harness/contract.ts";
 import { launchIo } from "../harness/launch-io.ts";
 import { harnessFor } from "../harness/resolve.ts";
-import { maybeShowCatchUp } from "../memory/native-visits.ts";
+import { tryShowCatchUp } from "../memory/native-visits.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
@@ -126,6 +126,8 @@ export type CoordinatorLaunchResult = Readonly<{
   readonly otherSessionReconciliations?: readonly CoordinatorSessionReconciliation[];
   /** Why the Tandem panel could not open beside the coordinator, when it could not. */
   readonly panelFailure?: string;
+  /** An optional catch-up warning after a successful visible launch or reconnect. */
+  readonly catchUpWarning?: string;
 }>;
 
 export type CoordinatorLaunchDependencies = Readonly<{
@@ -659,18 +661,18 @@ export async function launchCoordinatorUnlocked(
   if (running !== undefined) {
     await assertRunningCoordinatorSource(request, dependencies, running, context);
     if (request.restart !== true) {
-      let panelFailure = await openPanelBeside(dependencies.terminal, paths.home, running);
-      if (!headless)
-        await maybeShowCatchUp(dependencies.terminal, {
-          home: paths.home,
-          record: running,
-          now: (dependencies.clock ?? defaultClock)(),
-        }).catch((error: unknown) => {
-          panelFailure ??= error instanceof Error ? error.message : String(error);
-        });
+      const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, running);
+      const catchUp = headless
+        ? undefined
+        : await tryShowCatchUp(dependencies.terminal, {
+            home: paths.home,
+            record: running,
+            now: (dependencies.clock ?? defaultClock)(),
+          });
       return {
         ...coordinatorResultFromRecord(running),
         ...(panelFailure === undefined ? {} : { panelFailure }),
+        ...(catchUp?.warning === undefined ? {} : { catchUpWarning: catchUp.warning }),
       };
     }
   }
@@ -738,6 +740,7 @@ export async function launchCoordinatorUnlocked(
       : { workspaceRetirement: startup.workspaceRetirement }),
     ...(previousResources === undefined ? {} : { previousResources }),
     ...(startup.panelFailure === undefined ? {} : { panelFailure: startup.panelFailure }),
+    ...(startup.catchUpWarning === undefined ? {} : { catchUpWarning: startup.catchUpWarning }),
   };
 }
 
@@ -805,6 +808,7 @@ type CoordinatorStartupResult = Readonly<{
   readonly processExitCode?: number;
   readonly workspaceRetirement?: CoordinatorWorkspaceRetirement;
   readonly panelFailure?: string;
+  readonly catchUpWarning?: string;
 }>;
 
 function coordinatorLaunchIo(dependencies: CoordinatorLaunchDependencies): LaunchIo {
@@ -1087,15 +1091,14 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     request.sessionId,
     paths.repo,
   );
-  let panelFailure = await openPanelBeside(dependencies.terminal, paths.home, owned);
-  if (!headless)
-    await maybeShowCatchUp(dependencies.terminal, {
-      home: paths.home,
-      record: owned,
-      now: (dependencies.clock ?? defaultClock)(),
-    }).catch((error: unknown) => {
-      panelFailure ??= error instanceof Error ? error.message : String(error);
-    });
+  const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, owned);
+  const catchUp = headless
+    ? undefined
+    : await tryShowCatchUp(dependencies.terminal, {
+        home: paths.home,
+        record: owned,
+        now: (dependencies.clock ?? defaultClock)(),
+      });
   return {
     command: argv,
     direct: false,
@@ -1104,6 +1107,7 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     paneId: endpoint.paneId,
     ...(workspaceRetirement === undefined ? {} : { workspaceRetirement }),
     ...(panelFailure === undefined ? {} : { panelFailure }),
+    ...(catchUp?.warning === undefined ? {} : { catchUpWarning: catchUp.warning }),
   };
 }
 
