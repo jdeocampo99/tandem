@@ -47,54 +47,70 @@ export async function exactPane(
   }
   return found;
 }
+async function readForegroundGroup(commands: TernCommands, target: EndpointTarget, group: number) {
+  const request = {
+    argv: [
+      process.execPath,
+      fileURLToPath(new URL("./process-reader.ts", import.meta.url)),
+      String(group),
+    ],
+    cwd: target.cwd,
+  };
+  const result = await commands.run(request);
+  if (result.code !== 0)
+    throw new AdapterCommandError("Tern foreground process proof", request, result);
+  return decode(
+    result.stdout,
+    z.array(
+      z.object({ pid: z.number().int().positive(), name: z.string(), argv: z.array(z.string()) }),
+    ),
+    "Tern foreground process proof",
+  );
+}
+
 export async function inspect(
   commands: TernCommands,
   target: EndpointTarget,
 ): Promise<EndpointInspection> {
   const found = await exactPane(commands, target);
-  const proc = await commands.read(target.cwd, ["process", target.endpoint.paneId], Processes);
-  if (proc.pane !== target.endpoint.paneId)
-    throw new EndpointOwnershipError(target.endpoint, "Tern process response names another pane");
-  const nativeProcesses =
-    proc.group === null
-      ? []
-      : await (async () => {
-          const request = {
-            argv: [
-              process.execPath,
-              fileURLToPath(new URL("./process-reader.ts", import.meta.url)),
-              String(proc.group),
-            ],
-            cwd: target.cwd,
-          };
-          const result = await commands.run(request);
-          if (result.code !== 0)
-            throw new AdapterCommandError("Tern foreground process proof", request, result);
-          return decode(
-            result.stdout,
-            z.array(
-              z.object({
-                pid: z.number().int().positive(),
-                name: z.string(),
-                argv: z.array(z.string()),
-              }),
-            ),
-            "Tern foreground process proof",
-          );
-        })();
-  if (
-    proc.foreground !== null &&
-    !nativeProcesses.some(
-      (entry) =>
-        entry.pid === proc.foreground?.pid &&
-        JSON.stringify(entry.argv) === JSON.stringify(proc.foreground.argv),
-    )
-  )
-    throw new AdapterProtocolError(
-      "Tern foreground process proof",
-      "Tern leader and native group evidence disagree",
-      "",
-    );
+  let proc = await commands.read(target.cwd, ["process", target.endpoint.paneId], Processes);
+  let nativeProcesses: readonly { pid: number; name: string; argv: string[] }[] = [];
+  for (let attempt = 0; ; attempt += 1) {
+    if (proc.pane !== target.endpoint.paneId)
+      throw new EndpointOwnershipError(target.endpoint, "Tern process response names another pane");
+    try {
+      nativeProcesses =
+        proc.group === null ? [] : await readForegroundGroup(commands, target, proc.group);
+      if (
+        proc.foreground !== null &&
+        !nativeProcesses.some(
+          (entry) =>
+            entry.pid === proc.foreground?.pid &&
+            JSON.stringify(entry.argv) === JSON.stringify(proc.foreground.argv),
+        )
+      )
+        throw new AdapterProtocolError(
+          "Tern foreground process proof",
+          "Tern leader and native group evidence disagree",
+          "",
+        );
+      break;
+    } catch (error) {
+      if (!(error instanceof AdapterProtocolError || error instanceof AdapterCommandError))
+        throw error;
+      // A shell can exec or switch foreground groups between the two independent reads.
+      // Retry reads only when fresh exact-pane evidence proves the process snapshot changed.
+      // A stable disagreement still fails closed, as does continuous churn.
+      await exactPane(commands, target);
+      const current = await commands.read(
+        target.cwd,
+        ["process", target.endpoint.paneId],
+        Processes,
+      );
+      if (attempt >= 2 || JSON.stringify(current) === JSON.stringify(proc)) throw error;
+      proc = current;
+    }
+  }
   const foregroundProcesses = nativeProcesses.map((entry) => ({
     ...entry,
     argv0: entry.argv[0],

@@ -431,7 +431,11 @@ Effects:
 3. Persist stopped jobs and released reservations. Active tasks become cancelled; selected
    presentations become failed. Completed history and tasks awaiting approval are kept.
 4. Close exact owned coordinator panes, rechecking native ownership before each close and verifying
-   the pane disappeared. Then resume normal launch with fresh chats.
+   the pane disappeared. For Tern, preflight every coordinator-owned native view before closing
+   its coordinator, then retire those views by exact id and full argument/placement proof.
+   Busy or changed views refuse; unknown close outcomes quarantine the lease and preserve its
+   recorded owner. Brief, Board and Usage views retire along with the panel. Then resume normal
+   launch with fresh chats.
 
 Failure: if a coordinator changes state or a close fails after others in the batch already closed,
 reset stops closing, errors naming what closed and what stopped it, and does not force-close, retry,

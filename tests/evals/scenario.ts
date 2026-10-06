@@ -187,6 +187,7 @@ type PaneState = {
   ternSessionId?: string;
   workspaceId: string;
   tabId: string;
+  blockArgs?: readonly string[];
   foregroundCwd: string;
   shellPid: number;
   processes: readonly Readonly<{ pid: number; name: string; argv: readonly string[] }>[];
@@ -228,6 +229,9 @@ export type ScenarioWorld = Readonly<{
       readonly cwd: string;
       /** A daemon-hosted Tern block, with no PTY child or foreground process. */
       readonly blockProgram?: string;
+      readonly blockArgs?: readonly string[];
+      readonly anchor?: Endpoint;
+      readonly terminalSessionId?: string;
     }>,
   ) => Endpoint;
   readonly removePane: (paneId: string) => void;
@@ -476,13 +480,17 @@ export async function createScenarioWorld(
     nextPaneNumber += 1;
     nextPid += 1;
     const workspaceId =
-      options.terminal === "tern" ? String(1000 + nextPaneNumber) : `workspace-${nextPaneNumber}`;
+      input.anchor?.workspaceId ??
+      (options.terminal === "tern" ? String(1000 + nextPaneNumber) : `workspace-${nextPaneNumber}`);
     const tabId = options.terminal === "tern" ? workspaceId : `tab-${nextPaneNumber}`;
     if (options.terminal === "tern") ternSessions.set("100", "tandem-scenario");
     panes.set(input.paneId, {
       present: true,
       ...(input.blockProgram === undefined ? {} : { blockProgram: input.blockProgram }),
-      ...(options.terminal === "tern" ? { ternSessionId: "100" } : {}),
+      ...(input.blockArgs === undefined ? {} : { blockArgs: input.blockArgs }),
+      ...(options.terminal === "tern"
+        ? { ternSessionId: input.terminalSessionId ?? input.anchor?.terminalSessionId ?? "100" }
+        : {}),
       workspaceId,
       tabId,
       foregroundCwd: input.cwd,
@@ -728,6 +736,7 @@ export async function createScenarioWorld(
                 cwd: p.foregroundCwd,
                 live: true,
                 ...(p.blockProgram === undefined ? {} : { program: p.blockProgram }),
+                ...(p.blockArgs === undefined ? {} : { args: p.blockArgs }),
               })),
           })),
         })),
