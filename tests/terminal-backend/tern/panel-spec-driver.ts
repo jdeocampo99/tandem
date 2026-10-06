@@ -30,8 +30,14 @@ const run: CommandRunner = async (request) => {
 };
 const records = await listCoordinatorRecords(home, "fixture");
 const base = ternBackend(run, { home });
+const catchUpFailure = await Bun.file(join(home, "fixture-catchup-failure")).exists();
 const terminal = {
   ...base,
+  openView: async (input: Parameters<typeof base.openView>[0]) => {
+    if (catchUpFailure && input.view.kind === "catchup")
+      throw new Error("Fixture catch-up unavailable");
+    return base.openView(input);
+  },
   inspect: async (target: Parameters<typeof base.inspect>[0]) => {
     const result = await base.inspect(target);
     const record = records.find((record) => record.endpoint.paneId === target.endpoint.paneId);

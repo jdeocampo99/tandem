@@ -11,6 +11,7 @@ import { repositoryKey } from "../../../src/config/repositories.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { createTaskStore } from "../../../src/tasks/store.ts";
 import {
   ternBackend,
@@ -40,7 +41,11 @@ const tree = z.object({ tree: z.array(node) });
 (enabled ? test : test.skip)(
   "isolated panel selects project ten by identity; unread bell clears and inbox returns to real conversation",
   async () => {
-    const root = await realpath(await mkdtemp("/tmp/tdm-panel-spec-"));
+    const root = await realpath(
+      process.env.TANDEM_TERN_PROOF_ROOT ?? (await mkdtemp("/tmp/tdm-panel-spec-")),
+    );
+    if (!root.startsWith("/private/tmp/tdm-panel-spec-"))
+      throw new Error("Isolated proof root required");
     const config = join(root, "config"),
       home = join(root, "home"),
       plugin = join(root, "plugin"),
@@ -380,8 +385,43 @@ const tree = z.object({ tree: z.array(node) });
           panelPaneId: firstPanel,
         }),
       ).toBe(true);
+      // The production catch-up boundary preserves entry and surfaces a warning in the native panel.
+      await visitNativeProject(
+        {
+          home,
+          project: tenth.repo,
+          signature: "before",
+          now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        },
+        async () => {},
+      );
+      const visitPath = join(home, "native-visits", `${repositoryKey(tenth.repo)}.json`);
+      const visit = await readFile(visitPath, "utf8");
+      const destinationPath = nativeViewsPath(home, tenth.repo);
+      const latest = JSON.parse(await readFile(destinationPath, "utf8"));
+      await writeFile(
+        destinationPath,
+        nativeViewText("panel", { ...latest.model, changeSignature: "after" }),
+      );
+      await writeFile(join(home, "fixture-catchup-failure"), "fixture", {
+        flag: "wx",
+        mode: 0o600,
+      });
+      await click(find(tree.parse(await ctl("tree")).tree, "tdp-switch")[0]);
+      await until(
+        async () => find(tree.parse(await ctl("tree")).tree, "tdp-project-row").length === 10,
+      );
+      await click(find(tree.parse(await ctl("tree")).tree, "tdp-project-row")[9]);
+      await until(async () =>
+        JSON.stringify(await ctl("tree")).includes("Fixture catch-up unavailable"),
+      );
+      expect(await readFile(visitPath, "utf8")).toBe(visit);
+      expect(
+        z.object({ focused: z.object({ id: z.number() }) }).parse(await ctl("state")).focused.id,
+      ).toBe(Number(tenth.endpoint.paneId));
+      await ctl("shot", "07-catchup-warning");
       console.log(
-        `Native panel spec proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-ten-projects.png ${root}/shots/live/03-tenth-selected.png ${root}/shots/live/04-three-unread.png ${root}/shots/live/05-inbox.png ${root}/shots/live/06-inbox-project-return.png`,
+        `Native panel spec proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-ten-projects.png ${root}/shots/live/03-tenth-selected.png ${root}/shots/live/04-three-unread.png ${root}/shots/live/05-inbox.png ${root}/shots/live/06-inbox-project-return.png ${root}/shots/live/07-catchup-warning.png`,
       );
     } finally {
       if (window) {
