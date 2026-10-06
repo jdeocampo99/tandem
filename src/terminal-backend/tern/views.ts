@@ -406,14 +406,26 @@ export function ternViewHost(
       return { closed: true, warnings: [] };
     });
   };
+  const toggleBoard = async (input: ViewHostingInput, project: string): Promise<boolean> => {
+    const cmd = await scoped(input);
+    const source = blocks(await cmd.ls(input.cwd)).find(
+      (entry) => entry.block.id === (input.origin?.paneId ?? input.coordinator.paneId),
+    );
+    if (source?.block.program !== "tandem.board") return false;
+    await open(input, project, "panel", "return", nativeViewsPath(input.home, project));
+    return true;
+  };
   return {
     open,
     scoped,
     close,
+    toggleBoard,
     closeView: async (input: Parameters<TerminalBackend["closeView"]>[0]) =>
       close(input, await projectForView(input.home, input.coordinator)),
     openView: async (input: ViewHostingInput) => {
       const project = await projectForView(input.home, input.coordinator);
+      if (input.view.kind === "board" && (await toggleBoard(input, project)))
+        return { opened: true, warnings: [] };
       if (input.view.kind === "orchestrator" || input.view.kind === "inbox") {
         await open(
           input,
