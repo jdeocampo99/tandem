@@ -87,14 +87,12 @@ for (const mode of [
         expect(ticket.closeOrigin).toBe("4");
         expect(ticket.placement).toBe("return");
 
+        removed = mode !== "retained";
         await writeFile(
           ticket.receipt,
           JSON.stringify({ paneId: "3", tabId: "2", sessionId: "1" }),
         );
         return { code: 1, stderr: "cannot open in a file block", stdout: "" };
-      } else if (verb === "close") {
-        removed = mode !== "retained";
-        value = { block: "4" };
       } else throw new Error(`unexpected ${verb}`);
       return { code: 0, stderr: "", stdout: JSON.stringify(value) };
     };

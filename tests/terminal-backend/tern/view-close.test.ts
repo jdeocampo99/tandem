@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { nativeBriefFile } from "../../../src/board/native-views.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
@@ -8,7 +9,162 @@ import {
 } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
-for (const kind of ["brief", "board"] as const) {
+for (const mode of [
+  "closed",
+  "missing",
+  "coordinator",
+  "wrong-request",
+  "foreign-program",
+  "busy",
+  "changed",
+  "removed-after-second-read",
+  "program-after-second-read",
+  "args-after-second-read",
+  "tab-after-second-read",
+  "unknown",
+] as const) {
+  test(`retiring a native brief: ${mode} closes only the exact idle originating split`, async () => {
+    const home = "/tmp/native-brief-close-fixture";
+    const coordinator: Endpoint = {
+      terminal: "tern",
+      sessionId: "test",
+      terminalSessionId: "1",
+      workspaceId: "2",
+      tabId: "2",
+      paneId: "3",
+      role: "coordinator",
+      generation: 0,
+    };
+    const args = [
+      nativeDetailPath(home, home, nativeBriefFile("req-1")),
+      "3",
+      home,
+      "",
+      nativeViewsPath(home, home),
+    ];
+    let removed = mode === "missing";
+    let processReads = 0;
+    let closeCalls = 0;
+    const run: CommandRunner = async (request) => {
+      const verb = request.argv[1];
+      let value: unknown;
+      if (verb === "inspect") value = { clients: [{ kind: "window" }] };
+      else if (verb === "ls")
+        value = {
+          sessions: [
+            {
+              id: "1",
+              name: "fixture",
+              tabs: [
+                {
+                  id: "2",
+                  name: null,
+                  blocks: [
+                    { id: "3", title: "Tandem brief", cwd: home, live: true },
+                    ...(removed || (mode === "tab-after-second-read" && processReads === 2)
+                      ? []
+                      : [
+                          {
+                            id: "4",
+                            title: "Tandem brief",
+                            cwd: home,
+                            live: false,
+                            program:
+                              mode === "foreign-program" ||
+                              (mode === "program-after-second-read" && processReads === 2)
+                                ? "unrelated.brief"
+                                : "tandem.brief",
+                            args:
+                              mode === "wrong-request" ||
+                              (mode === "changed" && processReads > 0) ||
+                              (mode === "args-after-second-read" && processReads === 2)
+                                ? ["foreign.json", ...args.slice(1)]
+                                : args,
+                          },
+                        ]),
+                  ],
+                },
+                ...(mode === "tab-after-second-read" && processReads === 2
+                  ? [
+                      {
+                        id: "5",
+                        name: null,
+                        blocks: [
+                          {
+                            id: "4",
+                            title: "Tandem brief",
+                            cwd: home,
+                            live: false,
+                            program: "tandem.brief",
+                            args,
+                          },
+                        ],
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          ],
+          detached: [],
+        };
+      else if (verb === "process") {
+        processReads++;
+        if (processReads === 2 && mode === "removed-after-second-read") removed = true;
+        value = {
+          pane: "4",
+          child: mode === "busy" ? { pid: 10, name: "sh", argv: ["sh"], cwd: home } : null,
+          foreground: null,
+          group: null,
+        };
+      } else if (verb === "close") {
+        closeCalls++;
+        expect(request.argv[2]).toBe("4");
+        removed = true;
+        if (mode === "unknown") return { code: 1, stderr: "lost acknowledgment", stdout: "" };
+        value = { block: "4" };
+      } else throw new Error(`unexpected ${verb}`);
+      return { code: 0, stderr: "", stdout: JSON.stringify(value) };
+    };
+    let quarantined = false;
+    const host = ternViewHost(ternCommands(run, {}), {
+      clock: Date.now,
+      wait: Bun.sleep,
+      guard: async (_key, operation) => {
+        if (quarantined) throw new TernOutcomeUnknownError("brief close", "quarantined");
+        try {
+          return await operation();
+        } catch (error) {
+          if (error instanceof TernOutcomeUnknownError) quarantined = true;
+          throw error;
+        }
+      },
+    });
+    const close = () =>
+      host.close(
+        {
+          coordinator,
+          cwd: home,
+          home,
+          view: { kind: "brief", requestId: "req-1" },
+          origin: { paneId: mode === "coordinator" ? "3" : "4" },
+        },
+        home,
+      );
+    if (mode === "closed" || mode === "missing") {
+      expect(await close()).toEqual({ closed: true, warnings: [] });
+      expect(closeCalls).toBe(mode === "missing" ? 0 : 1);
+    } else {
+      await expect(close()).rejects.toThrow();
+      expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
+      if (mode === "unknown") {
+        await expect(close()).rejects.toThrow("quarantine");
+        expect(closeCalls).toBe(1);
+      }
+    }
+  });
+}
+
+for (const kind of ["board"] as const) {
   for (const mode of [
     "closed",
     "missing",
@@ -20,7 +176,7 @@ for (const kind of ["brief", "board"] as const) {
     "unknown",
   ] as const) {
     test(`retiring a native ${kind}: ${mode} closes only the exact idle originating view`, async () => {
-      const home = "/tmp/native-brief-close-fixture";
+      const home = await mkdtemp("/tmp/native-board-return-");
       const coordinator: Endpoint = {
         terminal: "tern",
         sessionId: "test",
@@ -31,20 +187,12 @@ for (const kind of ["brief", "board"] as const) {
         role: "coordinator",
         generation: 0,
       };
-      const args = [
-        kind === "brief"
-          ? nativeDetailPath(home, home, nativeBriefFile("req-1"))
-          : nativeViewsPath(home, home),
-        "3",
-        home,
-        "",
-        nativeViewsPath(home, home),
-      ];
+      const args = [nativeViewsPath(home, home), "3", home, "", nativeViewsPath(home, home)];
       let removed = mode === "missing";
       let processReads = 0;
       let closeCalls = 0;
       const run: CommandRunner = async (request) => {
-        if (kind === "board") expect(request.argv).toContain("active-window");
+        expect(request.argv).toContain("active-window");
         const verb = request.argv[1];
         let value: unknown;
         if (verb === "inspect") value = { clients: [{ kind: "window" }] };
@@ -91,19 +239,28 @@ for (const kind of ["brief", "board"] as const) {
             foreground: null,
             group: null,
           };
-        } else if (verb === "close") {
-          closeCalls++;
-          expect(request.argv[2]).toBe("4");
-          removed = true;
+        } else if (verb === "focus") value = { block: "3" };
+        else if (verb === "open") {
+          const ticket = JSON.parse(await readFile(request.argv[2] ?? "", "utf8"));
+          expect(ticket.placement).toBe("return");
+          if (ticket.closeOrigin !== undefined) {
+            expect(ticket.closeOrigin).toBe("4");
+            closeCalls++;
+            removed = true;
+          }
           if (mode === "unknown") return { code: 1, stderr: "lost acknowledgment", stdout: "" };
-          value = { block: "4" };
+          await writeFile(
+            ticket.receipt,
+            JSON.stringify({ paneId: "3", tabId: "2", sessionId: "1" }),
+          );
+          return { code: 1, stderr: "cannot open in a file block", stdout: "" };
         } else throw new Error(`unexpected ${verb}`);
         return { code: 0, stderr: "", stdout: JSON.stringify(value) };
       };
       let quarantined = false;
       const host = ternViewHost(ternCommands(run, {}), {
         clock: Date.now,
-        wait: Bun.sleep,
+        wait: async () => {},
         guard: async (_key, operation) => {
           if (quarantined) throw new TernOutcomeUnknownError("brief close", "quarantined");
           try {
@@ -115,29 +272,34 @@ for (const kind of ["brief", "board"] as const) {
         },
       });
       const close = () =>
-        host.close(
+        host.open(
           {
             coordinator,
             cwd: home,
             home,
-            view: kind === "brief" ? { kind: "brief", requestId: "req-1" } : { kind: "board" },
-            origin: {
-              paneId: mode === "coordinator" ? "3" : "4",
-              ...(kind === "board" ? { windowId: "active-window" } : {}),
-            },
+            view: { kind: "orchestrator" },
+            origin: { paneId: mode === "coordinator" ? "3" : "4", windowId: "active-window" },
           },
           home,
+          "panel",
+          "return",
+          nativeViewsPath(home, home),
         );
-      if (mode === "closed" || mode === "missing") {
-        expect(await close()).toEqual({ closed: true, warnings: [] });
-        expect(closeCalls).toBe(mode === "missing" ? 0 : 1);
-      } else {
-        await expect(close()).rejects.toThrow();
-        expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
-        if (mode === "unknown") {
-          await expect(close()).rejects.toThrow("quarantine");
-          expect(closeCalls).toBe(1);
+      try {
+        if (mode === "closed" || mode === "coordinator") {
+          expect(await close()).toEqual({ paneId: "3", project: home });
+          expect(closeCalls).toBe(mode === "coordinator" ? 0 : 1);
+        } else {
+          await expect(close()).rejects.toThrow();
+          expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
+          if (mode === "unknown") {
+            expect(quarantined).toBe(true);
+            await expect(close()).rejects.toThrow();
+            expect(closeCalls).toBe(1);
+          }
         }
+      } finally {
+        await rm(home, { recursive: true, force: true });
       }
     });
   }

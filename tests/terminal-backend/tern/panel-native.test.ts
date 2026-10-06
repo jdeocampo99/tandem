@@ -9,7 +9,11 @@ import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
-import { blocks, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import {
+  blocks,
+  TernOutcomeUnknownError,
+  ternCommands,
+} from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
@@ -149,10 +153,39 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         command: [
           "/bin/sh",
           "-c",
-          'clear; printf "%s\\n" "You: Add a Tern terminal backend so Tandem can run its panes and board inside Tern." "" "Orchestrator: I drafted a brief covering the adapter, pane launch, and the board." "Nothing starts until you approve it." "" "You: Looks right, I will read the brief."; read -r answer',
+          'clear; printf "%s\\n" "You: Add a Tern terminal backend so Tandem can run its panes and board inside Tern." "" "Orchestrator: I drafted a brief covering the adapter, pane launch, and the board." "Nothing starts until you approve it." "" "You: Looks right, I will read the brief."; while IFS= read -r answer; do :; done',
         ],
       });
-      const pane = await terminal.openPanel({ coordinator, cwd: root, project: root });
+      let mutationCount = 0;
+      let failListing = false;
+      const uncertain = ternBackend(
+        async (request) => {
+          if (failListing && request.argv[1] === "ls") {
+            failListing = false;
+            return { code: 1, stdout: "", stderr: "injected post-open verification failure" };
+          }
+          const result = await run(request);
+          if (request.argv[1] === "open") {
+            mutationCount++;
+            failListing = true;
+          }
+          return result;
+        },
+        { home, environment: env },
+      );
+      const panelInput = { coordinator, cwd: root, project: root };
+      await expect(uncertain.openPanel(panelInput)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+      await expect(uncertain.openPanel(panelInput)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+      expect(mutationCount).toBe(1);
+      const pane = await terminal.openPanel(panelInput);
+      const fresh = ternBackend(run, { home, environment: env });
+      expect(await fresh.openPanel(panelInput)).toBe(pane);
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
+          (entry) =>
+            entry.block.program === "tandem.panel" && entry.block.args?.[1] === coordinator.paneId,
+        ),
+      ).toHaveLength(1);
       expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(true);
       await until(async () => JSON.stringify(await ctl("tree")).includes("Tern backend adapter"));
       await ctl("shot", "01-panel");
