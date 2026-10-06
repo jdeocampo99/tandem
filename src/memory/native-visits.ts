@@ -73,6 +73,19 @@ export async function maybeShowCatchUp(
   );
 }
 
+/** Optional catch-up never changes a successful entry into a failure or acknowledges a failed open. */
+export async function tryShowCatchUp(
+  terminal: TerminalBackend,
+  input: Parameters<typeof maybeShowCatchUp>[1],
+): Promise<Readonly<{ shown: boolean; warning?: string }>> {
+  try {
+    return { shown: await maybeShowCatchUp(terminal, input) };
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { shown: false, warning: `Project opened, but catch-up is unavailable: ${detail}` };
+  }
+}
+
 async function readVisit(path: string, project: string): Promise<NativeVisit | undefined> {
   try {
     const stat = await lstat(path);

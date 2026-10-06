@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nativeViewText } from "../../src/board/native-views.ts";
@@ -1617,6 +1617,121 @@ test("native navigation selects published projects and details, refusing stale o
     await f.close();
   }
 });
+
+for (const failure of [
+  "catchup-refused",
+  "catchup-thrown",
+  "focus-refused",
+  "focus-thrown",
+] as const) {
+  test(`native project switch preserves focus and the unacknowledged visit on optional catch-up failure: ${failure}`, async () => {
+    const source = await fixture("tern");
+    const destination = await fixture("tern");
+    try {
+      const saved = await readCoordinatorRecord(
+        recordPath(destination.home, "isolated", destination.repo),
+      );
+      if (saved === undefined) throw new Error("Missing destination fixture coordinator");
+      const record = { ...saved, endpoint: { ...saved.endpoint, paneId: "202" } };
+      await saveCoordinatorRecord(source.home, record);
+      await mkdir(join(source.home, "native-views"), { recursive: true });
+      const model = {
+        version: 1,
+        project: source.repo,
+        writtenAt: new Date().toISOString(),
+        changeSignature: "before",
+        tasks: {},
+        briefs: {},
+        pullRequests: {},
+        projects: [
+          {
+            terminal: "tern",
+            repoPath: source.repo,
+            current: true,
+            offline: false,
+            sessionId: "isolated",
+          },
+          {
+            terminal: "tern",
+            repoPath: destination.repo,
+            current: false,
+            offline: false,
+            sessionId: "isolated",
+          },
+        ],
+      };
+      await writeFile(nativeViewsPath(source.home, source.repo), nativeViewText("panel", model));
+      await writeFile(
+        nativeViewsPath(source.home, destination.repo),
+        nativeViewText("panel", {
+          ...model,
+          project: destination.repo,
+          changeSignature: "after",
+        }),
+      );
+      await visitNativeProject(
+        {
+          home: source.home,
+          project: destination.repo,
+          signature: "before",
+          now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        },
+        async () => {},
+      );
+      const visitPath = join(
+        source.home,
+        "native-visits",
+        `${repositoryKey(destination.repo)}.json`,
+      );
+      const before = await readFile(visitPath, "utf8");
+      const events: string[] = [];
+      const stdout: string[] = [];
+      const result = await runTerminal(
+        ["native", "project", "next", "--pane", "101", "--cwd", source.clean],
+        {
+          ...source.deps,
+          stdout: (text) => stdout.push(text),
+          terminal: {
+            ...source.deps.terminal,
+            inspect: (input) =>
+              input.endpoint.paneId === "202"
+                ? destination.deps.terminal.inspect(input)
+                : source.deps.terminal.inspect(input),
+            focusAgent: async (input) => {
+              events.push("focus");
+              expect(input.paneId).toBe("202");
+              if (failure === "focus-thrown") throw new Error("fixture focus failure");
+              return failure !== "focus-refused";
+            },
+            openView: async (input) => {
+              events.push("catchup");
+              expect(input.coordinator).toEqual(record.endpoint);
+              if (failure === "catchup-thrown") throw new Error("fixture catch-up failure");
+              return { opened: false, warnings: ["fixture catch-up failure"] };
+            },
+          },
+        },
+      );
+      const catchUpFailure = failure.startsWith("catchup");
+      expect(result.exitCode).toBe(catchUpFailure ? 0 : 1);
+      expect(events).toEqual(catchUpFailure ? ["focus", "catchup"] : ["focus"]);
+      expect(await readFile(visitPath, "utf8")).toBe(before);
+      if (catchUpFailure)
+        expect(JSON.parse(stdout.join(""))).toEqual({
+          focused: true,
+          project: destination.repo,
+          warnings: ["Project opened, but catch-up is unavailable: fixture catch-up failure"],
+        });
+      else
+        expect(result.error?.message).toContain(
+          failure === "focus-thrown" ? "fixture focus failure" : "could not focus",
+        );
+    } finally {
+      await source.close();
+      await destination.close();
+    }
+  });
+}
 
 for (const action of ["brief-approve", "brief-request-changes"] as const) {
   test(`${action} closes only its native brief origin after recording or delivering the action`, async () => {

@@ -507,11 +507,16 @@ Hosting passes `keep_open=false`. Screen success callbacks invoke captured `cx:e
 results toast stderr and never invoke callback exit. Shared `navigation.run/back` accept an optional
 success callback. Uncertain opening or closure is quarantined without retries.
 
-`maybeShowCatchUp` in `src/memory/native-visits.ts` owns the project-entry trigger. Visible
+`tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger
+with the single non-fatal boundary shared by every entry path. Visible
 front-door launches/reconnects, `coordinator/open-project.ts`, dropdown/shortcut switches, and
 window focus entries (including inbox helper activation) invoke it. Background launches defer
 to visible entry. Opening failures remain non-fatal to successful project navigation and do not
-acknowledge the changed signature. An explicit catch-up opens without the automatic rule.
+acknowledge the changed signature. Launch/reconnect return a distinct catch-up warning printed
+by the front door, open-project returns it to the conversation, and native project/inbox entries
+return successful CLI results with warnings shown as Tern toasts, including lifecycle callbacks.
+Launch, ownership and focus failures remain outside this boundary and retain their normal errors.
+An explicit catch-up opens without the automatic rule.
 
 `native project entry|away|visible` are internal lifecycle calls carrying the exact originating
 pane/cwd/window. The CLI proves the running coordinator and originating pane in its recorded Tern

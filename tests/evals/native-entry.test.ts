@@ -121,6 +121,7 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
         world.repoPath,
         world.sessionId,
       );
+      const output: string[] = [];
       const result = await runTerminal(
         [
           "native",
@@ -142,13 +143,18 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
           },
           terminal,
           run: world.run,
-          stdout: () => {},
+          stdout: (text) => output.push(text),
           stderr: () => {},
         },
       );
       expect(result.exitCode).toBe(failure === "focus" || failure === "helper-moved" ? 1 : 0);
       expect(focused).toEqual(failure === "helper-moved" ? [] : ["101"]);
       expect(opens).toBe(failure === "focus" || failure === "helper-moved" ? 0 : 1);
+      if (failure === "catchup")
+        expect(JSON.parse(output.join(""))).toEqual({
+          entered: true,
+          warnings: ["Project opened, but catch-up is unavailable: fixture catch-up failure"],
+        });
       expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(
         failure === "focus" || failure === "helper-moved" ? 1 : 0,
       );

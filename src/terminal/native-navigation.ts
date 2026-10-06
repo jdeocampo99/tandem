@@ -2,7 +2,7 @@ import { markNativeAlertsRead, nativeAlertCounts } from "../board/native-alerts.
 import { readNativeBundle } from "../board/native-file.ts";
 import { nativeDetailPath, nativeViewsPath } from "../board/snapshot.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
-import { maybeShowCatchUp, recordNativeVisibility } from "../memory/native-visits.ts";
+import { recordNativeVisibility, tryShowCatchUp } from "../memory/native-visits.ts";
 import type { NativeRendererContext } from "./native-renderers.ts";
 
 async function owner(
@@ -71,12 +71,12 @@ async function lifecycle(context: NativeRendererContext, action: "entry" | "away
     if (!focused) throw new Error("Tern could not focus the alert's exact project coordinator");
     await markNativeAlertsRead(context.environment.home, current.repoPath, cursor.delivered);
   }
-  await maybeShowCatchUp(context.capabilities.terminal, {
+  const { warning } = await tryShowCatchUp(context.capabilities.terminal, {
     home: context.environment.home,
     record: current,
     ...(context.origin.windowId === undefined ? {} : { windowId: context.origin.windowId }),
-  }).catch(() => false);
-  return { value: { entered: true } };
+  });
+  return { value: { entered: true, ...(warning === undefined ? {} : { warnings: [warning] }) } };
 }
 
 export async function nativeProject(context: NativeRendererContext) {
@@ -130,12 +130,18 @@ export async function nativeProject(context: NativeRendererContext) {
       now: new Date().toISOString(),
       ...(model.changeSignature === undefined ? {} : { signature: model.changeSignature }),
     }).catch(() => {});
-  await maybeShowCatchUp(context.capabilities.terminal, {
+  const { warning } = await tryShowCatchUp(context.capabilities.terminal, {
     home: context.environment.home,
     record: destination,
     ...(context.origin.windowId === undefined ? {} : { windowId: context.origin.windowId }),
-  }).catch(() => false);
-  return { value: { focused: true, project: project.repoPath } };
+  });
+  return {
+    value: {
+      focused: true,
+      project: project.repoPath,
+      ...(warning === undefined ? {} : { warnings: [warning] }),
+    },
+  };
 }
 
 /** Native files select a known view only; arbitrary paths cannot grant block or terminal ownership. */

@@ -2,6 +2,15 @@
 -- Common CLI calling convention for screen renderers. No durable state or retries.
 local M = {}
 export type Origin = {path:string, coordinator:string, cwd:string, window:string, indexPath:string, home:string}
+-- Successful native actions may carry presentation warnings without failing navigation.
+function M.warnings(stdout: string): {string}
+ local messages: {string} = {}
+ local decoded,value=pcall(function() return tern.json.decode(stdout) end)
+ if decoded and type(value)=="table" and type(value.warnings)=="table" then
+  for _,message in value.warnings do if type(message)=="string" then table.insert(messages,message) end end
+ end
+ return messages
+end
 function M.origin(args: {string}): Origin
  local indexPath=args[5] or ""
  local home=string.match(indexPath,"^(.*)/native%-views/[^/]+%.json$") or ""
@@ -18,7 +27,11 @@ function M.run(origin: Origin, cx: BlockCx, args: {string}, onSuccess: (() -> ()
  local ok,problem=pcall(function()
   tern.process.run(argv,{cwd="."},function(result)
    if result.status~=0 then cx:toast("error","Tandem couldn't run that action",result.stderr)
-   elseif onSuccess then onSuccess() end
+   else
+    local warnings=M.warnings(result.stdout)
+    if #warnings>0 then cx:toast("warning","Tandem action completed",table.concat(warnings,"\n")) end
+    if onSuccess then onSuccess() end
+   end
   end)
  end)
  if not ok then cx:toast("error","Tandem couldn't start that action",tostring(problem)) end
