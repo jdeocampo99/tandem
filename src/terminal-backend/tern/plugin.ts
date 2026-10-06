@@ -140,7 +140,7 @@ function settingsInput(deps: TernPluginDependencies): TernPluginSettingsInput {
  */
 async function withSetupLock<T>(input: TernPluginSettingsInput, run: () => Promise<T>) {
   const directory = dirname(settingsPath(input));
-  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await mkdir(directory, { recursive: true });
   let release: () => Promise<void>;
   try {
     release = await acquireDarwinFileLock(
