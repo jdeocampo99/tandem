@@ -173,6 +173,8 @@ project switching, brief approval beside your chat, and PRs with CI, tours and c
 their diff lines. Comments on Tandem's PRs go straight to the worker as fix requests. When
 reviewing someone else's PR, choose the comments and verdict, then click Post to send the review.
 Tern's inbox brings you questions, new draft PRs and stuck tasks.
+The panel bell counts unread Tandem alerts. Click it or activate the project's inbox entry to
+read them and return to the conversation; clearing Tern's inbox alone leaves this bell unchanged.
 The Tern iOS app is **UNTESTED** with Tandem.
 
 Install Tern and sign in with your Stencil account, then choose **Tern** during Tandem setup.
@@ -200,6 +202,8 @@ Choosing Herdr again restores settings Tandem changed, keeping any edits you mad
   away, and Tandem shows what changed: merged PRs, what needs you, blocked tasks and your
   workstream notes. First visits and unchanged projects stay quiet. **Open what needs me**
   takes you to the first waiting item; **Dismiss** or `Esc` returns to chat.
+  A project stays visible while it is selected in any Tern window.
+  A catch-up failure shows a warning and leaves the project open so you can keep working.
 
 From Board or Usage, press `Esc` or click **← Orchestrator** to return to the project's chat.
 Pressing `Cmd+Shift+B` again from Board also closes it.

@@ -64,8 +64,15 @@ ambiguous, foreign or busy helpers refuse delivery without choosing a substitute
 Native alerts cover needs you, done (a new draft PR) and stuck. A private, locked per-project
 delivery cursor is saved before sending; repeated ticks, relaunches and unknown delivery outcomes
 do not resend a claimed transition. The first snapshot establishes a baseline. Tern groups
-alerts from one helper into one inbox entry, with a count and the latest title/body; clicking
-it focuses that helper tab. Worker OMP completion/error/ask notifications are disabled;
+alerts from one helper into one inbox entry, with a count and the latest title/body. Activation
+first selects the helper tab, then the CLI proves its recorded identity and focuses the real
+coordinator with its panel in the originating window. Failed focus leaves alerts unread.
+The panel bell counts confirmed Tandem deliveries since its private user read cursor, including
+brief and PR-watch alerts. Opening the panel bell or activating the owned inbox entry marks
+only deliveries captured before navigation as read; later arrivals remain unread. Coordinator
+acknowledgements and Tern's built-in inbox clear control do not clear this cursor.
+See [bell/read semantics](tern-views.md#panel-bell-and-user-read-semantics).
+Worker OMP completion/error/ask notifications are disabled;
 coordinator ask notifications remain enabled. See [transition delivery](tern-views.md#transition-delivery).
 
 ## Identity, close and recovery guards
@@ -120,6 +127,12 @@ uncertain intent cannot be settled, Orchestrator return can still focus the exac
 and show a warning while preserving every view, ticket and fence.
 See [hosting lifecycle](tern-views.md#native-hosting-and-renderer-launch-api).
 
+The plugin's `route.open` consumes private tickets immediately, then reads and lays them out
+through one-shot timer stages with a fresh `WindowCx`. This keeps work within Tern's 50 ms
+callback budget. Each effect rechecks exact panes; focus and block creation share one callback.
+Back rechecks the previous task before docking or closing. Failed stages never retry or write
+a receipt, leaving the ticket and intent quarantined. See [window integration](tern-views.md#window-integration).
+
 ## Native views and actions
 
 Tern uses daemon-hosted Luau blocks (hosting decision B). TypeScript computes models, reads
@@ -156,6 +169,10 @@ PRs, Board and usage buttons independently of shortcut consent.
 The package registers Panel, Welcome, Task, Task picker, Brief, PR, Board, Usage and Catch-up.
 `native prs` selects a project's published PR and opens that PR pane; New request focuses and
 prompts the verified coordinator. Project switching and published-detail navigation are implemented.
+The dropdown targets each online row by `repo:ABSOLUTE_REPO_PATH`, including rows after nine;
+the CLI checks its unique published identity, freshness, availability and coordinator ownership.
+Numeric targets 1–9 remain the keyboard shortcut slots, while previous/next wrap the list.
+Cached watched PRs without a task open read-only by `repo#number`.
 
 ### Task page, picker and reply links
 
@@ -203,24 +220,33 @@ ownership at click time. See [task hosting](tern-views.md#task-page-and-picker) 
   today's cost, agent time and finished-task count, weekly spend, model-cost charts for today
   and this week, and stage times. TypeScript supplies labels and chart widths; unknown limits,
   unpriced usage and unreadable ledger rows never become invented zero totals.
+  Quota labels use whole percentages; the numeric meters retain provider precision.
 - Board toggles back from its exact originating Board block. Escape or Orchestrator returns
   from Board/Usage through the guarded CLI, restoring the conversation and retiring only that
   idle view. Last readable data remains visible on a file error, with a warning; data-bound
   links/actions require a ready view, while returning remains available.
-- Catch-up opens on visible project opening, reconnecting or confirmed project switching after
-  **1+ hour** away, only with a known prior signature and a meaningful change. First visits,
+- Catch-up opens on project entry, including inbox activation, after **1+ hour** since last
+  visibility, only with a known prior signature and a meaningful change. First visits,
   unchanged work and timer-only repaints stay quiet. The full-window card lists merged PRs,
   Needs you, blocked work and saved workstream notes. Dismiss/Escape returns to the conversation;
   Open what needs me returns, then opens the first saved brief, task or inbox destination.
-- Private locked `<home>/native-visits/<repositoryKey>.json` records retain visit time and
-  signature. Polls and panel opening never advance the visit. A first publication can fill a
-  missing signature without changing its timestamp. Failed/uncertain openings remain
-  unacknowledged. Dismissal records the current signature only after confirmed navigation.
-  After confirmed focus, `open-project` treats catch-up read/visit/open failures as non-fatal
-  warnings: its result stays `focused:true` and carries `warnings`, including an ambiguous-window
-  refusal. It never chooses another window or retries. Direct front-door launch/reconnect also
-  catches these errors, carrying a non-fatal notice through `panelFailure`. Native project
-  switching still propagates catch-up errors after successful focus, without undoing that focus.
+- Private locked `<home>/native-visits/<repositoryKey>.json` records retain entry history,
+  `lastVisibleAt` and signature. Serialized focus transitions and once-minute selected-project
+  heartbeats capture visibility; a locked throttle shared across windows skips samples less
+  than a minute apart. Transitions can update sooner. Duplicate/backwards samples never move
+  timestamps backwards. Heartbeats change only these presentation records, preserving task
+  authority and root/detail files. Polls and panel opening never advance the visit; first
+  publication fills a missing signature only. Dismissal acknowledges after confirmed navigation.
+- Visibility means the selected project in a Tern window. Another active macOS application
+  does not mark it away. Another window's heartbeats keep the project visible; closing its last
+  window uses the last persisted heartbeat, which can lag by almost two minutes after a
+  transition. Continuous work followed by an immediate switch back stays quiet.
+- A catch-up failure never fails launch, reconnect, open-project, project switching or inbox
+  entry. Shared `tryShowCatchUp` preserves successful navigation, shows a warning and leaves
+  the failed visit unacknowledged. Launch/reconnect carry `catchUpWarning` separately from
+  `panelFailure`; the front door prints it. Open-project returns warnings to the conversation;
+  native entry/switch warnings appear as Tern toasts. Ownership, launch and focus failures
+  retain their usual errors. No catch-up failure selects another window or retries an opening.
 
 See [screen actions](tern-views.md#board-usage-and-catch-up-actions) for CLI subactions and
 [view models](native-views.md#board) for data and accounting contracts.
