@@ -163,20 +163,22 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       // Authentic coordinator and launch paths, realistic derived view data, no model turn or task mutation.
       const panel = panelFixture(a);
       await mkdir(join(home, "native-views"), { recursive: true });
-      await writeFile(
-        nativeViewsPath(home, a),
-        nativeViewText("panel", {
-          version: 1,
-          project: a,
-          writtenAt: new Date().toISOString(),
-          panel,
-          projects: panel.header.projects,
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          warnings: [],
-        }),
-      );
+      const writePanelFixture = () =>
+        writeFile(
+          nativeViewsPath(home, a),
+          nativeViewText("panel", {
+            version: 1,
+            project: a,
+            writtenAt: new Date().toISOString(),
+            panel,
+            projects: panel.header.projects,
+            tasks: {},
+            briefs: {},
+            pullRequests: {},
+            warnings: [],
+          }),
+        );
+      await writePanelFixture();
       await terminal.openPanel({
         coordinator: record.endpoint,
         cwd: record.worktree.path,
@@ -187,7 +189,12 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         cwd: a,
         workspaceId: record.endpoint.workspaceId,
       });
-      await until(async () => (await ctl("tree")).includes("Tern backend adapter"));
+      await until(async () => {
+        // The authentic coordinator keeps publishing its own empty panel; hold the fixture
+        // through a renderer poll until the first panel shows it.
+        await writePanelFixture();
+        return (await ctl("tree")).includes("Tern backend adapter");
+      });
       await ctl("shot", "01-project-a-panel");
       const plugin = blocks(await commands.ls(a)).find((p) => p.block.program === "tandem.panel");
       expect(plugin?.block.live).toBe(true);

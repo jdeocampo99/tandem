@@ -128,11 +128,14 @@ Native hosting adds a private coordinator-bound intent lock, unique layout ticke
 It proves the exact program, all five launch arguments and placement, refusing duplicate matches
 and conflicting detached/window evidence. A supplied window key must contain the exact origin
 and coordinator; without one, exactly one attached window is required. Unknown openings retain
-their fence and resources across fresh CLI calls. Native layout recovery requires exact block
-evidence; task replacement also proves the previous task pane absent. Browser listings cannot
-prove an uncertain opening's URL or picture-in-picture owner, so an unresolved browser intent
-fences both browser and native opens. Native and panel closes prove the full arguments and idle
-state again immediately before closing; failed verification quarantines the outcome.
+their fence and resources across fresh CLI calls; a host failure with zero applied layout effects
+settles instead and the user can open again. Native layout recovery requires exact block
+evidence; task replacement also proves the previous task pane absent. Browser opens keep no
+durable record: nothing can prove an uncertain one later and it is never re-invoked, so it never
+pauses other opens. Native and panel closes prove the full arguments and idle state again
+immediately before closing; failed verification quarantines the outcome. `tandem fix` lists
+retained opens and, with `--yes`, abandons one only after proving its coordinator exactly present
+or gone, through the port's `retainedViewOpens`/`abandonViewOpen` (Herdr has none).
 
 Panels and root Board, Usage and Catch-up views reuse one exact existing block under the opening
 lock, checking all five arguments and intended placement. Duplicate, detached or foreign-window
@@ -144,8 +147,9 @@ See [hosting lifecycle](tern-views.md#native-hosting-and-renderer-launch-api).
 The plugin's `route.open` consumes private tickets immediately, then reads and lays them out
 through one-shot timer stages with a fresh `WindowCx`. This keeps work within Tern's 50 ms
 callback budget. Each effect rechecks exact panes; focus and block creation share one callback.
-Back rechecks the previous task before docking or closing. Failed stages never retry or write
-a receipt, leaving the ticket and intent quarantined. See [window integration](tern-views.md#window-integration).
+Back rechecks the previous task before docking or closing, and every close waits for the pane's
+absence. Failed stages never retry; every exit writes a done or failed receipt with the count of
+applied effects. See [window integration](tern-views.md#window-integration).
 
 ## Native views and actions
 

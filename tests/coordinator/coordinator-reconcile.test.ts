@@ -561,6 +561,7 @@ test("the plan classifies each observed resource without touching any of them", 
     quarantines: [],
     settledQuarantineIds: [],
     failures: [],
+    nativeOpens: [],
   });
   expect(plan.items.map((item) => item.action)).toEqual([
     "retain",
@@ -990,7 +991,7 @@ test("the machine-readable report keeps a stable versioned shape", async () => {
       "failed",
       "freeable",
     ]);
-    expect(report.schemaVersion).toBe(2);
+    expect(report.schemaVersion).toBe(3);
     expect(report.home).toBe(test.home);
     const coordinator = entries(report.cleaned, "coordinator")[0];
     if (coordinator === undefined) throw new Error("the stopped coordinator was not reported");

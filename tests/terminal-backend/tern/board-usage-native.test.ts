@@ -11,6 +11,7 @@ import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
+import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/view-intent.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -154,6 +155,16 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         await ctl("state");
         return true;
       });
+      // An open fired during the window's startup tick either opens or fails cleanly with
+      // nothing changed; it never pauses the opens below.
+      await backend
+        .openView({ coordinator, cwd: project, home, origin, view: { kind: "board" } })
+        .catch((error: unknown) => {
+          if (!(error instanceof NativeViewNotOpenedError)) throw error;
+        });
+      // Tern exposes no startup-ready signal; settle as panel-native does so the opens below
+      // test opening, not startup.
+      await Bun.sleep(500);
       const shots = process.env.TANDEM_TERN_SHOTS;
       if (shots) await mkdir(shots, { recursive: true });
       let actionCount = 0;

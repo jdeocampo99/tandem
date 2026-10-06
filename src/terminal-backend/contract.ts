@@ -78,6 +78,21 @@ export type TerminalView =
 /** Presentation context from the initiating view; it grants no pane ownership. */
 export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
 
+/** A native view open whose outcome was never proved, so it pauses new opens for its owner. */
+export type RetainedViewOpen =
+  | Readonly<{
+      status: "readable";
+      path: string;
+      /** The record exactly as listed, so an abandon never removes one that changed since. */
+      record: string;
+      coordinator: Endpoint;
+      cwd: string;
+      view: string;
+      /** Why the open is still unproven, in the user's terms. */
+      reason: string;
+    }>
+  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+
 export type OpenViewResult = Readonly<{
   opened: boolean;
   warnings: readonly string[];
@@ -270,6 +285,16 @@ export type TerminalBackend = Readonly<{
       view: Extract<TerminalView, { kind: "brief" }>;
     }>,
   ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
+  /** Native view opens under `home` whose outcome was never proved, read without changing them. */
+  retainedViewOpens(home: string): Promise<readonly RetainedViewOpen[]>;
+  /**
+   * Removes one retained open's records, never a pane, under that open's lock: only while the
+   * record is unchanged and `conclusive` re-proves its coordinator's state.
+   */
+  abandonViewOpen(
+    open: Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>,
+    conclusive: () => Promise<boolean>,
+  ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;

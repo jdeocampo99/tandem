@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativeTaskFile, nativeViewText } from "../../../src/board/native-views.ts";
@@ -279,6 +279,12 @@ type ControlNode = {
       expect(replaced.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === endpoint.paneId)).toBe(
         true,
       );
+      // The replacement settled, so it pauses no later open.
+      expect(
+        (await readdir(join(input.home, "native-host"))).filter((name) =>
+          name.endsWith(".intent.json"),
+        ),
+      ).toEqual([]);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       await click("← Orchestrator");
       await until(async () =>

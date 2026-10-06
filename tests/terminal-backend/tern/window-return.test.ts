@@ -90,7 +90,7 @@ for (const mode of [
         removed = mode !== "retained";
         await writeFile(
           ticket.receipt,
-          JSON.stringify({ paneId: "3", tabId: "2", sessionId: "1" }),
+          JSON.stringify({ status: "done", paneId: "3", tabId: "2", sessionId: "1" }),
         );
         return { code: 1, stderr: "cannot open in a file block", stdout: "" };
       } else throw new Error(`unexpected ${verb}`);

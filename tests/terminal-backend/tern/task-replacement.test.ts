@@ -113,6 +113,7 @@ for (const placement of ["task", "return"] as const) {
           await writeFile(
             receipt,
             JSON.stringify({
+              status: "done",
               paneId: placement === "task" ? "5" : "3",
               tabId: "2",
               sessionId: "1",

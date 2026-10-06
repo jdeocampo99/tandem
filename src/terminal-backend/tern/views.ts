@@ -20,13 +20,31 @@ import {
   type TernCommands,
   TernOutcomeUnknownError,
 } from "./protocol.ts";
-import { exactNativeView, proveTaskReplacement, withNativeOpenIntent } from "./view-intent.ts";
+import {
+  exactNativeView,
+  NativeViewNotOpenedError,
+  partialOpenFailure,
+  proveTaskReplacement,
+  type Receipt,
+  readReceipt,
+  withNativeOpenIntent,
+} from "./view-intent.ts";
 
 const Opened = z.object({
   blocks: z.array(z.union([Id, z.number().int().safe().positive().transform(String)])),
   discarded: z.boolean(),
 });
-const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
+
+class BrowserOpenUnconfirmedError extends AdapterError {
+  constructor(cause: unknown) {
+    super(
+      "Tern did not confirm the PR opened in its browser. Tandem did not retry; open it again if it is missing.",
+      "tern browser",
+      cause,
+    );
+    this.name = "BrowserOpenUnconfirmedError";
+  }
+}
 const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 const windowPrograms = new Set(["tandem.board", "tandem.usage", "tandem.catchup"]);
@@ -361,20 +379,22 @@ export function ternViewHost(
         }
 
         const deadline = options.clock() + 5000;
-        let result: z.infer<typeof Receipt> | undefined;
+        let result: Receipt | undefined;
         while (options.clock() < deadline) {
-          try {
-            result = Receipt.parse(JSON.parse(await readFile(receipt, "utf8")));
-            break;
-          } catch {
-            await options.wait(50);
-          }
+          result = await readReceipt(receipt).catch(() => undefined);
+          if (result !== undefined) break;
+          await options.wait(50);
         }
         if (result === undefined)
           throw new TernOutcomeUnknownError(
             "tern open",
             "route receipt was not confirmed; keep route and resources",
           );
+        if (result.status === "failed") {
+          if (result.appliedEffects > 0) throw partialOpenFailure(result);
+          await intent.settle();
+          throw new NativeViewNotOpenedError();
+        }
         const listing = await cmd.ls(input.cwd).catch((cause: unknown) => {
           throw new TernOutcomeUnknownError("tern open", cause);
         });
@@ -553,34 +573,29 @@ export function ternViewHost(
           await withNativeOpenIntent(
             { ...input, indexPath: nativeViewsPath(input.home, project) },
             cmd,
-            async (intent) => {
+            async () => {
               const before = blocks(await cmd.ls(input.cwd));
-              await intent.claimBrowser({
-                url: url.href,
-                ...(input.origin?.windowId === undefined
-                  ? {}
-                  : { windowId: input.origin.windowId }),
-              });
               await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-              intent.markMutationAttempted();
-              const opened = await cmd.mutate(
-                input.cwd,
-                ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
-                BrowserOpened,
-              );
-              const listing = await cmd.ls(input.cwd);
-              const created = blocks(listing).find((entry) => entry.block.id === opened.ok.block);
-              if (
-                listing.detached.length > 0 ||
-                !created ||
-                created.session.id !== input.coordinator.terminalSessionId ||
-                before.some((entry) => entry.block.id === opened.ok.block)
-              )
-                throw new TernOutcomeUnknownError(
-                  "tern browser",
-                  "new browser identity was not confirmed",
+              // Nothing can later prove or disprove a browser opening, and it is never
+              // re-invoked, so an unconfirmed one is reported once and pauses nothing.
+              try {
+                const opened = await cmd.mutate(
+                  input.cwd,
+                  ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
+                  BrowserOpened,
                 );
-              await intent.settle();
+                const listing = await cmd.ls(input.cwd);
+                const created = blocks(listing).find((entry) => entry.block.id === opened.ok.block);
+                if (
+                  listing.detached.length > 0 ||
+                  !created ||
+                  created.session.id !== input.coordinator.terminalSessionId ||
+                  before.some((entry) => entry.block.id === opened.ok.block)
+                )
+                  throw new Error("new browser identity was not confirmed");
+              } catch (cause) {
+                throw new BrowserOpenUnconfirmedError(cause);
+              }
             },
           );
         });

@@ -15,6 +15,7 @@ import { createTandemService } from "../../../src/service/controller.ts";
 import { executeTandemAction } from "../../../src/session/actions.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/view-intent.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
 
@@ -331,6 +332,21 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         home: env.TANDEM_HOME,
         tern: { binary },
       });
+      // A brief opened during the window's startup tick either opens or fails cleanly with
+      // nothing changed; it never pauses the opens below.
+      await terminal
+        .openView({
+          coordinator,
+          cwd: root,
+          home: env.TANDEM_HOME,
+          view: { kind: "brief", requestId: model.requestId },
+        })
+        .catch((error: unknown) => {
+          if (!(error instanceof NativeViewNotOpenedError)) throw error;
+        });
+      // Tern exposes no startup-ready signal; settle as panel-native does so the opens below
+      // test opening, not startup.
+      await Bun.sleep(500);
       // A pane may be hosted before either its index or detail is published.
       const waiting = await terminal.openView({
         coordinator,

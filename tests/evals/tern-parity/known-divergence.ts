@@ -4,45 +4,36 @@ import { withParity } from "./inventory.ts";
 
 export type KnownDivergence = Readonly<{ name: string; run: () => Promise<void> }>;
 
-const UNKNOWN = "tern open outcome is unknown; quarantine and keep resources";
-const PAUSED = "tern open recovery outcome is unknown; quarantine and keep resources";
-
 function toasts(host: TernParityHost, mark: number): readonly string[] {
   return host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`);
 }
 
-/** Each task row the user clicks next is refused with `refusal`, and no task page opens. */
-async function expectOpensPaused(
+/** Each task row the user clicks next opens its own task page with no toast. */
+async function expectOpensWork(
   host: TernParityHost,
   panel: Screen,
-  rows: readonly RegExp[],
-  refusal: string,
+  rows: readonly (readonly [RegExp, string])[],
 ): Promise<void> {
-  const pages = host.world.ternBlocks().filter((block) => block.program === "tandem.task").length;
-  for (const row of rows) {
+  for (const [row, title] of rows) {
     const mark = host.events.length;
     await panel.click(row);
-    expect(toasts(host, mark)).toEqual([`Tandem couldn't run that action: ${refusal}`]);
-    expect(host.world.ternBlocks().filter((block) => block.program === "tandem.task")).toHaveLength(
-      pages,
-    );
+    expect(toasts(host, mark)).toEqual([]);
+    expect((await host.screen(host.pane("task")).render()).title).toBe(title);
   }
 }
 
 /**
- * Finding 1 in the Tern architecture review: after a staged open fails in Luau without
- * changing anything, or opens a browser whose reply is lost, every later native open for that
- * coordinator stays paused. These cases record that bug as today's behavior; step 5 flips them
- * so the next open succeeds. A route Tern never delivered stays quarantined by design, so the
- * inventory's Generic row drives it instead.
+ * Finding 1 in the Tern architecture review: a staged open that failed in Luau without
+ * changing anything, or a browser open whose reply was lost, used to pause every later native
+ * open for that coordinator. Step 5 settles both, so the next open succeeds. A route Tern never
+ * delivered stays quarantined by design, so the inventory's Generic row drives it instead.
  */
 export const knownDivergence: readonly KnownDivergence[] = [
   {
-    name: "a Luau failure that changed nothing pauses every later open",
+    name: "a Luau failure that changed nothing settles, and later opens work",
     run: () =>
       withParity(async ({ host, panel }) => {
         await panel.click(/^● Port the terminal/);
-        const task = host.screen(host.pane("task"));
         await host.fault("newBlock", true);
         let mark = host.events.length;
         await panel.click(/^● Fix login/);
@@ -52,18 +43,22 @@ export const knownDivergence: readonly KnownDivergence[] = [
           "Tandem couldn't run that action",
         ]);
         expect(failed[0]?.message).toEndWith("Native block could not open");
-        expect(failed[1]?.message).toBe(UNKNOWN);
+        expect(failed[1]?.message).toBe(
+          "The Tandem view did not open and nothing changed. Open it again.",
+        );
         await host.fault("newBlock", false);
-        await expectOpensPaused(host, panel, [/^● Write docs/, /^● Fix login/], PAUSED);
+        await expectOpensWork(host, panel, [
+          [/^● Write docs/, "Write docs"],
+          [/^● Fix login/, "Fix login"],
+        ]);
+        const task = host.screen(host.pane("task"));
         mark = host.events.length;
         await task.click("← Orchestrator");
-        expect(toasts(host, mark)).toEqual([
-          "Tandem kept an uncertain view: Returned to your conversation. An earlier view could not be verified, so its views and recovery record were kept. Continue here or use Tern's tab switcher; opening new native views stays paused until exact recovery evidence is available.",
-        ]);
+        expect(toasts(host, mark)).toEqual([]);
       }),
   },
   {
-    name: "a browser open whose reply is lost pauses every later open",
+    name: "a browser open whose reply is lost is reported once, and later opens work",
     run: () =>
       withParity(async ({ host, panel }) => {
         await panel.click("▦");
@@ -72,18 +67,16 @@ export const knownDivergence: readonly KnownDivergence[] = [
         const mark = host.events.length;
         await board.click("#281 open ↗");
         expect(toasts(host, mark)).toEqual([
-          "Tandem couldn't run that action: tern browser outcome is unknown; quarantine and keep resources",
+          "Tandem couldn't run that action: Tern did not confirm the PR opened in its browser. Tandem did not retry; open it again if it is missing.",
         ]);
         expect(
           host.world.ternBlocks().flatMap((block) => (block.browserUrl ? [block.browserUrl] : [])),
         ).toEqual(["https://github.com/acme/app/pull/281"]);
         host.loseBrowserReplies = false;
-        await expectOpensPaused(
-          host,
-          panel,
-          [/^● Write docs/, /^● Port the terminal/],
-          "tern open intent outcome is unknown; quarantine and keep resources",
-        );
+        await expectOpensWork(host, panel, [
+          [/^● Write docs/, "Write docs"],
+          [/^● Port the terminal/, "Port the terminal"],
+        ]);
       }),
   },
 ];

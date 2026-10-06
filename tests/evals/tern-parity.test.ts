@@ -7,4 +7,4 @@ import { knownDivergence } from "./tern-parity/known-divergence.ts";
 luauBinary();
 
 for (const entry of inventory) test(`${entry.view} · ${entry.item}`, entry.run, 60_000);
-for (const entry of knownDivergence) test(`known bug: ${entry.name}`, entry.run, 60_000);
+for (const entry of knownDivergence) test(`finding 1: ${entry.name}`, entry.run, 60_000);

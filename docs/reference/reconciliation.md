@@ -31,7 +31,8 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
 
 - **Scan (read-only):** every coordinator record in every session directory, whether Herdr still
   answers for each, the checkout behind each unanswered record, every pool's leases, terminal tasks
-  with unsettled cleanup, existing quarantine notes, and unreadable record files.
+  with unsettled cleanup, existing quarantine notes, unreadable record files, and native view
+  opens the terminal still retains.
 - **Plan:** a pure function of the scan, so nothing is classified from a resource Tandem changed.
 
 ### Classification
@@ -56,6 +57,13 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
 - Unreadable record file: listed with path and reason, never deleted.
 - Quarantine note: removed only when no record names its lease and Treehouse, re-read under the
   repository lock, no longer holds it. Kept when its lease cannot be read.
+- Retained native view open (Tern, under `<home>/native-host/`): an open whose outcome was never
+  proved, which pauses new native views for its coordinator. Listed with its view kind and why
+  (no receipt, a failure after layout changes, or a done receipt without exact block proof).
+  Applying abandons it only under that coordinator's open lock, while the record is unchanged,
+  after the terminal proves the coordinator pane exactly present or exactly gone again. A
+  detached or otherwise inconclusive answer keeps it. Abandoning removes only the record, ticket
+  and receipt; no pane is closed and nothing is reopened. An unreadable record is listed and kept.
 
 ### Superseded worktrees (`freeable`)
 
@@ -79,8 +87,9 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
   so a concurrent launch cannot allocate underneath. Task cleanup uses its durable owner.
 - A `clean` item is a prediction: applying re-reads the resource and its owner may still retain or
   quarantine it. A second apply cleans nothing.
-- `--json` is `schemaVersion` 2 with `mode`, `home`, and `cleaned`, `retained`, `quarantined`,
-  `failed`, `freeable` lists of entries (kind, id, repository, session, path, reason).
+- `--json` is `schemaVersion` 3 with `mode`, `home`, and `cleaned`, `retained`, `quarantined`,
+  `failed`, `freeable` lists of entries (kind, id, repository, session, path, reason). Version 3
+  added the `native-open` kind.
 - The human view prints one line per thing; a task line includes its lease's worktree number, so a
   task-held lease is never listed separately.
 - Exit is non-zero only when the scan or an apply failed, never for a deliberate retain.

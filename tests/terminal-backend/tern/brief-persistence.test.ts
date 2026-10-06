@@ -59,6 +59,7 @@ test("production Tern brief drafting persists and reloads a split without coordi
             await writeFile(
               ticket.receipt,
               JSON.stringify({
+                status: "done",
                 paneId: "3001",
                 tabId: coordinator.tabId,
                 sessionId: coordinator.terminalSessionId,

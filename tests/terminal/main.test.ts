@@ -1607,7 +1607,7 @@ test("fix inspects Tandem resources and applies nothing when there is nothing to
       stderr: (text) => jsonOutput.push(text),
     });
     expect(JSON.parse(jsonOutput.join(""))).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       mode: "dry-run",
       cleaned: [],
       retained: [],

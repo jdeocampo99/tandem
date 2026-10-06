@@ -76,7 +76,7 @@ async function fixture(kind: "board" | "usage" | "catchup" | "prs", mode = "conf
         if (ticket.closeOrigin !== undefined) roots = 0;
         await writeFile(
           ticket.receipt,
-          JSON.stringify({ paneId: "3", tabId: "2", sessionId: "1" }),
+          JSON.stringify({ status: "done", paneId: "3", tabId: "2", sessionId: "1" }),
         );
         return ok({ blocks: ["3"], discarded: false });
       }
@@ -88,6 +88,7 @@ async function fixture(kind: "board" | "usage" | "catchup" | "prs", mode = "conf
       await writeFile(
         ticket.receipt,
         JSON.stringify({
+          status: "done",
           paneId: String(3 + roots),
           tabId: placement === "split" ? "2" : "6",
           sessionId: "1",
