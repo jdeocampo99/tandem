@@ -19,30 +19,76 @@ type Model = {
   timing: { elapsedMs: number | string, activeMs: number, waitingMs: number | string },
   quota: { entries: { { plan: string, units: number, unit: string } }, unavailableSamples: number },
   breakdown: { byProvider: { { provider: string, model: string, charges: { amountMicros: number, unavailableSamples: number },
-   tokens: { actualInputTokens: number, actualOutputTokens: number, estimatedInputTokens: number, estimatedOutputTokens: number } } },
+   tokens: { actualInputTokens: number, actualOutputTokens: number, estimatedInputTokens: number, estimatedOutputTokens: number, unavailableSamples: number } } },
    byWorkKind: { { workKind: string, activeMs: number } }, malformedSamples: number, omittedSamples: number } }?,
 }
 type State = { view: views.View<Model>, field: fields.Field, tab: string, cwd: string, orchestrator: string?, busy: boolean, editing: boolean }
 
+local function optionalString(value: unknown): boolean return value == nil or type(value) == 'string' end
+local function events(value: unknown): boolean
+ if type(value) ~= 'table' then return false end
+ for _, event in value do
+  if type(event) ~= 'table' or type(event.seq) ~= 'number' or type(event.at) ~= 'string' or type(event.type) ~= 'string'
+   or not optionalString(event.cause) or not optionalString(event.from) or not optionalString(event.to) or not optionalString(event.stage)
+   or (event.round ~= nil and type(event.round) ~= 'number') then return false end
+ end
+ return true
+end
+local function numbers(value: unknown, keys: { string }): boolean
+ if type(value) ~= 'table' then return false end
+ for _, key in keys do if type(value[key]) ~= 'number' then return false end end
+ return true
+end
 local function parse(value: unknown): Model?
  if type(value) ~= 'table' or type(value.header) ~= 'table' or type(value.header.id) ~= 'string'
   or not string.match(value.header.id, '^[%w_-]+$') or type(value.header.title) ~= 'string'
-  or type(value.header.returnLabel) ~= 'string' or type(value.header.elapsed) ~= 'string'
-  or type(value.rightNow) ~= 'table' or type(value.rightNow.text) ~= 'string'
+  or type(value.header.stage) ~= 'string' or type(value.header.returnLabel) ~= 'string' or type(value.header.elapsed) ~= 'string'
+  or not optionalString(value.header.model) or not optionalString(value.header.branch)
+  or type(value.rightNow) ~= 'table' or type(value.rightNow.text) ~= 'string' or not optionalString(value.rightNow.age)
   or type(value.stageTrack) ~= 'table' or type(value.tabs) ~= 'table'
   or type(value.overview) ~= 'table' or type(value.overview.summary) ~= 'string'
-  or type(value.overview.todos) ~= 'table' or type(value.overview.recent) ~= 'table'
-  or type(value.progress) ~= 'table' or type(value.progress.events) ~= 'table'
+  or not numbers(value.overview, { 'done', 'total' }) or type(value.overview.todos) ~= 'table' or not events(value.overview.recent)
+  or type(value.progress) ~= 'table' or not events(value.progress.events) or type(value.progress.unreadableEvents) ~= 'number'
   or type(value.progress.checks) ~= 'table' or type(value.progress.findings) ~= 'table'
-  or type(value.message) ~= 'table' or type(value.message.placeholder) ~= 'string' then return nil end
+  or type(value.message) ~= 'table' or type(value.message.placeholder) ~= 'string' or not optionalString(value.message.model)
+  or not optionalString(value.requestId) then return nil end
  for _, step in value.stageTrack do
-  if type(step) ~= 'table' or type(step.label) ~= 'string' or type(step.state) ~= 'string' then return nil end
+  if type(step) ~= 'table' or type(step.label) ~= 'string' or not table.find({ 'done', 'current', 'pending', 'skipped' }, step.state)
+   or (step.round ~= nil and not numbers(step.round, { 'used', 'max' })) then return nil end
  end
  for _, tab in value.tabs do if type(tab) ~= 'string' then return nil end end
  for _, todo in value.overview.todos do
   if type(todo) ~= 'table' or type(todo.content) ~= 'string' or type(todo.status) ~= 'string' then return nil end
  end
+ for _, check in value.progress.checks do
+  if type(check) ~= 'table' or type(check.name) ~= 'string' or type(check.passed) ~= 'boolean'
+   or type(check.head) ~= 'string' or type(check.contract) ~= 'string' then return nil end
+ end
+ for _, finding in value.progress.findings do
+  if type(finding) ~= 'table' or type(finding.id) ~= 'string' or type(finding.severity) ~= 'string'
+   or type(finding.description) ~= 'string' or type(finding.status) ~= 'string' or not optionalString(finding.file)
+   or (finding.line ~= nil and type(finding.line) ~= 'number') then return nil end
+ end
  if value.stuck ~= nil and (type(value.stuck) ~= 'table' or type(value.stuck.reason) ~= 'string') then return nil end
+ if value.pullRequest ~= nil and (type(value.pullRequest) ~= 'table' or type(value.pullRequest.number) ~= 'number') then return nil end
+ local cost = value.cost
+ if cost ~= nil then
+  if type(cost) ~= 'table' or type(cost.recorded) ~= 'boolean' or not numbers(cost.charges, { 'amountMicros', 'unavailableSamples' })
+   or not numbers(cost.tokens, { 'actualInputTokens', 'actualOutputTokens', 'estimatedInputTokens', 'estimatedOutputTokens', 'unavailableSamples' })
+   or type(cost.timing) ~= 'table' or type(cost.timing.activeMs) ~= 'number'
+   or (type(cost.timing.elapsedMs) ~= 'number' and cost.timing.elapsedMs ~= 'unavailable')
+   or (type(cost.timing.waitingMs) ~= 'number' and cost.timing.waitingMs ~= 'unavailable')
+   or type(cost.quota) ~= 'table' or type(cost.quota.entries) ~= 'table' or type(cost.quota.unavailableSamples) ~= 'number'
+   or not numbers(cost.breakdown, { 'malformedSamples', 'omittedSamples' }) or type(cost.breakdown.byProvider) ~= 'table'
+   or type(cost.breakdown.byWorkKind) ~= 'table' then return nil end
+  for _, row in cost.breakdown.byProvider do
+   if type(row) ~= 'table' or type(row.provider) ~= 'string' or type(row.model) ~= 'string'
+    or not numbers(row.charges, { 'amountMicros', 'unavailableSamples' })
+    or not numbers(row.tokens, { 'actualInputTokens', 'actualOutputTokens', 'estimatedInputTokens', 'estimatedOutputTokens', 'unavailableSamples' }) then return nil end
+  end
+  for _, row in cost.breakdown.byWorkKind do if type(row) ~= 'table' or type(row.workKind) ~= 'string' or type(row.activeMs) ~= 'number' then return nil end end
+  for _, row in cost.quota.entries do if type(row) ~= 'table' or type(row.plan) ~= 'string' or type(row.units) ~= 'number' or type(row.unit) ~= 'string' then return nil end end
+ end
  return value :: Model
 end
 
@@ -65,17 +111,20 @@ end
 local function duration(ms: number | string): string
  return if type(ms) == 'number' then string.format('%.1fm', ms / 60000) else ms
 end
+local function measuredTokens(known: number, unavailable: number): string
+ return if unavailable == 0 then tostring(known) elseif known == 0 then 'unavailable' else tostring(known) .. ' + unavailable'
+end
 local function costNode(model: Model): Node
  local cost = model.cost
  if not cost or not cost.recorded then return text('Usage receipt unavailable. No recorded task usage yet.', 'muted') end
  local rows = { text(string.format('Additional charges · $%.2f', cost.charges.amountMicros / 1000000), 'strong') }
  for _, provider in cost.breakdown.byProvider do
-  table.insert(rows, text(string.format('%s / %s · %d in · %d out · $%.2f', provider.provider, provider.model,
-   provider.tokens.actualInputTokens + provider.tokens.estimatedInputTokens,
-   provider.tokens.actualOutputTokens + provider.tokens.estimatedOutputTokens, provider.charges.amountMicros / 1000000)))
+  table.insert(rows, text(string.format('%s / %s · %s in · %s out · $%.2f', provider.provider, provider.model,
+   measuredTokens(provider.tokens.actualInputTokens + provider.tokens.estimatedInputTokens, provider.tokens.unavailableSamples),
+   measuredTokens(provider.tokens.actualOutputTokens + provider.tokens.estimatedOutputTokens, provider.tokens.unavailableSamples), provider.charges.amountMicros / 1000000)))
  end
- table.insert(rows, text(string.format('Tokens · %d actual input / %d actual output · %d estimated input / %d estimated output',
-  cost.tokens.actualInputTokens, cost.tokens.actualOutputTokens, cost.tokens.estimatedInputTokens, cost.tokens.estimatedOutputTokens), 'muted'))
+ table.insert(rows, text(string.format('Tokens · %s actual input / %s actual output · %s estimated input / %s estimated output',
+  measuredTokens(cost.tokens.actualInputTokens, cost.tokens.unavailableSamples), measuredTokens(cost.tokens.actualOutputTokens, cost.tokens.unavailableSamples), measuredTokens(cost.tokens.estimatedInputTokens, cost.tokens.unavailableSamples), measuredTokens(cost.tokens.estimatedOutputTokens, cost.tokens.unavailableSamples)), 'muted'))
  table.insert(rows, text(string.format('Unpriced samples: %d · Unmeasured token samples: %d', cost.charges.unavailableSamples, cost.tokens.unavailableSamples), 'muted'))
  for _, quota in cost.quota.entries do table.insert(rows, text(string.format('Included quota · %s · %g %s', quota.plan, quota.units, quota.unit))) end
  table.insert(rows, text('Unavailable quota samples: ' .. cost.quota.unavailableSamples, 'muted'))
@@ -156,7 +205,8 @@ local block: BlockDef<State> = {
  title = function(state) return if state.view.model then state.view.model.header.title else 'Task' end,
  view = function(state)
   local model = state.view.model
-  if not model then return text('Task view unavailable. Waiting for its saved detail file.', 'warn') end
+  if not model then return { main = text('Task view unavailable. Waiting for its saved detail file.', 'warn') } end
+  if not table.find(model.tabs, state.tab) then state.tab = 'Overview' end
   local track, tabs = {}, {}
   for i, step in model.stageTrack do
    if i > 1 then table.insert(track, text('→', 'muted')) end
@@ -185,12 +235,15 @@ local block: BlockDef<State> = {
    ui.row({ text(model.message.model or model.header.model or 'Model unavailable', 'accent'), text('Steers the worker; it reads this at its next safe step', 'muted'),
     button(if state.busy then 'Sending…' else 'Send ↑', 'send', true) }),
   }))
-  return ui.el('div', { class = 'tt-page' }, children)
+  return { main = ui.el('div', { class = 'tt-page' }, children) }
  end,
- on_action = function(state, cx, action)
+ event = function(state, ev, cx)
+  if ev.ev == 'focus' then state.editing = string.find(ev.id, 'worker%-message$') ~= nil; cx:frame({ { 'focus', ev.id } }); return end
+  if ev.ev ~= 'action' then return end
+  local action = ev.act .. (if ev.value and ev.value ~= '' then '=' .. ev.value else '')
   local tab = string.match(action, '^tab=(.+)$')
   if tab and state.view.model and table.find(state.view.model.tabs, tab) then state.tab = tab; state.editing = false; cx:render(); return end
-  if action == 'focus-message' or action == 'steer' then state.editing = true; cx:render(); return end
+  if action == 'focus-message' or action == 'steer' then state.editing = true; cx:frame({ { 'focus', 'main.worker-message' } }); cx:render(); return end
   if action == 'send' then send(state, cx); return end
   local model = state.view.model
   if not model then return end
@@ -199,7 +252,7 @@ local block: BlockDef<State> = {
   elseif action == 'open-pr' and model.pullRequest then run(state, cx, { 'open', 'pr', tostring(model.pullRequest.number) })
   end
  end,
- on_key = function(state, cx, key)
+ key = function(state, key, cx)
   if not state.editing then return false end
   local outcome = fields.key(state.field, key)
   if outcome == 'submit' then send(state, cx)

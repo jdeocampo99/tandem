@@ -10,3 +10,7 @@ styles = ["tandem.css", "task.css"]
 [[blocks]]
 id = "task"
 title = "Task"
+
+[[blocks]]
+id = "task-picker"
+title = "Open task…"
