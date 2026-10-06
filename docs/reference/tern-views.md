@@ -166,11 +166,14 @@ Every brief action carries the exact identity of the displayed draft:
 ```
 
 `brief-approve` sends only those three fields. `brief-comment` and `brief-request-changes` may
-also include `text` and `comments`, where each comment is `{ "line": 12, "text": "Feedback" }`.
-Line numbers are positive, one-based lines of the displayed brief Markdown, and the renderer
-copies revision and digests from its view model without recalculating them or refreshing them
+also include `text` and `comments`, where each comment is
+`{ "lineId": "TL;DR:0:0", "text": "Feedback" }`.
+The renderer copies the stable string id from `briefView.lines[].id` and copies revision and
+digests from its view model without recalculating them or refreshing them
 behind the user's click. The CLI owns shape, revision, digest and approval validation. Unknown
-fields are refused. Feedback allows at most 100 comments and 64,000 bytes of encoded feedback.
+fields and numeric `line` anchors are refused. Feedback resolves ids through `briefView` for the
+exact preserved historical revision. Unknown ids, missing historical revisions, and mismatched
+digests refuse the action before delivery. Feedback allows at most 100 comments and 64,000 bytes of encoded feedback.
 The JSON object does not contain `requestId`: the command's positional `REQUEST_ID` names it.
 
 For example, the caller passes this argv suffix, preserving paths with spaces as one argument:
