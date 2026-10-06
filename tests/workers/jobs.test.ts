@@ -536,11 +536,11 @@ test("an implementer cannot report implemented while its worktree has uncommitte
   }
 });
 
-test("an implementer cannot report implemented while a playbook step is open in its to-do list", async () => {
+test("an implementer cannot report implemented while a specialist step is open in its to-do list", async () => {
   const previous = process.env.TANDEM_WORKER_JOB_PATH;
-  const root = await mkdtemp(join(tmpdir(), "tandem-playbook-"));
+  const root = await mkdtemp(join(tmpdir(), "tandem-specialist-steps-"));
   try {
-    const job = { ...makeJob(root), playbookSteps: ["Measure a baseline", "Measure again"] };
+    const job = { ...makeJob(root), specialistSteps: ["Measure a baseline", "Measure again"] };
     const { fixture: f } = await startExtension(root, job);
     const todo = (status: string) => ({
       toolName: "todo",
@@ -550,7 +550,7 @@ test("an implementer cannot report implemented while a playbook step is open in 
           op: "done",
           phases: [
             {
-              name: "Playbook",
+              name: "Steps",
               tasks: [
                 { content: "Measure a baseline", status: "completed" },
                 { content: "Measure again", status },
@@ -711,6 +711,18 @@ test("a job written before harness choice runs on OMP and an unknown harness is 
   expect(() => parseWorkerJob({ ...legacy, harness: "codex" })).toThrow(
     'harness must be "omp" or "claude-code", not "codex"',
   );
+});
+
+test("a job written with playbookSteps keeps its submit gate; one with both keys is refused", () => {
+  const job = makeJob("/tmp/worktree");
+  const steps = ["Measure a baseline"];
+  expect(parseWorkerJob({ ...job, playbookSteps: steps }).specialistSteps).toEqual(steps);
+  expect(() => parseWorkerJob({ ...job, playbookSteps: steps, specialistSteps: steps })).toThrow(
+    TypeError,
+  );
+  expect(() =>
+    parseWorkerJob({ ...makeJob("/tmp/worktree", "scout"), playbookSteps: steps }),
+  ).toThrow(TypeError);
 });
 
 /** A Claude Code scout job on disk, admitted, and a fake launch whose sidecar answers or never does. */

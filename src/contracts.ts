@@ -1,5 +1,5 @@
-import type { PlaybookId } from "./playbooks/catalog.ts";
 import type { PrReviewState } from "./pr-review/state.ts";
+import type { Specialist } from "./specialists/specialist.ts";
 
 export const MODEL_ROLE_ORDER = [
   "coordinator",
@@ -806,8 +806,8 @@ export type TaskRecord = {
   readonly researchHandoffs?: readonly ResearchHandoff[];
   readonly researchContinuation?: ResearchContinuation;
   readonly skills?: readonly SkillInvocation[];
-  /** The job playbook pinned at creation for implementation tasks; absent on older tasks. */
-  readonly playbook?: PlaybookId;
+  /** The specialist copied at creation for implementation tasks; absent on older tasks. */
+  readonly specialist?: Specialist;
   readonly blockReason?: string;
   /** Typed cause behind `blockReason`, when the site that blocked the task recorded one. Old records
    *  and sites not yet migrated to a typed cause carry `blockReason` alone. */

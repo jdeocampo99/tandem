@@ -8,7 +8,6 @@ import {
   REQUEST_BRIEF_RISKS,
   REQUEST_BRIEF_SIZES,
 } from "../contracts.ts";
-import { PINNABLE_PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import type { WorkerRole } from "../workers/jobs.ts";
 import { outcomesFor } from "../workers/protocol.ts";
 
@@ -103,6 +102,7 @@ export const tandemRequestSchema = z.strictObject({
     z.strictObject({ action: z.literal("check-tools") }),
     z.strictObject({ action: z.literal("setup-page"), repoPath: z.string() }),
     z.strictObject({ action: z.literal("models"), repoPath: z.string() }),
+    z.strictObject({ action: z.literal("specialists"), repoPath: z.string() }),
     z.strictObject({
       action: z.literal("configure-models"),
       repoPath: z.string(),
@@ -132,11 +132,12 @@ export const tandemRequestSchema = z.strictObject({
         .array(z.string())
         .optional()
         .describe("Skills the user asked this work to use, by exact name. Tandem loads them."),
-      playbook: z
-        .enum(PINNABLE_PLAYBOOK_IDS)
+      specialist: z
+        .string()
+        .min(1)
         .optional()
         .describe(
-          "The job type the user chose for implementation work. Leave out and Tandem picks one.",
+          "The specialist the user named for implementation work, by name. Leave out and Tandem guesses one.",
         ),
       targetRepo: z
         .string()

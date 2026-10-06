@@ -1,6 +1,5 @@
 import type { SkillInvocation } from "./contracts.ts";
-import { playbookSection } from "./playbooks/brief.ts";
-import type { PlaybookId } from "./playbooks/catalog.ts";
+import { type SpecialistRun, specialistSection } from "./specialists/run.ts";
 import { checkSkillInvocations } from "./tasks/skill-invocation.ts";
 import { isWorkerRole, type WorkerRole } from "./workers/jobs.ts";
 
@@ -23,8 +22,8 @@ export type AgentBriefInput = Readonly<{
   readonly artifacts?: readonly string[];
   /** Skills the user asked the task to use, pinned when it was created. */
   readonly skills?: readonly SkillInvocation[];
-  /** The playbook an implementer loads into its to-do list. */
-  readonly playbook?: PlaybookId;
+  /** The specialist an implementer follows: its instructions and the steps it must finish. */
+  readonly specialist?: SpecialistRun;
   /** `none` leaves out Tandem's code standards and principles. */
   readonly standards?: "none";
 }>;
@@ -118,7 +117,8 @@ Changing Tandem:
 
 export const COORDINATOR_TOOL_GUIDANCE = `## The tandem tool
 Call it with {request: {action: ...}}. Its text is a short summary; details and report paths hold the rest. The tool refuses unsafe actions and asks the user to confirm anything that needs approval, so you do not need to police that yourself: do not ask for approval yourself in prose first. A short factual summary before the call is fine as long as it does not itself ask a yes/no approval question; then call the action and let its own confirmation be the one approval ask.
-- create: start a task. Research starts automatically; implementation waits for approve. Pass researchTaskIds when it builds on research, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo; work spanning several repositories is one task per repository. Tandem looks each skill up and gives the workers all of it, so never copy or summarize a skill yourself; a skill about the conversation itself, such as one that interviews the user, you follow here instead. If create cannot find a skill or finds two with that name, ask the user which one they meant. When you tell the user a task started or is ready, name the skills it used.
+- create: start a task. Research starts automatically; implementation waits for approve. Pass researchTaskIds when it builds on research, and manualVerification with the brief's manual verification items that apply to this task. For research or changes in another repository, keep your project repoPath and add targetRepo; work spanning several repositories is one task per repository. Tandem looks each skill up and gives the workers all of it, so never copy or summarize a skill yourself; a skill about the conversation itself, such as one that interviews the user, you follow here instead. If create cannot find a skill or finds two with that name, ask the user which one they meant. When you tell the user a task started or is ready, name the skills it used. For implementation, pass specialist with the name when the user asks for one (for example "use the blog writer"); otherwise Tandem guesses one from the specialists' descriptions. Tell the user which specialist the task got before they approve it. If create says no specialist has that name, or the specialist's file is broken, tell the user and ask which one they meant.
+- specialists: list the project's specialists (built-in, from the repository, and from the user's Tandem home) and any file problems. Use it when the user asks what specialists exist or which to pick.
 - approve: record the user's approval of an implementation scope.
 - steer: pass a user direction to a running task within approved scope. Send short changes, and use supersedes to replace an outdated one. It is delivered at the next safe point.
 - answer: reply to a worker's question by its questionId. When Tandem asks "Keep fixing?", put it to the user and answer with their "yes" or "no"; yes gives the same task more fix rounds, once per task. When a task has used all its fix rounds and Tandem no longer asks, tell the user the open findings and that they can take it over, publish it as-is (publish-now), or cancel it. Never create a new task to get past the fix-round limit.
@@ -446,7 +446,7 @@ export function buildAgentBrief(input: AgentBriefInput): string {
         ]),
     ...(instructions.length === 0 ? [] : ["## Instructions", ...formatBullets(instructions), ""]),
     ...(skills === undefined ? [] : [...skillSection(input.role, skills), ""]),
-    ...(input.playbook === undefined ? [] : [playbookSection(input.playbook), ""]),
+    ...(input.specialist === undefined ? [] : [specialistSection(input.specialist), ""]),
     "## Report",
     ...formatBullets(reportInstructions),
     ...formatBullets(REPORT_INSTRUCTIONS),

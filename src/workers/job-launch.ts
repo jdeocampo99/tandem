@@ -9,8 +9,6 @@ import type {
   TaskRecord,
 } from "../contracts.ts";
 import { harnessOf } from "../harness/contract.ts";
-import { PLAYBOOKS, type PlaybookId } from "../playbooks/catalog.ts";
-import { playbookForRun } from "../playbooks/selection.ts";
 import { buildPrReviewBrief } from "../pr-review/brief.ts";
 import { readRunFiles } from "../pr-review/run.ts";
 import { prReviewRunDiffPath } from "../pr-review/state.ts";
@@ -38,6 +36,7 @@ import {
   workerCommand,
 } from "../service/records.ts";
 import { taskSourcePath } from "../service/source.ts";
+import { type SpecialistRun, specialistForRun } from "../specialists/run.ts";
 import { policyIdentity } from "../tasks/acceptance.ts";
 import { taskInboxPath, workerReceiptPath } from "../tasks/communication-persistence.ts";
 import type { TaskStore } from "../tasks/store.ts";
@@ -90,7 +89,7 @@ function workerJobSpec(
     readonly communication: NonNullable<WorkerJob["communication"]>;
     readonly sessionDirectory: string | undefined;
     readonly timeoutMs: number | undefined;
-    readonly playbook: PlaybookId | undefined;
+    readonly specialist: SpecialistRun | undefined;
   }>,
 ): WorkerJob {
   const { home, task, runtime, role, sessionDirectory, timeoutMs } = input;
@@ -120,7 +119,9 @@ function workerJobSpec(
     ...(role === "implementer" && task.policy.config.setupCommands.length > 0
       ? { setup: task.policy.config.setupCommands }
       : {}),
-    ...(input.playbook === undefined ? {} : { playbookSteps: PLAYBOOKS[input.playbook].steps }),
+    ...(input.specialist === undefined || input.specialist.steps.length === 0
+      ? {}
+      : { specialistSteps: input.specialist.steps }),
     ...(role === "implementer" && task.policy.config.validationCommands.length > 0
       ? { validationCommands: task.policy.config.validationCommands.map(validationCommandLine) }
       : {}),
@@ -179,9 +180,9 @@ export class JobLauncher {
     const jobId = runtime.operation?.jobId ?? singleLine(this.#deps.idFactory(), "worker job id");
     const paths = jobPaths(jobDirectoryFor(this.#deps.home, task.id, task.generation, jobId));
     const context = workerBriefContext(task, runtime, role, options.extraInstructions ?? []);
-    const playbook =
+    const specialist =
       role === "implementer"
-        ? playbookForRun(task.playbook, runtime.fixContextPath !== undefined)
+        ? specialistForRun(task.specialist, runtime.fixContextPath !== undefined)
         : undefined;
     const sessionDirectory =
       role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
@@ -212,12 +213,12 @@ export class JobLauncher {
       runtime,
       role,
       jobId,
-      prompt: await this.workerPrompt(task, role, paths.jobPath, context, playbook),
+      prompt: await this.workerPrompt(task, role, paths.jobPath, context, specialist),
       resultPath: paths.resultPath,
       communication,
       sessionDirectory,
       timeoutMs: this.#deps.workerTimeoutMs,
-      playbook,
+      specialist,
     });
     const specWritten = await this.#deps.records.withOperationEffect(
       task.id,
@@ -271,7 +272,7 @@ export class JobLauncher {
     role: WorkerRole,
     jobPath: string,
     context: ReturnType<typeof workerBriefContext>,
-    playbook: PlaybookId | undefined,
+    specialist: SpecialistRun | undefined,
   ): Promise<string> {
     const prReview = task.prReview;
     if (prReview === undefined) {
@@ -282,7 +283,7 @@ export class JobLauncher {
         context.artifacts,
         undefined,
         context.instructions,
-        playbook,
+        specialist,
       );
     }
     const files = await readRunFiles(this.#deps.home, task.id, task.generation);

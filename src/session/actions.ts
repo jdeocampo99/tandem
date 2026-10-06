@@ -1,3 +1,4 @@
+import { basename, resolve } from "node:path";
 import { isBoardView } from "../board/view.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
@@ -9,13 +10,13 @@ import type {
 } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
-import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
 import type { CommentEdit, NewComment } from "../pr-review/edits.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
 import type { ReviewPostRecovery } from "../pr-review/service.ts";
 import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
+import { renderSpecialistList } from "../specialists/view.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
 import { taskName } from "../tasks/question.ts";
 import { boundTaskTrace } from "../tasks/trace.ts";
@@ -42,6 +43,7 @@ export type TandemAction =
       readonly setupCommands?: readonly string[] | undefined;
     }>
   | Readonly<{ readonly action: "models"; readonly repoPath: string }>
+  | Readonly<{ readonly action: "specialists"; readonly repoPath: string }>
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
   | Readonly<{ readonly action: "open-project"; readonly repoPath: string }>
   | Readonly<{ readonly action: "find-repo"; readonly name: string }>
@@ -70,7 +72,8 @@ export type TandemAction =
       readonly researchTaskIds?: readonly string[] | undefined;
       /** Names of skills the user asked this work to use. */
       readonly skills?: readonly string[] | undefined;
-      readonly playbook?: PinnablePlaybookId | undefined;
+      /** The specialist the user named; Tandem guesses one when absent. */
+      readonly specialist?: string | undefined;
       readonly targetRepo?: string | undefined;
       readonly targetCheckout?: string | undefined;
       readonly targetClone?: boolean | undefined;
@@ -549,7 +552,7 @@ function serviceCreateInput(
     surfaces: action.surfaces,
     ...(action.researchTaskIds === undefined ? {} : { researchTaskIds: action.researchTaskIds }),
     ...(action.skills === undefined ? {} : { skills: action.skills }),
-    ...(action.playbook === undefined ? {} : { playbook: action.playbook }),
+    ...(action.specialist === undefined ? {} : { specialist: action.specialist }),
     ...(action.targetRepo === undefined ? {} : { targetRepo: action.targetRepo }),
     ...(action.targetCheckout === undefined ? {} : { targetCheckout: action.targetCheckout }),
     ...(action.targetClone === undefined ? {} : { targetClone: action.targetClone }),
@@ -849,6 +852,14 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.prWatchFix(pullRequestInput(action)), action.action, {
       approved: true,
     }),
+  specialists: async (action, service) =>
+    actionResult(
+      renderSpecialistList(
+        await service.specialists(action.repoPath),
+        basename(resolve(action.repoPath)),
+      ),
+      action.action,
+    ),
   "memory-list": async (action, service) => {
     const lines = await service.memoryList(action.repoPath);
     return actionResult(

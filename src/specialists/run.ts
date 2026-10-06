@@ -8,7 +8,7 @@ const FIX_ROUND_STEPS = [
 ] as const;
 
 export type SpecialistRun = Readonly<{
-  /** Whose instructions apply; absent on tasks created before playbooks existed. */
+  /** Whose instructions apply; absent on a fix round of a task that pinned none. */
   readonly specialist?: Specialist;
   readonly checklist: "specialist" | "fix-round";
   /** What the submit gate holds the implementer to. */
@@ -21,7 +21,11 @@ export function specialistForRun(
   fixRound: boolean,
 ): SpecialistRun | undefined {
   if (fixRound) {
-    return { ...(pinned === undefined ? {} : { specialist: pinned }), checklist: "fix-round", steps: FIX_ROUND_STEPS };
+    return {
+      ...(pinned === undefined ? {} : { specialist: pinned }),
+      checklist: "fix-round",
+      steps: FIX_ROUND_STEPS,
+    };
   }
   return pinned === undefined
     ? undefined

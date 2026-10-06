@@ -1198,9 +1198,11 @@ test("new scouts persist a classified continuation and an explicit disposition s
         durationMs: 4,
       };
     },
-    classifyPlaybook: async (goal) => {
+    classifySpecialist: async (goal, candidates) => {
       goals.push(goal);
-      return "refactor";
+      return candidates.some((candidate) => candidate.name === "blog-writer")
+        ? "blog-writer"
+        : "refactor";
     },
   });
   try {
@@ -1249,8 +1251,8 @@ test("new scouts persist a classified continuation and an explicit disposition s
     });
     expect(implementation.researchContinuation).toBeUndefined();
     expect(requests.length).toBe(1);
-    expect(implementation.playbook).toBe("refactor");
-    expect(scout.playbook).toBeUndefined();
+    expect(implementation.specialist?.name).toBe("refactor");
+    expect(scout.specialist).toBeUndefined();
     expect(goals).toEqual(["Apply the approved scheduler change"]);
 
     const chosen = await classified.create({
@@ -1259,10 +1261,63 @@ test("new scouts persist a classified continuation and an explicit disposition s
       objective: "Speed up the scheduler",
       acceptanceCriteria: ["It is faster"],
       surfaces: ["src"],
-      playbook: "perf",
+      specialist: "perf",
     });
-    expect(chosen.playbook).toBe("perf");
+    expect(chosen.specialist?.name).toBe("perf");
     expect(goals.length).toBe(1);
+
+    await expect(
+      classified.create({
+        repoPath: source,
+        kind: "scout",
+        objective: "Research the scheduler",
+        acceptanceCriteria: ["Report"],
+        surfaces: ["src"],
+        specialist: "perf",
+      }),
+    ).rejects.toThrow(TypeError);
+    await expect(
+      classified.create({
+        repoPath: source,
+        kind: "implementation",
+        objective: "Speed up the scheduler",
+        acceptanceCriteria: ["It is faster"],
+        surfaces: ["src"],
+        specialist: "pref",
+      }),
+    ).rejects.toThrow("pref");
+
+    const folder = join(source, ".tandem", "specialists");
+    await mkdir(folder, { recursive: true });
+    const file = join(folder, "blog-writer.md");
+    await writeFile(
+      file,
+      "---\nname: blog-writer\ndescription: Writes posts.\n---\nShort paragraphs.\n## Steps\n- Write an outline\n",
+    );
+    const guessed = await classified.create({
+      repoPath: source,
+      kind: "implementation",
+      objective: "Write the launch post",
+      acceptanceCriteria: ["It is posted"],
+      surfaces: ["docs"],
+    });
+    expect(guessed.specialist).toMatchObject({ name: "blog-writer", origin: "repository" });
+    await writeFile(file, "---\nname: blog-writer\n---\nLong paragraphs.\n");
+    expect((await classified.get(guessed.id)).specialist).toEqual(guessed.specialist);
+    await rm(file);
+    expect((await classified.get(guessed.id)).specialist).toEqual(guessed.specialist);
+
+    await writeFile(join(folder, "refactor.md"), "---\nname: refactor\nmodel: opus\n---\nBody\n");
+    await expect(
+      classified.create({
+        repoPath: source,
+        kind: "implementation",
+        objective: "Tidy the scheduler",
+        acceptanceCriteria: ["Same behavior"],
+        surfaces: ["src"],
+        specialist: "refactor",
+      }),
+    ).rejects.toThrow("refactor.md");
   } finally {
     await classified.shutdown();
   }

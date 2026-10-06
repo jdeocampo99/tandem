@@ -12,13 +12,13 @@ import { harnessOfSelector } from "../harness/contract.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import { type MemoryShowResult, renderMemoryShow } from "../memory/view.ts";
 import { CATCH_UP_MAX_CHARS } from "../memory/workstream.ts";
-import { PLAYBOOKS } from "../playbooks/catalog.ts";
 import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
 import type { RequestUsageReceipt } from "../runtime/usage-receipt.ts";
 import {
   REQUEST_RECEIPT_SCHEMA_VERSION,
   renderRequestReceiptTable,
 } from "../runtime/usage-receipt.ts";
+import { specialistLine } from "../specialists/view.ts";
 import { isPinnedEvidence } from "../tasks/acceptance.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import {
@@ -205,7 +205,7 @@ function summarizeTask(task: TaskRecord): string {
       : [
           `Skills: ${task.skills.map((skill) => `${skill.name} (${SKILL_SOURCES[skill.origin]})`).join(", ")}`,
         ]),
-    ...(task.playbook === undefined ? [] : [`Type: ${PLAYBOOKS[task.playbook].title}`]),
+    ...(task.specialist === undefined ? [] : [`Specialist: ${specialistLine(task.specialist)}`]),
   ];
   if (heads.length > 0) lines.push(`Commits: ${heads.join(", ")}`);
   if (task.worktree !== undefined) {
@@ -1145,6 +1145,10 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   // Workstream notes are Markdown whose line breaks carry meaning, so they are never collapsed.
   if (action.startsWith("memory-") && typeof value === "string") {
     return boundedOutput(value, CATCH_UP_MAX_CHARS);
+  }
+  // The list is a table; collapsing its line breaks would make it unreadable.
+  if (action === "specialists" && typeof value === "string") {
+    return boundedOutput(value, ACTION_RESULT_MAX_CHARS);
   }
   if (typeof value === "string")
     return boundedOutput(compactText(value, ACTION_RESULT_MAX_CHARS), ACTION_RESULT_MAX_CHARS);

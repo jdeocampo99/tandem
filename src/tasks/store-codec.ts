@@ -55,8 +55,9 @@ import {
   WORKSTREAM_NAME_PATTERN,
   type WorktreeLease,
 } from "../contracts.ts";
-import { PLAYBOOK_IDS } from "../playbooks/catalog.ts";
 import { type PrReviewState, parsePrReviewState } from "../pr-review/state.ts";
+import { builtInSpecialist } from "../specialists/built-in.ts";
+import { checkSpecialist, type Specialist } from "../specialists/specialist.ts";
 import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 import { parseTaskCommunication } from "./communication-protocol.ts";
 import { FINDING_STATUSES } from "./findings.ts";
@@ -142,6 +143,8 @@ const TOP_LEVEL_KEYS = [
   "researchHandoffs",
   "researchContinuation",
   "skills",
+  "specialist",
+  // Tasks created before specialists pinned a built-in playbook by id.
   "playbook",
   // Tasks created before Tandem looked skills up itself recorded one coordinator-written skill.
   "skill",
@@ -982,6 +985,29 @@ function parseSkills(value: UnknownRecord, source: string): readonly SkillInvoca
  * existed load with the conservative default; anything else present is rejected rather than
  * repaired, and non-scout records may never carry one.
  */
+/** Reads `specialist`, or the built-in an older task pinned as `playbook`; a record holding both is corrupt. */
+function parsePinnedSpecialist(
+  value: UnknownRecord,
+  kind: TaskKind,
+  source: string,
+): Specialist | undefined {
+  const hasSpecialist = Object.hasOwn(value, "specialist");
+  const hasPlaybook = Object.hasOwn(value, "playbook");
+  if (hasSpecialist && hasPlaybook) {
+    failState(source, "a task records either specialist or playbook, not both");
+  }
+  if (!hasSpecialist && !hasPlaybook) return undefined;
+  if (kind !== "implementation")
+    failState(source, "only implementation tasks may record a specialist");
+  if (hasPlaybook) {
+    const id = requiredText(value, "playbook", source);
+    return builtInSpecialist(id) ?? failState(`${source}.playbook`, `unknown playbook ${id}`);
+  }
+  const check = checkSpecialist(value.specialist);
+  if (!check.valid) failState(`${source}.specialist`, check.defect);
+  return check.specialist;
+}
+
 function parseResearchContinuation(
   value: UnknownRecord,
   kind: TaskKind,
@@ -1126,6 +1152,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
     failState(source, "only pr-review tasks may record a pull request to review");
   }
   const researchContinuation = parseResearchContinuation(value, kind, source);
+  const specialist = parsePinnedSpecialist(value, kind, source);
   const taskBase = {
     schemaVersion: 1 as const,
     id,
@@ -1170,9 +1197,7 @@ export function parseTaskRecord(value: unknown, source = "task record"): TaskRec
         }),
     ...(researchContinuation === undefined ? {} : { researchContinuation }),
     ...(skills === undefined ? {} : { skills }),
-    ...(Object.hasOwn(value, "playbook")
-      ? { playbook: requiredEnum(value, "playbook", PLAYBOOK_IDS, source) }
-      : {}),
+    ...(specialist === undefined ? {} : { specialist }),
   };
   return {
     ...taskBase,

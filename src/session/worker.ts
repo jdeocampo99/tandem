@@ -1,6 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
-import { openSteps, type TodoItem } from "../workers/todos.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { findingHeadline } from "../tasks/findings.ts";
@@ -29,6 +28,7 @@ import {
   type WorkerTerminalState,
   type WorkerTokenTally,
 } from "../workers/terminal.ts";
+import { openSteps, type TodoItem } from "../workers/todos.ts";
 import { validationCommandRefusal } from "../workers/validation-commands.ts";
 import type {
   Cancel,
@@ -749,10 +749,10 @@ export class WorkerSession {
         const status = await this.deps.gitStatus(job.cwd);
         const uncommitted = status === undefined ? undefined : uncommittedWorkRejection(status);
         if (uncommitted !== undefined) return uncommitted;
-        const open = openSteps(job.playbookSteps ?? [], this.todos);
+        const open = openSteps(job.specialistSteps ?? [], this.todos);
         if (open.length > 0) {
           return new ReportRejection(
-            `these playbook steps are still open in your to-do list: ${open.join("; ")}. Finish them, or drop any that do not apply with the todo tool and give the reason in your report`,
+            `these specialist steps are still open in your to-do list: ${open.join("; ")}. Finish them, or drop any that do not apply with the todo tool and give the reason in your report`,
           );
         }
       }
