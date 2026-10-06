@@ -8,8 +8,10 @@ import { withPrWatches } from "../../../src/pr-watch/store.ts";
 import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import { nativeReplyLinks } from "../../../src/session/native-links.ts";
-import { TERN_PLUGIN_KEYS } from "../../../src/terminal-backend/tern/plugin-keys.ts";
-import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin-settings.ts";
+import {
+  configureTernPluginSettings,
+  planTernPluginKeys,
+} from "../../../src/terminal-backend/tern/plugin.ts";
 import { content } from "../../board/fixtures.ts";
 import {
   type ScenarioTernProject,
@@ -43,7 +45,11 @@ const PATCH = [
 ].join("\n");
 
 export function briefs(world: ScenarioWorld) {
-  return createRequestBriefStore({ home: world.home, clock: world.clock, idFactory: world.idFactory });
+  return createRequestBriefStore({
+    home: world.home,
+    clock: world.clock,
+    idFactory: world.idFactory,
+  });
 }
 
 /** A project mid-flight: one task in each panel section, a brief to approve and a watched PR. */
@@ -80,12 +86,14 @@ async function seedWork(world: ScenarioWorld): Promise<string> {
     patch: PATCH,
     checks: [
       { name: "lint", state: "pass" },
-      { name: "e2e", state: "pending", startedAt: new Date(Date.parse(world.clock()) - 90_000).toISOString() },
+      {
+        name: "e2e",
+        state: "pending",
+        startedAt: new Date(Date.parse(world.clock()) - 90_000).toISOString(),
+      },
       { name: "unit", state: "fail" },
     ],
-    comments: [
-      { id: "c1", author: "sam", createdAt: world.clock(), body: "Looks close." },
-    ],
+    comments: [{ id: "c1", author: "sam", createdAt: world.clock(), body: "Looks close." }],
     threads: [
       {
         id: "thread-1",
@@ -95,7 +103,13 @@ async function seedWork(world: ScenarioWorld): Promise<string> {
         resolved: false,
         outdated: false,
         comments: [
-          { id: "n1", databaseId: 11, author: "jules", createdAt: world.clock(), body: "Why guard here?" },
+          {
+            id: "n1",
+            databaseId: 11,
+            author: "jules",
+            createdAt: world.clock(),
+            body: "Why guard here?",
+          },
         ],
       },
     ],
@@ -199,7 +213,10 @@ function styleOf(view: Rendered, text: string): string {
 }
 
 function traceSince(world: ScenarioWorld, mark: number): readonly string[] {
-  return world.trace().slice(mark).map((event) => `${event.action} ${event.outcome}`);
+  return world
+    .trace()
+    .slice(mark)
+    .map((event) => `${event.action} ${event.outcome}`);
 }
 
 function blockKinds(world: ScenarioWorld): readonly string[] {
@@ -221,8 +238,22 @@ export const inventory: readonly InventoryEntry[] = [
         await host.publish();
         await host.refresh();
         const view = await panel.render();
-        expect(view.text.slice(0, 7)).toEqual(["tandem ▾", "1", "5h unavailable", "🔔︎ 0", "⎇", "▦", "Needs you · 2"]);
-        expect(labels(view).slice(0, 5)).toEqual(["tandem ▾ 1", "5h unavailable", "🔔︎ 0", "⎇", "▦"]);
+        expect(view.text.slice(0, 7)).toEqual([
+          "tandem ▾",
+          "1",
+          "5h unavailable",
+          "🔔︎ 0",
+          "⎇",
+          "▦",
+          "Needs you · 2",
+        ]);
+        expect(labels(view).slice(0, 5)).toEqual([
+          "tandem ▾ 1",
+          "5h unavailable",
+          "🔔︎ 0",
+          "⎇",
+          "▦",
+        ]);
         await panel.click("▦");
         expect(host.screen(host.pane("board")).pane).toBeGreaterThan(0);
         await panel.click("5h unavailable");
@@ -230,7 +261,12 @@ export const inventory: readonly InventoryEntry[] = [
         await panel.click("⎇");
         const prs = await host.screen(host.pane("pr")).render();
         expect(prs.title).toBe("#281 ▾");
-        expect(blockKinds(world)).toEqual(["tandem.board", "tandem.panel", "tandem.pr", "tandem.usage"]);
+        expect(blockKinds(world)).toEqual([
+          "tandem.board",
+          "tandem.panel",
+          "tandem.pr",
+          "tandem.usage",
+        ]);
       }),
   },
   {
@@ -241,24 +277,56 @@ export const inventory: readonly InventoryEntry[] = [
         const view = await panel.render();
         expect(view.text.slice(5)).toEqual([
           "Needs you · 2",
-          "●", "Add dark mode", "brief to approve", "brief waiting for approval",
-          "●", "Fix login", "stuck", "0s", "worker stopped twice",
+          "●",
+          "Add dark mode",
+          "brief to approve",
+          "brief waiting for approval",
+          "●",
+          "Fix login",
+          "stuck",
+          "0s",
+          "worker stopped twice",
           "Running · 1",
-          "●", "Port the terminal", "implementing", "0s", "for 0s",
+          "●",
+          "Port the terminal",
+          "implementing",
+          "0s",
+          "for 0s",
           "Ready · 2",
-          "●", "Ship the port", "ready", "0s", " · waiting for PR watch", "#281 ↗",
-          "●", "#282 feature-282", "checks running", "2 checks pending",
+          "●",
+          "Ship the port",
+          "ready",
+          "0s",
+          " · waiting for PR watch",
+          "#281 ↗",
+          "●",
+          "#282 feature-282",
+          "checks running",
+          "2 checks pending",
           "Recently done · 1",
-          "●", "Write docs", "done", "0s", "done",
+          "●",
+          "Write docs",
+          "done",
+          "0s",
+          "done",
         ]);
         expect(styleOf(view, "Needs you · 2")).toContain("tdp-needs");
         const dots = view.spans
           .filter((span) => span.text === "●")
           .map((span) => span.style.split(" ").at(-1));
-        expect(dots).toEqual(["tdp-yellow", "tdp-red", "tdp-blue", "tdp-green", "tdp-yellow", "tdp-green"]);
+        expect(dots).toEqual([
+          "tdp-yellow",
+          "tdp-red",
+          "tdp-blue",
+          "tdp-green",
+          "tdp-yellow",
+          "tdp-green",
+        ]);
         const mark = host.events.length;
         await panel.click("#281 ↗");
-        expect(host.since(mark).flatMap((event) => (event.open ? [event.open.url] : []))).toEqual([PR_URL]);
+        expect(host.since(mark).flatMap((event) => (event.open ? [event.open.url] : []))).toEqual([
+          PR_URL,
+        ]);
       }),
   },
   {
@@ -280,7 +348,9 @@ export const inventory: readonly InventoryEntry[] = [
         await panel.press({ name: "up" });
         expect(await row()).toBe("Add dark mode");
         await panel.press({ name: "enter" });
-        expect((await host.screen(host.pane("brief")).render()).title).toBe("Brief · Request brief");
+        expect((await host.screen(host.pane("brief")).render()).title).toBe(
+          "Brief · Request brief",
+        );
         await panel.click(/^● Port the terminal/);
         expect((await host.screen(host.pane("task")).render()).title).toBe("Port the terminal");
         await panel.click(/^● #282 feature-282/);
@@ -310,7 +380,9 @@ export const inventory: readonly InventoryEntry[] = [
         expect((await panel.render()).text).toContain("🔔︎ 1");
         const mark = host.events.length;
         await panel.click("🔔︎ 1");
-        expect(host.since(mark).flatMap((event) => (event.command ? [event.command] : []))).toEqual(["inbox"]);
+        expect(host.since(mark).flatMap((event) => (event.command ? [event.command] : []))).toEqual(
+          ["inbox"],
+        );
         expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(0);
         await host.publish();
         await host.refresh();
@@ -327,8 +399,15 @@ export const inventory: readonly InventoryEntry[] = [
           await host.publish();
           await host.refresh();
           expect((await panel.render()).text).toEqual([
-            "tandem ▾", "5h unavailable", "🔔︎ 0", "⎇", "▦",
-            "Needs you · 0", "Running · 0", "Ready · 0", "Recently done · 0",
+            "tandem ▾",
+            "5h unavailable",
+            "🔔︎ 0",
+            "⎇",
+            "▦",
+            "Needs you · 0",
+            "Running · 0",
+            "Ready · 0",
+            "Recently done · 0",
           ]);
           await writeFile(nativeViewsPath(world.home, world.repoPath), "{broken");
           await host.refresh();
@@ -339,7 +418,9 @@ export const inventory: readonly InventoryEntry[] = [
           expect(host.cli.length).toBe(mark);
           await host.publish(host.project, { snapshotAgeMs: 60_000 });
           await host.refresh();
-          expect((await panel.render()).text.at(-1)).toBe("⚠ updated 1m ago · no coordinator running");
+          expect((await panel.render()).text.at(-1)).toBe(
+            "⚠ updated 1m ago · no coordinator running",
+          );
         },
         { seed: false, publish: false },
       ),
@@ -356,12 +437,24 @@ export const inventory: readonly InventoryEntry[] = [
         await otherProject(parity);
         await host.publish();
         await host.refresh();
-        await panel.click("tandem ▾ 1");
+        await panel.click("tandem ▾ 2");
         const open = await panel.render();
         expect(open.text.slice(0, open.text.indexOf("tandem ▾"))).toEqual([
-          " ", "api", "0 running · 1 needs you", "1", "⌘1",
-          "✓", "repo", "1 running · 2 needs you", "2", "⌘2",
-          " ", "web", "offline", "1", "⌘3",
+          " ",
+          "api",
+          "0 running · 1 needs you",
+          "1",
+          "⌘1",
+          "✓",
+          "repo",
+          "1 running · 2 needs you",
+          "2",
+          "⌘2",
+          " ",
+          "web",
+          "offline",
+          "1",
+          "⌘3",
           "+ Open another project…",
           "⌘⇧[ / ⌘⇧] previous / next project",
         ]);
@@ -380,12 +473,12 @@ export const inventory: readonly InventoryEntry[] = [
         world.advanceClock(0.5);
         await host.publish();
         await host.refresh();
-        await panel.click("tandem ▾ 1");
+        await panel.click("tandem ▾ 2");
         mark = world.trace().length;
         await panel.click(/ api /);
         expect(traceSince(world, mark)).toContain("tern focus ok");
         expect((await panel.render()).text).not.toContain("+ Open another project…");
-        await panel.click("tandem ▾ 1");
+        await panel.click("tandem ▾ 2");
         await panel.click("+ Open another project…");
         expect(world.sentKeys()).toEqual([
           { paneId: "101", text: "Help me open another project in Tandem.\r" },
@@ -402,7 +495,9 @@ export const inventory: readonly InventoryEntry[] = [
         await host.publish();
         await host.refresh();
         const commands = await host.commands();
-        expect(commands.filter((command) => command.visible).map((command) => command.title)).toEqual([
+        expect(
+          commands.filter((command) => command.visible).map((command) => command.title),
+        ).toEqual([
           "Tandem: New request…",
           "Tandem: Open task…",
           "Tandem: Toggle board",
@@ -410,7 +505,10 @@ export const inventory: readonly InventoryEntry[] = [
           "Tandem: Usage",
         ]);
         const registered = new Set(commands.map((command) => `plugin.tandem.${command.id}`));
-        const bound = [...new Set(Object.values(TERN_PLUGIN_KEYS))];
+        const installed: { keybinds: Record<string, string> } = JSON.parse(
+          planTernPluginKeys("{}").text,
+        );
+        const bound = [...new Set(Object.values(installed.keybinds))];
         expect(bound.filter((id) => !registered.has(id))).toEqual([]);
         expect(
           commands.filter((command) => !command.visible).map((command) => command.title),
@@ -460,7 +558,9 @@ export const inventory: readonly InventoryEntry[] = [
         ]);
         for (const link of links) expect(await host.link(link.url)).toBe(true);
         expect((await host.screen(host.pane("task")).render()).title).toBe("Port the terminal");
-        expect((await host.screen(host.pane("brief")).render()).title).toBe("Brief · Request brief");
+        expect((await host.screen(host.pane("brief")).render()).title).toBe(
+          "Brief · Request brief",
+        );
         expect((await host.screen(host.pane("pr")).render()).title).toBe("#281 ▾");
         expect(await host.link("https://example.com/not-tandem")).toBe(false);
         expect(await host.link("tandem://pr/not-a-number")).toBe(false);
@@ -496,9 +596,9 @@ export const inventory: readonly InventoryEntry[] = [
         await briefs(world).create({ repoPath: world.repoPath, content: content("Add search") });
         await host.publish();
         expect(world.ttyWrites().map((write) => `${write.paneId} ${write.text}`)).toEqual([
-          "102 \x1b]777;notify;Tandem: Stuck;Port the terminal\x07",
           "102 \x1b]777;notify;Tandem: Done;Write docs\x07",
-          "102 \x1b]777;notify;Tandem: Needs you;Request brief\x07",
+          "102 \x1b]777;notify;Tandem: Stuck;Port the terminal\x07",
+          "102 \x1b]777;notify;Tandem: Needs you;Add search\x07",
         ]);
         await host.refresh();
         expect((await panel.render()).text).toContain("🔔︎ 3");
@@ -513,11 +613,24 @@ export const inventory: readonly InventoryEntry[] = [
         const view = await host.screen(host.pane("task")).render();
         expect(view.title).toBe("Ship the port");
         expect(view.text.slice(0, 18)).toEqual([
-          "Ship the port", "task #ship", "← Orchestrator",
-          "Model unavailable", "0s elapsed", "Branch unavailable",
-          "Right now", "▸ ready to publish",
-          "Agent progress", "✓ Implement", "→", "✓ Validate", "→", "✓ Review", "→",
-          "Fix · round 0 of 1", "→", "Ready",
+          "Ship the port",
+          "task #ship",
+          "← Orchestrator",
+          "Model unavailable",
+          "0s elapsed",
+          "Branch unavailable",
+          "Right now",
+          "▸ ready to publish",
+          "Agent progress",
+          "✓ Implement",
+          "→",
+          "✓ Validate",
+          "→",
+          "✓ Review",
+          "→",
+          "Fix · round 0 of 1",
+          "→",
+          "Ready",
         ]);
         expect(styleOf(view, "✓ Implement")).toContain("success");
       }),
@@ -531,24 +644,48 @@ export const inventory: readonly InventoryEntry[] = [
         const task = host.screen(host.pane("task"));
         const body = async () => {
           const view = await task.render();
-          return view.text.slice(view.text.indexOf("Cost") + 1, view.text.indexOf("Message the worker…"));
+          return view.text.slice(
+            view.text.indexOf("Cost") + 1,
+            view.text.indexOf("Message the worker…"),
+          );
         };
         expect(labels(await task.render()).slice(1, 7)).toEqual([
-          "Overview", "Brief", "Progress", "Diff", "PR", "Cost",
+          "Overview",
+          "Brief",
+          "Progress",
+          "Diff",
+          "PR",
+          "Cost",
         ]);
         const at = world.clock().slice(11, 16);
         expect(await body()).toEqual([
-          "Summary", "Ship the port", "To-dos · 0 of 0", "No worker to-dos yet.", "Recent events",
-          at, "implementing → ready", at, "queued → implementing", at, "awaiting-approval → queued",
-          at, "Started · awaiting-approval",
+          "Summary",
+          "Ship the port",
+          "To-dos · 0 of 0",
+          "No worker to-dos yet.",
+          "Recent events",
+          at,
+          "queued → ready",
+          at,
+          "awaiting-approval → queued",
+          at,
+          "Started · awaiting-approval",
         ]);
         await task.click("Brief");
         expect(await body()).toEqual(["No brief is linked to this task yet."]);
         await task.click("Progress");
         expect(await body()).toEqual([
-          "Timeline", at, "Started · awaiting-approval", at, "awaiting-approval → queued",
-          at, "queued → implementing", at, "implementing → ready",
-          "Validation checks", "No validation evidence yet.", "Review findings", "No saved findings.",
+          "Timeline",
+          at,
+          "Started · awaiting-approval",
+          at,
+          "awaiting-approval → queued",
+          at,
+          "queued → ready",
+          "Validation checks",
+          "No validation evidence yet.",
+          "Review findings",
+          "No saved findings.",
         ]);
         await task.click("Diff");
         const diff = await body();
@@ -571,10 +708,17 @@ export const inventory: readonly InventoryEntry[] = [
         const task = host.screen(host.pane("task"));
         const view = await task.render();
         const banner = view.text.indexOf("Stuck");
-        expect(view.text.slice(banner, banner + 4)).toEqual(["Stuck", "worker stopped twice", "Restart", "Steer…"]);
+        expect(view.text.slice(banner, banner + 4)).toEqual([
+          "Stuck",
+          "worker stopped twice",
+          "Restart",
+          "Steer…",
+        ]);
         expect(view.text.slice(-4)).toEqual([
-          "Message the worker…", "Model unavailable",
-          "Steers the worker; it reads this at its next safe step", "Send ↑",
+          "Message the worker…",
+          "Model unavailable",
+          "Steers the worker; it reads this at its next safe step",
+          "Send ↑",
         ]);
         let mark = host.events.length;
         await task.click("Restart");
@@ -604,7 +748,9 @@ export const inventory: readonly InventoryEntry[] = [
         await rm(nativeDetailPath(world.home, world.repoPath, "task-docs.json"));
         await panel.click(/^● Write docs/);
         expect((await host.screen(host.pane("task")).render()).text).toEqual([
-          "Task unavailable", "← Orchestrator", "Task view unavailable. Waiting for its saved detail file.",
+          "Task unavailable",
+          "← Orchestrator",
+          "Task view unavailable. Waiting for its saved detail file.",
         ]);
         await host.publish();
         await panel.click(/^● Port the terminal/);
@@ -615,21 +761,38 @@ export const inventory: readonly InventoryEntry[] = [
         expect((await task.render()).text).toContain("Sending…");
         await host.settle();
         expect((await task.render()).text).toContain("Send ↑");
+        expect(JSON.stringify((await world.store.read("port"))?.communication)).toContain(
+          "use the new API",
+        );
         await writeFile(nativeDetailPath(world.home, world.repoPath, "task-port.json"), "{broken");
         await host.refresh();
         const stale = await task.render();
-        expect(stale.text).toContain("Saved view unavailable. Actions are disabled until fresh data arrives.");
+        expect(stale.text).toContain(
+          "Saved view unavailable. Actions are disabled until fresh data arrives.",
+        );
         expect(stale.title).toBe("Port the terminal");
+        const port = await world.store.read("port");
+        if (port === undefined) throw new Error("missing seeded task");
+        await world.store.update(port.id, port.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          pullRequest: {
+            repository: "acme/app",
+            number: 283,
+            state: "draft",
+            head: "feature-283",
+            base: "main",
+          },
+        }));
         await host.publish();
         await host.refresh();
-        world.replaceForeground("101", ["unrelated"]);
+        await task.click("PR");
         const mark = host.events.length;
-        await task.click(/^Message the worker…/);
-        await task.type("again");
-        await task.click("Send ↑");
-        expect(host.toasts(mark).map((toast) => toast.title)).toEqual(["Tandem action failed"]);
-        expect((await task.render()).text).toContain("again");
-        world.replaceForeground("101", ["omp", "--cwd", host.project.worktree.path, "--session-dir", join(world.home, "conversations", "repo")]);
+        await task.click("Open PR #283");
+        expect(host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`)).toEqual([
+          "Tandem action failed: tandem: Native pr detail is not ready\n",
+        ]);
+        expect(blockKinds(world)).toEqual(["tandem.panel", "tandem.task"]);
         await task.click("← Orchestrator");
         expect(blockKinds(world)).toEqual(["tandem.panel"]);
       }),
@@ -639,11 +802,20 @@ export const inventory: readonly InventoryEntry[] = [
     item: "Loading text; NEW markers; hover + and comment card; Approve; Request changes (N); Edit in browser ↗",
     run: () =>
       withParity(async ({ host, panel, world, briefId }) => {
-        const fresh = await briefs(world).create({ repoPath: world.repoPath, content: content("Add search") });
-        await rm(nativeDetailPath(world.home, world.repoPath, `brief-${fresh.id}.json`), { force: true });
+        const fresh = await briefs(world).create({
+          repoPath: world.repoPath,
+          content: content("Add search"),
+        });
+        await rm(nativeDetailPath(world.home, world.repoPath, `brief-${fresh.id}.json`), {
+          force: true,
+        });
         expect(await host.link(`tandem://brief/${fresh.id}`)).toBe(true);
         const loading = host.screen(host.pane("brief"));
-        expect((await loading.render()).text).toEqual(["Brief", "×", "Loading brief… Waiting for a published revision."]);
+        expect((await loading.render()).text).toEqual([
+          "Brief",
+          "×",
+          "Loading brief… Waiting for a published revision.",
+        ]);
         await loading.click("×");
         const store = briefs(world);
         const saved = await store.read(briefId);
@@ -657,9 +829,12 @@ export const inventory: readonly InventoryEntry[] = [
         const brief = host.screen(host.pane("brief"));
         const view = await brief.render();
         expect(view.text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
-        expect(view.text.slice(view.text.indexOf("Add dark mode with a toggle"), view.text.indexOf("Add dark mode with a toggle") + 3)).toEqual([
-          "Add dark mode with a toggle", "NEW", "+",
-        ]);
+        expect(
+          view.text.slice(
+            view.text.indexOf("Add dark mode with a toggle"),
+            view.text.indexOf("Add dark mode with a toggle") + 3,
+          ),
+        ).toEqual(["Add dark mode with a toggle", "NEW", "+"]);
         expect(labels(view)).not.toContain("Edit in browser ↗");
         await brief.click("+", { nth: 2 });
         await brief.focusField("main.comment");
@@ -675,7 +850,10 @@ export const inventory: readonly InventoryEntry[] = [
         expect(world.sentKeys().map((sent) => sent.text)).toEqual([
           expect.stringContaining("Default to the system theme"),
         ]);
-        const approved = await briefs(world).create({ repoPath: world.repoPath, content: content("Add export") });
+        const approved = await briefs(world).create({
+          repoPath: world.repoPath,
+          content: content("Add export"),
+        });
         await host.publish();
         await host.refresh();
         expect(await host.link(`tandem://brief/${approved.id}`)).toBe(true);
@@ -714,15 +892,34 @@ export const inventory: readonly InventoryEntry[] = [
         await host.publish();
         await host.refresh();
         const stale = await brief.render();
-        expect(stale.text).toContain("A newer revision is available. Your comments still describe this revision.");
+        expect(stale.text).toContain(
+          "A newer revision is available. Your comments still describe this revision.",
+        );
         expect(labels(stale)).toContain("Discard comments and refresh");
         mark = host.events.length;
         await brief.click("Request changes (1)");
-        const refused = host.toasts(mark);
-        expect(refused.map((toast) => toast.title)).toEqual(["Tandem couldn't send the brief"]);
+        expect(host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`)).toEqual([
+          "Brief action completed: The brief changed after this action; the current brief was left open. Do not resubmit this action.",
+        ]);
+        expect(world.sentKeys()).toEqual([
+          {
+            paneId: "101",
+            text: `From the open review page:\n\nBrief ${briefId}, revision 1: Request changes\n\nLine 2 [TL;DR:0:0] (Add dark mode):\nKeep the old palette\r`,
+          },
+        ]);
         expect(blockKinds(world)).toContain("tandem.brief");
-        await brief.click("Discard comments and refresh");
-        expect((await brief.render()).text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
+        const after = await brief.render();
+        expect(after.text.slice(0, 4)).toEqual([
+          "Brief · Request brief · rev 1 · 0 changes",
+          "×",
+          "The brief changed after this action; the current brief was left open. Do not resubmit this action.",
+          "A newer revision is available. Your comments still describe this revision.",
+        ]);
+        expect(labels(after).filter((label) => !["×", "+", "Remove"].includes(label))).toEqual([]);
+        await brief.click("×");
+        await panel.click(/^● Add dark mode/);
+        const reopened = await host.screen(host.pane("brief")).render();
+        expect(reopened.text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
       }),
   },
 ];

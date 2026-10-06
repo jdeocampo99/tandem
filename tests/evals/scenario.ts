@@ -1115,7 +1115,8 @@ export async function createScenarioWorld(
         }),
       );
     }
-    if (argv[1] === "pr" && argv[2] === "diff") return commandResult(pullRequestArgument(argv).patch);
+    if (argv[1] === "pr" && argv[2] === "diff")
+      return commandResult(pullRequestArgument(argv).patch);
     if (argv[1] === "pr" && argv[2] === "edit") {
       const pr = pullRequestArgument(argv);
       const option = (name: string) =>

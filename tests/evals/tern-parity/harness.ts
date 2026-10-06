@@ -86,7 +86,11 @@ const HostEvent = z
       kind: z.string(),
       title: z.string().optional(),
       tree: z
-        .object({ main: ViewNode.optional(), dock: ViewNode.optional(), layer: ViewNode.optional() })
+        .object({
+          main: ViewNode.optional(),
+          dock: ViewNode.optional(),
+          layer: ViewNode.optional(),
+        })
         .optional(),
     }),
     route: z.object({ handled: z.boolean() }),
@@ -152,7 +156,14 @@ function clickable(node: ViewNode): Readonly<{ label: string; action: string }>[
       : undefined;
   const own =
     typeof click === "string"
-      ? [{ label: spans(node).map((span) => span.text).join(" "), action: click }]
+      ? [
+          {
+            label: spans(node)
+              .map((span) => span.text)
+              .join(" "),
+            action: click,
+          },
+        ]
       : [];
   return [...own, ...node.c.flatMap(clickable)];
 }
@@ -233,13 +244,13 @@ export class TernParityHost {
     this.#epochMs = Date.parse(world.clock());
   }
 
-  static async start(
-    world: ScenarioWorld,
-    project: ScenarioTernProject,
-  ): Promise<TernParityHost> {
+  static async start(world: ScenarioWorld, project: ScenarioTernProject): Promise<TernParityHost> {
     const names = (await readdir(PLUGIN)).filter((name) => name.endsWith(".luau")).toSorted();
     const sources = await Promise.all(
-      names.map(async (name) => `["./${name.slice(0, -5)}"]=${longString(await readFile(join(PLUGIN, name), "utf8"))}`),
+      names.map(
+        async (name) =>
+          `["./${name.slice(0, -5)}"]=${longString(await readFile(join(PLUGIN, name), "utf8"))}`,
+      ),
     );
     const host = new TernParityHost(
       world,
@@ -380,7 +391,9 @@ export class TernParityHost {
     await this.settle();
   }
 
+  /** A link click in a coordinator reply; the click focuses the coordinator's pane first. */
   async link(url: string): Promise<boolean> {
+    await this.focus(Number(this.project.coordinator.paneId));
     const line = await this.send({ op: "link", url });
     await this.settle();
     return line.events.some((event) => event.link?.handled === true);
@@ -437,8 +450,9 @@ export class TernParityHost {
     else if (script === "native-input.sh") {
       const [verb, id, ...context] = rest;
       if (verb === undefined || id === undefined) throw new Error("native-input.sh needs a verb");
-      exitCode = await withNativeInput(process.stdin ?? "", async (path) =>
-        (await invoke(["native", verb, id, "--input", path, ...context])).exitCode,
+      exitCode = await withNativeInput(
+        process.stdin ?? "",
+        async (path) => (await invoke(["native", verb, id, "--input", path, ...context])).exitCode,
       );
     } else throw new Error(`Tern plugin ran unknown script ${script}`);
     const run = { argv: process.argv, exitCode, stdout: stdout.join(""), stderr: stderr.join("") };
@@ -601,7 +615,8 @@ export class Screen {
     const matches = actions.filter((entry) =>
       typeof label === "string" ? entry.label === label : label.test(entry.label),
     );
-    const chosen = options.nth === undefined ? matches : matches.slice(options.nth - 1, options.nth);
+    const chosen =
+      options.nth === undefined ? matches : matches.slice(options.nth - 1, options.nth);
     if (chosen.length !== 1 || (options.nth === undefined && matches.length !== 1))
       throw new Error(
         `expected one enabled "${String(label)}" in pane ${this.pane}, found ${matches.length}: ${JSON.stringify(actions.map((entry) => entry.label))}`,
