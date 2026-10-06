@@ -111,7 +111,8 @@ function applySavedModelSettings(base: RepoPolicy, settings: ModelSettings): Rep
   return parsePolicyOverride({ models: settings.models }, base);
 }
 
-function repositoryKey(root: string): string {
+/** Stable key used by saved project settings and derived project files. Input is the canonical root. */
+export function repositoryKey(root: string): string {
   return createHash("sha256").update(root).digest("hex").slice(0, 24);
 }
 
