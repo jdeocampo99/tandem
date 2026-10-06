@@ -9,7 +9,12 @@ import {
   writeNativeViews,
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import {
+  blocks,
+  Created,
+  decode,
+  ternCommands,
+} from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
 
@@ -153,6 +158,10 @@ type ControlNode = {
       };
       await host.open(input, root, "panel", "panel", index);
       let opened = await host.open(input, root, "task", "task", file);
+      const launched = blocks(await ternCommands(commandRunner, { binary }).ls(root)).find(
+        (entry) => entry.block.id === opened.paneId,
+      );
+      expect(launched?.block.args).toEqual([file, endpoint.paneId, root, "", index]);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       expect(JSON.stringify(await tree())).toContain("round 1 of 2");
       await ctl("shot", "03-task");
