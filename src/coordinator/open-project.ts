@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
-import { maybeShowCatchUp } from "../memory/native-visits.ts";
+import { tryShowCatchUp } from "../memory/native-visits.ts";
 import { terminalContext } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
@@ -75,15 +75,8 @@ export async function openProject(
     workspaceId: record.endpoint.workspaceId,
   });
   if (focus.focused) {
-    try {
-      await maybeShowCatchUp(terminal, { home: input.home, record });
-    } catch (error: unknown) {
-      const detail = error instanceof Error ? error.message : String(error);
-      return {
-        focused: true,
-        warnings: [`Project opened, but catch-up is unavailable: ${detail}`],
-      };
-    }
+    const { warning } = await tryShowCatchUp(terminal, { home: input.home, record });
+    return { focused: true, ...(warning === undefined ? {} : { warnings: [warning] }) };
   }
   return { focused: focus.focused };
 }

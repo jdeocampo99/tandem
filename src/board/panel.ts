@@ -1,6 +1,7 @@
 import type { BlockCauseKind, TaskStage, TerminalName } from "../contracts.ts";
 import type { TodoItem } from "../playbooks/progress.ts";
 import { elapsed } from "../pr-watch/view.ts";
+import { nativeDurationLabel } from "../runtime/usage-display.ts";
 import type { LimitMeter } from "../runtime/usage-view.ts";
 import type { WorkerActivity } from "../workers/worker-activity.ts";
 import type { BoardSnapshot } from "./snapshot.ts";
@@ -588,6 +589,7 @@ export type NativePanelView = Readonly<{
     projects: readonly NativeProjectRow[];
     otherProjectsNeedYou: number;
     fiveHour?: LimitMeter;
+    fiveHourLabel: string;
     bellCount: number;
   }>;
   sections: readonly Readonly<{
@@ -728,6 +730,10 @@ export function nativePanelView(
         .filter((row) => !row.current)
         .reduce((sum, row) => sum + row.needsYou, 0),
       bellCount: input.bellCount,
+      fiveHourLabel:
+        input.fiveHour === undefined || input.fiveHour.remainingPercent === "unavailable"
+          ? "5h unavailable"
+          : `5h ${Math.round(100 - input.fiveHour.remainingPercent)}% · ${input.fiveHour.resetInMs === "unavailable" ? "unavailable" : nativeDurationLabel(input.fiveHour.resetInMs)}`,
       ...(input.fiveHour === undefined ? {} : { fiveHour: input.fiveHour }),
     },
     sections: (["Needs you", "Running", "Ready", "Recently done"] as const).map((title) => ({

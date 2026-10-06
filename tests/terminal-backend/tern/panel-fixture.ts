@@ -72,6 +72,7 @@ export function panelFixture(project: string): NativePanelView {
       projects,
       otherProjectsNeedYou: 1,
       bellCount: 3,
+      fiveHourLabel: "5h 62% · 2h 14m",
       fiveHour: {
         provider: "anthropic",
         account: "fixture",
