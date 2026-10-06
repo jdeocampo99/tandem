@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { link, lstat, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { AdapterCommandError, AdapterProtocolError } from "../../adapters/primitives.ts";
 import type { CommandRunner } from "../../contracts.ts";
+import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
 
 export const TANDEM_TERN_PLUGIN = "tandem";
@@ -133,14 +134,27 @@ function settingsInput(deps: TernPluginDependencies): TernPluginSettingsInput {
 
 /**
  * Every Tandem home on this machine shares one Tern config directory, which holds both the plugin
- * links and the settings file, so the lock lives there rather than in any one Tandem home.
+ * links and the settings file, so the lock lives there rather than in any one Tandem home. Tern's
+ * `plugin list` never creates that directory, so first-time setup creates it before locking; restore
+ * only locks once its record exists there.
  */
 async function withSetupLock<T>(input: TernPluginSettingsInput, run: () => Promise<T>) {
-  const release = await acquireDarwinFileLock(
-    join(dirname(settingsPath(input)), "tandem-setup.lock"),
-    SETUP_LOCK_TIMEOUT_MS,
-    SETUP_LOCK_POLL_MS,
-  );
+  const directory = dirname(settingsPath(input));
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  let release: () => Promise<void>;
+  try {
+    release = await acquireDarwinFileLock(
+      join(directory, "tandem-setup.lock"),
+      SETUP_LOCK_TIMEOUT_MS,
+      SETUP_LOCK_POLL_MS,
+    );
+  } catch (error) {
+    if (!(error instanceof StoreLockTimeoutError)) throw error;
+    throw new Error(
+      "Another Tandem process is setting up Tern and is likely waiting for an answer to its question about Tern's sidebar and shortcuts. Answer it there, then try again.",
+      { cause: error },
+    );
+  }
   try {
     return await run();
   } finally {

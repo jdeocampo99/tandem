@@ -76,6 +76,28 @@ test("onboarding links palette actions even when global preferences are declined
   ]);
 });
 
+test("first-time setup links and configures Tern before its config directory exists", async () => {
+  const root = await mkdtemp("/tmp/tandem-plugin-fresh-");
+  const config = join(root, "Tern");
+  const fresh = runner([missing, ready]);
+  try {
+    expect(
+      await ensureTernPlugin({
+        ...fresh,
+        cwd: root,
+        env: { TERN_CONFIG_DIR: config },
+        confirm: async () => true,
+      }),
+    ).toBe(true);
+    expect(fresh.calls.map((call) => call.argv[2])).toEqual(["list", "link", "list"]);
+    const applied = JSON.parse(await readFile(join(config, "settings.json"), "utf8"));
+    expect(applied.tabs_autohide).toBe(true);
+    expect(applied.keybinds["cmd+shift+b"]).toBe("plugin.tandem.board");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 for (const selection of ["injected-path", "explicit-binary", "app-fallback"] as const) {
   test(`plugin list, link and reload resolve the executable with ${selection}`, async () => {
     const root = await mkdtemp("/tmp/tandem-plugin-binary-");
