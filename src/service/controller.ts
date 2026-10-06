@@ -1238,9 +1238,13 @@ class TandemController {
     };
   }
 
-  async openProject(
-    repoPath: string,
-  ): Promise<Readonly<{ readonly repoPath: string; readonly focused: boolean }>> {
+  async openProject(repoPath: string): Promise<
+    Readonly<{
+      readonly repoPath: string;
+      readonly focused: boolean;
+      readonly warnings?: readonly string[];
+    }>
+  > {
     const onboarded = await this.setupOnboard(repoPath, false);
     if (!onboarded.existingConfig) {
       throw new Error(`${onboarded.repoPath} has no saved Tandem settings yet; save them first`);
@@ -1248,13 +1252,13 @@ class TandemController {
     if (!onboarded.modelSettings.configured) {
       throw new Error("no model choices are saved yet; save them first");
     }
-    const { focused } = await openProject(this.#deps.run, this.#deps.terminal, {
+    const opened = await openProject(this.#deps.run, this.#deps.terminal, {
       repoPath: onboarded.repoPath,
       home: this.#deps.home,
       sessionId: this.#deps.sessionId,
       poolRoot: this.#deps.poolRoot,
     });
-    return { repoPath: onboarded.repoPath, focused };
+    return { repoPath: onboarded.repoPath, ...opened };
   }
 
   /**
