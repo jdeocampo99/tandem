@@ -264,6 +264,8 @@ It removes only recorded keys still equal to their installed action and restores
 while its value remains Tandem's installed value. Later user edits and unrelated preferences remain.
 After successful restoration it removes the record. An absent record performs no writes.
 `reloadTernPlugin` refreshes an already installed package for `tandem update`; it never installs one.
+Plugin list, link and reload select an explicit executable override first, then `tern` on the
+injected environment's `PATH` (or the process `PATH`), then the macOS app bundle executable.
 
 `setup.sh` invokes `src/terminal-backend/setup.ts`, which reads the saved home terminal choice
 and runs the existing Herdr setup or the Tern installer. The terminal front door also offers
