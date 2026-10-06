@@ -49,18 +49,18 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       join(plugin, "tandem.sh"),
       `#!/bin/sh\nprintf '%s\\n' "$@" >> '${join(root, "actions.log")}'\nif [ "$2" = "usage" ]; then printf 'fixture action refused\\n' >&2; exit 7; fi\n`,
     );
-    // Only layout fixtures: other workers own the actual task/board renderers.
+    // Task layout fixture; the registered board renderer is exercised through the real host.
     await writeFile(
       join(plugin, "layout-fixture.luau"),
       'return {init=function(cx,args) return {} end, title=function() return "Layout fixture" end, view=function() return {main=tern.ui.col({tern.ui.text({tern.ui.span("Layout fixture")})})} end}',
     );
     await writeFile(
       join(plugin, "host.luau"),
-      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("board", require("./layout-fixture"))\n`,
+      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\n`,
     );
     await writeFile(
       join(plugin, "plugin.toml"),
-      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="board"\ntitle="Layout fixture board"\n`,
+      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n`,
     );
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {

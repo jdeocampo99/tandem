@@ -1373,7 +1373,10 @@ test("native navigation selects published projects and details, refusing stale o
         )
       ).exitCode,
     ).toBe(0);
-    expect(f.opened).toEqual([{ kind: "brief", requestId: f.record.id }]);
+    expect(f.opened).toEqual([
+      { kind: "catchup", automatic: true },
+      { kind: "brief", requestId: f.record.id },
+    ]);
     expect((await action("view-file", join(f.root, "foreign.json"))).exitCode).not.toBe(0);
     await publish({ ...model, writtenAt: "2000-01-01T00:00:00Z" });
     expect((await action("project", "1")).exitCode).not.toBe(0);
@@ -1382,7 +1385,7 @@ test("native navigation selects published projects and details, refusing stale o
     await publish({ ...model, projects: [{ ...model.projects[0], offline: true }] });
     expect((await action("project", "1")).exitCode).not.toBe(0);
     expect(focused).toHaveLength(1);
-    expect(f.opened).toHaveLength(1);
+    expect(f.opened).toHaveLength(2);
   } finally {
     await f.close();
   }
