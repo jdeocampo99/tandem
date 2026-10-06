@@ -300,18 +300,24 @@ All renderers use these block ids and the same five string launch arguments:
 | `tandem.board`, `tandem.usage`, `tandem.catchup` | Root `panel` envelope | Own full-window tab |
 | `tandem.welcome` | Root path (static welcome) | Beside the conversation |
 
-`args = {modelPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, tandemHome}`.
+`args = {modelPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, indexPath}`.
 The renderer passes its **own** `cx.pane`, plus the supplied cwd and optional window key,
 to every native CLI action. `tern-plugin/navigation.luau` provides `origin(args)`,
 `run(origin, cx, argv)`, `root(origin)` and `back(origin, cx)` without action policy or retries.
+`origin.indexPath` is explicit; `root` returns it and `origin.home` is derived from its
+`<home>/native-views/<project>.json` location for custom-home CLI flags.
 Root inputs come from `nativeViewsPath`; detail inputs come from `nativeDetailPath`.
 Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
 board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
 coordinator, home, cwd and origin context.
 
+Known owned renderer back buttons all restore the conversation. When the coordinator is floated,
+the host proves its exact task block by program, coordinator and index launch arguments before
+docking the coordinator and closing that task. Other native tabs remain open.
+
 Task hosting floats and hides the conversation in its **same recorded tab**, retaining its
 exact endpoint and process. It refuses unrelated pictures in picture. Opening a second task proves the previous task block's
-coordinator and home launch arguments, replaces only that block, and keeps the floated
+coordinator and index launch arguments, replaces only that block, and keeps the floated
 coordinator in its recorded tab. Returning docks that
 coordinator and closes only the exact task block; it never closes or restarts the agent.
 `native view-file ROOT#orchestrator` performs that return; `navigation.back` builds it.

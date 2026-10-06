@@ -108,7 +108,7 @@ local def:BlockDef<State> ={
   if urlIndex then local row=rows(state)[tonumber(urlIndex)]; if row and row.pullRequest then cx:open(row.pullRequest.url) end; return end
   local project=string.match(command,"^project:(%d+)$")
   if project then nav.run(state.origin,cx,{"project",project}); state.dropdown=false
-  elseif command=="inbox" or command=="open-project" then nav.run(state.origin,cx,{"view-file",state.origin.path .. "#" .. command})
+  elseif command=="inbox" or command=="open-project" then nav.run(state.origin,cx,{"view-file",nav.root(state.origin) .. "#" .. command})
   elseif command=="prs" or command=="board" or command=="usage" then nav.run(state.origin,cx,{command}) end
  end,
 }

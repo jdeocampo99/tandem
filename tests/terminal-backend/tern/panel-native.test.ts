@@ -263,6 +263,13 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,
       );
+      const behindBoard = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "task", taskId: "behind-board" } },
+        root,
+        "task",
+        "task",
+        path,
+      );
       const board = await host.open(
         { coordinator, cwd: root, home, view: { kind: "board" } },
         root,
@@ -275,7 +282,27 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           (entry) => entry.block.id === board.paneId,
         )?.tab.id,
       ).not.toBe(coordinator.tabId);
-      await terminal.focusAgent({ sessionId: "fixture", cwd: root, paneId: coordinator.paneId });
+      await host.open(
+        {
+          coordinator,
+          cwd: root,
+          home,
+          view: { kind: "orchestrator" },
+          origin: { paneId: board.paneId, cwd: root },
+        },
+        root,
+        "panel",
+        "return",
+        path,
+      );
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          (entry) => entry.block.id === behindBoard.paneId,
+        ),
+      ).toBe(false);
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
       const other = await terminal.createWorkspace({
         sessionId: "other",
         cwd: root,

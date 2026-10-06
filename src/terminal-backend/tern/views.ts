@@ -18,6 +18,11 @@ const Opened = z.object({
 });
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
+const returnPrograms = new Set(
+  ["panel", "task", "brief", "pr", "prs", "board", "usage", "catchup", "welcome"].map(
+    (kind) => `tandem.${kind}`,
+  ),
+);
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
 
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
@@ -107,6 +112,7 @@ export function ternViewHost(
   ) => {
     const cmd = await scoped(input);
     return options.guard(input.coordinator.paneId, async () => {
+      const indexPath = nativeViewsPath(input.home, project);
       if (
         placement === "return" &&
         input.origin?.paneId !== undefined &&
@@ -116,23 +122,24 @@ export function ternViewHost(
           (entry) => entry.block.id === input.origin?.paneId,
         );
         if (
-          source?.block.program !== "tandem.task" ||
+          source?.block.program === undefined ||
+          !returnPrograms.has(source.block.program) ||
           source.block.args?.[1] !== input.coordinator.paneId ||
-          source.block.args?.[4] !== input.home
+          source.block.args?.[4] !== indexPath
         )
           throw new EndpointOwnershipError(
             input.coordinator,
-            "return origin is not this coordinator's task block",
+            "return origin is not this coordinator's native view",
           );
       }
       const existingTasks =
-        placement === "task"
+        placement === "task" || placement === "return"
           ? blocks(await cmd.ls(input.cwd)).filter(
               (entry) =>
                 entry.tab.id === input.coordinator.tabId &&
                 entry.block.program === "tandem.task" &&
                 entry.block.args?.[1] === input.coordinator.paneId &&
-                entry.block.args?.[4] === input.home,
+                entry.block.args?.[4] === indexPath,
             )
           : [];
       if (existingTasks.length > 1)
@@ -159,7 +166,7 @@ export function ternViewHost(
         input.coordinator.paneId,
         input.cwd,
         input.origin?.windowId ?? "",
-        input.home,
+        indexPath,
       ];
       await writeFile(
         route,

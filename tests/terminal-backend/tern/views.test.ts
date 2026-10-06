@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import {
   TernOutcomeUnknownError,
@@ -28,6 +29,7 @@ for (const mode of [
 ] as const)
   test(`native opening ${mode} retains exact identity and never falls back to a title`, async () => {
     const home = await mkdtemp("/tmp/tandem-host-test-");
+    const modelPath = nativeViewsPath(home, home);
     let created = false;
     let effects = 0;
     let now = 0;
@@ -72,11 +74,11 @@ for (const mode of [
                                     ? "unrelated.panel"
                                     : "tandem.panel",
                               args: [
-                                home + "/index.json",
+                                modelPath,
                                 mode === "foreign-return" ? "999" : "3",
                                 home,
                                 "",
-                                home,
+                                modelPath,
                               ],
                             },
                           ]
@@ -96,7 +98,7 @@ for (const mode of [
         if (!path) throw new Error("missing route");
         const ticket = JSON.parse(await readFile(path, "utf8"));
         expect((await lstat(path)).mode & 0o777).toBe(0o600);
-        expect(ticket.args).toEqual([home + "/index.json", "3", home, "", home]);
+        expect(ticket.args).toEqual([modelPath, "3", home, "", modelPath]);
         created = true;
         if (mode !== "unknown")
           await writeFile(
@@ -140,7 +142,7 @@ for (const mode of [
         home,
         "panel",
         mode === "foreign-return" ? "return" : "panel",
-        home + "/index.json",
+        modelPath,
       );
     try {
       if (mode === "success") expect(await open()).toEqual({ paneId: "4", project: home });
