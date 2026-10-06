@@ -285,6 +285,36 @@ prompt. On switching to Herdr, the shared configure callback restores preference
 choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
 plugin consent. The Tern package stays linked for later use.
 
+## Native brief pane and request intake
+
+The `tandem.brief` Luau block reads a direct `BriefView` detail envelope. Launch arguments are
+`[detailPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, tandemHome]`. It uses the shared file loader,
+text fields, diff rows and comment cards. Hovering a line reveals a gutter `+`; the comment editor
+opens below that line. Comment saves a local pending card, Cancel discards the editor, and Remove
+removes a pending card. No comment drafts are written to Tandem state or restored after restart.
+The optional overall comment sits in the bottom bar. `browserUrl`, when supplied by the detail
+model, offers the existing "Edit in browser" page.
+
+Pending comments pin the shown brief and its stable line ids. If the detail file advances, the
+pane keeps that displayed revision and offers "Discard comments and refresh". A missing or
+malformed file leaves the last readable content visible with actions disabled. Approve copies
+only `model.approval` into its input, without recalculating any digest. Request changes carries
+the displayed revision and digests, pending line comments and the optional overall comment.
+The CLI validates the durable revision and feedback anchors.
+
+Each submit passes UTF-8 JSON on stdin to the shared `native-input.sh` caller. Its TypeScript
+helper creates a unique private directory and exclusively writes the input before invoking the
+CLI once with explicit pane/cwd/window/home context, then removes the directory in `finally`. While the
+CLI runs, another submit is disabled. Nonzero stderr becomes a toast and keeps the pane and
+comments open. After success, the CLI closes the scoped native split only while the durable
+revision and digest triplet still match. A retained pane displays success warnings and disables
+submission, so an uncertain close never invites another approval or feedback delivery. Local ×
+uses `cx:exit(0)` with hosting's default `keep_open=false`. There is no automatic retry.
+
+"Tandem: New request…" focuses the ownership-proven coordinator and sends a short intake prompt
+asking what the user wants to change. The user answers in that conversation. The action rechecks
+ownership after focusing, sends nothing if focus or proof fails, and creates no task or approval.
+
 ## Native hosting and renderer launch API
 
 The Tern backend opens private, unique `<home>/native-host/<uuid>.tandem-open.json`

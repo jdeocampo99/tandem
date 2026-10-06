@@ -111,6 +111,45 @@ async function promptCoordinator(
   });
 }
 
+/** Completion is authoritative even when its owned native projection cannot be retired. */
+async function closeNativeBrief(
+  context: CliCommandContext,
+  owned: CoordinatorRecord,
+  seen: ViewedBrief,
+): Promise<readonly string[]> {
+  const origin = viewOriginFrom(context.invocation);
+  if (owned.endpoint.terminal !== "tern" || origin?.paneId === undefined) return [];
+  try {
+    const latest = await context.service().requestBrief(seen.requestId);
+    if (
+      latest.record.draft.revision !== seen.briefRevision ||
+      latest.record.draft.contentDigest !== seen.contentDigest ||
+      latest.record.draft.agreementDigest !== seen.agreementDigest
+    ) {
+      return [
+        "The brief changed after this action; the current brief was left open. Do not resubmit this action.",
+      ];
+    }
+    const result = await context.capabilities.terminal.closeView({
+      coordinator: owned.endpoint,
+      cwd: owned.worktree.path,
+      home: context.environment.home,
+      origin: {
+        paneId: origin.paneId,
+        ...(origin.windowId === undefined ? {} : { windowId: origin.windowId }),
+      },
+      view: { kind: "brief", requestId: seen.requestId },
+    });
+    return result.closed || result.warnings.length > 0
+      ? result.warnings
+      : ["The action completed, but the native brief remains open. Do not resubmit this action."];
+  } catch (error) {
+    return [
+      `The action completed, but the native brief could not be closed: ${error instanceof Error ? error.message : String(error)}. Do not resubmit this action.`,
+    ];
+  }
+}
+
 export async function commentOnBrief(
   context: CliCommandContext,
   requestChanges: boolean,
@@ -131,12 +170,16 @@ export async function commentOnBrief(
   let view = brief;
   const warnings: string[] = [];
   if (requestChanges) {
-    try {
-      view = await service.closeRequestBriefReview(requestId, feedback.briefRevision);
-    } catch (error) {
-      warnings.push(
-        `Feedback was delivered, but the review pane could not be retired: ${error instanceof Error ? error.message : String(error)}. Do not resubmit this feedback.`,
-      );
+    if (owned.endpoint.terminal === "tern") {
+      warnings.push(...(await closeNativeBrief(context, owned, feedback)));
+    } else {
+      try {
+        view = await service.closeRequestBriefReview(requestId, feedback.briefRevision);
+      } catch (error) {
+        warnings.push(
+          `Feedback was delivered, but the review pane could not be retired: ${error instanceof Error ? error.message : String(error)}. Do not resubmit this feedback.`,
+        );
+      }
     }
   }
   return {
@@ -190,6 +233,7 @@ export async function approveViewedBrief(context: CliCommandContext): Promise<Cl
       `Approval was recorded, but the coordinator could not be notified: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  warnings.push(...(await closeNativeBrief(context, owned, intent)));
   return { value: { ...view, warnings }, approved: true };
 }
 
