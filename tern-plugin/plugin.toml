@@ -14,3 +14,7 @@ title = "Task"
 [[blocks]]
 id = "task-picker"
 title = "Open task…"
+
+[[blocks]]
+id = "pr"
+title = "Pull request"

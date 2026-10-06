@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
-import { type CachedPullRequest, prPaneView } from "../../src/pr-review/native-view.ts";
+import {
+  type CachedPullRequest,
+  prMarkdownBlocks,
+  prPaneView,
+} from "../../src/pr-review/native-view.ts";
 
 const now = "2030-01-01T12:00:00Z";
 const cached: CachedPullRequest = {
@@ -78,7 +82,8 @@ test("native PR diff anchors both sides and replies while retaining outdated thr
   expect(view.files[0]?.rows[2]?.threads[0]?.comments).toHaveLength(2);
   expect(view.unanchoredThreads[0]?.id).toBe("outdated");
   expect(view.tour[0]?.stops[0]?.rowIds).toEqual(["src/a.ts:2"]);
-  expect(view.checks).toEqual(cached.checks);
+  expect(view.checks[0]).toMatchObject({ elapsedMs: 77000 });
+  expect(view.checks[1]).toMatchObject({ duration: "9s" });
   expect(prPaneView({ cached, now: "2030-01-01T13:00:00Z" })).toEqual(view);
   expect(view.commentDestination).toBe("worker");
 });
@@ -110,4 +115,17 @@ test("PRs without a tour hide its tab and reviews carry the commit and posted bi
   expect(view.commentDestination).toBe("review");
   expect(view.review).toEqual(review);
   expect(view.files[0]?.rows[2]?.drafts[0]?.id).toBe("draft-1");
+});
+
+test("PR Markdown blocks preserve blank lines inside a fence and separate headings", () => {
+  expect(
+    prMarkdownBlocks(
+      "## What\nParagraph\n\n```ts\nconst a = 1;\n\nconst b = 2;\n```\n\n- first\n- second",
+    ),
+  ).toEqual([
+    "## What",
+    "Paragraph",
+    "```ts\nconst a = 1;\n\nconst b = 2;\n```",
+    "- first\n- second",
+  ]);
 });

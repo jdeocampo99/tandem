@@ -70,8 +70,12 @@ export type PrPaneView = Readonly<{
   }>;
   readAt: IsoTimestamp;
   tabs: readonly string[];
-  checks: readonly PrCheck[];
-  description: Readonly<{ markdown: string; conversation: readonly PrComment[] }>;
+  checks: readonly (PrCheck & Readonly<{ duration?: string; elapsedMs?: number }>)[];
+  description: Readonly<{
+    markdown: string;
+    blocks: readonly string[];
+    conversation: readonly PrComment[];
+  }>;
   tour: readonly Readonly<{
     title: string;
     why: string;
@@ -170,8 +174,12 @@ export function prPaneView(
     },
     readAt: cached.readAt,
     tabs: ["Description", ...(cached.tour.length === 0 ? [] : ["Tour"]), "Diff"],
-    checks: cached.checks,
-    description: { markdown: cached.body, conversation: cached.conversation },
+    checks: cached.checks.map((check) => presentCheck(check, cached.readAt)),
+    description: {
+      markdown: cached.body,
+      blocks: prMarkdownBlocks(cached.body),
+      conversation: cached.conversation,
+    },
     files,
     unanchoredThreads: cached.threads.filter((thread) => !anchored.has(thread.id)),
     tour: cached.tour.map((chapter) => ({
@@ -194,4 +202,54 @@ export function prPaneView(
     commentDestination: input.review === undefined ? "worker" : "review",
     ...(input.review === undefined ? {} : { review: input.review }),
   };
+}
+
+/** Keep fenced code together, including blank lines, when drawing one Markdown node per block. */
+export function prMarkdownBlocks(markdown: string): readonly string[] {
+  const blocks: string[] = [];
+  let lines: string[] = [];
+  let fence: { marker: string; length: number } | undefined;
+  const flush = () => {
+    if (lines.length > 0) blocks.push(lines.join("\n"));
+    lines = [];
+  };
+  for (const line of markdown.replace(/\r\n/gu, "\n").split("\n")) {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    if (fence !== undefined) {
+      lines.push(line);
+      if (
+        marker?.[1]?.[0] === fence.marker &&
+        marker[1].length >= fence.length &&
+        marker[2]?.trim() === ""
+      ) {
+        fence = undefined;
+        flush();
+      }
+    } else if (marker?.[1] !== undefined) {
+      flush();
+      fence = { marker: marker[1][0] ?? "`", length: marker[1].length };
+      lines.push(line);
+    } else if (line.trim() === "") flush();
+    else if (/^ {0,3}#{1,6}\s/u.test(line)) {
+      flush();
+      blocks.push(line);
+    } else lines.push(line);
+  }
+  flush();
+  return blocks;
+}
+
+function presentCheck(check: PrCheck, readAt: string): PrPaneView["checks"][number] {
+  const start = Date.parse(check.startedAt ?? "");
+  const end = Date.parse(check.completedAt ?? "");
+  if (check.state === "running" && Number.isFinite(start))
+    return { ...check, elapsedMs: Math.max(0, Date.parse(readAt) - start) };
+  if (check.state === "passed" && Number.isFinite(start) && Number.isFinite(end)) {
+    const seconds = Math.max(0, Math.round((end - start) / 1000));
+    return {
+      ...check,
+      duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
+    };
+  }
+  return check;
 }

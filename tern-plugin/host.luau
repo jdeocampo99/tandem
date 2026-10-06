@@ -9,3 +9,4 @@ require("./components")
 -- Block registrations: one tern.block.define(id, require("./block-file")) line per renderer.
 tern.block.define("task", require("./task"))
 tern.block.define("task-picker", require("./task-picker"))
+tern.block.define("pr", require("./pr"))
