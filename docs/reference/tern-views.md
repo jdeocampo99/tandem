@@ -318,6 +318,11 @@ The host proves the block's program, all launch arguments, scoped session and id
 then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
 are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
 
+For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0.
+Successful hosting already removed its private ticket and receipt, so no host cleanup remains.
+Task pages use the Orchestrator return action instead, which restores the hidden conversation
+before removing its replacement block.
+
 Known owned renderer back buttons all restore the conversation. When the coordinator is floated,
 the host proves its exact task block by program, coordinator and index launch arguments before
 docking the coordinator and closing that task. Other native tabs remain open.

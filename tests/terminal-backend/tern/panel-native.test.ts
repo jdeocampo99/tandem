@@ -52,7 +52,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
     // Only layout fixtures: other workers own the actual task/board renderers.
     await writeFile(
       join(plugin, "layout-fixture.luau"),
-      'return {init=function(cx,args) return {} end, title=function() return "Layout fixture" end, view=function() return {main=tern.ui.col({tern.ui.text({tern.ui.span("Layout fixture")})})} end}',
+      'return {init=function(cx,args) return {} end, key=function(state,key,cx) if key.name=="escape" then cx:exit(0); return true end; return false end, title=function() return "Layout fixture" end, view=function() return {main=tern.ui.col({tern.ui.text({tern.ui.span("Layout fixture")})})} end}',
     );
     await writeFile(
       join(plugin, "host.luau"),
@@ -223,6 +223,16 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         "split",
         nativeDetailPath(home, root, nativeBriefFile("req-native")),
       );
+      await ctl("key", "escape");
+      await Bun.sleep(200);
+      const exited = blocks(await ternCommands(run, { environment: env }).ls(root)).find(
+        (entry) => entry.block.id === brief.paneId,
+      );
+      expect(exited).toBeUndefined();
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      await ctl("shot", "04-exited-brief");
       expect(
         await host.close(
           {
@@ -235,9 +245,28 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           root,
         ),
       ).toEqual({ closed: true, warnings: [] });
+      const reopened = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "brief", requestId: "req-native" } },
+        root,
+        "brief",
+        "split",
+        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+      );
+      expect(
+        await host.close(
+          {
+            coordinator,
+            cwd: root,
+            home,
+            origin: { paneId: reopened.paneId },
+            view: { kind: "brief", requestId: "req-native" },
+          },
+          root,
+        ),
+      ).toEqual({ closed: true, warnings: [] });
       expect(
         blocks(await ternCommands(run, { environment: env }).ls(root)).some(
-          (entry) => entry.block.id === brief.paneId,
+          (entry) => entry.block.id === reopened.paneId,
         ),
       ).toBe(false);
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
@@ -382,7 +411,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         true,
       );
       console.log(
-        `Native proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-projects.png ${root}/shots/live/09-needs-you.png ${root}/shots/live/09-done.png ${root}/shots/live/09-stuck.png`,
+        `Native proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-projects.png ${root}/shots/live/04-exited-brief.png ${root}/shots/live/09-needs-you.png ${root}/shots/live/09-done.png ${root}/shots/live/09-stuck.png`,
       );
     } finally {
       if (window) {
