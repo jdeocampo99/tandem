@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
+import type { RetainedViewOpen, TerminalBackend } from "../contract.ts";
 import {
   blocks,
   Id,
@@ -306,22 +307,6 @@ const Owner = z.tuple([
   z.string(),
 ]);
 
-/** A native open whose outcome is unproven, so it pauses new opens for its coordinator. */
-export type RetainedNativeOpen = Readonly<{
-  path: string;
-  /** The intent exactly as listed, so an abandon never removes a record that changed since. */
-  text: string;
-  coordinator: Endpoint;
-  cwd: string;
-  kind: string;
-  route: string;
-  receipt: string;
-  /** Why the open is still unproven, in the user's terms. */
-  reason: string;
-}>;
-
-export type UnreadableNativeOpen = Readonly<{ path: string; reason: string }>;
-
 function retainedReason(receipt: Receipt | "unreadable" | undefined): string {
   if (receipt === undefined) return "Tern never confirmed the view opened";
   if (receipt === "unreadable") return "the view's receipt cannot be read";
@@ -332,37 +317,40 @@ function retainedReason(receipt: Receipt | "unreadable" | undefined): string {
     : `Tern failed at ${receipt.stage} after ${receipt.appliedEffects} layout changes: ${receipt.reason}`;
 }
 
+/** The token files sit beside the intent; the recorded home spelling may differ. */
+function tokenFiles(path: string, intent: z.infer<typeof Intent>) {
+  const directory = dirname(path);
+  return {
+    route: join(directory, basename(intent.route)),
+    receipt: join(directory, basename(intent.ticket.receipt)),
+  };
+}
+
 /** Every retained open under `<home>/native-host/`, read without changing anything. */
-export async function listRetainedNativeOpens(home: string): Promise<
-  Readonly<{
-    opens: readonly RetainedNativeOpen[];
-    unreadable: readonly UnreadableNativeOpen[];
-  }>
-> {
+export async function listRetainedNativeOpens(home: string): Promise<RetainedViewOpen[]> {
   const directory = join(home, "native-host");
   let names: string[];
   try {
     names = await readdir(directory);
   } catch (error) {
-    if (missing(error)) return { opens: [], unreadable: [] };
+    if (missing(error)) return [];
     throw error;
   }
-  const opens: RetainedNativeOpen[] = [];
-  const unreadable: UnreadableNativeOpen[] = [];
+  const opens: RetainedViewOpen[] = [];
   for (const name of names.filter((each) => each.endsWith(".intent.json")).toSorted()) {
     const path = join(directory, name);
     try {
-      const text = JSON.stringify(await readPrivateJson(path));
-      const intent = Intent.parse(JSON.parse(text));
+      const record = JSON.stringify(await readPrivateJson(path));
+      const intent = Intent.parse(JSON.parse(record));
       const [terminal, sessionId, terminalSessionId, tabId, workspaceId, paneId, generation, cwd] =
         Owner.parse(JSON.parse(intent.owner));
-      // The token files sit beside the intent; the recorded home spelling may differ.
-      const route = join(directory, basename(intent.route));
-      const receiptPath = join(directory, basename(intent.ticket.receipt));
-      const receipt = await readReceipt(receiptPath).catch(() => "unreadable" as const);
+      const receipt = await readReceipt(tokenFiles(path, intent).receipt).catch(
+        () => "unreadable" as const,
+      );
       opens.push({
+        status: "readable",
         path,
-        text,
+        record,
         coordinator: {
           terminal,
           sessionId,
@@ -374,46 +362,45 @@ export async function listRetainedNativeOpens(home: string): Promise<
           generation,
         },
         cwd,
-        kind: intent.ticket.kind,
-        route,
-        receipt: receiptPath,
+        view: intent.ticket.kind,
         reason: retainedReason(receipt),
       });
     } catch (error) {
-      unreadable.push({ path, reason: error instanceof Error ? error.message : String(error) });
+      opens.push({
+        status: "unreadable",
+        path,
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
   }
-  return { opens, unreadable };
+  return opens;
 }
 
-/**
- * Removes one retained open's records under its coordinator's open lock, only while the intent
- * is unchanged and `conclusive` re-proves the coordinator's state. Panes are never touched.
- */
-export async function abandonRetainedNativeOpen(
-  open: RetainedNativeOpen,
-  conclusive: () => Promise<boolean>,
-): Promise<"abandoned" | "settled" | "changed" | "unproven"> {
+export const abandonRetainedNativeOpen: TerminalBackend["abandonViewOpen"] = async (
+  open,
+  conclusive,
+) => {
   const release = await acquireDarwinFileLock(
     open.path.replace(/\.intent\.json$/u, ".lock"),
     10000,
     20,
   );
   try {
-    let text: string;
+    let record: string;
     try {
-      text = JSON.stringify(await readPrivateJson(open.path));
+      record = JSON.stringify(await readPrivateJson(open.path));
     } catch (error) {
       if (missing(error)) return "settled";
       throw error;
     }
-    if (text !== open.text) return "changed";
+    if (record !== open.record) return "changed";
     if (!(await conclusive())) return "unproven";
-    await rm(open.route, { force: true });
-    await rm(open.receipt, { force: true });
+    const { route, receipt } = tokenFiles(open.path, Intent.parse(JSON.parse(record)));
+    await rm(route, { force: true });
+    await rm(receipt, { force: true });
     await rm(open.path, { force: true });
     return "abandoned";
   } finally {
     await release();
   }
-}
+};

@@ -103,6 +103,8 @@ export function terminalBackend(
     },
     openView: (input) => select().openView(input),
     closeView: (input) => select().closeView(input),
+    retainedViewOpens: (home) => select().retainedViewOpens(home),
+    abandonViewOpen: (open, conclusive) => select().abandonViewOpen(open, conclusive),
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),

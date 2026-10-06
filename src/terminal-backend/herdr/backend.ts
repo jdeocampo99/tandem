@@ -64,6 +64,10 @@ export function herdrBackend(
       closed: false,
       warnings: ["Herdr has no native brief split; retire its owned request review pane instead."],
     }),
+    retainedViewOpens: async () => [],
+    abandonViewOpen: async () => {
+      throw new Error("Herdr keeps no native view opens to abandon");
+    },
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),
     sendKeys: (target) => sendKeys(run, target),

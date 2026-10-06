@@ -1,14 +1,17 @@
 import { expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { EndpointOwnershipError } from "../../src/adapters/primitives.ts";
-import type { CommandRunner, Endpoint } from "../../src/contracts.ts";
-import { reconcileTandemResources } from "../../src/coordinator/reconcile.ts";
-import type { EndpointInspection, TerminalBackend } from "../../src/terminal-backend/contract.ts";
-import { ternBackend } from "../../src/terminal-backend/tern/backend.ts";
-import { missing } from "../../src/terminal-backend/tern/endpoints.ts";
-import { ternCommands } from "../../src/terminal-backend/tern/protocol.ts";
-import { ternViewHost } from "../../src/terminal-backend/tern/views.ts";
+import { EndpointOwnershipError } from "../../../src/adapters/primitives.ts";
+import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { reconcileTandemResources } from "../../../src/coordinator/reconcile.ts";
+import type {
+  EndpointInspection,
+  TerminalBackend,
+} from "../../../src/terminal-backend/contract.ts";
+import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { missing } from "../../../src/terminal-backend/tern/endpoints.ts";
+import { ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 const coordinator: Endpoint = {
   terminal: "tern",

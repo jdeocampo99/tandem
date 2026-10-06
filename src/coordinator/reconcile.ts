@@ -25,12 +25,7 @@ import {
 } from "../service/superseded.ts";
 
 import { createTaskStore } from "../tasks/store.ts";
-import type { TerminalBackend } from "../terminal-backend/contract.ts";
-import {
-  abandonRetainedNativeOpen,
-  listRetainedNativeOpens,
-  type RetainedNativeOpen,
-} from "../terminal-backend/tern/view-intent.ts";
+import type { RetainedViewOpen, TerminalBackend } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import {
@@ -143,9 +138,11 @@ export type NativeOpenOwner =
   | Readonly<{ readonly status: "gone" }>
   | Readonly<{ readonly status: "ambiguous"; readonly detail: string }>;
 
+type ReadableViewOpen = Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>;
+
 /** One native view open whose outcome was never proved, which pauses new opens for its owner. */
 export type ObservedNativeOpen =
-  | Readonly<{ readonly open: RetainedNativeOpen; readonly owner: NativeOpenOwner }>
+  | Readonly<{ readonly open: ReadableViewOpen; readonly owner: NativeOpenOwner }>
   | Readonly<{ readonly unreadable: Readonly<{ path: string; reason: string }> }>;
 
 /** Everything the plan is allowed to look at, gathered without changing a single resource. */
@@ -230,7 +227,7 @@ export type ReconcilePlanItem =
       readonly path: string;
       readonly sessionId: string | undefined;
       /** Present only when the record parsed; an unreadable one is only ever reported. */
-      readonly open: RetainedNativeOpen | undefined;
+      readonly open: ReadableViewOpen | undefined;
     }>;
 
 export type ReconcilePlan = Readonly<{
@@ -795,13 +792,8 @@ function planUnreadableRecord(entry: UnreadableCoordinatorRecord): ReconcilePlan
  */
 async function nativeOpenOwner(
   terminal: TerminalBackend,
-  open: RetainedNativeOpen,
+  open: ReadableViewOpen,
 ): Promise<NativeOpenOwner> {
-  if (open.coordinator.terminal !== terminal.name)
-    return {
-      status: "ambiguous",
-      detail: `its coordinator ran in ${open.coordinator.terminal}, but Tandem now uses ${terminal.name}`,
-    };
   try {
     await terminal.inspect({ endpoint: open.coordinator, cwd: open.cwd });
     return { status: "present" };
@@ -816,9 +808,13 @@ async function observeNativeOpens(
   terminal: TerminalBackend,
   home: string,
 ): Promise<readonly ObservedNativeOpen[]> {
-  const { opens, unreadable } = await listRetainedNativeOpens(home);
-  const observed: ObservedNativeOpen[] = unreadable.map((entry) => ({ unreadable: entry }));
-  for (const open of opens) observed.push({ open, owner: await nativeOpenOwner(terminal, open) });
+  const observed: ObservedNativeOpen[] = [];
+  for (const open of await terminal.retainedViewOpens(home))
+    observed.push(
+      open.status === "unreadable"
+        ? { unreadable: open }
+        : { open, owner: await nativeOpenOwner(terminal, open) },
+    );
   return observed;
 }
 
@@ -836,7 +832,7 @@ function planNativeOpen(observed: ObservedNativeOpen): ReconcilePlanItem {
   const item = (action: "clean" | "retain", why: string): ReconcilePlanItem => ({
     kind: "native-open",
     action,
-    reason: `${open.kind} view: ${open.reason}; ${why}`,
+    reason: `${open.view} view: ${open.reason}; ${why}`,
     path: open.path,
     sessionId: open.coordinator.sessionId,
     open,
@@ -858,7 +854,7 @@ async function applyNativeOpenItem(
   if (item.open === undefined) return { item, outcome: "quarantined", reason: item.reason };
   const { open } = item;
   let detail = "";
-  const outcome = await abandonRetainedNativeOpen(open, async () => {
+  const outcome = await terminal.abandonViewOpen(open, async () => {
     const owner = await nativeOpenOwner(terminal, open);
     if (owner.status === "ambiguous") detail = owner.detail;
     return owner.status !== "ambiguous";

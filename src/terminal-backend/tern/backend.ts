@@ -31,6 +31,7 @@ import {
   TernOutcomeUnknownError,
   ternCommands,
 } from "./protocol.ts";
+import { abandonRetainedNativeOpen, listRetainedNativeOpens } from "./view-intent.ts";
 
 export type TernBackendOptions = TernOptions &
   Readonly<{
@@ -269,6 +270,8 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     name: "tern",
     openView: async (input) => (await native()).views.openView(input),
     closeView: async (input) => (await native()).views.closeView(input),
+    retainedViewOpens: listRetainedNativeOpens,
+    abandonViewOpen: abandonRetainedNativeOpen,
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>
