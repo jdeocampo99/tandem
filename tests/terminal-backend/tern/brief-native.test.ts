@@ -449,17 +449,28 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         path,
       );
       await until(async () => (await tree()).some((each) => each.text === "Approve"));
+      // Let the newly opened split finish laying out before using control coordinates.
+      await Bun.sleep(500);
       await clickText("Approve");
+      await until(async () =>
+        (await readFile(join(root, "args.txt"), "utf8")).includes(String(reopened.paneId)),
+      );
       await until(async () => !(await paneExists(reopened.paneId)));
       await until(
         async () =>
           !(await Bun.file(await readFile(join(root, "input-path.txt"), "utf8")).exists()),
       );
       expect(await paneExists(coordinator.paneId)).toBe(true);
+      if (shots) await ctl("shot", "brief-closed");
       expect(JSON.parse(await readFile(join(root, "received.json"), "utf8"))).toEqual(
         model.approval,
       );
     } catch (error) {
+      if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-failed").catch(() => {});
+      console.error(
+        "Last CLI argv",
+        await readFile(join(root, "args.txt"), "utf8").catch(() => "none"),
+      );
       console.error(
         (await tree().catch(() => [])).filter((each) => each.text).map((each) => each.text),
       );
