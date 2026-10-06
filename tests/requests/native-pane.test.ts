@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { projectRequestBriefPane } from "../../src/requests/review-pane.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { RequestBriefWorkflow } from "../../src/requests/workflow.ts";
+import { createTandemService } from "../../src/service/controller.ts";
+import { executeTandemAction } from "../../src/session/actions.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
 import { content } from "../board/fixtures.ts";
@@ -44,6 +48,90 @@ async function fixture(world: ScenarioWorld, terminal: TerminalBackend) {
   });
   return { workflow, coordinator, worktree };
 }
+
+test("every direct brief projector caller uses native hosting in Tern", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const opens: Parameters<TerminalBackend["openView"]>[0][] = [];
+    const terminal: TerminalBackend = {
+      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+      openView: async (input) => {
+        opens.push(input);
+        return { opened: true, warnings: [], endpoint: { ...input.coordinator, paneId: "3001" } };
+      },
+    };
+    const { workflow, coordinator } = await fixture(world, terminal);
+    const draft = await workflow.draft({
+      repoPath: world.repoPath,
+      content: content("Review the brief after native feedback"),
+      reviewPane: false,
+    });
+    const pane = await projectRequestBriefPane(
+      {
+        terminal,
+        home: world.home,
+        sessionId: world.sessionId,
+        parentWorkspaceId: coordinator.workspaceId,
+        coordinatorPaneId: coordinator.paneId,
+        clock: world.clock,
+      },
+      draft.record,
+    );
+    expect(pane.endpoint.paneId).toBe("3001");
+    expect(opens).toHaveLength(1);
+    expect(opens[0]?.view).toEqual({ kind: "brief", requestId: draft.record.id });
+    expect(
+      world.trace().filter((each) => each.boundary === "tern" || each.boundary === "herdr"),
+    ).toEqual([]);
+  });
+});
+
+test("coordinator reviewRequestBrief action after feedback enters native hosting and never falls back to a pager", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    const { workflow, coordinator } = await fixture(world, {
+      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+      openView: async (input) => ({
+        opened: true,
+        warnings: [],
+        endpoint: { ...input.coordinator, paneId: "3001" },
+      }),
+      closeView: async () => ({ closed: true, warnings: [] }),
+    });
+    const draft = await workflow.draft({
+      repoPath: world.repoPath,
+      content: content("Review the brief after native feedback"),
+      reviewPane: true,
+    });
+    await workflow.closeReview(draft.record.id, draft.record.draft.revision);
+    let nativeHosting = 0;
+    const service = createTandemService({
+      home: world.home,
+      sessionId: world.sessionId,
+      coordinatorPaneId: coordinator.paneId,
+      clock: world.clock,
+      idFactory: world.idFactory,
+      run: async (request) => {
+        // An unavailable native owner must stop the action instead of opening a shell split.
+        expect(request.argv.slice(1)).toEqual(["inspect", "--json"]);
+        nativeHosting++;
+        throw new Error("native hosting unavailable; retain the request");
+      },
+    });
+    try {
+      await expect(
+        executeTandemAction({ action: "brief-review", requestId: draft.record.id }, service, {
+          confirm: undefined,
+        }),
+      ).rejects.toThrow("native hosting unavailable");
+      expect(nativeHosting).toBe(1);
+      expect((await service.requestBrief(draft.record.id)).record.reviewPane?.status).toBe(
+        "closed",
+      );
+    } finally {
+      await service.shutdown();
+    }
+  });
+});
 
 for (const action of ["approve", "request-changes", "abandon"] as const) {
   test(`automatic Tern brief projection binds revisions and retires its native split on ${action}`, async () => {

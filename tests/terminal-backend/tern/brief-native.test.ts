@@ -11,6 +11,8 @@ import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src
 import { briefView } from "../../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import { RequestBriefWorkflow } from "../../../src/requests/workflow.ts";
+import { createTandemService } from "../../../src/service/controller.ts";
+import { executeTandemAction } from "../../../src/session/actions.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
@@ -571,15 +573,47 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         model.approval,
       );
       // Conversation approval uses the same scoped retirement as the native action.
-      const conversationReview = await workflow.review(model.requestId);
-      const conversationPane = conversationReview.record.reviewPane?.endpoint.paneId;
-      if (conversationPane === undefined) throw new Error("Workflow brief pane missing");
-      await until(async () => (await tree()).some((each) => each.text === "Approve"));
-      const approved = await workflow.approve({ requestId: model.requestId, ...model.approval });
-      expect(approved.approvalState).toBe("current");
-      expect(approved.record.reviewPane?.status).toBe("closed");
-      expect(await paneExists(conversationPane)).toBe(false);
-      expect(await paneExists(coordinator.paneId)).toBe(true);
+      await writeFile(join(env.TANDEM_HOME, "settings.toml"), 'terminal = "tern"\n');
+      const service = createTandemService({
+        home: env.TANDEM_HOME,
+        sessionId: coordinator.sessionId,
+        coordinatorPaneId: coordinator.paneId,
+        run: runner,
+        clock: () => NOW,
+      });
+      try {
+        // Feedback retirement followed by the real coordinator tool action must host a native
+        // brief. Repeating that action refreshes the exact same split instead of launching a pager.
+        await service.closeRequestBriefReview(model.requestId, model.revision);
+        await executeTandemAction({ action: "brief-review", requestId: model.requestId }, service, {
+          confirm: undefined,
+        });
+        const conversationReview = await service.requestBrief(model.requestId);
+        const conversationPane = conversationReview.record.reviewPane?.endpoint.paneId;
+        if (conversationPane === undefined) throw new Error("Workflow brief pane missing");
+        await until(async () => (await tree()).some((each) => each.text === "Approve"));
+        await executeTandemAction({ action: "brief-review", requestId: model.requestId }, service, {
+          confirm: undefined,
+        });
+        expect(
+          (await service.requestBrief(model.requestId)).record.reviewPane?.endpoint.paneId,
+        ).toBe(conversationPane);
+        const briefBlocks = (await commands.ls(root)).sessions
+          .flatMap((session) => session.tabs.flatMap((tab) => tab.blocks))
+          .filter((block) => block.program === "tandem.brief");
+        expect(briefBlocks.map((block) => block.id)).toEqual([conversationPane]);
+        if (shots) await ctl("shot", "brief-coordinator-review");
+        const approved = await service.approveRequestBrief({
+          requestId: model.requestId,
+          ...model.approval,
+        });
+        expect(approved.approvalState).toBe("current");
+        expect(approved.record.reviewPane?.status).toBe("closed");
+        expect(await paneExists(conversationPane)).toBe(false);
+        expect(await paneExists(coordinator.paneId)).toBe(true);
+      } finally {
+        await service.shutdown();
+      }
       if (shots) {
         await Bun.sleep(1000);
         await ctl("shot", "brief-workflow-closed");

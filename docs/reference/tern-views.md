@@ -383,6 +383,8 @@ Brief projection writes its detail before opening, so a new request need not wai
 background index publication. Native brief opens derive the stable detail filename and reuse
 exactly one matching split across revisions, without running a pager. The same exact-evidence
 reuse applies to PR, PR-list and task-picker splits; repeating an open creates no duplicate.
+The shared `projectRequestBriefPane` and `closeRequestBriefPane` entry points select this native
+path for Tern, including the coordinator's `reviewRequestBrief` action after feedback.
 
 The host explicitly launches renderer blocks and task replacements with `keep_open=false`.
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.

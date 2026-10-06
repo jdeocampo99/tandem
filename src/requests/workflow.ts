@@ -19,7 +19,6 @@ import {
   withRequestReviewPane,
 } from "./brief.ts";
 import { renderRequestBriefMarkdown } from "./markdown.ts";
-import { closeNativeBriefPane, projectNativeBriefPane } from "./native-pane.ts";
 import type { BriefLanguageChecker } from "./plain-language.ts";
 import {
   closeRequestBriefPane,
@@ -234,18 +233,14 @@ export class RequestBriefWorkflow {
   }
 
   async #project(record: RequestBriefRecord): Promise<RequestBriefRecord> {
-    const pane = await (this.#deps.terminal.name === "tern"
-      ? projectNativeBriefPane(this.#paneDependencies(), record)
-      : projectRequestBriefPane(this.#paneDependencies(), record));
+    const pane = await projectRequestBriefPane(this.#paneDependencies(), record);
     return this.#deps.store.update(record.id, record.revision, (stored) =>
       withRequestReviewPane(stored, pane, this.#deps.clock()),
     );
   }
 
   #closePane(record: RequestBriefRecord) {
-    return this.#deps.terminal.name === "tern"
-      ? closeNativeBriefPane(this.#paneDependencies(), record)
-      : closeRequestBriefPane(this.#paneDependencies(), record);
+    return closeRequestBriefPane(this.#paneDependencies(), record);
   }
 
   async #require(requestId: string): Promise<RequestBriefRecord> {
