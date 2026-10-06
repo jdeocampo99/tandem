@@ -5,6 +5,7 @@ import { nativeViewText } from "../../src/board/native-views.ts";
 import { nativeViewsPath } from "../../src/board/snapshot.ts";
 import { repositoryKey } from "../../src/config/repositories.ts";
 import { launchCoordinator } from "../../src/coordinator/launch.ts";
+import { findRunningCoordinator } from "../../src/coordinator/ownership.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "./scenario.ts";
@@ -110,5 +111,62 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
     await reconnect(false);
     expect(opened).toBe(1);
     expect(JSON.parse(await readFile(visitPath, "utf8")).previousSignature).toBe("after");
+  });
+});
+
+test("a second project launches beside the first project's live native panel", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+    const terminal = terminalBackend(world.run, { home: world.home });
+    const launch = (repo: string) =>
+      launchCoordinator(
+        {
+          cwd: repo,
+          repo,
+          home: world.home,
+          poolRoot: world.poolRoot,
+          sessionId: world.sessionId,
+          model: undefined,
+          continueSession: true,
+          headless: true,
+          noAttach: true,
+        },
+        {
+          run: world.run,
+          terminal,
+          startPersistent: async () => undefined,
+          runInteractive: async () => {
+            throw new Error("must launch in a Tern pane");
+          },
+          sleep: async () => {},
+          processEnvironment: {},
+        },
+      );
+    const first = await launch(world.repoPath);
+    const panel = world.openPane({
+      paneId: "48",
+      cwd: world.repoPath,
+      blockProgram: "tandem.panel",
+    });
+    const secondRepo = join(world.home, "..", "repo-b");
+    await mkdir(join(secondRepo, ".git"), { recursive: true });
+    const second = await launch(secondRepo);
+    expect(second.paneId).not.toBe(first.paneId);
+    expect(second.worktree.leaseId).not.toBe(first.worktree.leaseId);
+    for (const [repoPath, launched] of [
+      [world.repoPath, first],
+      [secondRepo, second],
+    ] as const) {
+      const record = await findRunningCoordinator(world.run, terminal, {
+        home: world.home,
+        sessionId: world.sessionId,
+        repoPath,
+      });
+      expect(record?.endpoint.paneId).toBe(launched.paneId);
+      expect(world.paneIsPresent(launched.paneId ?? "")).toBe(true);
+    }
+    expect(world.paneIsPresent(panel.paneId)).toBe(true);
+    expect(world.trace().some((event) => event.action === "tern close")).toBe(false);
+    expect((await world.snapshot()).resources.failed).toEqual([]);
   });
 });
