@@ -102,6 +102,7 @@ import {
   type PostPrReviewResult,
   type PrReviewWorkflow,
   type ReviewPageEvent,
+  type ReviewPostRecovery,
   type ReviewSubmissionBinding,
   type ShowPrReviewResult,
   type StartPrReviewInput,
@@ -515,7 +516,11 @@ export type TandemService = Readonly<{
   readonly reviewEdit: (id: string, edits: PrReviewEdits) => Promise<ShowPrReviewResult>;
   readonly reviewPost: (
     id: string,
-    input: { readonly verdict: ReviewVerdict; readonly approved: boolean },
+    input: {
+      readonly verdict: ReviewVerdict;
+      readonly approved: boolean;
+      readonly recovery?: ReviewPostRecovery;
+    },
   ) => Promise<PostPrReviewResult>;
   /** Posts a submission from the review page; the user's click on Submit is the approval. */
   readonly reviewSubmit: (
@@ -1013,7 +1018,7 @@ class TandemController {
       reviewEdit: (id, edits) => this.#prReviews.edit(assertTaskId(id), edits),
       reviewPost: (id, input) =>
         this.#deps.store.serialized(() =>
-          this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
+          this.#prReviews.post(assertTaskId(id), input.verdict, input.approved, input.recovery),
         ),
       reviewSubmit: (id, submission, expected) =>
         this.#deps.store.serialized(() =>

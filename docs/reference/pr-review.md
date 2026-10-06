@@ -122,9 +122,30 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   a lost response, malformed receipt, or failure to save the receipt leaves that attempt uncertain
   across restarts. Retries only look for its marker and save the original verdict/choices as posted
   when found. Even a currently absent marker cannot prove an uncertain POST will never appear, so
-  it does not permit another POST; there is no automatic retry or manual state clearing. This also
+  it does not permit an automatic POST. This also
   means a crash after saving the attempt but before sending it needs reconciliation rather than a
   blind repost. The receipt is saved before replies for addressed earlier comments are sent.
+
+### Recovering an uncertain post
+
+- An uncertain result, `review-show`, and native PR review notes say: "GitHub may or may not have
+  received this review; check the PR." They link the PR and offer two choices through the Tandem
+  conversation. Ordinary `review-post` and native/page submissions still only reconcile the marker.
+- After checking the PR, the user can ask to post the saved review again. The coordinator uses
+  `review-post` with the saved verdict and `recovery: {kind: "post-again", taskRevision}`. The
+  confirmation warns that GitHub may already have it and this can create a duplicate. Reposting
+  preserves the exact saved choices, checks the current head and readable marker list again, and
+  persists a fresh attempt before sending it. A found marker saves its receipt without reposting.
+- The user can instead supply the GitHub review link they checked and ask to mark it as posted:
+  `recovery: {kind: "mark-posted", taskRevision, url}`. The URL must belong to this PR and include
+  its `#pullrequestreview-N` anchor. Confirmation saves a receipt with `confirmedByUser: true`,
+  preserves the saved choices/verdict, and clears the pending state without any GitHub requests or
+  thread replies. This works even when GitHub API reads are unavailable.
+- Both choices require explicit human confirmation through the existing approval dialog or its
+  code-written conversation confirmation. `taskRevision` comes from the latest full task record;
+  it binds consent to that exact pending attempt. Any intervening change refuses recovery, so a
+  confirmation cannot be reused after a second uncertain attempt, even with an identical clock.
+  No model, polling loop, or ordinary resubmission chooses recovery on its own.
 
 ## Follow-ups and close
 

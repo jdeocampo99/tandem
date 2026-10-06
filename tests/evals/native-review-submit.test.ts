@@ -10,6 +10,8 @@ import {
   prReviewRunDiffPath,
 } from "../../src/pr-review/state.ts";
 import { createTandemService } from "../../src/service/controller.ts";
+import { executeTandemAction, type TandemAction } from "../../src/session/actions.ts";
+import { tandemRequestSchema } from "../../src/session/tools.ts";
 import {
   SCENARIO_HEAD,
   SCENARIO_NEXT_HEAD,
@@ -167,6 +169,188 @@ test("native submission holds its checked round through posting before a re-revi
   });
 }, 20_000);
 
+test("uncertain posting offers explicit confirmed recovery and never reuses a confirmation for another attempt", async () => {
+  await withScenario({}, async (world) => {
+    const { state } = await seedReview(world);
+    const payloads: unknown[] = [];
+    let requests = 0;
+    const service = reviewService(world, async (request) => {
+      if (request.argv[0] !== "gh") return world.run(request);
+      requests += 1;
+      if (request.argv.includes("--slurp")) return { code: 0, stdout: "[[]]", stderr: "" };
+      if (request.argv.includes("headRefOid"))
+        return { code: 0, stdout: SCENARIO_HEAD, stderr: "" };
+      if (request.argv.includes("POST")) {
+        const saved = await world.store.read(SCENARIO_TASK_ID);
+        expect(saved?.prReview?.rounds[0]?.pendingPost?.verdict).toBe("request-changes");
+        payloads.push(JSON.parse(request.stdin ?? "{}"));
+        return { code: 1, stdout: "", stderr: "response lost" };
+      }
+      throw new Error(`Unexpected GitHub request ${JSON.stringify(request.argv)}`);
+    });
+    const submission: ReviewSubmission = {
+      tandemPrReview: 1,
+      verdict: "request-changes",
+      summary: "The saved choices",
+      drafts: [],
+      yours: [],
+    };
+    const expected = { head: SCENARIO_HEAD, generation: 0 };
+    try {
+      expect(await service.reviewSubmit(SCENARIO_TASK_ID, submission, expected)).toMatchObject({
+        posted: false,
+        message: expect.stringContaining("check the PR"),
+      });
+      expect((await service.reviewShow(SCENARIO_TASK_ID, { page: false })).text).toContain(
+        "GitHub may or may not have received this review",
+      );
+      const before = await service.get(SCENARIO_TASK_ID);
+      const action: TandemAction = {
+        action: "review-post",
+        taskId: SCENARIO_TASK_ID,
+        verdict: "request-changes",
+        recovery: { kind: "post-again", taskRevision: before.revision },
+      };
+      expect(tandemRequestSchema.safeParse({ request: action }).success).toBe(true);
+      expect((await executeTandemAction(action, service, { confirm: undefined })).approved).toBe(
+        false,
+      );
+      expect(
+        (await executeTandemAction(action, service, { confirm: async () => false })).approved,
+      ).toBe(false);
+      await expect(
+        service.reviewPost(SCENARIO_TASK_ID, {
+          verdict: "request-changes",
+          approved: false,
+          recovery: { kind: "post-again", taskRevision: before.revision },
+        }),
+      ).rejects.toThrow("user's approval");
+      expect(payloads).toHaveLength(1);
+
+      const reposted = await executeTandemAction(action, service, {
+        confirm: async (_title, message) => {
+          expect(message).toContain("this can create a duplicate review");
+          return true;
+        },
+      });
+      expect(reposted.value).toMatchObject({
+        posted: false,
+        message: expect.stringContaining("check the PR"),
+      });
+      expect(payloads).toHaveLength(2);
+      expect(payloads[1]).toEqual(payloads[0]);
+      // Both attempts use the fixture's identical clock; the durable revision still binds consent.
+      await expect(
+        executeTandemAction(action, service, { confirm: undefined, confirmedInConversation: true }),
+      ).rejects.toThrow("review changed since you checked it");
+      await service.reviewSubmit(SCENARIO_TASK_ID, submission, expected);
+      expect(payloads).toHaveLength(2);
+
+      const pending = await service.get(SCENARIO_TASK_ID);
+      const recovery = {
+        kind: "mark-posted" as const,
+        taskRevision: pending.revision,
+        url: `${state.url}#pullrequestreview-77`,
+      };
+      for (const url of [
+        "https://github.com/other/repo/pull/7#pullrequestreview-77",
+        state.url,
+        "https://example.com/owner/repo/pull/7#pullrequestreview-77",
+      ]) {
+        await expect(
+          service.reviewPost(SCENARIO_TASK_ID, {
+            verdict: "request-changes",
+            approved: true,
+            recovery: { ...recovery, url },
+          }),
+        ).rejects.toThrow("GitHub review link");
+      }
+      const mark: TandemAction = {
+        action: "review-post",
+        taskId: SCENARIO_TASK_ID,
+        verdict: "request-changes",
+        recovery,
+      };
+      expect(tandemRequestSchema.safeParse({ request: mark }).success).toBe(true);
+      expect(
+        (await executeTandemAction(mark, service, { confirm: async () => false })).approved,
+      ).toBe(false);
+      const requestsBeforeMarking = requests;
+      const marked = await executeTandemAction(mark, service, {
+        confirm: async (_title, message) => {
+          expect(message).toContain("without posting to GitHub");
+          return true;
+        },
+      });
+      expect(marked.value).toMatchObject({ posted: true, url: recovery.url });
+      expect(requests).toBe(requestsBeforeMarking);
+      expect(payloads).toHaveLength(2);
+      const confirmed = await service.get(SCENARIO_TASK_ID);
+      expect(confirmed.prReview?.rounds[0]?.posted).toMatchObject({
+        url: recovery.url,
+        verdict: "request-changes",
+        confirmedByUser: true,
+      });
+      expect(confirmed.prReview?.rounds[0]?.pendingPost).toBeUndefined();
+      expect(confirmed.prReview?.rounds[0]?.review.summaryComment).toBe(submission.summary);
+      expect(
+        await service.reviewPost(SCENARIO_TASK_ID, { verdict: "request-changes", approved: true }),
+      ).toMatchObject({ posted: true, url: recovery.url });
+      expect(payloads).toHaveLength(2);
+    } finally {
+      await service.shutdown();
+    }
+  });
+}, 20_000);
+
+for (const refused of ["moved-head", "unreadable-head", "unreadable-markers"] as const) {
+  test(`confirmed repost preserves uncertainty when preflight has ${refused}`, async () => {
+    await withScenario({}, async (world) => {
+      await seedReview(world);
+      let posts = 0;
+      let retrying = false;
+      const service = reviewService(world, async (request) => {
+        if (request.argv[0] !== "gh") return world.run(request);
+        if (request.argv.includes("--slurp"))
+          return retrying && refused === "unreadable-markers"
+            ? { code: 1, stdout: "", stderr: "offline" }
+            : { code: 0, stdout: "[[]]", stderr: "" };
+        if (request.argv.includes("headRefOid"))
+          return retrying && refused === "unreadable-head"
+            ? { code: 1, stdout: "", stderr: "offline" }
+            : {
+                code: 0,
+                stdout: retrying && refused === "moved-head" ? SCENARIO_NEXT_HEAD : SCENARIO_HEAD,
+                stderr: "",
+              };
+        if (request.argv.includes("POST")) {
+          posts += 1;
+          return { code: 1, stdout: "", stderr: "response lost" };
+        }
+        throw new Error(`Unexpected GitHub request ${JSON.stringify(request.argv)}`);
+      });
+      try {
+        await service.reviewPost(SCENARIO_TASK_ID, { verdict: "approve", approved: true });
+        const pending = await service.get(SCENARIO_TASK_ID);
+        retrying = true;
+        const result = await service.reviewPost(SCENARIO_TASK_ID, {
+          verdict: "approve",
+          approved: true,
+          recovery: { kind: "post-again", taskRevision: pending.revision },
+        });
+        expect(result).toMatchObject({
+          posted: false,
+          message: expect.stringContaining("GitHub may or may not have received this review"),
+        });
+        expect(posts).toBe(1);
+        expect((await service.get(SCENARIO_TASK_ID)).prReview).toEqual(pending.prReview);
+      } finally {
+        await service.shutdown();
+      }
+    });
+  }, 20_000);
+}
+
 for (const first of ["chat", "native"] as const) {
   test(`${first} posting fences an overlapping ${first === "chat" ? "native" : "chat"} submission through its receipt`, async () => {
     await withScenario({}, async (world) => {
@@ -292,7 +476,7 @@ test("an accepted review with a lost response remains quarantined across restart
     try {
       expect(await service.reviewSubmit(SCENARIO_TASK_ID, submission, expected)).toMatchObject({
         posted: false,
-        message: expect.stringContaining("uncertain"),
+        message: expect.stringContaining("GitHub may or may not have received this review"),
       });
       expect(payloads).toHaveLength(1);
     } finally {

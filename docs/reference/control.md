@@ -192,5 +192,9 @@ different matching project. When no readable/live candidate matches, the command
   A question follow-up retains the existing finished round and its binding.
   The click is confirmation; pinned-head refusal and
   duplicate-post prevention remain in that service. Plain comments never become submissions.
+  Uncertain submissions explain that GitHub may or may not have received the review and ask the
+  user to check the PR. The conversation's `review-post` action offers explicitly confirmed
+  recovery to post saved choices again or record the review link the user checked; ordinary native
+  submissions never choose either path. See [uncertain review recovery](pr-review.md#recovering-an-uncertain-post).
 - The native action namespace does not expose publication or merge commands. Publishing, merging,
   deployment, and destructive operations retain their separate conversation approvals.

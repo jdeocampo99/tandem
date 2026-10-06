@@ -14,6 +14,8 @@ export type PostedReview = Readonly<{
   url: string;
   verdict: ReviewVerdict;
   postedAt: string;
+  /** The user checked the PR and explicitly supplied this receipt after an uncertain POST. */
+  confirmedByUser?: true;
 }>;
 
 /** One finished review of one PR head. */
@@ -151,10 +153,14 @@ function parsePosted(value: unknown, source: string): PostedReview {
   const record = recordAt(value, source);
   const verdict = textAt(record.verdict, `${source}.verdict`);
   if (!VERDICTS.has(verdict)) throw new TypeError(`${source}.verdict is not a known verdict`);
+  if (record.confirmedByUser !== undefined && record.confirmedByUser !== true) {
+    throw new TypeError(`${source}.confirmedByUser must be true when present`);
+  }
   return {
     url: stringAt(record.url, `${source}.url`),
     verdict: verdict as ReviewVerdict,
     postedAt: textAt(record.postedAt, `${source}.postedAt`),
+    ...(record.confirmedByUser === true ? { confirmedByUser: true as const } : {}),
   };
 }
 

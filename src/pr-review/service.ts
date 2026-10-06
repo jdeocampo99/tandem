@@ -23,7 +23,7 @@ import {
   type PullRequestFacts,
   readPullRequest,
 } from "./pull-request.ts";
-import { renderReviewText, wantsPage } from "./render.ts";
+import { renderReviewText, uncertainPostMessage, wantsPage } from "./render.ts";
 import type { ReviewLens } from "./review.ts";
 import {
   latestRound,
@@ -85,6 +85,11 @@ export type PostPrReviewResult = Readonly<{
 
 /** The finished review round the native pane displayed when the user clicked Submit. */
 export type ReviewSubmissionBinding = Readonly<{ head: string; generation: number }>;
+
+/** One explicitly confirmed recovery of the exact task revision the user inspected. */
+export type ReviewPostRecovery =
+  | Readonly<{ kind: "post-again"; taskRevision: number }>
+  | Readonly<{ kind: "mark-posted"; taskRevision: number; url: string }>;
 
 /** What the review workflow needs from the task service; everything else it does itself. */
 export type PrReviewDependencies = Readonly<{
@@ -296,9 +301,41 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     taskId: string,
     verdict: ReviewVerdict,
     approved: boolean,
+    recovery?: ReviewPostRecovery,
   ): Promise<PostPrReviewResult> {
     if (!approved) throw new ApprovalRequiredError("posting a PR review needs the user's approval");
     const { task, state, round } = await reviewed(taskId);
+    if (recovery !== undefined) {
+      if (!Number.isSafeInteger(recovery.taskRevision) || task.revision !== recovery.taskRevision) {
+        throw new Error(
+          "The review changed since you checked it; inspect it again before confirming recovery.",
+        );
+      }
+      if (round.pendingPost === undefined)
+        throw new Error("This review has no uncertain post to recover.");
+      if (verdict !== round.pendingPost.verdict)
+        throw new Error("Recovery must keep the saved review verdict and choices.");
+      if (recovery.kind === "post-again") {
+        // The saved attempt remains durable until preflight succeeds and a fresh attempt is saved.
+        const { pendingPost: _pendingPost, ...retry } = round;
+        return publish(task, state, retry, verdict, true);
+      }
+      const url = confirmedReviewUrl(recovery.url, state);
+      const { pendingPost: _pendingPost, ...confirmed } = round;
+      await deps.updatePrReview(
+        task,
+        replaceLatestRound(state, {
+          ...confirmed,
+          posted: { url, verdict, postedAt: deps.clock(), confirmedByUser: true },
+        }),
+      );
+      return {
+        taskId: task.id,
+        posted: true,
+        url,
+        message: `Marked your saved review as posted using the link you confirmed: ${url}`,
+      };
+    }
     if (round.posted !== undefined) {
       return {
         taskId: task.id,
@@ -316,6 +353,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     state: PrReviewState,
     round: PrReviewRound,
     verdict: ReviewVerdict,
+    recovering = false,
   ): Promise<PostPrReviewResult> {
     const input = {
       ref: state.ref,
@@ -345,21 +383,33 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       return {
         taskId: task.id,
         posted: false,
-        message: `The review post is uncertain; another review will not be sent. Retry only to reconcile its marker.${outcome.kind === "absent" ? " GitHub has not returned the saved marker yet." : ` ${outcome.message}`}`,
+        message: uncertainPostMessage(
+          state.url,
+          outcome.kind === "absent"
+            ? "GitHub has not returned the saved marker yet."
+            : outcome.message,
+        ),
       };
     }
     if (outcome.kind === "moved") {
       return {
         taskId: task.id,
         posted: false,
-        message: `The PR moved to ${outcome.head.slice(0, 12)} since this review, so the comments could land on the wrong lines. Ask for a re-review first.`,
+        message: recovering
+          ? uncertainPostMessage(
+              state.url,
+              `A new post was refused because the PR moved to ${outcome.head.slice(0, 12)}.`,
+            )
+          : `The PR moved to ${outcome.head.slice(0, 12)} since this review, so the comments could land on the wrong lines. Ask for a re-review first.`,
       };
     }
     if (outcome.kind === "failed") {
       return {
         taskId: task.id,
         posted: false,
-        message: `The review was not sent: ${outcome.message}`,
+        message: recovering
+          ? uncertainPostMessage(state.url, `A new post was refused: ${outcome.message}`)
+          : `The review was not sent: ${outcome.message}`,
       };
     }
     const { pendingPost: _pendingPost, ...confirmed } = round;
@@ -501,4 +551,23 @@ function replaceLatestRound(state: PrReviewState, round: PrReviewRound): PrRevie
 function requireState(task: TaskRecord): PrReviewState {
   if (task.prReview === undefined) throw new Error(`Task ${task.id} is not a PR review.`);
   return task.prReview;
+}
+
+function confirmedReviewUrl(value: string, state: PrReviewState): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Use the GitHub review link you checked on this PR.");
+  }
+  if (
+    url.origin !== "https://github.com" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.pathname.toLowerCase() !== `/${state.ref.repo}/pull/${state.ref.number}`.toLowerCase() ||
+    !/^#pullrequestreview-[1-9][0-9]*$/u.test(url.hash)
+  )
+    throw new Error("Use a GitHub review link for this same PR, including its review anchor.");
+  return url.href;
 }
