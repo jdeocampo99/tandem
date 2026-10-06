@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -12,12 +12,21 @@ import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordina
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
-import { Action, ActionEnvelope, blockArgs, Outcome } from "../../src/native/contract.ts";
-import { projectStoreDirectory, readProjectState } from "../../src/native/store.ts";
+import {
+  Action,
+  ActionEnvelope,
+  blockArgs,
+  Outcome,
+  setupFile,
+  ViewFile,
+} from "../../src/native/contract.ts";
+import { projectStoreDirectory, readProjectState, viewDetailPath } from "../../src/native/store.ts";
+import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
+import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
-import { createTandemService } from "../../src/service/controller.ts";
+import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type {
@@ -28,6 +37,7 @@ import type {
 import { seedScenarioTask, seedTernProject } from "../evals/scenario.ts";
 import type { TernParityHost } from "../evals/tern-parity/harness.ts";
 import { seedReview, withParity } from "../evals/tern-parity/inventory.ts";
+import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { viewsOf, viewsWith } from "../terminal-backend/views.ts";
 import { prIndexEntry, projectRow, publishFixture } from "./view-files.ts";
 
@@ -1896,6 +1906,132 @@ test("project lookup uses the terminal saved in the block's home, not the proces
     });
     expect(calls[0]?.slice(1)).toEqual(["ls", "--json"]);
     expect(calls.every((argv) => argv[0] !== "herdr")).toBe(true);
+  } finally {
+    await f.close();
+  }
+});
+
+const setupAnswer = (mode: SetupMode, repositories: readonly unknown[]) => ({
+  tandemSetup: 1,
+  mode,
+  models: Object.fromEntries(
+    ["coordinator", "scout", "implementer", "reviewer", "presentation"].map((role) => [
+      role,
+      { model: "claude-code/opus", thinking: "high" },
+    ]),
+  ),
+  repositories,
+  selfImprovement: "fix",
+});
+
+/** The fixture's service with setup's discovery and save replaced, since no machine is behind it. */
+function setupService(f: Fixture, save: (answerText: string) => SetupApplyResult): TandemService {
+  return {
+    ...f.service,
+    setupView: async (_repoPath, mode) => setupViewFixture(mode),
+    saveSetup: async (_repoPath, answerText) => save(answerText),
+  };
+}
+
+async function publishedSetup(f: Fixture, mode: SetupMode) {
+  return ViewFile.parse(
+    JSON.parse(await readFile(viewDetailPath(f.home, f.repo, setupFile(mode)), "utf8")),
+  );
+}
+
+test("setup opens beside the conversation and settings in a tab, each from its published model", async () => {
+  const f = await fixture("tern");
+  try {
+    const service = setupService(f, () => {
+      throw new Error("nothing is saved by opening");
+    });
+    for (const mode of SETUP_MODES) {
+      const outcome = await f.act({ verb: "open", ref: { kind: "setup", mode } }, { deps: { service } });
+      expect(outcome).toEqual({ status: "done" });
+      const file = await publishedSetup(f, mode);
+      expect(file.kind).toBe("setup");
+      expect(file.model).toMatchObject({ mode });
+    }
+    expect(f.opened).toEqual([
+      { kind: "setup", mode: "setup" },
+      { kind: "setup", mode: "settings" },
+    ]);
+
+    // A terminal without native views cannot show the block.
+    const withoutViews = { service, terminal: { ...f.deps.terminal, views: undefined } };
+    const refused = await f.act(
+      { verb: "open", ref: { kind: "setup", mode: "settings" } },
+      { deps: withoutViews },
+    );
+    expect(refused.status).toBe("refused");
+    expect(f.opened).toHaveLength(2);
+  } finally {
+    await f.close();
+  }
+});
+
+test("setup-save applies the answer, shows the saved model again and tells the coordinator in fixed words", async () => {
+  const f = await fixture("tern");
+  try {
+    const saved: string[] = [];
+    const service = setupService(f, (text) => {
+      saved.push(text);
+      return { message: "", complete: true, opened: ["api", "web", "docs"] };
+    });
+    const answer = setupAnswer("setup", [{ path: "/code/api", validationCommands: ["make check"] }]);
+    expect(await f.act({ verb: "setup-save", answer }, { deps: { service } })).toEqual({
+      status: "done",
+    });
+    expect(saved.map((text) => JSON.parse(text))).toEqual([answer]);
+    expect(f.prompts).toEqual(["Setup saved. Chats for api, web and docs are open in the sidebar."]);
+    expect((await publishedSetup(f, "setup")).model).toMatchObject({ mode: "setup" });
+
+    const settings = setupService(f, () => ({ message: "", complete: true, opened: [] }));
+    const edited = setupAnswer("settings", [{ path: "/code/api", validationCommands: ["make"] }]);
+    const outcome = await f.act({ verb: "setup-save", answer: edited }, { deps: { service: settings } });
+    expect(outcome).toEqual({ status: "done" });
+    expect(f.prompts.at(-1)).toBe("Settings saved. New tasks will use them.");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a partly failed setup-save is kept with what failed and tells the coordinator", async () => {
+  const f = await fixture("tern");
+  try {
+    const service = setupService(f, () => ({
+      message: "Model choices were not saved: models broke",
+      complete: false,
+      opened: [],
+    }));
+    const answer = setupAnswer("setup", [{ path: "/code/api", validationCommands: ["make check"] }]);
+    expect(await f.act({ verb: "setup-save", answer }, { deps: { service } })).toEqual({
+      status: "kept",
+      notice: { code: "setup-incomplete", text: "Model choices were not saved: models broke" },
+    });
+    expect(f.prompts).toEqual([
+      "Setup was saved with problems:\nModel choices were not saved: models broke",
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("setup-save refuses an answer the CLI cannot parse before saving or prompting", async () => {
+  const f = await fixture("tern");
+  try {
+    const service = setupService(f, () => {
+      throw new Error("must not save a refused answer");
+    });
+    const bad = { ...setupAnswer("setup", []), models: {}, mode: "later" };
+    const outcome = await f.act({ verb: "setup-save", answer: bad }, { deps: { service } });
+    expect(outcome.status).toBe("refused");
+    expect(outcome.notice?.text).toContain("Planning has no model.");
+    expect(outcome.notice?.text).toContain('mode must be "setup" or "settings".');
+    expect(f.prompts).toEqual([]);
+    expect(Action.safeParse({ verb: "setup-save" }).success).toBe(false);
+    expect(Action.safeParse({ verb: "setup-save", answer: [] }).success).toBe(false);
+    expect(Action.safeParse({ verb: "setup-save", answer: {}, extra: 1 }).success).toBe(false);
   } finally {
     await f.close();
   }

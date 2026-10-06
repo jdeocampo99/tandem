@@ -1,5 +1,6 @@
-import { isAbsolute } from "node:path";
+import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
+import { SETUP_MODES, type SetupMode } from "../onboarding/setup-view.ts";
 
 /** Every native block Tandem defines, as `tandem.<kind>` programs. */
 export const VIEW_KINDS = [
@@ -13,6 +14,7 @@ export const VIEW_KINDS = [
   "board",
   "usage",
   "catchup",
+  "setup",
 ] as const;
 export const ViewKind = z.enum(VIEW_KINDS);
 export type ViewKind = z.infer<typeof ViewKind>;
@@ -451,15 +453,90 @@ const PrModel = z
     { message: "a review destination needs the review of the shown head" },
   );
 
+/**
+ * The setup block's model: `SetupView` (src/onboarding/setup-view.ts) as written. Each mode has
+ * its own detail file, because setup opens beside the conversation and settings in its own tab.
+ */
+const ModelChoice = z.object({ model: str, thinking: str });
+const SetupRepoModel = z.object({
+  name: str,
+  path: str,
+  shownPath: str,
+  repo: opt(str),
+  setUp: bool,
+  validationCommands: strings,
+  setupCommands: strings,
+  suggestions: strings,
+  detectedFrom: opt(str),
+  inspectionError: opt(str),
+});
+const SetupModel = z.object({
+  schemaVersion: z.literal(1),
+  mode: z.enum(SETUP_MODES),
+  generatedAt: str,
+  models: z.array(
+    z.object({
+      selector: str,
+      harness: z.enum(["claude-code", "omp"]),
+      name: str,
+      provider: str,
+      thinking: strings,
+      context: opt(num),
+      cost: opt(z.object({ input: num, output: num })),
+      priceLevel: opt(z.enum(["$", "$$", "$$$"])),
+    }),
+  ),
+  harnesses: z.array(
+    z.object({
+      id: z.enum(["claude-code", "omp"]),
+      name: str,
+      note: str,
+      unavailable: opt(str),
+    }),
+  ),
+  roles: z.array(
+    z.object({
+      id: str,
+      name: str,
+      what: str,
+      color: str,
+      hint: str,
+      thinking: str,
+      pick: opt(ModelChoice),
+      recommended: opt(z.object({ model: ModelChoice, reason: str })),
+    }),
+  ),
+  thinkingLevels: z.array(z.object({ level: str, note: str })),
+  repos: z.array(SetupRepoModel),
+  candidates: z.array(SetupRepoModel),
+  selfImprovement: z.enum(["off", "fix", "report"]),
+});
+
 /** The model schema of each view file kind. The index feeds every screen without a detail file. */
 export const VIEW_MODELS = {
   index: IndexModel,
   task: TaskModel,
   brief: BriefModel,
   pr: PrModel,
+  setup: SetupModel,
 } as const;
 export type ViewFileKind = keyof typeof VIEW_MODELS;
-export const ViewFileKind = z.enum(["index", "task", "brief", "pr"]);
+export const ViewFileKind = z.enum(["index", "task", "brief", "pr", "setup"]);
+
+/** The setup detail file of `mode`. */
+export function setupFile(mode: SetupMode): string {
+  return `setup-${mode}.json`;
+}
+
+const WINDOW_KINDS: readonly ViewKind[] = ["board", "usage", "catchup"];
+
+/**
+ * Whether a view opens as its own full-window tab. Board, usage and catch-up always do; setup does
+ * only as settings, which its detail file tells: setup opens beside the conversation.
+ */
+export function isWindowView(kind: ViewKind, viewPath: string): boolean {
+  return WINDOW_KINDS.includes(kind) || (kind === "setup" && basename(viewPath) === setupFile("settings"));
+}
 
 /**
  * Every view file. `epoch` names one life of the project's store directory and `seq` orders its
@@ -523,6 +600,7 @@ export const ViewRef = z.discriminatedUnion("kind", [
       ]),
     })
     .strict(),
+  z.object({ kind: z.literal("setup"), mode: z.enum(SETUP_MODES) }).strict(),
 ]);
 export type ViewRef = z.infer<typeof ViewRef>;
 
@@ -589,6 +667,8 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("catchup-open-needs") }).strict(),
   z.object({ verb: z.literal("board-link"), cardKey: z.string().min(1) }).strict(),
   z.object({ verb: z.literal("merged-link"), url: z.string().url() }).strict(),
+  /** The setup block's answer: parsed by `parseSetupAnswer`, so its shape lives in one place. */
+  z.object({ verb: z.literal("setup-save"), answer: z.record(z.string(), z.unknown()) }).strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -611,6 +691,7 @@ export const NOTICE_CODES = [
   "review-posted",
   "review-unconfirmed",
   "feedback-saved",
+  "setup-incomplete",
 ] as const;
 export const NoticeCode = z.enum(NOTICE_CODES);
 export type NoticeCode = z.infer<typeof NoticeCode>;

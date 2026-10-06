@@ -8,7 +8,7 @@ import {
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
 import type { Endpoint, TerminalPaneLocation } from "../../contracts.ts";
-import { blockArgs, parseBlockArgs } from "../../native/contract.ts";
+import { blockArgs, parseBlockArgs, setupFile } from "../../native/contract.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import { type TernEndpoint, ternEndpoint } from "../identity.ts";
 import {
@@ -230,11 +230,11 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
   // Native screens load coordinator/model code only when requested. Ordinary worker startup
   // must not load the interactive harness through this terminal port.
   const native = async () => {
-    const [{ ternViewHost, projectForView }, { viewIndexPath }] = await Promise.all([
+    const [{ ternViewHost, projectForView }, { viewDetailPath, viewIndexPath }] = await Promise.all([
       import("./views.ts"),
       import("../../native/store.ts"),
     ]);
-    return { views: ternViewHost(cli), projectForView, viewIndexPath };
+    return { views: ternViewHost(cli), projectForView, viewDetailPath, viewIndexPath };
   };
   return {
     name: "tern",
@@ -523,6 +523,25 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
         "split",
         viewIndexPath(options.home, project),
       );
+    },
+    openSetup: async (target) => {
+      if (options.home === undefined) throw new Error("Tern setup requires a Tandem home");
+      const { views, projectForView, viewDetailPath } = await native();
+      const coordinator = await byId(target, target.paneId);
+      const project = await projectForView(options.home, coordinator);
+      await views.open(
+        {
+          coordinator,
+          cwd: target.cwd,
+          home: options.home,
+          view: { kind: "setup", mode: "setup" },
+        },
+        project,
+        "setup",
+        "split",
+        viewDetailPath(options.home, project, setupFile("setup")),
+      );
+      return true;
     },
     promptAgent: async (target) =>
       cli.mutate({

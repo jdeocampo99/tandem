@@ -124,6 +124,7 @@ export function terminalBackend(
     checkInstall: (input) => select().checkInstall(input),
     notify: (input) => select().notify(input),
     openWelcome: (input) => select().openWelcome(input),
+    openSetup: (input) => select().openSetup(input),
     promptAgent: (input) => select().promptAgent(input),
     openPanel: (input) => select().openPanel(input),
     isPanelOpen: (input) => select().isPanelOpen(input),

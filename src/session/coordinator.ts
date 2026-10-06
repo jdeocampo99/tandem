@@ -9,6 +9,7 @@ import {
   COORDINATOR_TOOL_GUIDANCE,
   TANDEM_COORDINATOR_INSTRUCTIONS,
 } from "../instructions.ts";
+import { remainingOnboardingSteps, SETUP_WELCOME_TEXT } from "../onboarding/checklist.ts";
 import type { CoordinatorUsageEntry } from "../runtime/usage-receipt.ts";
 import type { SourceRefreshResult, TandemService } from "../service/controller.ts";
 import { isMissing, isTerminalTask } from "../service/records.ts";
@@ -49,6 +50,11 @@ export type CoordinatorDeps = SessionDeps &
     isTandemCheckout(): Promise<boolean>;
     /** Opens the welcome popup over the Herdr session, pointed at this coordinator's pane. */
     openWelcome(): Promise<void>;
+    /**
+     * Publishes the setup view and opens its block beside this coordinator's conversation; false
+     * when the terminal has no native blocks, so setup runs in the chat.
+     */
+    openSetup(): Promise<boolean>;
     readReport: ResearchReportReader;
     appendUsage(entry: CoordinatorUsageEntry): Promise<void>;
     /** Context size that triggers early compaction; `0` leaves compaction to the harness. */
@@ -378,25 +384,47 @@ export class CoordinatorSession {
   }
 
   /**
-   * The Tandem coordinator greets the user while no other project is set up. When the popup cannot
-   * open (an older Herdr, or the plugin is not linked), the same words arrive in the chat instead.
+   * The Tandem coordinator opens the setup block beside the chat while setup is unfinished, and
+   * otherwise greets the user while no other project is set up. When a terminal has no setup block
+   * the checklist runs in the chat. When the welcome popup cannot open (an older Herdr, or the
+   * plugin is not linked), the same words arrive in the chat instead.
    */
   private async welcome(): Promise<void> {
     if (!(await this.tandemCheckout())) return;
+    if (await this.openSetupBlock()) return;
     const repo = await this.deps.realpath(this.deps.environment.repo);
     const { projects } = await this.service().board();
     if (projects.some((project) => project !== repo)) return;
     try {
       await this.deps.openWelcome();
     } catch {
-      await this.deps.host.perform({
-        type: "deliver",
-        source: "notification",
-        text: WELCOME_TEXT,
-        timing: "nextTurn",
-        triggerTurn: false,
-      });
+      await this.deliverStartupText(WELCOME_TEXT);
     }
+  }
+
+  /** Whether the setup block opened; a block that cannot open leaves setup to the chat. */
+  private async openSetupBlock(): Promise<boolean> {
+    const facts = await this.service().onboardingFacts(this.deps.environment.repo);
+    if (remainingOnboardingSteps(facts).length === 0) return false;
+    try {
+      if (!(await this.deps.openSetup())) return false;
+    } catch (error) {
+      this.deps.logError(OPERATION_FAILED, error);
+      return false;
+    }
+    this.onboarding().setupBlockOpened();
+    await this.deliverStartupText(SETUP_WELCOME_TEXT);
+    return true;
+  }
+
+  private deliverStartupText(text: string): Promise<void> {
+    return this.deps.host.perform({
+      type: "deliver",
+      source: "notification",
+      text,
+      timing: "nextTurn",
+      triggerTurn: false,
+    });
   }
 
   async agentStart(): Promise<Reply<"agentStart">> {

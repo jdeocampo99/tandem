@@ -47,3 +47,11 @@ test("plain-choice steps have fixed wording; open-ended steps have none", () => 
   expect(onboardingQuestion("models")).toBeUndefined();
   expect(onboardingQuestion("repositories")).toBeUndefined();
 });
+
+test("with the setup block open the chat answers questions instead of asking them", () => {
+  const guidance = onboardingContext(fresh, true);
+  expect(guidance).toContain("The setup block is open beside this chat");
+  expect(guidance).toContain('"Setup saved." message');
+  expect(guidance).not.toContain("Current step:");
+  expect(onboardingContext(done, true)).toBeUndefined();
+});

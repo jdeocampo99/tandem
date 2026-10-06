@@ -3,15 +3,14 @@ import { basename } from "node:path";
 import { EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
 import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
-import { parseBlockArgs, ViewKind } from "../../native/contract.ts";
+import { isWindowView, parseBlockArgs, ViewKind } from "../../native/contract.ts";
 import { viewDetailPath, viewIndexPath } from "../../native/store.ts";
 import type { EndpointTarget } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
 import { blocks, type LocatedBlock, TernOutcomeUnknownError } from "./protocol.ts";
 
-const windowKinds: readonly ViewKind[] = ["board", "usage", "catchup"];
-const detailKinds: readonly ViewKind[] = ["task", "brief", "pr"];
+const detailKinds: readonly ViewKind[] = ["task", "brief", "pr", "setup"];
 
 async function recordedCoordinator(home: string, target: EndpointTarget) {
   const owners = (await listCoordinatorRecords(home, target.endpoint.sessionId)).filter(
@@ -98,7 +97,7 @@ export async function planCoordinatorViews(
       listed === undefined ||
       entry.block.id === target.endpoint.paneId ||
       entry.session.id !== target.endpoint.terminalSessionId ||
-      (windowKinds.includes(kind.data)
+      (isWindowView(kind.data, file)
         ? entry.tab.id === target.endpoint.tabId
         : entry.tab.id !== target.endpoint.tabId) ||
       file !== expectedFile ||

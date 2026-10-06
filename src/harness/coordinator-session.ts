@@ -7,8 +7,10 @@ import {
   type TandemEnvironmentSource,
 } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
+import { canonicalPath } from "../coordinator/record.ts";
 import { refreshCoordinatorSourceUnlocked } from "../coordinator/source.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
+import { publishViews } from "../native/store.ts";
 import { playbookClassifier } from "../playbooks/classify.ts";
 import { briefLanguageChecker } from "../requests/plain-language.ts";
 import { appendCoordinatorUsage } from "../runtime/usage-ledger.ts";
@@ -104,6 +106,10 @@ export function bindCoordinator(
     sessionId: harness.sessionId,
   });
   const terminal = terminalBackend(options.run ?? runCommand, { home: environment.home });
+  let service: TandemService | undefined;
+  // One service per session: the setup block reads the same one the conversation uses.
+  const coordinatorService = (): TandemService =>
+    (service ??= createCoordinatorService(options, environment, environmentSnapshot));
   const session = new CoordinatorSession({
     host: harness.host,
     clock: { now: () => Date.now(), monotonic: () => performance.now() },
@@ -117,7 +123,7 @@ export function bindCoordinator(
     }),
     logError: harness.logError,
     environment,
-    createService: () => createCoordinatorService(options, environment, environmentSnapshot),
+    createService: coordinatorService,
     realpath: (path) => realpath(path),
     isTandemCheckout: () => isTandemCheckout(environment.repo),
     openWelcome: async () => {
@@ -125,6 +131,22 @@ export function bindCoordinator(
         throw new Error("the coordinator is not running in a Tandem Herdr pane");
       }
       await terminal.openWelcome({
+        sessionId: environment.sessionId,
+        cwd: harness.cwd,
+        paneId: environment.coordinatorPaneId,
+      });
+    },
+    openSetup: async () => {
+      // Herdr has no native blocks; its setup runs in the chat, and nothing is published for it.
+      if (terminal.views === undefined) return false;
+      if (environment.coordinatorPaneId === undefined) {
+        throw new Error("the coordinator is not running in a Tandem Tern pane");
+      }
+      const setup = await coordinatorService().setupView(environment.repo, "setup");
+      await publishViews(environment.home, await canonicalPath(environment.repo, "repoPath"), async () => ({
+        setup,
+      }));
+      return terminal.openSetup({
         sessionId: environment.sessionId,
         cwd: harness.cwd,
         paneId: environment.coordinatorPaneId,

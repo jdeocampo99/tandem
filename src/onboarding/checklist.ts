@@ -36,14 +36,28 @@ const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
     "Ask which repositories to set up. For each: find-repo with the name or path (with several matches, ask which). Say in two lines which checks and install step it found; ask them to confirm or change those. Then setup with their answers, pr-watch-merging with how pull requests merge, and open-project.",
 };
 
-/** What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done. */
-export function onboardingContext(facts: OnboardingFacts): string | undefined {
+const SETUP_BLOCK_GUIDANCE =
+  "The setup block is open beside this chat, where the user chooses models, repositories and what happens when Tandem finds a bug in itself. Their answers arrive by themselves as a \"Setup saved.\" message, so do not ask the setup questions here or call the setup tools for them. Help with their questions about any setting: what each job does, models and thinking levels, validation and setup commands, the bug-report options. To change a setting they ask about, tell them to change it in the block.";
+
+/**
+ * What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done.
+ * While the setup block is open it leads, so the guidance says to answer questions, not to ask.
+ */
+export function onboardingContext(
+  facts: OnboardingFacts,
+  setupBlockOpen = false,
+): string | undefined {
   const [current, ...later] = remainingOnboardingSteps(facts);
   if (current === undefined) return undefined;
+  if (setupBlockOpen) return `Setup is unfinished. ${SETUP_BLOCK_GUIDANCE}`;
   const after = later.length === 0 ? "" : ` Then: ${later.join(", ")}.`;
   const step = `Current step: ${STEP_GUIDANCE[current]}${after}`;
   return `Setup is unfinished. ${step}`;
 }
+
+/** What the chat says when the setup block opens beside it. */
+export const SETUP_WELCOME_TEXT =
+  "Welcome to Tandem.\n\nYour setup is on the right. Add your repositories, check the recommended models, then press Start. Ask me here about any setting.";
 
 export type OnboardingQuestion = Readonly<{
   readonly text: string;

@@ -7,13 +7,20 @@ import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
 import {
   type BlockContext,
   blockArgs,
+  isWindowView,
   type Placement,
   parseBlockArgs,
   Receipt,
+  setupFile,
   Ticket,
   ViewKind,
 } from "../../native/contract.ts";
-import { openDirectories, openDirectory, viewIndexPath } from "../../native/store.ts";
+import {
+  openDirectories,
+  openDirectory,
+  viewDetailPath,
+  viewIndexPath,
+} from "../../native/store.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
 import type { RetainedViewOpen, ViewOrigin, ViewsCapability } from "../contract.ts";
@@ -31,8 +38,7 @@ import {
 const TICKET_LIFETIME_MS = 10_000;
 const TICKET = ".ticket.json";
 const RECEIPT = ".receipt.json";
-const reusableRoots: readonly ViewKind[] = ["board", "usage", "catchup", "prs"];
-const windowPrograms: readonly string[] = ["tandem.board", "tandem.usage", "tandem.catchup"];
+const reusableRoots: readonly ViewKind[] = ["board", "usage", "catchup", "prs", "setup"];
 
 /** The host failed before any layout effect, so the open settled and the user can retry it. */
 export class NativeViewNotOpenedError extends Error {
@@ -470,7 +476,7 @@ export async function openView(
   );
 
   async function dispatch(directory: string, key: string): Promise<OpenResult> {
-    const closing = await closingOrigin(cmd, input, placement, index);
+    const closing = await closingOrigin(cmd, input, placement, index, project);
     const ownedTasks =
       placement === "task" || placement === "return"
         ? blocks(await cmd.ls(input.cwd)).filter((entry) => {
@@ -623,6 +629,7 @@ async function closingOrigin(
   input: OpenInput,
   placement: Placement,
   index: string,
+  project: string,
 ): Promise<ViewTarget | undefined> {
   const originId = input.origin?.paneId;
   if (placement !== "return" || originId === undefined || originId === input.coordinator.paneId)
@@ -641,7 +648,8 @@ async function closingOrigin(
       input.coordinator,
       "return origin is not this coordinator's native view",
     );
-  if (!windowPrograms.includes(source.block.program)) return undefined;
+  const kind = ViewKind.parse(source.block.program.slice("tandem.".length));
+  if (!isWindowView(kind, listed.viewPath)) return undefined;
   const target: ViewTarget = {
     endpoint: {
       ...input.coordinator,
@@ -651,7 +659,9 @@ async function closingOrigin(
     },
     cwd: input.cwd,
     program: source.block.program,
-    args: blockArgs(index, {
+    args: blockArgs(
+      kind === "setup" ? viewDetailPath(input.home, project, setupFile("settings")) : index,
+      {
       coordinator: input.coordinator.paneId,
       cwd: input.cwd,
       home: input.home,

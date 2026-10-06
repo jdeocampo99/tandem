@@ -43,7 +43,8 @@ stop the existing work through normal task controls before choosing the other te
 
 `TerminalBackend` in `src/terminal-backend/contract.ts` is every pane, workspace and session
 effect Tandem has: inspect, run, send keys, interrupt, close, create and split, list, focus,
-notify, the panel and the welcome view. Every operation that names a pane takes its full identity
+notify, the panel, the welcome view and the setup block (`openSetup`, which Herdr answers with
+`false` so setup runs in the chat). Every operation that names a pane takes its full identity
 and refuses a pane whose session, workspace or tab no longer match. Failures a caller decides on
 are typed: `EndpointOwnershipError` for a missing or foreign pane and `EndpointBusyError` for an
 active worker. Herdr (`herdr/`) and Tern (`tern/`) implement it. `compose.ts` alone picks one.

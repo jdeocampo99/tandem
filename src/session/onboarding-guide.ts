@@ -23,6 +23,7 @@ export class OnboardingGuide {
   private readonly asked = new Set<OnboardingStep>();
   /** Whether setup was unfinished when last read; unset until the first read. */
   private unfinished: boolean | undefined;
+  private setupBlockOpen = false;
 
   constructor(
     private readonly deps: Readonly<{
@@ -48,7 +49,7 @@ export class OnboardingGuide {
     const facts = await this.track();
     if (this.unfinished) {
       await this.askCurrent(facts);
-    } else if (wasUnfinished === true) {
+    } else if (wasUnfinished === true && !this.setupBlockOpen) {
       await this.say(ONBOARDING_DONE_TEXT);
     }
   }
@@ -66,7 +67,7 @@ export class OnboardingGuide {
 
   private async askCurrent(facts: OnboardingFacts): Promise<void> {
     const [current] = remainingOnboardingSteps(facts);
-    if (current === undefined || this.asked.has(current)) return;
+    if (current === undefined || this.setupBlockOpen || this.asked.has(current)) return;
     const question = onboardingQuestion(current);
     if (question === undefined) return;
     this.asked.add(current);
@@ -75,8 +76,13 @@ export class OnboardingGuide {
 
   /** Setup guidance is read fresh for each model turn, never inferred from an earlier step. */
   async context(): Promise<readonly string[]> {
-    const text = onboardingContext(await this.read());
+    const text = onboardingContext(await this.read(), this.setupBlockOpen);
     return text === undefined ? [] : [text];
+  }
+
+  /** The setup block is open beside the chat: it asks the questions and says when it is done. */
+  setupBlockOpened(): void {
+    this.setupBlockOpen = true;
   }
 
   private async say(text: string, hidden?: string): Promise<void> {
