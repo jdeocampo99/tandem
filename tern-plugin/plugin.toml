@@ -6,3 +6,7 @@ description = "Tandem views, project keys, palette commands and task links"
 host = "host.luau"
 window = "window.luau"
 styles = ["tandem.css"]
+
+[[blocks]]
+id = "pr"
+title = "Pull request"
