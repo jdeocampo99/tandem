@@ -150,6 +150,9 @@ const ProjectState = z
   .strict();
 export type ProjectState = z.infer<typeof ProjectState>;
 
+/** `published` is a cache the next publication rebuilds, so an older shape must not wedge it. */
+const StoredProjectState = ProjectState.extend({ published: z.unknown().optional() });
+
 async function readBounded(path: string, what: string): Promise<string | undefined> {
   try {
     const stat = await lstat(path);
@@ -172,7 +175,9 @@ export async function readProjectState(
     "Native project state",
   );
   if (text === undefined) return undefined;
-  const state = ProjectState.parse(JSON.parse(text));
+  const { published, ...stored } = StoredProjectState.parse(JSON.parse(text));
+  const cached = Published.safeParse(published);
+  const state: ProjectState = cached.success ? { ...stored, published: cached.data } : stored;
   if (state.project !== project) throw new Error("Native project state belongs to another project");
   return state;
 }

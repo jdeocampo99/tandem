@@ -22,6 +22,8 @@ with the same basename have different directories. The directory holds:
   so each filename is one path segment; PR filenames include the repository.
 - `state.json`: the store's `epoch` and `seq`, the alert cursors (`board/native-alerts.ts`), the
   visit record (`memory/native-visits.ts`) and `published`, what the last full publication showed.
+  `published` is a cache: a value in an older shape reads as absent, and the next publication
+  rebuilds it while keeping `epoch`, `seq`, alerts and visit.
 - `open/<coordinatorKey>.<token>.{ticket,receipt}.json`, staged open tickets and their receipts
   (`terminal-backend/tern/host.ts`).
 
