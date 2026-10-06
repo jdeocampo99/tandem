@@ -253,9 +253,10 @@ refused the click or it failed. The notice says why, and the user may try again.
 title and level in `rt.luau`. `failed` and unknown codes take the asking screen's title. A
 request-changes on a revised brief is `kept` with "Brief left open", never "completed".
 
-`tandem native act` exits 0 whenever it printed an outcome, including a refusal. Only a malformed
-invocation exits nonzero. `rt.act` turns a nonzero exit, an unreadable outcome or a synchronous
-spawn failure into the screen's error toast. The outcome never authorizes a later mutation.
+`tandem native act` exits 0 whenever it printed an outcome, including a refusal. It exits nonzero
+without an outcome when its arguments are malformed, when the envelope exceeds 1 MiB, or when
+reading stdin fails. `rt.act` turns a nonzero exit, an unreadable outcome or a synchronous spawn
+failure into the screen's error toast. The outcome never authorizes a later mutation.
 
 ### Action fields
 
@@ -272,8 +273,9 @@ Every brief action carries the exact identity of the displayed draft:
 }
 ```
 
-`brief-approve` sends only those three fields and `requestId`. `brief-request-changes` may also
-include `text` and `comments`, where each comment is `{ "lineId": "TL;DR:0:0", "text": "Feedback" }`.
+`brief-approve` sends only those three fields and `requestId`. `brief-request-changes` also
+carries `comments` (possibly empty) and may include `text`. Each comment is
+`{ "lineId": "TL;DR:0:0", "text": "Feedback" }`.
 The renderer copies the stable string id from `briefView.lines[].id` and copies revision and
 digests from its view model without recalculating them or refreshing them behind the user's
 click. The CLI owns shape, revision, digest and approval validation. Unknown fields and numeric
@@ -287,10 +289,11 @@ feedback.
 and positive one-based line are the displayed diff anchor.
 
 `review-submit` carries the existing `ReviewSubmission` object from `src/pr-review/page.ts` as
-its `submission`: `tandemPrReview: 1`, `verdict: "comment" | "approve" | "request-changes"`,
-`summary`, `drafts: [{ id, decision: "post" | "drop" | "undecided", body? }]` and
-`yours: [{ file, line, body }]`. Beside it go the required `reviewHead` and `reviewGeneration`,
-copied from the displayed `PrPaneView.review.head` and `.generation`. Generation is a nonnegative
+its `submission`. That object holds `tandemPrReview: 1`,
+`verdict: "comment" | "approve" | "request-changes"`, `summary`,
+`drafts: [{ id, decision: "post" | "drop" | "undecided", body? }]` and
+`yours: [{ file, line, body }]`. Beside it go the required `reviewHead` and `reviewGeneration`.
+Both are copied from the displayed `PrPaneView.review.head` and `.generation`. Generation is a nonnegative
 safe integer, including zero. Missing or invalid bindings are refused. The service checks both
 against the latest authoritative round and checks the re-review task generation before applying
 choices. A revision-checked `pendingPost` claim binds those choices before posting, and a lost
@@ -322,9 +325,10 @@ paused until evidence or `tandem fix` settles it.
 
 `src/terminal-backend/tern/host.ts` owns every staged open. It writes a private ticket
 `<home>/tern/<projectKey>/open/<coordinatorKey>.<token>.ticket.json` and runs `tern open` on it
-through `mutate`. `window.luau`'s open route hands the ticket to `tern-plugin/layout.luau`, which
-writes exactly one `<coordinatorKey>.<token>.receipt.json`: `done` with the exact pane, tab and
-session, or `failed` with its stage, the number of layout effects it applied and a reason. Tern
+through `mutate`. `window.luau`'s open route hands the ticket to `tern-plugin/layout.luau`. That
+module writes exactly one `<coordinatorKey>.<token>.receipt.json`. The receipt is `done` with the
+exact pane, tab and session, or `failed` with its stage, the number of layout effects it applied
+and a reason. Tern
 0.5.0 reports handled layout routes as "cannot open in a file block", even after opening them, so
 only the receipt and a scoped listing decide. An exit-0 block list is corroboration. No title
 proves ownership.
@@ -442,8 +446,8 @@ uses numbers, so ids outside JavaScript's safe integer range are refused before 
 exact originating native brief split. The caller checks the durable revision and completes
 approval or feedback first. Close errors become warnings on a successful action, never retries.
 The close goes through `mutate`, which proves the block's program, all launch arguments, scoped
-session and idle state, rechecks exact identity and full arguments after the final process read
-immediately before closing, then checks the close acknowledgement and absence. Missing blocks
+session and idle state. After the final process read, immediately before closing, it rechecks
+exact identity and full arguments. It then checks the close acknowledgement and absence. Missing blocks
 count as closed. Unknown outcomes are quarantined against the brief pane. Automatic request
 projection uses the existing `reviewPane` receipt fields for the native split. A manual native
 action does not register a Markdown projection. The shared `projectRequestBriefPane` and
