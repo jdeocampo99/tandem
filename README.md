@@ -166,6 +166,24 @@ Herdr's sidebar starts hidden, since the panel does its job; `prefix+b` shows it
 Sections are colored by what they mean: yellow waits on you, red failed, cyan is in progress,
 green is done. Piped output and `NO_COLOR` give the same layout as plain text.
 
+### Native screens in Tern
+
+With Tandem's Tern plugin enabled, you can check on work without leaving the terminal:
+
+- **Board:** choose **Tandem: Toggle board** in Tern's command palette, or press `Cmd+Shift+B`
+  if setup installed that shortcut. Tasks appear in Working, Needs you, In review, and Ready to
+  merge lanes. Cards show the branch, model, cost, and PR link.
+- **Usage:** choose **Tandem: Usage**, or press `Cmd+Shift+U` if installed. See provider limits
+  and reset times alongside today's and this week's cost, agent time, and model breakdown.
+- **Catch-up:** when you reopen or switch back to a previously visited project after at least
+  an hour, Tandem shows what changed if the project has changed: merged PRs, what needs
+  you, blocked tasks, and your workstream notes. First visits and unchanged projects stay quiet.
+  **Open what needs me** takes you to the first waiting item; **Dismiss** or `Esc` returns to chat.
+
+From Board or Usage, press `Esc` or click **← Orchestrator** to return to the project's chat.
+Pressing `Cmd+Shift+B` again also closes Board. Setup preserves existing shortcuts, so use the
+command palette if a key is already assigned to something else.
+
 ## Requirements
 
 - macOS
