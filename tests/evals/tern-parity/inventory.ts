@@ -2,6 +2,7 @@ import { expect } from "bun:test";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
+import { readNativeBundle } from "../../../src/board/native-file.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { withPrWatches } from "../../../src/pr-watch/store.ts";
@@ -1288,5 +1289,164 @@ export const inventory: readonly InventoryEntry[] = [
         expect(reviewed.postedReviews).toEqual([]);
       });
     },
+  },
+  {
+    view: "Board",
+    item: "Header view-only; four lanes; cards; stuck tag; All quiet; PR card link",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        await panel.click("▦");
+        const board = host.screen(host.pane("board"));
+        const view = await board.render();
+        expect(view.title).toBe("Tandem board");
+        expect(view.text).toEqual([
+          "Board · tandem",
+          "view-only · ⌘⇧B or Esc to close",
+          "← Orchestrator",
+          "● Working",
+          "1",
+          "Port the terminal",
+          "branch unavailable",
+          "for 0s",
+          "0s",
+          "model unavailable",
+          "cost unavailable",
+          "● Needs you",
+          "2",
+          "Add dark mode",
+          "branch unavailable",
+          "brief waiting for approval",
+          "model unavailable",
+          "cost unavailable",
+          "Fix login",
+          "stuck",
+          "branch unavailable",
+          "worker stopped twice",
+          "0s",
+          "model unavailable",
+          "cost unavailable",
+          "● In review",
+          "0",
+          "All quiet",
+          "● Ready to merge",
+          "2",
+          "Ship the port",
+          "branch unavailable",
+          "waiting for PR watch",
+          "0s",
+          "model unavailable",
+          "cost unavailable",
+          "#281 open ↗",
+          "#282 feature-282",
+          "branch unavailable",
+          "2 checks pending",
+          "model unavailable",
+          "cost unavailable",
+        ]);
+        expect(labels(view)).toEqual(["← Orchestrator", "#281 open ↗"]);
+        await board.click("#281 open ↗");
+        expect(
+          world.ternBlocks().flatMap((block) => (block.browserUrl ? [block.browserUrl] : [])),
+        ).toEqual([PR_URL]);
+        expect(await board.press({ name: "escape" })).toBe(true);
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+      }),
+  },
+  {
+    view: "Usage",
+    item: "Limits first; Provider limits unavailable; today and week totals; breakdown; No recorded usage",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        await panel.click("5h unavailable");
+        const usage = host.screen(host.pane("usage"));
+        const view = await usage.render();
+        expect(view.title).toBe("Tandem usage");
+        expect(view.text).toEqual([
+          "Usage · tandem",
+          "← Orchestrator",
+          "Limits",
+          "Provider limits unavailable",
+          `View updated at ${world.clock().slice(0, 10)} ${world.clock().slice(11, 19)} UTC`,
+          "Provider limit refresh failed; last known limits may be stale",
+          "$0.00",
+          "cost today",
+          "0m",
+          "agent time today",
+          "2",
+          "tasks done today",
+          "$0.00",
+          "this week",
+          "Cost by model · today",
+          "No recorded usage",
+          "Cost by model · week",
+          "No recorded usage",
+          "Time per stage",
+          "Stage",
+          "Today",
+          "Week",
+        ]);
+        await usage.click("← Orchestrator");
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+      }),
+  },
+  {
+    view: "Catch-up",
+    item: "Shown after 1 hour away when something changed; four sections with None; Open what needs me; Dismiss; Esc",
+    run: () =>
+      withParity(async (parity) => {
+        const { host, world } = parity;
+        const other = await otherProject(parity);
+        await host.focus(101);
+        const signature = (await readNativeBundle(world.home, world.repoPath)).changeSignature;
+        const stepAway = async (minutes: number, changed = true) => {
+          await host.focus(Number(other.coordinator.paneId));
+          await visitNativeProject(
+            {
+              home: world.home,
+              project: world.repoPath,
+              now: new Date(Date.parse(world.clock()) - minutes * 60_000).toISOString(),
+              signature: changed ? "before" : (signature ?? ""),
+            },
+            async () => {},
+          );
+          await host.focus(101);
+        };
+        await stepAway(30);
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+        await stepAway(120, false);
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+        await stepAway(120);
+        const catchup = host.screen(host.pane("catchup"));
+        const view = await catchup.render();
+        expect(view.title).toBe("Welcome back · Tandem");
+        expect(view.text).toEqual([
+          "Welcome back · tandem",
+          "Esc dismiss",
+          "Since you left",
+          "Merged",
+          "None",
+          "Needs you",
+          "Add dark mode: brief waiting for approval",
+          "Ship the port: done, waiting for you",
+          "Blocked",
+          "Fix login: worker stopped twice",
+          "Where we left off",
+          "None",
+          "Open what needs me",
+          "Dismiss",
+        ]);
+        expect(labels(view)).toEqual(["Open what needs me", "Dismiss"]);
+        await catchup.click("Open what needs me");
+        expect(blockKinds(world)).toEqual(["tandem.brief", "tandem.panel"]);
+        const brief = host.screen(host.pane("brief"));
+        expect((await brief.render()).title).toBe("Brief · Request brief");
+        await brief.click("×");
+        await stepAway(120);
+        expect(await host.screen(host.pane("catchup")).press({ name: "escape" })).toBe(true);
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+        await stepAway(120);
+        await host.screen(host.pane("catchup")).click("Dismiss");
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+      }),
   },
 ];
