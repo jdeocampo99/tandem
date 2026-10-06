@@ -30,6 +30,7 @@ tern.json={
   if raw == 'detail' then return {version=1,kind='pr',revision='revision',model=model} end
   if raw == '{"posted":true,"url":"https://github.com/acme/app/pull/281#pullrequestreview-1"}' then return {posted=true,url='https://github.com/acme/app/pull/281#pullrequestreview-1'} end
   if raw == '{"posted":false,"message":"PR head moved"}' then return {posted=false,message='PR head moved'} end
+  if raw == uncertainOutput then return {taskId='review-1',posted=false,message=uncertainMessage} end
   error('Unreadable JSON')
  end,
 }
@@ -72,6 +73,7 @@ assert(#pending==2)
 pending[2].callback({status=0,stdout='{"posted":false,"message":"PR head moved"}',stderr=''})
 preserved(state)
 assert(toasts[#toasts].message=='PR head moved' and #pending==2)
+local refusalMessage=toasts[#toasts].message
 post(state)
 pending[3].callback({status=0,stdout='malformed',stderr=''})
 preserved(state)
@@ -91,6 +93,25 @@ local invalidOrigin=create(); invalidOrigin.home=''
 post(invalidOrigin)
 preserved(invalidOrigin)
 assert(#pending==4)
+-- Service-owned uncertainty guidance remains distinct from a definite refusal.
+local uncertain=create()
+post(uncertain)
+assert(#pending==5)
+pending[5].callback({status=0,stdout=uncertainOutput,stderr=''})
+preserved(uncertain)
+assert(toasts[#toasts].message==uncertainMessage and toasts[#toasts].message~=refusalMessage)
+assert(string.find(toasts[#toasts].message,'may or may not have received') and string.find(toasts[#toasts].message,'Both require your confirmation'))
+block.view(uncertain,cx)
+assert(#pending==5) -- Neither completion nor redraw invokes a retry.
+local stale=create()
+post(stale)
+pending[6].callback({status=2,stdout='',stderr='The displayed PR review is stale; reopen the pane before submitting.'})
+preserved(stale)
+assert(toasts[#toasts].message=='The displayed PR review is stale; reopen the pane before submitting.' and #pending==6)
+model.review.generation=1
+post(stale)
+assert(#pending==6 and not stale.content.posting)
+model.review.generation=0
 -- Embedded content records receipt success without closing its hosting task pane.
 local embedded=content.create(); content.view(embedded,model,true)
 local complete=nil
