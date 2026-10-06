@@ -206,30 +206,80 @@ test("closed stdin does not stop the sidecar, since the mod spawns it with stdin
   expect(await sidecar.process.exited).toBe(0);
 });
 
+async function startParent(repo: string, root: string) {
+  const pidFile = join(root, "child-pid");
+  const parent = Bun.spawn(
+    [
+      "bun",
+      "-e",
+      `const child = Bun.spawn([process.execPath, ${JSON.stringify(SIDECAR)}, "--session", "session-1"], { stdin: "ignore", stdout: "inherit", stderr: "inherit" });
+       await Bun.write(${JSON.stringify(pidFile)}, String(child.pid));
+       await Bun.stdin.text();
+       process.exit(0);`,
+    ],
+    {
+      cwd: repo,
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { PATH: process.env.PATH, HOME: root, TANDEM_HOME: join(root, "home") },
+    },
+  );
+  cleanups.push(async () => {
+    parent.kill("SIGKILL");
+    await parent.exited;
+    if (existsSync(pidFile)) {
+      try {
+        process.kill(Number(await Bun.file(pidFile).text()), "SIGKILL");
+      } catch {}
+    }
+  });
+  return parent;
+}
+
 test("the sidecar stops when the process that started it dies", async () => {
   const repo = await gitRepo();
   const root = await tempDir();
   cleanups.push(() => rm(root, { recursive: true, force: true }));
-  const parent = Bun.spawn(
-    ["sh", "-c", `sleep 20 | bun ${SIDECAR} --session session-1 & sleep 2`],
-    {
-      cwd: repo,
-      stdout: "pipe",
-      stderr: "ignore",
-      env: { PATH: process.env.PATH, HOME: root, TANDEM_HOME: join(root, "home") },
-    },
-  );
-  const ready = await lineReader(parent.stdout)();
+  const parent = await startParent(repo, root);
+  const nextLine = lineReader(parent.stdout);
+  const ready = await nextLine();
   if (ready.type !== "ready") throw new Error(`sidecar did not start: ${JSON.stringify(ready)}`);
-  cleanups.push(async () => {
-    try {
-      process.kill(ready.pid, "SIGKILL");
-    } catch {}
-  });
+  await parent.stdin.end();
   await parent.exited;
-  const deadline = Date.now() + 5_000;
-  while (existsSync(ready.socket) && Date.now() < deadline) await Bun.sleep(100);
+  await expect(nextLine()).rejects.toThrow("stdout ended");
   expect(existsSync(ready.socket)).toBe(false);
+}, 10_000);
+
+test("a parent exiting during socket initialization is not adopted as the sidecar's owner", async () => {
+  const repo = await gitRepo();
+  const root = await tempDir();
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const home = join(root, "home");
+  await mkdir(join(home, "sidecars"), { recursive: true });
+  const socket = sidecarSocketPath(home, "session-1");
+  const observed = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const previous = Bun.serve({
+    unix: socket,
+    async fetch() {
+      observed.resolve();
+      await release.promise;
+      return new Response("ok");
+    },
+  });
+  cleanups.push(async () => {
+    release.resolve();
+    await previous.stop(true);
+  });
+  const parent = await startParent(repo, root);
+  await observed.promise;
+  await parent.stdin.end();
+  expect(await parent.exited).toBe(0);
+  await rm(socket, { force: true });
+  release.resolve();
+  await expect(lineReader(parent.stdout)()).rejects.toThrow("stdout ended");
+  expect(existsSync(socket)).toBe(false);
 }, 10_000);
 
 test("a shutdown event answers, then stops the sidecar", async () => {

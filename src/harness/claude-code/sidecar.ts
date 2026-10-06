@@ -169,6 +169,9 @@ const timers: SessionDeps["timers"] = {
  * `shutdown` event, then stops listening, removes its socket, and shuts the session down.
  */
 async function main(): Promise<void> {
+  // Initialization can await a worker job or a replaced socket while Claude Code exits.
+  const parent = process.ppid;
+  if (parent <= 1) throw new Error("Claude Code's parent process exited before sidecar startup");
   // Stdout carries only protocol lines; anything else the core prints goes to stderr.
   console.log = console.error;
   const args = parseSidecarArgs(process.argv.slice(2));
@@ -244,7 +247,10 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void stop());
   process.on("SIGHUP", () => void stop());
   // `$.process.spawn` closes stdin from the start, so a dead Claude Code shows only as a new parent.
-  const parent = process.ppid;
+  if (process.ppid !== parent) {
+    await stop();
+    return;
+  }
   setInterval(() => {
     if (process.ppid !== parent) void stop();
   }, PARENT_POLL_MS).unref();
