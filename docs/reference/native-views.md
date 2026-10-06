@@ -167,7 +167,8 @@ The service uses the published-summary builder; existing `panelView` and text ta
 NativePanelView = {
   header: {
     title: string, project: string, projects: NativeProjectRow[],
-    otherProjectsNeedYou: number, bellCount: number, fiveHour?: LimitMeter
+    otherProjectsNeedYou: number, bellCount: number, fiveHour?: LimitMeter,
+    fiveHourLabel: string // whole percent used; numeric meter retains provider precision
   },
   sections: { title: "Needs you" | "Running" | "Ready" | "Recently done",
               count: number, rows: NativePanelRow[] }[],

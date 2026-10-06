@@ -3,13 +3,13 @@ local files=require("./view-file")
 local nav=require("./navigation")
 type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,number:number?},pullRequest:{number:number,url:string}?}
 type Project={repoPath:string,name:string,status:string,current:boolean,needsYou:number,shortcut:string?,offline:boolean}
-type Panel={header:{title:string,otherProjectsNeedYou:number,bellCount:number,fiveHour:{remainingPercent:number|string,resetInMs:number|string}?,projects:{Project}},sections:{{title:string,count:number,rows:{Row}}},footer:string?}
+type Panel={header:{title:string,otherProjectsNeedYou:number,bellCount:number,fiveHourLabel:string,fiveHour:{remainingPercent:number|string,resetInMs:number|string}?,projects:{Project}},sections:{{title:string,count:number,rows:{Row}}},footer:string?}
 type Bundle={panel:Panel}
 type State={file:files.View<Bundle>,origin:nav.Origin,dropdown:boolean,selected:number}
 local function parse(value:unknown): Bundle?
  if type(value)~="table" or type(value.panel)~="table" then return nil end
  local panel=value.panel
- if type(panel.header)~="table" or type(panel.header.title)~="string" or type(panel.header.projects)~="table" or type(panel.header.bellCount)~="number" or type(panel.sections)~="table" then return nil end
+ if type(panel.header)~="table" or type(panel.header.title)~="string" or type(panel.header.projects)~="table" or type(panel.header.bellCount)~="number" or type(panel.header.fiveHourLabel)~="string" or type(panel.sections)~="table" then return nil end
  for _,section in panel.sections do
   if type(section.title)~="string" or type(section.rows)~="table" or type(section.count)~="number" then return nil end
   for _,row in section.rows do
@@ -55,7 +55,7 @@ local def:BlockDef<State> ={
   local name={text(header.title,"tdp-project-title")}
   if header.otherProjectsNeedYou>0 then table.insert(name,text(tostring(header.otherProjectsNeedYou),"tdp-count")) end
   local meter=header.fiveHour
-  local limit=if meter and type(meter.remainingPercent)=="number" then "5h " .. tostring(math.floor(100-meter.remainingPercent)) .. "% · " .. (if type(meter.resetInMs)=="number" then tostring(math.floor(meter.resetInMs/3600000)) .. "h" .. tostring(math.floor(meter.resetInMs/60000)%60) .. "m" else "unavailable") else "5h unavailable"
+  local limit=header.fiveHourLabel
   local head=el("tdp-header",{
    el("tdp-switch",name,"projects"),
    el("tdp-limit",{text(limit,"tdp-dim"),el("tdp-meter",{tern.ui.node("el",{class="tdp-meter-fill",grow=if meter and type(meter.remainingPercent)=="number" then 100-meter.remainingPercent else 0}),tern.ui.node("el",{grow=if meter and type(meter.remainingPercent)=="number" then meter.remainingPercent else 100})})},"usage"),

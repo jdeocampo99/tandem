@@ -121,7 +121,14 @@ export function nativeScreensFixture(): NativeViews {
       done: 2,
     },
     panel: {
-      header: { title: "tandem", project, projects: [], otherProjectsNeedYou: 0, bellCount: 3 },
+      header: {
+        title: "tandem",
+        project,
+        projects: [],
+        otherProjectsNeedYou: 0,
+        bellCount: 3,
+        fiveHourLabel: "5h unavailable",
+      },
       sections: [],
     },
     projects: [],
