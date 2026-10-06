@@ -8,7 +8,11 @@ import {
   installTerminalPlugin,
   reloadTerminalPlugin,
 } from "../../../src/terminal-backend/compose.ts";
-import { ensureTernPlugin, reloadTernPlugin } from "../../../src/terminal-backend/tern/plugin.ts";
+import {
+  ensureTernPlugin,
+  reloadTernPlugin,
+  TERN_APP_BINARY,
+} from "../../../src/terminal-backend/tern/plugin.ts";
 import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin-settings.ts";
 
 function runner(catalogs: readonly string[]) {
@@ -48,6 +52,7 @@ test("onboarding links palette actions even when global preferences are declined
     expect(
       await ensureTernPlugin({
         ...approved,
+        binary: TERN_APP_BINARY,
         cwd: "/tmp",
         directory: "/plugin with spaces",
         settingsPath: join(root, "settings.json"),
@@ -65,6 +70,45 @@ test("onboarding links palette actions even when global preferences are declined
     "--json",
   ]);
 });
+
+for (const selection of ["injected-path", "explicit-binary", "app-fallback"] as const) {
+  test(`plugin list, link and reload resolve the executable with ${selection}`, async () => {
+    const root = await mkdtemp("/tmp/tandem-plugin-binary-");
+    const executable = join(root, "tern");
+    const selected = runner([missing, ready, ready, ready]);
+    try {
+      await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const env = { PATH: selection === "app-fallback" ? "" : root };
+      const deps = {
+        ...selected,
+        cwd: root,
+        env,
+        ...(selection === "explicit-binary" ? { binary: "/explicit/tern" } : {}),
+        settingsPath: join(root, "settings.json"),
+        confirm: async () => false,
+      };
+      expect(await ensureTernPlugin(deps)).toBe(true);
+      expect(await reloadTernPlugin(deps)).toBe(true);
+      const expected =
+        selection === "explicit-binary"
+          ? "/explicit/tern"
+          : selection === "app-fallback"
+            ? TERN_APP_BINARY
+            : executable;
+      expect(selected.calls.map((call) => call.argv.slice(0, 3))).toEqual([
+        [expected, "plugin", "list"],
+        [expected, "plugin", "link"],
+        [expected, "plugin", "list"],
+        [expected, "plugin", "list"],
+        [expected, "plugin", "reload"],
+        [expected, "plugin", "list"],
+      ]);
+      expect(selected.calls.every((call) => call.env === env)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
 
 test("update reloads an existing integration and refuses a broken reload", async () => {
   const installed = runner([ready, ready]);
