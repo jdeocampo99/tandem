@@ -126,7 +126,7 @@ local function related(state: State, cx: BlockCx)
  end
  local path: string? = nil
  for _, pr in index.model.pullRequests do
-  if pr.header.taskId == model.header.id or (model.pullRequest and pr.header.number == model.pullRequest.number) then
+  if pr.header.taskId == model.header.id then
    local candidate = detailPath(state, pr.detailFile)
    if path and path ~= candidate then path = nil; break end
    path = candidate
@@ -141,7 +141,7 @@ local function related(state: State, cx: BlockCx)
  end
 end
 local function prReady(state: State): boolean
- return state.prMatch and state.view.status == 'ready' and state.index ~= nil and state.index.status == 'ready' and state.pr ~= nil and state.pr.status == 'ready'
+ return state.prMatch and state.view.status == 'ready' and state.index ~= nil and state.index.status == 'ready' and state.pr ~= nil and state.pr.status == 'ready' and state.pr.model ~= nil and state.view.model ~= nil and state.pr.model.header.taskId == state.view.model.header.id
 end
 
 local function text(value: string, tone: string?): Node return components.text(value, tone) end
@@ -218,6 +218,7 @@ local function body(state: State, model: Model): Node
   return ui.col({ section('Timeline', events), section('Validation checks', if #checks > 0 then checks else { text('No validation evidence yet.', 'muted') }),
    section('Review findings', if #findings > 0 then findings else { text('No saved findings.', 'muted') }) })
  elseif state.tab == 'Brief' then
+  if not model.requestId then return text('No brief is linked to this task yet.', 'muted') end
   local brief = state.brief
   if not brief or not brief.model then return ui.col({ text('Brief detail unavailable. Wait for its saved view.', 'muted'), button('Open brief', 'open-brief') }) end
   local rows = { text(brief.model.title .. ' · revision ' .. brief.model.revision, 'strong'), button('Open brief to review or comment', 'open-brief') }

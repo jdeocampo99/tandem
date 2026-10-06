@@ -330,6 +330,31 @@ type ControlNode = {
         index,
       );
 
+      const empty = taskScreenFixture(false, false);
+      await writeNativeViews(env.TANDEM_HOME, {
+        ...publication,
+        bundle: { ...publication.bundle, briefs: {}, pullRequests: {} },
+        details: [
+          {
+            file: nativeTaskFile("102"),
+            view: { version: 1, project: root, kind: "task", data: empty },
+          },
+        ],
+      });
+      await host.open(input, root, "task", "task", file);
+      await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
+      const beforeEmpty = await readFile(join(root, "actions.log"), "utf8");
+      await click("Brief");
+      await until(async () => JSON.stringify(await tree()).includes("No brief is linked"));
+      expect(JSON.stringify(await tree())).not.toContain("Open brief");
+      await ctl("shot", "03-task-no-brief");
+      await click("PR");
+      await until(async () =>
+        JSON.stringify(await tree()).includes("No pull request is available yet"),
+      );
+      await ctl("shot", "03-task-no-pr");
+      expect(await readFile(join(root, "actions.log"), "utf8")).toBe(beforeEmpty);
+
       console.log(`Native task proof: ${root}`);
     } finally {
       if (window) {

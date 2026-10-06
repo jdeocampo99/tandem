@@ -14,7 +14,7 @@ import { content } from "../board/fixtures.ts";
 import { task } from "../session/fixtures.ts";
 
 /** A real task projection used by the native screen interaction check. */
-export function taskScreenFixture(blocked = false) {
+export function taskScreenFixture(blocked = false, linked = true) {
   const record = task({
     id: "102",
     title: "Tern backend adapter",
@@ -25,15 +25,19 @@ export function taskScreenFixture(blocked = false) {
     reviewRound: 1,
     blockReason:
       "Review found the same 2 problems twice. The fix did not change the result, so Tandem stopped retrying on its own.",
-    requestId: "req-tern",
-    pullRequest: {
-      number: 281,
-      repository: "owner/repo",
-      url: "https://github.com/owner/repo/pull/281",
-      state: "draft",
-      head: "tandem/tern-backend-adapter",
-      base: "main",
-    },
+    ...(linked
+      ? {
+          requestId: "req-tern",
+          pullRequest: {
+            number: 281,
+            repository: "owner/repo",
+            url: "https://github.com/owner/repo/pull/281",
+            state: "draft" as const,
+            head: "tandem/tern-backend-adapter",
+            base: "main",
+          },
+        }
+      : {}),
     createdAt: "2030-01-02T03:04:05.000Z",
     findingLedger: [
       {
