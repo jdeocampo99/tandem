@@ -8,6 +8,7 @@ import { ensurePrivateDirectoryTree } from "../coordinator/lock.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import { defaultIdFactory } from "../runtime/persistence.ts";
 import { createTaskStore } from "../tasks/store.ts";
+import { acquireDarwinFileLock } from "../tasks/store-lock.ts";
 import type { StoredTimelineEvent } from "../tasks/timeline.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
 import type { NativeReadDependencies } from "./native-read.ts";
@@ -33,6 +34,7 @@ const State = z.object({
   cursors: z.record(z.number().int().nonnegative()),
   drafts: z.record(z.string()),
   rows: z.array(z.string()),
+  routing: z.array(z.string()).default([]),
 });
 type AlertState = z.infer<typeof State>;
 const titles = { "needs-you": "Tandem: Needs you", done: "Tandem: Done", stuck: "Tandem: Stuck" };
@@ -44,8 +46,26 @@ export class NativeAlerts {
     this.#deps = deps;
   }
   async observe(snapshot: BoardSnapshot, project: string, sessionId: string): Promise<void> {
+    const directory = join(this.#deps.home, "native-alerts");
+    await ensurePrivateDirectoryTree(directory, "native alert cursor directory");
+    const release = await acquireDarwinFileLock(
+      join(directory, `${repositoryKey(project)}.lock`),
+      5000,
+      20,
+    );
+    try {
+      await this.#observe(snapshot, project, sessionId, directory);
+    } finally {
+      await release();
+    }
+  }
+  async #observe(
+    snapshot: BoardSnapshot,
+    project: string,
+    sessionId: string,
+    directory: string,
+  ): Promise<void> {
     const deps = this.#deps;
-    const directory = join(deps.home, "native-alerts");
     const path = join(directory, `${repositoryKey(project)}.json`);
     let previous: AlertState | undefined;
     try {
@@ -63,7 +83,13 @@ export class NativeAlerts {
         idFactory: defaultIdFactory(),
       }).list()
     ).filter((task) => task.repoPath === project);
-    const next: AlertState = { version: 1, cursors: {}, drafts: { ...previous?.drafts }, rows: [] };
+    const next: AlertState = {
+      version: 1,
+      cursors: {},
+      drafts: { ...previous?.drafts },
+      rows: [],
+      routing: [...(previous?.routing ?? [])],
+    };
     const alerts: NativeAlert[] = [];
     for (const task of tasks) {
       const timeline = await readTimeline(deps.home, task.id);
@@ -87,7 +113,17 @@ export class NativeAlerts {
     }
     // Brief revisions and failing PR watch rows have board identities, rather than task events.
     for (const row of snapshot.board.needsYou) {
-      if (row.repoPath !== project || row.taskId !== undefined || !notifiesUser(row)) continue;
+      if (row.repoPath !== project || !notifiesUser(row)) continue;
+      // Routing timeline waits have no decision id. The board row is the authoritative
+      // projection of that id, so claim it once here even when it also has task events.
+      if (row.cause === "model-question") {
+        if (!next.routing.includes(row.key)) {
+          next.routing.push(row.key);
+          if (previous) alerts.push({ kind: "needs-you", body: row.name });
+        }
+        continue;
+      }
+      if (row.taskId !== undefined) continue;
       const signature = JSON.stringify([row.key, row.text]);
       next.rows.push(signature);
       if (previous && !previous.rows.includes(signature))

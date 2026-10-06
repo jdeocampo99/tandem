@@ -287,6 +287,14 @@ as "cannot open in a file block", even after opening them. Success therefore req
 receipt and a scoped listing proving the exact block program and launch arguments. Missing
 or conflicting evidence quarantines the opening, retaining its ticket and resources.
 A confirmed opening removes its transient ticket and receipt. No title proves ownership.
+Before any opening mutation, the host locks a private coordinator-bound intent under
+`<home>/native-host`. It lists the scoped session and reuses exactly one block with the full
+program and five launch arguments in the intended tab placement; duplicate matches refuse.
+The intent is claimed before the first mutation and remains on every unconfirmed outcome,
+including failed or malformed verification reads. A later CLI/backend instance must settle
+retained intents and route tickets from that same exact block evidence before it can open.
+A missing receipt can be settled by the unique exact block; conflicting receipts or missing
+block evidence retain the fence and resources. Lock files remain for later callers.
 
 All renderers use these block ids and the same five string launch arguments:
 
@@ -315,7 +323,8 @@ coordinator, home, cwd and origin context.
 retires only the exact originating native brief split. The caller checks the durable revision
 and completes approval/feedback first; close errors become successful-action warnings, never retries.
 The host proves the block's program, all launch arguments, scoped session and idle state twice,
-then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
+rechecks exact identity and full arguments after the final process read immediately before
+closing, then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
 are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
 
 The host never sets `keep_open` when launching split/detail blocks or task replacements.
@@ -355,8 +364,11 @@ that scope. Multiple windows are refused rather than choosing one by ordering.
 
 The native publisher consumes durable task timeline events for questions, approval waits and
 blocked transitions. It observes new draft PR identities for `done`, and new brief or failing-PR
-Needs you rows. A private per-project delivery cursor under `<home>/native-alerts` is saved
-before sending OSC. Repeated ticks, relaunches and unknown delivery outcomes never resend a
+Needs you rows. Model-routing questions use their stable routing-decision row identity,
+including queued admission waits and questions raised during an active task stage. Their
+claimed identities survive temporary row absence, wording changes and coordinator relaunch;
+timeline admission waits do not emit a duplicate alert. A private per-project delivery cursor under `<home>/native-alerts` is saved
+under a cross-process lock before sending OSC. Repeated ticks, relaunches and unknown delivery outcomes never resend a
 claimed transition. The first snapshot establishes a baseline without replaying historical alerts.
 These cursors are presentation delivery state, not task authority.
 
