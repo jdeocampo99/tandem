@@ -33,14 +33,21 @@ const Ticket = z.object({
   coordinator: Id,
   session: Id,
   receipt: z.string(),
+  replaced: Id.optional(),
 });
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
-const Intent = z.object({
+const NativeIntent = z.object({
   version: z.literal(1),
   owner: z.string(),
   route: z.string(),
   ticket: Ticket,
 });
+const BrowserIntent = z.object({
+  version: z.literal(1),
+  owner: z.string(),
+  browser: z.object({ url: z.string().url(), windowId: z.string().optional() }),
+});
+const Intent = z.union([NativeIntent, BrowserIntent]);
 type TicketModel = z.infer<typeof Ticket>;
 
 async function readPrivateJson(path: string): Promise<unknown> {
@@ -51,6 +58,22 @@ async function readPrivateJson(path: string): Promise<unknown> {
 }
 function missing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+/** The new task's identity cannot prove that retiring its predecessor succeeded. */
+export async function proveTaskReplacement(
+  commands: TernCommands,
+  cwd: string,
+  replaced: string | undefined,
+): Promise<void> {
+  if (replaced === undefined) return;
+  try {
+    const listing = await commands.ls(cwd);
+    if (listing.detached.length > 0 || blocks(listing).some((entry) => entry.block.id === replaced))
+      throw new Error("replaced task is still present or its absence is ambiguous");
+  } catch (cause) {
+    throw new TernOutcomeUnknownError("tern task replacement", cause);
+  }
 }
 
 /** Match all launch arguments in the exact session and intended tab placement, never a title. */
@@ -119,8 +142,11 @@ export async function withNativeOpenIntent<T>(
     recovered: boolean;
     markMutationAttempted: () => void;
     claim: (route: string, ticket: TicketModel) => Promise<void>;
+    claimBrowser: (browser: z.infer<typeof BrowserIntent>["browser"]) => Promise<void>;
     settle: () => Promise<void>;
   }) => Promise<T>,
+  onUnresolved?: (cause: TernOutcomeUnknownError) => Promise<T>,
+  runOperation?: (operation: () => Promise<T>, recovered: boolean) => Promise<T>,
 ): Promise<T> {
   const directory = join(input.home, "native-host");
   await ensurePrivateDirectoryTree(directory, "native route directory");
@@ -140,7 +166,9 @@ export async function withNativeOpenIntent<T>(
   const release = await acquireDarwinFileLock(join(directory, `${key}.lock`), 10000, 20);
   const pending: { route: string; ticket: TicketModel }[] = [];
   let claimedThisCall = false;
+  let browserPending = false;
   let mutationAttempted = false;
+  let recovering = true;
   const settle = async () => {
     // Remove the fence last. Interrupted cleanup still leaves a recoverable intent.
     for (const attempt of pending) {
@@ -153,6 +181,12 @@ export async function withNativeOpenIntent<T>(
     try {
       const saved = Intent.parse(await readPrivateJson(path));
       if (saved.owner !== owner) throw new Error("Native opening intent owner changed");
+      // A browser listing cannot correlate a URL or PiP owner with an unacknowledged
+      // opening. Even a matching title or newly visible browser is insufficient proof.
+      if ("browser" in saved) {
+        browserPending = true;
+        throw new Error("Earlier browser opening has no exact completion evidence");
+      }
       pending.push(saved);
     } catch (error) {
       if (!missing(error)) throw new TernOutcomeUnknownError("tern open intent", error);
@@ -196,6 +230,19 @@ export async function withNativeOpenIntent<T>(
         );
         if (exact === undefined)
           throw new Error("Earlier opening has no exact native block evidence");
+        let replaced = attempt.ticket.replaced;
+        if (replaced === undefined && attempt.ticket.placement === "task") {
+          // Older durable intents omitted replacement metadata, but their retained
+          // layout routes included it. Missing/conflicting routes cannot prove retirement.
+          const retained = Ticket.parse(await readPrivateJson(attempt.route));
+          if (
+            JSON.stringify({ ...retained, replaced: undefined }) !==
+            JSON.stringify({ ...attempt.ticket, replaced: undefined })
+          )
+            throw new Error("Retained task route conflicts with its opening intent");
+          replaced = retained.replaced;
+        }
+        await proveTaskReplacement(commands, input.cwd, replaced);
         try {
           const receipt = Receipt.parse(await readPrivateJson(attempt.ticket.receipt));
           if (
@@ -214,21 +261,32 @@ export async function withNativeOpenIntent<T>(
     const recovered = pending.length > 0;
     if (recovered) await settle();
     pending.length = 0;
-    return await operation({
-      recovered,
-      markMutationAttempted: () => {
-        mutationAttempted = true;
-      },
-      claim: async (route, ticket) => {
-        await writeFile(path, JSON.stringify({ version: 1, owner, route, ticket }), {
-          flag: "wx",
-          mode: 0o600,
-        });
-        pending.push({ route, ticket });
-        claimedThisCall = true;
-      },
-      settle,
-    });
+    recovering = false;
+    const invoke = () =>
+      operation({
+        recovered,
+        markMutationAttempted: () => {
+          mutationAttempted = true;
+        },
+        claim: async (route, ticket) => {
+          await writeFile(path, JSON.stringify({ version: 1, owner, route, ticket }), {
+            flag: "wx",
+            mode: 0o600,
+          });
+          pending.push({ route, ticket });
+          claimedThisCall = true;
+        },
+        claimBrowser: async (browser) => {
+          await writeFile(path, JSON.stringify({ version: 1, owner, browser }), {
+            flag: "wx",
+            mode: 0o600,
+          });
+          browserPending = true;
+          claimedThisCall = true;
+        },
+        settle,
+      });
+    return await (runOperation === undefined ? invoke() : runOperation(invoke, recovered));
   } catch (cause) {
     // Only this invocation can prove that its opening was never attempted.
     // Earlier retained attempts remain uncertain, even if recovery's reads fail.
@@ -236,8 +294,10 @@ export async function withNativeOpenIntent<T>(
       await settle();
       throw cause;
     }
-    if (pending.length > 0 && !(cause instanceof TernOutcomeUnknownError))
+    if ((pending.length > 0 || browserPending) && !(cause instanceof TernOutcomeUnknownError))
       throw new TernOutcomeUnknownError("tern open verification", cause);
+    if (recovering && cause instanceof TernOutcomeUnknownError && onUnresolved !== undefined)
+      return await onUnresolved(cause);
     throw cause;
   } finally {
     await release();

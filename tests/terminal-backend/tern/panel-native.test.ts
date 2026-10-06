@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativeBriefFile, nativeViewText } from "../../../src/board/native-views.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
+import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
+import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
@@ -15,15 +17,16 @@ import {
   ternCommands,
 } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
 (enabled ? test : test.skip)(
   "isolated native panel, switcher, preserved task layout and three OSC inbox alerts",
   async () => {
-    const root = await mkdtemp("/tmp/tandem-panel-proof-");
+    const root = await realpath(await mkdtemp("/tmp/tandem-panel-proof-"));
+    const home = await realpath(await mkdtemp("/tmp/tandem-panel-home-"));
     const config = join(root, "config"),
-      home = join(root, "home"),
       plugin = join(root, "plugin"),
       control = join(root, "w.sock");
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
@@ -40,7 +43,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       TANDEM_HOME: home,
       STENCIL_LOG_DIR: join(root, "logs"),
     };
-    await Promise.all([mkdir(config), mkdir(home), mkdir(env.ZDOTDIR), mkdir(join(root, "shots"))]);
+    await Promise.all([mkdir(config), mkdir(env.ZDOTDIR), mkdir(join(root, "shots"))]);
     await writeFile(
       join(config, "settings.json"),
       JSON.stringify({ tabs_autohide: true, layout: "rail", link_target: "Tern" }),
@@ -60,11 +63,9 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
     );
     await writeFile(
       join(plugin, "host.luau"),
-      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("brief", require("./layout-fixture"))\n`,
-    );
-    await writeFile(
-      join(plugin, "plugin.toml"),
-      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="brief"\ntitle="Layout fixture brief"\n`,
+      (await readFile(join(plugin, "host.luau"), "utf8"))
+        .replace('require("./task"))', 'require("./layout-fixture"))')
+        .replace('require("./brief"))', 'require("./layout-fixture"))'),
     );
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
@@ -141,9 +142,9 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           tasks: {},
           briefs: {},
           pullRequests: {},
-          board: {},
-          usage: {},
-          catchup: {},
+          board: nativeScreensFixture().board,
+          usage: nativeScreensFixture().usage,
+          catchup: nativeScreensFixture().catchup,
           warnings: [],
         }),
       );
@@ -175,7 +176,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       );
       const panelInput = { coordinator, cwd: root, project: root };
       await expect(uncertain.openPanel(panelInput)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-      await expect(uncertain.openPanel(panelInput)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+      expect(await uncertain.openPanel(panelInput)).toBeDefined();
       expect(mutationCount).toBe(1);
       const pane = await terminal.openPanel(panelInput);
       const fresh = ternBackend(run, { home, environment: env });
@@ -397,13 +398,50 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         ),
       ).toBe(false);
       for (const kind of ["usage", "catchup"] as const) {
-        const full = await host.open(
-          { coordinator, cwd: root, home, view: { kind } },
-          root,
-          kind,
-          "window",
-          path,
+        const repeated = await Promise.all(
+          Array.from({ length: 4 }, () =>
+            host.open({ coordinator, cwd: root, home, view: { kind } }, root, kind, "window", path),
+          ),
         );
+        const full = repeated[0];
+        if (full === undefined) throw new Error("missing repeated root result");
+        expect(new Set(repeated.map((result) => result.paneId)).size).toBe(1);
+        expect(
+          blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
+            (entry) => entry.block.program === `tandem.${kind}`,
+          ),
+        ).toHaveLength(1);
+        if (kind === "usage") {
+          await Bun.sleep(500);
+          await ctl("shot", "12-usage-reused");
+          expect(JSON.stringify(await ctl("tree"))).toContain("Opus");
+          const originalCli = await readFile(join(plugin, "tandem.sh"), "utf8");
+          const warningFile = join(root, "safe-return.json");
+          await writeFile(
+            warningFile,
+            JSON.stringify({
+              opened: true,
+              warnings: [
+                "Returned to your conversation. The uncertain view and recovery record were kept. Use Tern's tab switcher to continue.",
+              ],
+            }),
+          );
+          await writeFile(
+            join(plugin, "tandem.sh"),
+            `#!/bin/sh\nif [ "$2" = "view-file" ]; then cat '${warningFile}'; exit 0; fi\n${originalCli.replace("#!/bin/sh\n", "")}`,
+          );
+          await ctl("key", "escape");
+          await until(async () =>
+            JSON.stringify(await ctl("tree")).includes("Tandem kept an uncertain view"),
+          );
+          expect(
+            blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+              (entry) => entry.block.id === full.paneId,
+            ),
+          ).toBe(true);
+          await ctl("shot", "14-return-warning-keeps-view");
+          await writeFile(join(plugin, "tandem.sh"), originalCli);
+        }
         await host.open(
           {
             coordinator,
@@ -472,10 +510,99 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         expect(state).toContain('"alert":"waiting"');
         await ctl("shot", name ?? "09-alerts");
       }
-      await terminal.closePanel({ sessionId: "fixture", cwd: root, panelPaneId: pane });
+      // Native safety audit: retain an uncertain browser across independent CLI backends.
+      await saveCoordinatorRecord(home, {
+        schemaVersion: 1,
+        repoPath: root,
+        endpoint: coordinator,
+        harness: DEFAULT_HARNESS,
+        command: ["omp"],
+        worktree: {
+          root,
+          path: root,
+          name: "fixture",
+          branch: "fixture",
+          baseHead: "a".repeat(40),
+          leaseId: "fixture",
+          leaseHolder: "fixture",
+          leasedAt: new Date().toISOString(),
+        },
+      });
+      let browserOpens = 0;
+      let loseBrowserListing = false;
+      const browserRunner: CommandRunner = async (request) => {
+        if (loseBrowserListing && request.argv[1] === "ls") {
+          loseBrowserListing = false;
+          return { code: 1, stdout: "", stderr: "injected native browser verification loss" };
+        }
+        const result = await run(request);
+        if (request.argv[1] === "browser") {
+          browserOpens++;
+          expect(result.code).toBe(0);
+          loseBrowserListing = true;
+        }
+        return result;
+      };
+      const browserInput = {
+        home,
+        coordinator,
+        cwd: root,
+        view: { kind: "browser", url: "https://example.invalid/pull/281" } as const,
+      };
+      await expect(
+        ternBackend(browserRunner, { home, environment: env }).openView(browserInput),
+      ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+      await expect(
+        ternBackend(browserRunner, { home, environment: env }).openView(browserInput),
+      ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+      expect(browserOpens).toBe(1);
+      await ctl("shot", "10-browser-quarantined");
+      const safeReturn = await fresh.openView({
+        coordinator,
+        cwd: root,
+        home,
+        view: { kind: "orchestrator" },
+      });
+      expect(safeReturn.opened).toBe(true);
+      expect(safeReturn.warnings[0]).toContain("Returned to your conversation");
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      await Bun.sleep(200);
+      await ctl("shot", "13-safe-return-quarantined");
+
+      let panelCloses = 0;
+      let loseCloseListing = false;
+      const uncertainClose = ternBackend(
+        async (request) => {
+          if (loseCloseListing && request.argv[1] === "ls") {
+            loseCloseListing = false;
+            return { code: 1, stdout: "", stderr: "injected native panel close verification loss" };
+          }
+          const result = await run(request);
+          if (request.argv[1] === "close") {
+            panelCloses++;
+            loseCloseListing = true;
+          }
+          return result;
+        },
+        { home, environment: env },
+      );
+      const closeInput = { sessionId: "fixture", cwd: root, panelPaneId: pane };
+      await expect(uncertainClose.closePanel(closeInput)).rejects.toBeInstanceOf(
+        TernOutcomeUnknownError,
+      );
+      await expect(uncertainClose.closePanel(closeInput)).rejects.toBeInstanceOf(
+        TernOutcomeUnknownError,
+      );
+      expect(panelCloses).toBe(1);
       expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(false);
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,
+      );
+      await ctl("shot", "11-panel-close-quarantined");
+      console.log(
+        `Native quarantine artifacts: ${root}/shots/live/10-browser-quarantined.png ${root}/shots/live/11-panel-close-quarantined.png`,
       );
       console.log(
         `Native proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-projects.png ${root}/shots/live/04-exited-brief.png ${root}/shots/live/09-needs-you.png ${root}/shots/live/09-done.png ${root}/shots/live/09-stuck.png`,
