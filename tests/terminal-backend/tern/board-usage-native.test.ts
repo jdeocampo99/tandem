@@ -347,6 +347,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       const actions = await readFile(log, "utf8");
       expect(actions.match(/--pane/g)?.length).toBe(actionCount);
       expect(actions).toContain(`--cwd\n${project}`);
+      expect(actions).toContain(`--home\n${home}`);
     } catch (error) {
       console.error(await readFile(join(root, "window.log"), "utf8").catch(() => ""));
       throw error;
