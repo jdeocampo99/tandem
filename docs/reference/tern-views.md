@@ -236,9 +236,11 @@ after adding the mappings so it reads the settings.
 decision, exact added key/action pairs, original keybind-table presence, and sidebar's original
 presence/value plus installed value. A decline is remembered and leaves settings byte-identical.
 An approval records changes before applying them, allowing restoration after an interrupted write.
-A failed settings write removes its unchanged record when the intended settings did not commit,
-so the next attempt cannot claim an unapplied approval. If the settings did commit before a later
-failure, the record remains available for guarded restoration. An existing approved record reports
+A failed settings write removes its unchanged record only when the writer positively reports
+`PreferenceWriteNotCommittedError` before attempting atomic rename/link. Unclassified failures,
+commit-attempt failures and post-commit cleanup failures retain the record for guarded restoration,
+even if formatting or unrelated preferences changed after the commit. Byte differences never prove
+non-commit. An existing approved record reports
 `configured: true` only while its recorded settings are actually present; an interrupted write
 cannot claim application on the next launch. User edits are still never reapplied.
 Both files are regular, non-symlink files written atomically with mode 0600, and stale writes are
