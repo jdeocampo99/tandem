@@ -1355,7 +1355,7 @@ test("renderer commands reject missing context and invalid project/file input be
 });
 
 test("Show PRs opens the indexed durable task in the originating project without fetching GitHub", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     const task = await createPrTask(f);
     const path = nativeViewsPath(f.home, f.repo);
