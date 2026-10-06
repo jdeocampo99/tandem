@@ -1,6 +1,7 @@
 import type { IsoTimestamp } from "../contracts.ts";
 import { calendarDate } from "../memory/workstream.ts";
 import type { RequestUsageEvent, RequestWorkKind } from "./usage.ts";
+import { type UsageDisplay, usageDisplay } from "./usage-display.ts";
 import {
   buildRequestUsageReceipt,
   type RequestUsageReadout,
@@ -25,6 +26,7 @@ export type UsageTotals = Readonly<{
   tasksDone: number;
 }>;
 export type UsageView = Readonly<{
+  display?: UsageDisplay;
   limits: readonly LimitMeter[];
   today: UsageTotals;
   week: UsageTotals;
@@ -77,7 +79,7 @@ export function usageView(
       return [JSON.stringify([provider, model]), { provider, model }];
     }),
   );
-  return {
+  const view: UsageView = {
     limits: input.limits.map((limit) => limitMeter(limit, input.now)),
     today: { ...totals(today, input.todayStart, input.now), tasksDone: done(input.todayStart) },
     week: { ...totals(week, input.weekStart, input.now), tasksDone: done(input.weekStart) },
@@ -111,6 +113,7 @@ export function usageView(
     })),
     malformedEvents: input.readout.malformedEvents,
   };
+  return { ...view, display: usageDisplay(view) };
 }
 
 /** Local midnight boundaries are explicit inputs to usageView for deterministic rendering. */
