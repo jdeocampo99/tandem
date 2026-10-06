@@ -102,6 +102,7 @@ import {
   type PostPrReviewResult,
   type PrReviewWorkflow,
   type ReviewPageEvent,
+  type ReviewSubmissionBinding,
   type ShowPrReviewResult,
   type StartPrReviewInput,
   type StartPrReviewResult,
@@ -517,7 +518,11 @@ export type TandemService = Readonly<{
     input: { readonly verdict: ReviewVerdict; readonly approved: boolean },
   ) => Promise<PostPrReviewResult>;
   /** Posts a submission from the review page; the user's click on Submit is the approval. */
-  readonly reviewSubmit: (id: string, submission: ReviewSubmission) => Promise<PostPrReviewResult>;
+  readonly reviewSubmit: (
+    id: string,
+    submission: ReviewSubmission,
+    expected?: ReviewSubmissionBinding,
+  ) => Promise<PostPrReviewResult>;
   readonly reviewAgain: (id: string) => Promise<TaskRecord>;
   readonly reviewClose: (id: string) => Promise<TaskRecord>;
   /** The board across every onboarded project, from saved state only; it never reads GitHub. */
@@ -1008,7 +1013,10 @@ class TandemController {
       reviewEdit: (id, edits) => this.#prReviews.edit(assertTaskId(id), edits),
       reviewPost: (id, input) =>
         this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
-      reviewSubmit: (id, submission) => this.#prReviews.submit(assertTaskId(id), submission),
+      reviewSubmit: (id, submission, expected) =>
+        this.#deps.store.serialized(() =>
+          this.#prReviews.submit(assertTaskId(id), submission, expected),
+        ),
       reviewAgain: (id) => this.#prReviews.again(assertTaskId(id)),
       reviewClose: (id) => this.#prReviews.close(assertTaskId(id)),
       board: () => readBoard(this.#deps.home, this.#deps.clock),

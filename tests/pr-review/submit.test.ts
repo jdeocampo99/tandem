@@ -82,13 +82,18 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-function workflow(head: string) {
+function workflow(head: string, overrides: Partial<TaskRecord> = {}) {
   const gh = fakeGh({
     [REVIEWS]: ok([[]]),
     [HEAD]: ok(`${head}\n`),
     [POST]: ok({ html_url: URL }),
   });
-  let record: TaskRecord = task({ kind: "pr-review", stage: "completed", prReview: state });
+  let record: TaskRecord = task({
+    kind: "pr-review",
+    stage: "completed",
+    prReview: state,
+    ...overrides,
+  });
   const flow = createPrReviewWorkflow({
     home,
     run: gh.run,
@@ -156,4 +161,51 @@ test("a submission naming a draft the review lacks posts nothing", async () => {
     flow.submit("task-1", { ...submission, drafts: [{ id: "c9", decision: "post" }] }),
   ).rejects.toThrow("The page sent draft ids this review does not have: c9");
   expect(posted(calls)).toHaveLength(0);
+});
+
+for (const changed of ["head", "round-generation", "task-generation"]) {
+  test(`a native submission refuses a changed ${changed} even when the new round reuses draft ids`, async () => {
+    const previous = state.rounds[0];
+    if (previous === undefined) throw new Error("Missing fixture round");
+    const head = changed === "head" ? "def456" : previous.head;
+    const generation = changed === "head" ? 0 : 1;
+    const nextState = {
+      ...state,
+      rounds: [
+        {
+          ...previous,
+          head,
+          generation: changed === "round-generation" ? generation : 0,
+          review: { ...previous.review, head },
+        },
+      ],
+    };
+    const { flow, calls, current } = workflow(head, { generation, prReview: nextState });
+    await expect(
+      flow.submit("task-1", submission, { head: previous.head, generation: 0 }),
+    ).rejects.toThrow("The displayed PR review is stale; reopen the pane before submitting.");
+    expect(calls).toEqual([]);
+    expect(current().prReview).toEqual(nextState);
+  });
+}
+
+test("a native submission matching the displayed round uses the existing pinned posting path", async () => {
+  const { flow, calls } = workflow("abc123");
+  expect(await flow.submit("task-1", submission, { head: "abc123", generation: 0 })).toMatchObject({
+    posted: true,
+    url: URL,
+  });
+  expect(posted(calls)).toHaveLength(1);
+  expect(posted(calls)[0]).toMatchObject({ commit_id: "abc123" });
+});
+
+test("a finished question follow-up can still submit the same unchanged review round", async () => {
+  const { flow, calls } = workflow("abc123", {
+    generation: 1,
+    prReview: { ...state, mode: "question" },
+  });
+  expect(await flow.submit("task-1", submission, { head: "abc123", generation: 0 })).toMatchObject({
+    posted: true,
+  });
+  expect(posted(calls)[0]).toMatchObject({ commit_id: "abc123" });
 });
