@@ -17,8 +17,6 @@ for (const placement of ["task", "return"] as const) {
     "failed-listing",
     "malformed-listing",
     "closed",
-    "legacy-intent",
-    "legacy-route",
   ] as const) {
     test(`${placement} replacement ${mode} settles only after exact predecessor absence`, async () => {
       const home = await mkdtemp("/tmp/tandem-retained-task-");
@@ -161,10 +159,6 @@ for (const placement of ["task", "return"] as const) {
           const path = `${home}/native-host/${intent}`;
           const saved = JSON.parse(await readFile(path, "utf8"));
           expect(saved.ticket.replaced).toBe("4");
-          if (mode === "legacy-intent") {
-            delete saved.ticket.replaced;
-            await writeFile(path, JSON.stringify(saved));
-          } else if (mode === "legacy-route") await rm(path);
           const before = opens,
             focused = focuses;
           // Recovery must fence the complete outcome, even when the new task's
@@ -181,7 +175,7 @@ for (const placement of ["task", "return"] as const) {
           expect(opens).toBe(before);
           expect(await Bun.file(route).exists()).toBe(true);
           expect(await Bun.file(receipt).exists()).toBe(true);
-          if (mode !== "legacy-route") expect(await Bun.file(path).exists()).toBe(true);
+          expect(await Bun.file(path).exists()).toBe(true);
         }
         expect(opens).toBe(1);
       } finally {
@@ -190,3 +184,98 @@ for (const placement of ["task", "return"] as const) {
     });
   }
 }
+
+// A crash inside settle() after the route was removed leaves only the intent. The
+// exact block plus an intent with no predecessor is complete evidence of the opening.
+test("task opening interrupted during settle reuses its exact block without reopening", async () => {
+  const home = await mkdtemp("/tmp/tandem-settle-crash-");
+  const coordinator: Endpoint = {
+    terminal: "tern",
+    sessionId: "test",
+    terminalSessionId: "1",
+    workspaceId: "2",
+    tabId: "2",
+    paneId: "3",
+    role: "coordinator",
+    generation: 0,
+  };
+  const index = nativeViewsPath(home, home);
+  const args = [`${home}/new-task.json`, "3", home, "", index];
+  let created = false,
+    opens = 0;
+  let route = "";
+  const run: CommandRunner = async (request) => {
+    const ok = (value: unknown) => ({ code: 0, stdout: JSON.stringify(value), stderr: "" });
+    const verb = request.argv[1];
+    if (verb === "inspect") return ok({ clients: [{ kind: "window" }] });
+    if (verb === "ls")
+      return ok({
+        sessions: [
+          {
+            id: "1",
+            name: "fixture",
+            tabs: [
+              {
+                id: "2",
+                name: null,
+                blocks: [
+                  { id: "3", title: "coordinator", cwd: home, live: true, cols: 150 },
+                  ...(created
+                    ? [
+                        {
+                          id: "5",
+                          title: "new task",
+                          cwd: home,
+                          live: false,
+                          program: "tandem.task",
+                          args,
+                        },
+                      ]
+                    : []),
+                ],
+              },
+            ],
+          },
+        ],
+        detached: [],
+      });
+    if (verb === "focus") return ok({ block: "3" });
+    if (verb === "open") {
+      opens++;
+      route = request.argv[2] ?? "";
+      created = true;
+      return { code: 1, stdout: "", stderr: "connection lost after open" };
+    }
+    throw new Error(`unexpected ${verb}`);
+  };
+  const open = () =>
+    ternViewHost(ternCommands(run, { binary: "tern", windowKey: "own-window" }), {
+      clock: Date.now,
+      wait: async () => {},
+      guard: async (_key, operation) => operation(),
+    }).open(
+      { home, cwd: home, coordinator, view: { kind: "task", taskId: "task-new" } },
+      home,
+      "task",
+      "task",
+      args[0] ?? "",
+    );
+  try {
+    await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    const intent = (await readdir(`${home}/native-host`)).find((name) =>
+      name.endsWith(".intent.json"),
+    );
+    expect(intent).toBeDefined();
+    const saved = JSON.parse(await readFile(`${home}/native-host/${intent}`, "utf8"));
+    expect(saved.ticket.replaced).toBeUndefined();
+    await rm(route);
+
+    expect((await open()).paneId).toBe("5");
+    expect(opens).toBe(1);
+    expect(
+      (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
+    ).toEqual([]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});

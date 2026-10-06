@@ -91,10 +91,6 @@ tern.route.open(function(req, cx)
   end)
   return {handled=true}
  end
- if string.match(req.path, "%.tandem%-view%.json$") then
-  run(cx, { "view-file", req.path })
-  return { handled = true }
- end
  return nil
 end)
 

@@ -60,8 +60,7 @@ and fills in subsequent reconciliations. No empty or failing read means zero usa
 
 ## JSON schema (version 1)
 
-Every native index and per-entity file matches the Luau hosting foundation's
-`NativeViewFile<Model>` from `src/tern-view/file.ts`:
+Every native index and per-entity file is one envelope:
 
 ```ts
 {
