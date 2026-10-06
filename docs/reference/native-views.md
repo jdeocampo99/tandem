@@ -1,6 +1,7 @@
 # Native view data
 
-The data contract for Tern screens 1–8 from #282. All models are computed by Tandem in
+The data contract for Tern screens. Start with [terminal.md](terminal.md) for the backend
+and [tern-views.md](tern-views.md) for hosting and the shared Luau API. All models are computed by Tandem in
 TypeScript. The terminal renderer reads the JSON and runs CLI actions. It never fetches
 GitHub, provider limits, or the task store itself.
 
@@ -60,7 +61,7 @@ and fills in subsequent reconciliations. No empty or failing read means zero usa
 ## JSON schema (version 1)
 
 Every native index and per-entity file matches the Luau hosting foundation's
-`NativeViewFile<Model>` from `src/tern-view/file.ts` in PR #286 (`tern/host-plugin`):
+`NativeViewFile<Model>` from `src/tern-view/file.ts`:
 
 ```ts
 {
@@ -200,7 +201,8 @@ activity or the saved stop reason; to-dos stay on the task page. PR metadata sup
 numbers. Active tasks with draft PRs stay in Running and are not duplicated as a Ready row.
 All four section containers exist, including empty ones. Project switcher status includes offline
 and counts, with shortcuts for the first nine projects; the renderer owns the footer's open-project
-and previous/next controls. The bell count is this project's confirmed native alert deliveries minus its user read cursor;
+and previous/next controls. The bell count is this project's confirmed native alert deliveries
+minus its user read cursor;
 it includes brief and PR-watch alerts and is independent of coordinator acknowledgements.
 See [bell/read semantics](tern-views.md#panel-bell-and-user-read-semantics).
 The compact meter uses the lowest known remaining percentage among the account 5-hour limits.
@@ -262,8 +264,8 @@ Native brief comments and request changes take the same three identity fields pl
 revision/digests and resolves ids through `briefView` for the exact preserved historical draft,
 never the latest draft. Unknown ids, missing historical revisions and mismatched digests refuse
 delivery. Numeric `line` anchors are refused. See [native brief feedback](request-briefs.md#native-brief-feedback).
-The builder accepts comments and a browser URL; their collection and CLI actions belong to the
-annotation/action integration, which can supply them when opening the pane.
+The builder accepts comments and a browser URL. Native comments are delivered through the CLI
+to the coordinator; local drafts remain transient in the renderer until sent.
 
 ### PR pane and diff/tour
 
@@ -373,7 +375,8 @@ It returns true only at **1+ hour** since last visibility, with a known baseline
 different meaningful signature. Invalid dates, repaint/timer changes and unchanged work stay quiet.
 The host stores private locked presentation records under `<home>/native-visits`, updates last
 visibility on departure and foreground heartbeats, and runs the rule on every project entry,
-including inbox activation. Failed catch-up opens never fail a successful project navigation or
-acknowledge its changed signature. Initial publication fills a missing baseline only. Dismiss and
+including inbox activation. A catch-up failure shows a warning, preserves successful project
+navigation and leaves the visit unacknowledged; see the [single entry rule](terminal.md#board-usage-and-catch-up).
+Initial publication fills a missing baseline only. Dismiss and
 Open what needs me acknowledge after confirmed navigation. See [visibility semantics and API
 limits](tern-views.md#board-usage-and-catch-up-actions).

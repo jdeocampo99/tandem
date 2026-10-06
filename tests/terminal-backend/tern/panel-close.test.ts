@@ -92,7 +92,6 @@ for (const mode of [
       };
       const hidden =
         mode === "missing" ||
-        mode === "detached-before-close" ||
         (closes > 0 && (mode === "confirmed" || mode === "retired-coordinator"));
       return {
         code: 0,
@@ -110,8 +109,9 @@ for (const mode of [
                     ...(mode === "retired-coordinator" || mode === "conversation"
                       ? []
                       : [{ id: "3", title: "Coordinator", cwd, live: true }]),
-                    // A visible panel on retry would be closed twice by the unfenced host.
-                    ...(hidden ? [] : [panel]),
+                    // Detached absence must have no placed panel. A visible panel
+                    // on post-effect retries exposes a second close by the unfenced host.
+                    ...(mode === "detached-before-close" || hidden ? [] : [panel]),
                   ],
                 },
               ],
@@ -163,6 +163,7 @@ for (const mode of [
         await expect(close()).rejects.toThrow();
         await expect(close()).rejects.toThrow();
       }
+      if (mode === "detached-before-close") expect(idleRead).toBe(false);
       expect(closes).toBe(
         effectUnconfirmed || mode === "confirmed" || mode === "retired-coordinator" ? 1 : 0,
       );
