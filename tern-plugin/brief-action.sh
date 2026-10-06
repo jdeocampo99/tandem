@@ -11,8 +11,8 @@ request=$2
 pane=$3
 cwd=$4
 window=${5-}
-home=${6-}
+action_home=${6-}
 set -- native "$verb" "$request" --input "$input" --pane "$pane" --cwd "$cwd"
-if [ -n "$home" ]; then set -- "$@" --home "$home"; fi
+if [ -n "$action_home" ]; then set -- "$@" --home "$action_home"; fi
 if [ -n "$window" ]; then set -- "$@" --window "$window"; fi
 /bin/sh tandem.sh "$@"
