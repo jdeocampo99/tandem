@@ -332,6 +332,12 @@ browser intent fences native and browser openings alike. Listings cannot correla
 uncertain browser with its URL and picture-in-picture owner, so they never clear that fence or
 authorize another open. Panel-close verification failures likewise quarantine the close in the
 backend guard and retain resources without a second close.
+Panel close refuses detached placement even before the effect. A unique recorded coordinator
+must bind the panel's session, tab, worktree cwd and all five launch arguments, including the
+project view path; the conversation itself cannot be closed as a panel. The full program and
+argument proof runs again after the idle process read, immediately before the close mutation.
+Changed or foreign programs/arguments refuse without closing anything. The recorded binding
+remains usable when retirement has already closed the coordinator pane.
 
 Before any opening mutation, the host locks a private coordinator-bound intent under
 `<home>/native-host`. For panels, it lists the scoped session and reuses exactly one block

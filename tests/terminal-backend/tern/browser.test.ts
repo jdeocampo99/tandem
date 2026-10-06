@@ -6,6 +6,8 @@ import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 
+// Regression from the #282 safety verifier's browser-relaunch.test.ts:
+// independent native CLI backends must not repeat the same uncertain opening.
 for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirmed"] as const) {
   test(`browser ${mode} persists quarantine across fresh backend instances`, async () => {
     const root = await realpath(await mkdtemp("/tmp/tandem-browser-"));
@@ -119,6 +121,9 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
       } else {
         await expect(open()).rejects.toThrow("outcome is unknown");
         loseListing = false;
+        await expect(open(ternBackend(run, { home, binary: "tern" }))).rejects.toThrow(
+          "quarantine",
+        );
         await expect(open()).rejects.toThrow("quarantine");
         // Reads now succeed and the created browser is visible, but they cannot
         // prove the URL/owner of an earlier uncertain operation.
