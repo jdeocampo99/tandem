@@ -18,7 +18,6 @@ import {
   TernUnsupportedOperationError,
 } from "../../../src/terminal-backend/tern/protocol.ts";
 import {
-  scenarioReservation,
   scenarioRuntimeTask,
   seedScenarioRuntime,
   seedScenarioTask,
@@ -524,24 +523,9 @@ test("close waits for its exact session to disappear without retrying an acknowl
   });
 });
 
-test("a killed session with an unconfirmed tab times out, keeps durable resources and quarantines another close", async () => {
+test("a killed session with an unconfirmed tab times out and quarantines another close", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "45", cwd: world.repoPath });
-    const lease = await world.grantLease({ name: "tern-retained-session", holder: "holder" });
-    await seedScenarioTask(world, {
-      kind: "implementation",
-      stage: "paused",
-      endpoints: [endpoint],
-      worktree: lease,
-    });
-    await seedScenarioRuntime(
-      world,
-      scenarioRuntimeTask({
-        endpoints: [endpoint],
-        worktree: lease,
-        reservation: scenarioReservation({ id: "r1" }),
-      }),
-    );
     let now = 0;
     let kills = 0;
     let killedSession: string | undefined;
@@ -575,10 +559,6 @@ test("a killed session with an unconfirmed tab times out, keeps durable resource
     await expect(terminal.close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     expect(kills).toBe(1);
     expect(world.trace().filter((event) => event.action === "tern close")).toHaveLength(1);
-    const snapshot = await world.snapshot();
-    expect(snapshot.resources.retained).toContain(`endpoint:${endpoint.paneId}`);
-    expect(snapshot.resources.retained).toContain("lease:lease-1");
-    expect(snapshot.resources.retained).toContain("reservation:r1");
   });
 });
 

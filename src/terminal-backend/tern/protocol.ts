@@ -68,18 +68,11 @@ export type TernOptions = Readonly<{
   environment?: Readonly<Record<string, string>>;
 }>;
 
-/** Resolve an executable, preserving explicit injection for native and fake runners. */
-export function resolveTernBinary(options: TernOptions): string | undefined {
-  return (
+export function ternCommands(run: CommandRunner, options: TernOptions) {
+  const binary =
     options.binary ??
     Bun.which("tern", { PATH: options.environment?.PATH ?? process.env.PATH ?? "" }) ??
-    Bun.which(TERN_BINARY) ??
-    undefined
-  );
-}
-
-export function ternCommands(run: CommandRunner, options: TernOptions) {
-  const binary = resolveTernBinary(options) ?? TERN_BINARY;
+    TERN_BINARY;
   const request = (cwd: string, args: readonly string[]) => ({
     argv: [
       binary,
