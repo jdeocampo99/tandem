@@ -288,8 +288,9 @@ receipt and a scoped listing proving the exact block program and launch argument
 or conflicting evidence quarantines the opening, retaining its ticket and resources.
 A confirmed opening removes its transient ticket and receipt. No title proves ownership.
 Before any opening mutation, the host locks a private coordinator-bound intent under
-`<home>/native-host`. It lists the scoped session and reuses exactly one block with the full
-program and five launch arguments in the intended tab placement; duplicate matches refuse.
+`<home>/native-host`. For panels, it lists the scoped session and reuses exactly one block
+with the full program and five launch arguments in the intended tab placement; duplicate
+matches refuse. Successful task opens retain their replacement behavior.
 The intent is claimed before the first mutation and remains on every unconfirmed outcome,
 including failed or malformed verification reads. A later CLI/backend instance must settle
 retained intents and route tickets from that same exact block evidence before it can open.
