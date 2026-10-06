@@ -14,6 +14,7 @@ import {
   type CoordinatorLaunchRequest,
   launchCoordinator,
 } from "../../src/coordinator/launch.ts";
+import { listCoordinatorQuarantineRecords } from "../../src/coordinator/quarantine.ts";
 import {
   planTandemReconciliation,
   type ReconcileReport,
@@ -23,10 +24,7 @@ import {
 } from "../../src/coordinator/reconcile.ts";
 import { digest, recordPath, registrySessionDirectory } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
-import {
-  listCoordinatorQuarantineRecords,
-  quarantineCoordinatorLease,
-} from "../../src/coordinator/resources.ts";
+import { quarantineCoordinatorLease } from "../../src/coordinator/resources.ts";
 import { runTerminal } from "../../src/main.ts";
 import { runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";

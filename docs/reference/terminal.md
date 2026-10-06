@@ -97,6 +97,20 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   process proof remain ambiguous. Busy panes refuse close unless the caller explicitly
   authorizes force; force still requires ownership and exact acknowledgement.
   Project close checks both coordinator and recorded alert helper before closing either.
+  Before retiring a recorded coordinator, it also proves every claimed native view's program,
+  all five arguments, project model paths, exact native session/tab/block and idle process state.
+  It closes the conversation first, then rechecks and closes each view by exact id, including
+  Brief, Board and Usage tabs, and finally the alert helper. Unrelated panes remain open.
+  Unknown view-close acknowledgements or absence proofs retain the lease and a durable
+  coordinator quarantine note; fresh adapters refuse to repeat the quarantined operation.
+  Launch and restart also check that durable fence before replacing ownership or reusing the lease,
+  including missing-pane/tab and cross-session paths. `tandem fix` lists and preserves the quarantine.
+- Tern and macOS process-group reads are separate observations. A shell may exec or change
+  groups between them. A failed native match can resample only after an exact-pane recheck and
+  a demonstrably changed Tern process snapshot, for at most three attempts. Every successful
+  sample still requires exact leader pid and argv in the native group. Stable disagreement,
+  changed pane identity and continuous process churn fail closed. Ambiguous foreground proof
+  for a recorded coordinator retains its lease and a durable coordinator quarantine note.
 - After close, prove the exact pane absent. If the session is empty, recheck its exact id and
   emptiness before `tern kill session`. Tern can retain its last empty session: an exact kill
   acknowledgement followed by no tabs is known cleanup, with no repeated kill. Other uncertain

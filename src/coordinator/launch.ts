@@ -4,7 +4,6 @@ import { join, resolve } from "node:path";
 import { quoteShellCommand } from "../adapters/commands.ts";
 import { readCheckpoint } from "../adapters/git.ts";
 import { AdapterCommandError } from "../adapters/primitives.ts";
-import { acquireWorktree } from "../adapters/treehouse.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { readModelSettings } from "../config/models.ts";
 import type {
@@ -43,6 +42,7 @@ import { openPanelBeside } from "./panel.ts";
 import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } from "./record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
+  acquireCoordinatorLease,
   applyCoordinatorReplacement,
   type CoordinatorResourceOutcome,
   decideCoordinatorReplacement,
@@ -333,14 +333,14 @@ async function validateBoundCoordinatorSource(
   return normalizedBoundSourcePath;
 }
 
-async function acquireCoordinatorLease(
+async function acquireCoordinatorSourceLease(
   request: CoordinatorLaunchRequest,
   paths: CoordinatorPaths,
   dependencies: CoordinatorLaunchDependencies,
   sourceHead: string,
 ): Promise<WorktreeLease> {
   const identity = coordinatorLeaseIdentity(paths.repo, request.sessionId, sourceHead);
-  return acquireWorktree(dependencies.run, {
+  return acquireCoordinatorLease(dependencies.run, paths.home, {
     repo: paths.repo,
     root: paths.poolRoot,
     tandemId: identity.tandemId,
@@ -692,7 +692,7 @@ export async function launchCoordinatorUnlocked(
     sourceHead,
     context,
   );
-  const worktree = await acquireCoordinatorLease(request, paths, dependencies, sourceHead);
+  const worktree = await acquireCoordinatorSourceLease(request, paths, dependencies, sourceHead);
   // A lease the previous record still names is not this launch's to undo.
   const rollbackEligible = previous === undefined || previous.worktree.leaseId !== worktree.leaseId;
   let ownedEndpoint: Endpoint | undefined;

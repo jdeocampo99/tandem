@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import type { z } from "zod";
 import {
   AdapterError,
+  AdapterProtocolError,
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
@@ -87,7 +88,20 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       throw new TernOutcomeUnknownError(key, "an earlier effect is quarantined");
     return guard(openingKey, operation);
   };
-  const check = (target: EndpointTarget) => inspect(commands, target);
+  const check = async (target: EndpointTarget) => {
+    try {
+      return await inspect(commands, target);
+    } catch (error) {
+      if (
+        error instanceof AdapterProtocolError &&
+        error.operation === "Tern foreground process proof"
+      ) {
+        const { quarantineCoordinatorProof } = await import("./retire-views.ts");
+        await quarantineCoordinatorProof(options.home, target, error.message);
+      }
+      throw error;
+    }
+  };
   const endpointFor = (target: SessionTarget, entry: LocatedBlock): Endpoint => ({
     terminal: "tern",
     sessionId: target.sessionId,
@@ -212,7 +226,18 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           }
         }
       }
+      const { planCoordinatorViews } = await import("./retire-views.ts");
+      const retireViews = await planCoordinatorViews(commands, options.home, target);
+      // Prove the conversation before retiring views, then recheck it in close itself.
+      try {
+        if ((await check(target)).activeWorker && target.force !== true)
+          throw new EndpointBusyError(target.endpoint);
+      } catch (error) {
+        if (strict || !(error instanceof EndpointOwnershipError && error.reason === "missing"))
+          throw error;
+      }
       await close(commands, target, strict, { clock, wait });
+      await retireViews();
       if (helper !== undefined)
         await guard(helper.paneId, () =>
           close(

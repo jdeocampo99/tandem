@@ -5,6 +5,7 @@ import type { EndpointInspection, TerminalBackend } from "../terminal-backend/co
 import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
 import { assertStoppedCoordinatorShell } from "./ownership.ts";
 import { closeCoordinatorPanel } from "./panel.ts";
+import { assertCoordinatorEffectsSettled } from "./quarantine.ts";
 import { type CoordinatorRecord, canonicalPath } from "./record.ts";
 
 export type CoordinatorWorkspaceOutcome = "closed" | "already-clear" | "retained" | "quarantined";
@@ -117,6 +118,7 @@ export async function retireCoordinatorWorkspace(
   home: string,
   record: RetiredRecord,
 ): Promise<CoordinatorWorkspaceRetirement> {
+  await assertCoordinatorEffectsSettled(home, record.repoPath);
   try {
     assertTerminalEndpoint(terminal.name, record.endpoint);
   } catch (error) {

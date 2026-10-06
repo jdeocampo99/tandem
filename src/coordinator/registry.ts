@@ -3,6 +3,7 @@ import type { Dirent, Stats } from "node:fs";
 import { chmod, lstat, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { ensurePrivateDirectoryTree } from "./lock.ts";
+import { assertCoordinatorEffectsSettled } from "./quarantine.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
@@ -75,6 +76,7 @@ export async function saveCoordinatorRecord(
   if (pathIsWithin(canonical.repoPath, home)) {
     throw new Error("Tandem home must remain outside the target repository");
   }
+  await assertCoordinatorEffectsSettled(home, canonical.repoPath);
   await writeRecordFile(
     recordPath(home, canonical.endpoint.sessionId, canonical.repoPath),
     canonical,
@@ -94,6 +96,7 @@ export async function removeCoordinatorRecord(
   const home = await canonicalHome(homeInput);
   const sessionId = sessionText(sessionInput);
   const repoPath = await canonicalPath(repoPathInput, "repoPath");
+  await assertCoordinatorEffectsSettled(home, repoPath);
   await rm(recordPath(home, sessionId, repoPath), { force: true });
 }
 
