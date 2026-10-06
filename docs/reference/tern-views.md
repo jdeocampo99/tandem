@@ -161,8 +161,15 @@ work run in successive one-shot timers with the fresh `WindowCx` of each callbac
 window callbacks a 50 ms budget and disables a hook that exceeds it; doing the whole layout in
 `route.open` can disable interception and expose later tickets as ordinary FILE blocks. Keep
 focus and block creation together so navigation between stages cannot change the destination.
-Recheck exact originating panes before layout effects. Never retry a failed stage or write a
-receipt for it: the TypeScript backend retains uncertain tickets and their durable opening intent.
+Recheck exact originating panes before layout effects. Never retry a failed stage. Every exit,
+including an error inside a timer callback or a window that closed between stages, writes the
+ticket's receipt exactly once: `{status:"done", paneId, tabId, sessionId}` or
+`{status:"failed", stage, appliedEffects, reason}`. `appliedEffects` counts every create, move,
+resize, float, dock, close and command that ran; focus alone is not counted. Tern's `fs` has no
+rename, so the backend accepts only a receipt that parses whole.
+Tern's raw `close` returns nothing and retires the pane after the callback returns. Every close
+therefore polls the exact pane id in later stages (50 ms apart, at most one second) and continues
+only once it is absent; a pane that stays fails the open after its effects.
 Process completion hooks only schedule a continuation. Cold result-helper loading, result
 handling and the next queued process launch run in separate one-shot timers. Commands capture
 the originating pane/cwd at the gesture, then launch in a fresh timer. Focus entries and away
@@ -176,7 +183,8 @@ Horizontal ancestor ratios translate nested dividers into actual pane width when
 are already beside the conversation.
 It ignores daemon/pre-split column counts, including hidden project tabs. The host checks the
 result within one cell before writing its receipt. An unavailable, changed or clamped divider
-fails without a retry or receipt, preserving the opening intent and panes for recovery.
+fails without a retry, writing a failed receipt with its applied effects so the opening intent
+and panes stay quarantined for recovery.
 
 Back also rereads the previous task in the same callback before closing a task picker or docking
 the coordinator. A disappeared task, changed kind or tab, or newly floating task refuses the
@@ -284,12 +292,12 @@ receipt and a scoped listing proving the exact block program and launch argument
 or conflicting evidence quarantines the opening, retaining its ticket and resources.
 A confirmed opening removes its transient ticket and receipt. No title proves ownership.
 
-Browser opens use the same private coordinator-bound intent and lock before `tern browser`
-mutates the window. A new acknowledgement and scoped listing must confirm the new block;
-failed or malformed verification retains the intent across fresh CLI invocations. An unresolved
-browser intent fences native and browser openings alike. Listings cannot correlate an earlier
-uncertain browser with its URL and picture-in-picture owner, so they never clear that fence or
-authorize another open. Panel-close verification failures likewise quarantine the close in the
+Browser opens run under the same coordinator-bound lock, and an unresolved native intent still
+refuses them, but they keep no durable record. Nothing can later prove or disprove a browser
+opening and it is never re-invoked, so a new acknowledgement and scoped listing either confirm
+the new block or the click reports once that Tern did not confirm it. A crash after `tern
+browser` leaves nothing behind, and no browser outcome pauses later opens. Panel-close
+verification failures quarantine the close in the
 backend guard and retain resources without a second close.
 Panel close refuses detached placement even before the effect. A unique recorded coordinator
 must bind the panel's session, tab, worktree cwd and all five launch arguments, including the
@@ -309,11 +317,18 @@ this coordinator and view also refuses reuse. Successful task opens retain their
 The read-only exact coordinator check runs immediately before focus. A known failure before
 this invocation attempts any mutation cancels only its own new intent, so failed or malformed
 pre-focus reads leave no fence. Earlier uncertain intents are never cancelled by a failed read.
-The intent is claimed before the first mutation and remains on every unconfirmed outcome,
-including failed or malformed verification reads. A later CLI/backend instance must settle
-retained intents and route tickets from that same exact block evidence before it can open.
-A missing receipt can be settled by the unique exact block; conflicting receipts or missing
-block evidence retain the fence and resources. Lock files remain for later callers.
+The intent is claimed before the first mutation. A failed receipt with zero applied effects
+proves nothing changed: the backend settles the intent and refuses the click with "The Tandem
+view did not open and nothing changed. Open it again.", beside the host's "Tandem view did not
+open" toast. Any applied effect, a missing receipt after five seconds, or failed or malformed
+verification reads keep the intent. A later CLI/backend instance must settle retained intents
+and route tickets before it can open: a late zero-effect failed receipt settles; otherwise
+exact block evidence is required. A missing receipt can be settled by the unique exact block;
+conflicting receipts, failed receipts with effects, or missing block evidence retain the fence
+and resources. Lock files remain for later callers. Nothing is retried automatically.
+`tandem fix` lists every retained intent with its reason and, with `--yes`, abandons one only
+after proving its coordinator exactly present or exactly gone; see
+[reconciliation](reconciliation.md#tandem-fix).
 The durable fence governs native opens even within one backend instance, so exact recovery
 can settle a previous verification failure instead of being blocked by a process-local guard.
 Reused root views focus the exact existing pane without another layout opening.
