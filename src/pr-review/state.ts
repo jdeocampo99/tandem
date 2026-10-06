@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { isRecord } from "../adapters/primitives.ts";
 import type { ReviewVerdict } from "./post.ts";
 import type { PullRequestRef } from "./pull-request.ts";
+import { roundReplies } from "./replies.ts";
 import { type PrReview, parsePrReview, type ReviewLens } from "./review.ts";
 
 /**
@@ -16,9 +17,15 @@ export type PostedReview = Readonly<{
   postedAt: string;
   /** The user checked the PR and explicitly supplied this receipt after an uncertain POST. */
   confirmedByUser?: true;
+  /**
+   * Set on every receipt saved by a build that claims replies to earlier comments in `replyPosts`.
+   * Older builds sent those replies directly with no claim or receipt, so on a receipt without it
+   * they count as already sent.
+   */
+  priorRepliesClaimed?: true;
 }>;
 
-/** One reply's network claim or settled result; its identity/body live in review.replies[index]. */
+/** One reply's network claim or settled result; its target and body live in roundReplies(review)[index]. */
 export type ReplyPost = Readonly<{ index: number }> &
   (
     | Readonly<{ kind: "pending"; attemptedAt: string; attemptRevision: number }>
@@ -137,7 +144,7 @@ function parseRound(value: unknown, source: string): PrReviewRound {
     ...(record.replyPosts === undefined
       ? {}
       : {
-          replyPosts: parseReplyPosts(record.replyPosts, source, review.replies?.length ?? 0),
+          replyPosts: parseReplyPosts(record.replyPosts, source, roundReplies(review).length),
         }),
     head: textAt(record.head, `${source}.head`),
     from: textAt(record.from, `${source}.from`),
@@ -220,14 +227,16 @@ function parsePosted(value: unknown, source: string): PostedReview {
   const record = recordAt(value, source);
   const verdict = textAt(record.verdict, `${source}.verdict`);
   if (!VERDICTS.has(verdict)) throw new TypeError(`${source}.verdict is not a known verdict`);
-  if (record.confirmedByUser !== undefined && record.confirmedByUser !== true) {
-    throw new TypeError(`${source}.confirmedByUser must be true when present`);
+  for (const flag of ["confirmedByUser", "priorRepliesClaimed"] as const) {
+    if (record[flag] !== undefined && record[flag] !== true)
+      throw new TypeError(`${source}.${flag} must be true when present`);
   }
   return {
     url: stringAt(record.url, `${source}.url`),
     verdict: verdict as ReviewVerdict,
     postedAt: textAt(record.postedAt, `${source}.postedAt`),
     ...(record.confirmedByUser === true ? { confirmedByUser: true as const } : {}),
+    ...(record.priorRepliesClaimed === true ? { priorRepliesClaimed: true as const } : {}),
   };
 }
 

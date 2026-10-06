@@ -1,7 +1,7 @@
 import type { TaskRecord } from "../contracts.ts";
 import { readNativeThreads } from "../pr-watch/native-cache.ts";
 import { findPostedReply, postThreadReply } from "./post.ts";
-import { validateThreadReplies } from "./replies.ts";
+import { roundReplies, sentWithoutClaim, validateThreadReplies } from "./replies.ts";
 import type { PrReviewDependencies } from "./service.ts";
 import type { PrReviewRound, PrReviewState, ReplyPost } from "./state.ts";
 
@@ -25,8 +25,9 @@ export function createReplyPosting(
         "The reply changed since you checked it; inspect it again before confirming recovery.",
       );
     const { state, round } = savedRound(task, binding);
-    const reply = round.review.replies?.[index];
+    const reply = roundReplies(round.review)[index];
     if (reply === undefined) throw new Error("This round has no saved reply at that index.");
+    if (sentWithoutClaim(round, reply)) return;
     const previous = round.replyPosts?.find((post) => post.index === index);
     if (previous?.kind === "posted") return;
     if (send && previous !== undefined && recoveryRevision === undefined) {
@@ -41,9 +42,9 @@ export function createReplyPosting(
       marker: `<!-- tandem-reply:${taskId}:${round.generation}:${index} -->`,
     };
     let claimed: ReplyPost | undefined;
-    if (send && recoveryRevision !== undefined) {
+    if (send && recoveryRevision !== undefined && reply.thread !== undefined) {
       validateThreadReplies(
-        [reply],
+        [reply.thread],
         await readNativeThreads(deps.run, state.ref, state.checkout, round.head),
       );
     }
@@ -96,15 +97,20 @@ export function createReplyPosting(
       if (saved?.kind === "posted") return live.state;
       if (JSON.stringify(saved) !== JSON.stringify(claimed ?? previous))
         throw new Error("The saved reply attempt changed; inspect it again.");
-      if (JSON.stringify(live.round.review.replies?.[index]) !== JSON.stringify(reply))
+      if (JSON.stringify(roundReplies(live.round.review)[index]) !== JSON.stringify(reply))
         throw new Error("The saved reply changed; inspect it again.");
       return replacePost(live.state, live.round, next);
     });
   }
 
-  async function reconcile(taskId: string, round: PrReviewRound) {
-    for (const index of (round.review.replies ?? []).keys())
-      await attempt(taskId, round, index, false);
+  /**
+   * Sends every reply of a posted round that has no claim yet and reconciles the rest, so a crash
+   * mid-loop loses nothing on re-entry and a claimed reply is never sent twice. Replies an older
+   * build already sent without a claim are skipped.
+   */
+  async function postRemaining(taskId: string, round: PrReviewRound) {
+    for (const index of roundReplies(round.review).keys())
+      await attempt(taskId, round, index, true);
   }
 
   async function markPosted(task: TaskRecord, round: PrReviewRound, index: number, url: string) {
@@ -120,7 +126,7 @@ export function createReplyPosting(
       }),
     );
   }
-  return { attempt, reconcile, markPosted };
+  return { attempt, postRemaining, markPosted };
 }
 
 function savedRound(task: TaskRecord, binding: PrReviewRound) {

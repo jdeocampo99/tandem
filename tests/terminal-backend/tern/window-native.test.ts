@@ -6,7 +6,7 @@ import { z } from "zod";
 import {
   configureTernPluginSettings,
   restoreTernPluginSettings,
-} from "../../../src/terminal-backend/tern/plugin-settings.ts";
+} from "../../../src/terminal-backend/tern/plugin.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
