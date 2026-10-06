@@ -44,6 +44,7 @@ for (const kind of ["brief", "board"] as const) {
       let processReads = 0;
       let closeCalls = 0;
       const run: CommandRunner = async (request) => {
+        if (kind === "board") expect(request.argv).toContain("active-window");
         const verb = request.argv[1];
         let value: unknown;
         if (verb === "inspect") value = { clients: [{ kind: "window" }] };
@@ -120,7 +121,10 @@ for (const kind of ["brief", "board"] as const) {
             cwd: home,
             home,
             view: kind === "brief" ? { kind: "brief", requestId: "req-1" } : { kind: "board" },
-            origin: { paneId: mode === "coordinator" ? "3" : "4" },
+            origin: {
+              paneId: mode === "coordinator" ? "3" : "4",
+              ...(kind === "board" ? { windowId: "active-window" } : {}),
+            },
           },
           home,
         );

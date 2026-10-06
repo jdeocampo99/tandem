@@ -289,6 +289,9 @@ export function ternViewHost(
           );
         return { closed: true, warnings: [] };
       }
+      // Window commands can supply a new active scope for a block opened without a key.
+      // Its immutable launch key is separate from the independently proven current window.
+      if (input.view.kind === "board") args[3] = entry.block.args?.[3] ?? "";
       const endpoint: Endpoint = {
         ...input.coordinator,
         paneId: entry.block.id,
