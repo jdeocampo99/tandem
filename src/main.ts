@@ -796,8 +796,9 @@ async function runProjectFlow({
     terminal,
     renestAfterLaunches,
   );
+  const terminalLabel = terminal.name === "tern" ? "Tern" : "Herdr";
   stdout(
-    `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared Herdr session ${environment.sessionId}.\n`,
+    `Tandem prepared ${roots.length} project${roots.length === 1 ? "" : "s"} in shared ${terminalLabel} session ${environment.sessionId}.\n`,
   );
   if (invocation.command === "update") {
     await reloadTerminalPlugin(environment.home, pluginDependencies);

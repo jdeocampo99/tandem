@@ -499,6 +499,40 @@ test("focuses the requested coordinator workspace before one Herdr attach", asyn
   await rm(join(repo, ".."), { recursive: true, force: true });
 });
 
+for (const terminal of ["herdr", "tern"] as const) {
+  test(`launch message names the saved ${terminal} backend`, async () => {
+    const [repo] = await gitProjects(1);
+    if (repo === undefined) throw new Error("test project was not created");
+    const root = join(repo, "..");
+    const home = join(root, "home");
+    try {
+      await mkdir(home, { recursive: true });
+      await writeFile(join(home, "settings.toml"), `terminal = "${terminal}"\n`);
+      const fake = onboardingService({ existingConfig: true, configured: true });
+      const output: string[] = [];
+      const result = await runTerminal([repo, "--home", home, "--no-attach"], {
+        cwd: repo,
+        processEnvironment: {},
+        run: async (request) =>
+          request.argv[0] === "git"
+            ? runCommand(request)
+            : { code: 1, stdout: "", stderr: "native terminal unavailable in test" },
+        service: fake.service,
+        application: fakeApplication([]),
+        isTTY: false,
+        stdout: (text) => output.push(text),
+        stderr: (text) => output.push(text),
+      });
+      expect(result.status).toBe("launched");
+      expect(output.join("")).toContain(
+        `Tandem prepared 1 project in shared ${terminal === "tern" ? "Tern" : "Herdr"} session tandem.`,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("multiple explicit projects use one selected session without inheriting another project's source or parent", async () => {
   const projects = await gitProjects(2);
   const first = projects[0];
