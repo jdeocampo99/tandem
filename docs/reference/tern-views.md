@@ -379,6 +379,9 @@ handler invoke it. Background `--no-attach` launches defer the visit to the call
 The function reads the root signature and the Tandem-owned visit record, applies
 `shouldAutoShowCatchUp`, then opens `view:{kind:"catchup"}` through the hosting port. An explicit
 catch-up view opens the screen without that rule. Panel opening and polling never record visits.
+Opening before the first publication still saves the visit timestamp. The first successful root
+publication fills its missing signature without advancing that timestamp; subsequent publications
+leave the saved baseline intact.
 `native board catchup-dismiss` returns and records dismissal; `catchup-open-needs` returns, opens
 the first saved needs-you destination (brief, task or inbox), then records dismissal.
 

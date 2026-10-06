@@ -14,7 +14,7 @@ const visit = z.object({
   version: z.literal(1),
   project: z.string(),
   lastOpenedAt: z.string().datetime(),
-  previousSignature: z.string().min(1),
+  previousSignature: z.string().min(1).optional(),
   dismissedSignature: z.string().optional(),
 });
 export type NativeVisit = z.infer<typeof visit>;
@@ -45,12 +45,15 @@ export async function maybeShowCatchUp(
   try {
     signature = (await readNativeBundle(home, record.repoPath)).changeSignature;
   } catch (error) {
-    if (isNotFoundError(error)) return false;
-    throw error;
+    if (!isNotFoundError(error)) throw error;
   }
-  if (signature === undefined) return false;
   return visitNativeProject(
-    { home, project: record.repoPath, signature, now: input.now ?? new Date().toISOString() },
+    {
+      home,
+      project: record.repoPath,
+      ...(signature === undefined ? {} : { signature }),
+      now: input.now ?? new Date().toISOString(),
+    },
     async () => {
       const result = await terminal.openView({
         coordinator: record.endpoint,
@@ -85,8 +88,8 @@ async function readVisit(path: string, project: string): Promise<NativeVisit | u
 
 /** Host navigation state lives in Tandem's home. No task state or Tern settings are changed. */
 async function updateVisit(
-  input: NativeVisitInput,
-  effect: (previous: NativeVisit | undefined) => Promise<NativeVisit>,
+  input: Pick<NativeVisitInput, "home" | "project">,
+  effect: (previous: NativeVisit | undefined) => Promise<NativeVisit | undefined>,
 ): Promise<void> {
   const directory = join(input.home, "native-visits");
   await ensurePrivateDirectoryTree(directory, "native visit directory");
@@ -95,6 +98,7 @@ async function updateVisit(
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     const saved = await effect(await readVisit(path, input.project));
+    if (saved === undefined) return;
     await writeFile(temporary, JSON.stringify(visit.parse(saved)), { flag: "wx", mode: 0o600 });
     await rename(temporary, path);
   } finally {
@@ -105,30 +109,52 @@ async function updateVisit(
 
 /** Invoke only on a project visit, never on a view poll. Failed/uncertain opens stay unacknowledged. */
 export async function visitNativeProject(
-  input: NativeVisitInput,
+  input: Omit<NativeVisitInput, "signature"> & Readonly<{ signature?: string }>,
   show: () => Promise<void>,
 ): Promise<boolean> {
   let shown = false;
   await updateVisit(input, async (previous) => {
-    const shouldShow = shouldAutoShowCatchUp({
-      now: input.now,
-      currentSignature: input.signature,
-      ...(previous === undefined
-        ? {}
-        : { lastOpenedAt: previous.lastOpenedAt, previousSignature: previous.previousSignature }),
-    });
+    const shouldShow =
+      input.signature !== undefined &&
+      shouldAutoShowCatchUp({
+        now: input.now,
+        currentSignature: input.signature,
+        ...(previous === undefined
+          ? {}
+          : {
+              lastOpenedAt: previous.lastOpenedAt,
+              ...(previous.previousSignature === undefined
+                ? {}
+                : { previousSignature: previous.previousSignature }),
+            }),
+      });
     if (shouldShow) {
       await show();
       shown = true;
     }
+    const signature = input.signature ?? previous?.previousSignature;
     return {
       version: 1,
       project: input.project,
       lastOpenedAt: input.now,
-      previousSignature: input.signature,
+      ...(signature === undefined ? {} : { previousSignature: signature }),
     };
   });
   return shown;
+}
+
+/** First publication fills a known visit's missing baseline without changing its timestamp. */
+export async function recordNativePublication(
+  input: Pick<NativeVisitInput, "home" | "project" | "signature">,
+): Promise<void> {
+  const path = join(input.home, "native-visits", `${repositoryKey(input.project)}.json`);
+  const saved = await readVisit(path, input.project);
+  if (saved === undefined || saved.previousSignature !== undefined) return;
+  await updateVisit(input, async (previous) =>
+    previous === undefined || previous.previousSignature !== undefined
+      ? undefined
+      : { ...previous, previousSignature: input.signature },
+  );
 }
 
 export async function dismissNativeCatchUp(input: NativeVisitInput): Promise<void> {

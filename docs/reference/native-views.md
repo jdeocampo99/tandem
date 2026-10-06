@@ -347,6 +347,9 @@ never auto-show. The host owns visit/dismiss tracking and invokes this pure rule
 locked, atomically replaced `<home>/native-visits/<repositoryKey>.json` files. Its exported
 `maybeShowCatchUp` is called after visible project opening, reconnecting and confirmed switching;
 background `--no-attach` launch defers to the caller's focus hook. Panel opening and polling never
-change visits. A failed opening does not acknowledge the visit. First visits and unchanged work
+change visit timestamps. A visit before the first root publication records its timestamp without
+a signature. The first successful publication fills only that missing baseline; later publications
+preserve it so changes remain detectable on return. Publication never creates a visit or advances
+its timestamp. A failed opening does not acknowledge the visit. First visits and unchanged work
 remain quiet. Dismiss and
 Open what needs me acknowledge the current signature only after confirmed navigation.

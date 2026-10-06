@@ -58,6 +58,10 @@ for (const [terminal, homeTerminal, publishes] of [
         const view = published.parse(JSON.parse(await readFile(path, "utf8")));
         expect(view.model.summary).toEqual({ terminal: "tern", sessionId: endpoint.sessionId });
         expect((await stat(path)).mode & 0o777).toBe(0o600);
+        await expect(stat(join(world.home, "native-visits"))).rejects.toHaveProperty(
+          "code",
+          "ENOENT",
+        );
       } else {
         await expect(stat(join(world.home, "native-views"))).rejects.toHaveProperty(
           "code",
