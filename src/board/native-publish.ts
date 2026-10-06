@@ -65,6 +65,16 @@ export class NativeViewsPublisher {
     });
   }
 
+  /** Resolves once queued publications and the remote reads they started have finished. */
+  async idle(): Promise<void> {
+    let running: Promise<void>;
+    do {
+      running = this.#running;
+      await running;
+    } while (running !== this.#running);
+    await this.#reader.idle();
+  }
+
   /** Finish the last queued publication, then drain provider/GitHub cache reads. */
   async settle(): Promise<void> {
     this.#closed = true;

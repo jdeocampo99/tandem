@@ -1,22 +1,19 @@
 import { expect } from "bun:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
-import { readNativeBundle } from "../../../src/board/native-file.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { type PrReviewRound, prReviewRunDiffPath } from "../../../src/pr-review/state.ts";
 import { withPrWatches } from "../../../src/pr-watch/store.ts";
 import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import { nativeReplyLinks } from "../../../src/session/native-links.ts";
-import { installTerminalPlugin } from "../../../src/terminal-backend/compose.ts";
 import { content } from "../../board/fixtures.ts";
 import {
   SCENARIO_POLICY,
   type ScenarioPullRequest,
   type ScenarioTernProject,
   type ScenarioWorld,
+  scenarioRuntimeTask,
+  seedScenarioRuntime,
   seedScenarioTask,
   seedTernProject,
   withScenario,
@@ -464,7 +461,7 @@ export const inventory: readonly InventoryEntry[] = [
         expect(host.since(mark).flatMap((event) => (event.command ? [event.command] : []))).toEqual(
           ["inbox"],
         );
-        expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(0);
+        expect(await host.unreadAlerts()).toBe(0);
         await host.publish();
         await host.refresh();
         expect((await panel.render()).text).toContain("🔔︎ 0");
@@ -475,7 +472,7 @@ export const inventory: readonly InventoryEntry[] = [
     item: "Loading, unavailable, stale footer; empty sections",
     run: () =>
       withParity(
-        async ({ host, panel, world }) => {
+        async ({ host, panel }) => {
           expect((await panel.render()).text).toEqual(["Waiting for Tandem's project snapshot…"]);
           await host.publish();
           await host.refresh();
@@ -490,14 +487,14 @@ export const inventory: readonly InventoryEntry[] = [
             "Ready · 0",
             "Recently done · 0",
           ]);
-          await writeFile(nativeViewsPath(world.home, world.repoPath), "{broken");
+          await host.corruptPanelView();
           await host.refresh();
           const unavailable = await panel.render();
           expect(unavailable.text).toContain("View unavailable · actions paused");
           const mark = host.cli.length;
           await panel.click("⎇");
           expect(host.cli.length).toBe(mark);
-          await host.publish(host.project, { snapshotAgeMs: 60_000 });
+          await host.publish(host.project, { snapshotAgeMinutes: 1 });
           await host.refresh();
           expect((await panel.render()).text.at(-1)).toBe(
             "⚠ updated 1m ago · no coordinator running",
@@ -549,7 +546,7 @@ export const inventory: readonly InventoryEntry[] = [
         let mark = host.events.length;
         await panel.click(/ api /);
         expect(host.toasts(mark).map((toast) => toast.message)).toEqual([
-          "tandem: Project switcher is stale; wait for the coordinator snapshot\n",
+          "Project switcher is stale; wait for the coordinator snapshot",
         ]);
         world.advanceClock(0.5);
         await host.publish();
@@ -782,6 +779,18 @@ export const inventory: readonly InventoryEntry[] = [
     item: "Stuck banner with Restart and Steer…; message box with model",
     run: () =>
       withParity(async ({ host, panel, world }) => {
+        const worktree = await world.grantLease({ name: "login", holder: "login" });
+        const login = await world.store.read("login");
+        if (login === undefined) throw new Error("missing seeded task");
+        await world.store.update(login.id, login.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          worktree,
+        }));
+        await seedScenarioRuntime(
+          world,
+          scenarioRuntimeTask({ taskId: "login", taskName: "login", worktree }),
+        );
         await panel.click(/^● Fix login/);
         const task = host.screen(host.pane("task"));
         const view = await task.render();
@@ -798,24 +807,27 @@ export const inventory: readonly InventoryEntry[] = [
           "Steers the worker; it reads this at its next safe step",
           "Send ↑",
         ]);
-        let mark = host.events.length;
-        await task.click("Restart");
-        expect(host.toasts(mark).map((toast) => toast.message)).toEqual([
-          "tandem: runtime task login is missing\n",
-        ]);
-        mark = host.events.length;
         await task.click("Steer…");
-        expect(host.since(mark).flatMap((event) => (event.frame ? [event.frame] : []))).toEqual([
-          { pane: task.pane, operations: [["focus", "main.worker-message"]] },
-        ]);
+        expect((await task.render()).focused).toBe("Message the worker…");
         await task.type("try the other port");
         expect((await task.render()).text).toContain("try the other port");
-        mark = host.events.length;
+        let mark = host.events.length;
         await task.press({ name: "enter" });
         expect(host.toasts(mark)).toEqual([]);
         const steered = await world.store.read("login");
         expect(JSON.stringify(steered?.communication)).toContain("try the other port");
         expect((await task.render()).text).not.toContain("try the other port");
+        mark = host.events.length;
+        const ledger = world.trace().length;
+        await task.click("Restart");
+        expect(host.toasts(mark)).toEqual([]);
+        expect((await world.store.read("login"))?.stage).toBe("implementing");
+        expect(traceSince(world, ledger)).toEqual(
+          expect.arrayContaining(["tern new ok", "tern run ok"]),
+        );
+        await host.publish();
+        await host.refresh();
+        expect((await task.render()).text).not.toContain("Stuck");
       }),
   },
   {
@@ -823,7 +835,7 @@ export const inventory: readonly InventoryEntry[] = [
     item: "Unavailable; busy flag during an action; failure toasts; ← Orchestrator",
     run: () =>
       withParity(async ({ host, panel, world }) => {
-        await rm(nativeDetailPath(world.home, world.repoPath, "task-docs.json"));
+        await host.unpublishDetail({ task: "docs" });
         await panel.click(/^● Write docs/);
         expect((await host.screen(host.pane("task")).render()).text).toEqual([
           "Task unavailable",
@@ -842,7 +854,7 @@ export const inventory: readonly InventoryEntry[] = [
         expect(JSON.stringify((await world.store.read("port"))?.communication)).toContain(
           "use the new API",
         );
-        await writeFile(nativeDetailPath(world.home, world.repoPath, "task-port.json"), "{broken");
+        await host.corruptTaskView("port");
         await host.refresh();
         const stale = await task.render();
         expect(stale.text).toContain(
@@ -868,7 +880,7 @@ export const inventory: readonly InventoryEntry[] = [
         const mark = host.events.length;
         await task.click("Open PR #283");
         expect(host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`)).toEqual([
-          "Tandem action failed: tandem: Native pr detail is not ready\n",
+          "Tandem action failed: Native pr detail is not ready",
         ]);
         expect(blockKinds(world)).toEqual(["tandem.panel", "tandem.task"]);
         await task.click("← Orchestrator");
@@ -884,9 +896,7 @@ export const inventory: readonly InventoryEntry[] = [
           repoPath: world.repoPath,
           content: content("Add search"),
         });
-        await rm(nativeDetailPath(world.home, world.repoPath, `brief-${fresh.id}.json`), {
-          force: true,
-        });
+        await host.unpublishDetail({ brief: fresh.id });
         expect(await host.link(`tandem://brief/${fresh.id}`)).toBe(true);
         const loading = host.screen(host.pane("brief"));
         expect((await loading.render()).text).toEqual([
@@ -915,7 +925,7 @@ export const inventory: readonly InventoryEntry[] = [
         ).toEqual(["Add dark mode with a toggle", "NEW", "+"]);
         expect(labels(view)).not.toContain("Edit in browser ↗");
         await brief.click("+", { nth: 2 });
-        await brief.focusField("main.comment");
+        await brief.focusField("Comment on this line…");
         await brief.type("Default to the system theme");
         let editing = await brief.render();
         expect(editing.text).toContain("Comment on this line…");
@@ -935,7 +945,13 @@ export const inventory: readonly InventoryEntry[] = [
         await host.publish();
         await host.refresh();
         expect(await host.link(`tandem://brief/${approved.id}`)).toBe(true);
-        await host.screen(host.pane("brief")).click("Approve");
+        const pending = host.screen(host.pane("brief"));
+        await pending.click("Approve", { hold: true });
+        const sending = await pending.render();
+        expect(sending.text).toContain("Sending…");
+        expect(labels(sending)).not.toContain("Approve");
+        expect(labels(sending).filter((label) => label.startsWith("Request changes"))).toEqual([]);
+        await host.settle();
         expect(blockKinds(world)).not.toContain("tandem.brief");
         expect((await briefs(world).read(approved.id))?.approval).toBeDefined();
       }),
@@ -958,7 +974,7 @@ export const inventory: readonly InventoryEntry[] = [
         expect(host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`)).toEqual([
           "Finish your line comment: Choose Comment or Cancel before submitting the brief.",
         ]);
-        await brief.focusField("main.comment");
+        await brief.focusField("Comment on this line…");
         await brief.type("Keep the old palette");
         await brief.click("Comment");
         const store = briefs(world);
@@ -1042,15 +1058,11 @@ export const inventory: readonly InventoryEntry[] = [
           "Description",
           "Diff",
         ]);
-        let mark = host.events.length;
+        const mark = host.events.length;
         await pr.click("Open PR ↗");
         expect(opened(host, mark)).toEqual([PR_URL]);
-        mark = host.events.length;
         await pr.click("1 unresolved comments");
-        expect(host.since(mark).flatMap((event) => (event.frame ? [event.frame] : []))).toEqual([
-          { pane: pr.pane, operations: [["reveal", "main.content.body.diff.rows.r3", "start"]] },
-        ]);
-        expect((await pr.render()).text).toContain("Why guard here?");
+        expect((await pr.render()).revealed).toContain("Why guard here?");
         await pr.click("#281 ▾");
         expect((await pr.render()).text.slice(0, 3)).toEqual([
           "#281 Ship the port",
@@ -1400,26 +1412,12 @@ export const inventory: readonly InventoryEntry[] = [
       withParity(async (parity) => {
         const { host, world } = parity;
         const other = await otherProject(parity);
-        await host.focus(101);
-        const signature = (await readNativeBundle(world.home, world.repoPath)).changeSignature;
-        const stepAway = async (minutes: number, changed = true) => {
-          await host.focus(Number(other.coordinator.paneId));
-          await visitNativeProject(
-            {
-              home: world.home,
-              project: world.repoPath,
-              now: new Date(Date.parse(world.clock()) - minutes * 60_000).toISOString(),
-              signature: changed ? "before" : (signature ?? ""),
-            },
-            async () => {},
-          );
-          await host.focus(101);
-        };
-        await stepAway(30);
+        await host.focus(Number(parity.project.coordinator.paneId));
+        await host.stepAway(other, 30, true);
         expect(blockKinds(world)).toEqual(["tandem.panel"]);
-        await stepAway(120, false);
+        await host.stepAway(other, 120, false);
         expect(blockKinds(world)).toEqual(["tandem.panel"]);
-        await stepAway(120);
+        await host.stepAway(other, 120, true);
         const catchup = host.screen(host.pane("catchup"));
         const view = await catchup.render();
         expect(view.title).toBe("Welcome back · Tandem");
@@ -1445,10 +1443,10 @@ export const inventory: readonly InventoryEntry[] = [
         const brief = host.screen(host.pane("brief"));
         expect((await brief.render()).title).toBe("Brief · Request brief");
         await brief.click("×");
-        await stepAway(120);
+        await host.stepAway(other, 120, true);
         expect(await host.screen(host.pane("catchup")).press({ name: "escape" })).toBe(true);
         expect(blockKinds(world)).toEqual(["tandem.panel"]);
-        await stepAway(120);
+        await host.stepAway(other, 120, true);
         await host.screen(host.pane("catchup")).click("Dismiss");
         expect(blockKinds(world)).toEqual(["tandem.panel"]);
       }),
@@ -1456,23 +1454,32 @@ export const inventory: readonly InventoryEntry[] = [
   {
     view: "Generic",
     item: "Tandem view did not open; Tandem kept an uncertain view; paused-views warning on return",
-    run: () =>
-      withParity(async ({ host, panel, world }) => {
+    run: async () => {
+      // A Luau failure that changed nothing still toasts once the open path settles it.
+      await withParity(async ({ host, panel, world }) => {
+        await host.fault("newBlock", true);
+        const mark = host.events.length;
+        await panel.click(/^● Fix login/);
+        const failed = host
+          .toasts(mark)
+          .filter((toast) => toast.title === "Tandem view did not open");
+        expect(failed).toHaveLength(1);
+        expect(failed[0]?.message).toEndWith("Native block could not open");
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+      });
+      // A route Tern never delivered leaves no receipt, so the open stays quarantined.
+      await withParity(async ({ host, panel, world }) => {
         await panel.click(/^● Port the terminal/);
         const task = host.screen(host.pane("task"));
-        await host.fault("newBlock", true);
-        let mark = host.events.length;
+        host.dropRoutes = true;
         await panel.click(/^● Fix login/);
-        const failed = host.toasts(mark);
-        expect(failed.map((toast) => toast.title)).toEqual([
-          "Tandem view did not open",
+        host.dropRoutes = false;
+        let mark = host.events.length;
+        await panel.click(/^● Write docs/);
+        expect(host.toasts(mark).map((toast) => toast.title)).toEqual([
           "Tandem couldn't run that action",
         ]);
-        expect(failed[0]?.message).toEndWith("Native block could not open");
-        expect(failed[1]?.message).toBe(
-          "tandem: tern open outcome is unknown; quarantine and keep resources\n",
-        );
-        await host.fault("newBlock", false);
+        expect(blockKinds(world)).toEqual(["tandem.panel", "tandem.task"]);
         mark = host.events.length;
         await task.click("← Orchestrator");
         expect(host.toasts(mark)).toEqual([
@@ -1485,66 +1492,39 @@ export const inventory: readonly InventoryEntry[] = [
           },
         ]);
         expect(blockKinds(world)).toEqual(["tandem.panel", "tandem.task"]);
-      }),
+      });
+    },
   },
   {
     view: "Setup",
     item: "One consent for sidebar autohide and keys",
     run: () =>
       withParity(
-        async ({ world }) => {
-          const consent = async (directory: string, answer: boolean) => {
-            const questions: string[] = [];
-            const printed: string[] = [];
-            // A coordinator start passes the availability it already proved, as here.
-            const ready = await installTerminalPlugin(
-              world.home,
-              {
-                run: world.run,
-                cwd: world.home,
-                binary: "tern",
-                env: { TERN_CONFIG_DIR: join(world.home, directory) },
-                confirm: async (question) => {
-                  questions.push(question);
-                  return answer;
-                },
-                print: (text) => printed.push(text),
-              },
-              { status: "ready" },
-            );
-            const settings: unknown = await readFile(
-              join(world.home, directory, "settings.json"),
-              "utf8",
-            ).then(
-              (text) => JSON.parse(text),
-              () => undefined,
-            );
-            return { ready, questions, printed, settings };
-          };
+        async ({ host, world }) => {
           const question =
             "Hide Tern's sidebar and use Tandem's board, PR, usage and project shortcuts? These settings apply to every Tern window. Your custom shortcuts stay unchanged. Palette commands and panel buttons work either way.";
           const unchanged =
             "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To change this later, switch to Herdr and select Tern again in setup.\n";
           const installed = { keybinds: TERN_KEYBINDS, tabs_autohide: true };
-          expect(await consent("approved", true)).toEqual({
+          expect(await host.offerTernPreferences("approved", true)).toEqual({
             ready: true,
             questions: [question],
             printed: [],
             settings: installed,
           });
-          expect(await consent("approved", false)).toEqual({
+          expect(await host.offerTernPreferences("approved", false)).toEqual({
             ready: true,
             questions: [],
             printed: [],
             settings: installed,
           });
-          expect(await consent("declined", false)).toEqual({
+          expect(await host.offerTernPreferences("declined", false)).toEqual({
             ready: true,
             questions: [question],
             printed: [unchanged],
             settings: undefined,
           });
-          expect(await consent("declined", true)).toEqual({
+          expect(await host.offerTernPreferences("declined", true)).toEqual({
             ready: true,
             questions: [],
             printed: [],

@@ -2,20 +2,15 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { NativeAlerts } from "../../../src/board/native-alerts.ts";
-import { NativeViewsReader } from "../../../src/board/native-read.ts";
-import { readBoard } from "../../../src/board/read.ts";
-import {
-  type BoardSnapshot,
-  publishNativeViews,
-  writeBoardSnapshot,
-} from "../../../src/board/snapshot.ts";
-import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
+import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
+import { readNativeBundle } from "../../../src/board/native-file.ts";
+import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
+import type { CommandRunner } from "../../../src/contracts.ts";
 import { runTerminal } from "../../../src/main.ts";
-import { recordNativePublication } from "../../../src/memory/native-visits.ts";
-import { createTandemService } from "../../../src/service/controller.ts";
+import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { createTandemService, type TandemService } from "../../../src/service/controller.ts";
 import { withNativeInput } from "../../../src/terminal/native-input.ts";
-import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
+import { installTerminalPlugin, terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { luauBinary } from "../../luau.ts";
 import type { ScenarioTernProject, ScenarioWorld } from "../scenario.ts";
 
@@ -25,6 +20,15 @@ const FIRST_LUAU_PANE = 20001;
 const FIRST_LUAU_TAB = 30001;
 /** Staged route and launch timers use 1 ms; anything due this soon belongs to the current gesture. */
 const SETTLE_WINDOW_MS = 50;
+/** The entry files Tern loads first; every other module is reached through `require`. */
+const PluginManifest = z.object({ host: z.string(), window: z.string() });
+/** Only the publisher's open-ended reads are needed to decide whether another tick is due. */
+const PublishedWarnings = z.object({ model: z.object({ warnings: z.array(z.string()) }) });
+
+/** Plugin sources `require` each other as `./name`, without the `.luau` suffix. */
+function moduleName(file: string): string {
+  return `./${file.replace(/\.luau$/u, "")}`;
+}
 
 type Lua = string | number | boolean | undefined | readonly Lua[] | { readonly [key: string]: Lua };
 type Command = Readonly<{ op: string } & { readonly [key: string]: Lua }>;
@@ -73,7 +77,10 @@ const HostEvent = z
     exit: z.object({ pane: z.number(), code: z.number() }),
     toast: Toast,
     open: z.object({ pane: z.number(), url: z.string() }),
-    frame: z.unknown(),
+    frame: z.object({
+      pane: z.number(),
+      operations: list(list(z.union([z.string(), z.number()]))),
+    }),
     write: z.object({ path: z.string(), text: z.string() }),
     process: z.object({
       id: z.number(),
@@ -128,7 +135,15 @@ export type Rendered = Readonly<{
   text: readonly string[];
   spans: readonly Span[];
   actions: readonly Readonly<{ label: string; action: string }>[];
+  /** The field that holds the caret, by its placeholder. */
+  focused: string | undefined;
+  /** The visible strings of the node Tern last scrolled into view. */
+  revealed: readonly string[];
 }>;
+
+type Slot = "layer" | "main" | "dock";
+/** A block's drawn slots in drawing order. */
+type Roots = readonly (readonly [Slot, ViewNode])[];
 
 /** Tern ticks an `elapsed` node itself; draw it as the clock it starts at. */
 function elapsedText(node: ViewNode): string | undefined {
@@ -166,6 +181,44 @@ function clickable(node: ViewNode): Readonly<{ label: string; action: string }>[
         ]
       : [];
   return [...own, ...node.c.flatMap(clickable)];
+}
+
+/** Tern names a node by its view slot and the keys of its keyed ancestors: `main.content.body`. */
+function nodeAt(roots: Roots, id: string): ViewNode | undefined {
+  const [slot, ...keys] = id.split(".");
+  const root = roots.find(([name]) => name === slot)?.[1];
+  return root === undefined ? undefined : descend(root, keys);
+}
+
+function descend(node: ViewNode, keys: readonly string[]): ViewNode | undefined {
+  let rest = keys;
+  if (typeof node.p.key === "string") {
+    if (node.p.key !== keys[0]) return undefined;
+    rest = keys.slice(1);
+    if (rest.length === 0) return node;
+  }
+  for (const child of node.c) {
+    const hit = descend(child, rest);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
+}
+
+function idOf(roots: Roots, match: (node: ViewNode) => boolean): string | undefined {
+  const walk = (node: ViewNode, path: readonly string[]): string | undefined => {
+    const here = typeof node.p.key === "string" ? [...path, node.p.key] : path;
+    if (match(node)) return here.join(".");
+    for (const child of node.c) {
+      const hit = walk(child, here);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  };
+  for (const [slot, root] of roots) {
+    const hit = walk(root, [slot]);
+    if (hit !== undefined) return hit;
+  }
+  return undefined;
 }
 
 /** A Lua long-bracket literal whose level does not occur in the text. */
@@ -217,14 +270,19 @@ export class TernParityHost {
   readonly cli: CliRun[] = [];
   /** When set, `tern open` returns as Tern does but the route never reaches the plugin. */
   dropRoutes = false;
+  /** When set, `tern browser` opens the browser but its reply never reaches Tandem. */
+  loseBrowserReplies = false;
+  /** Tern's frame operations per pane: the field it focused and the node it scrolled to. */
+  readonly frames = new Map<number, { focus?: string; reveal?: string }>();
   readonly #modules: string;
   readonly #host: string;
+  readonly #entries: readonly string[];
   readonly #commands: Command[] = [];
   readonly #lines: string[] = [];
   readonly #files = new Map<string, string>();
   #paneKey: string | undefined;
   readonly #pending: NonNullable<HostEvent["process"]>[] = [];
-  readonly #readers = new Map<string, NativeViewsReader>();
+  readonly #services = new Map<string, TandemService>();
   #next: number | undefined;
   readonly #scratch: string;
   readonly #epochMs: number;
@@ -232,13 +290,14 @@ export class TernParityHost {
   private constructor(
     world: ScenarioWorld,
     project: ScenarioTernProject,
-    modules: string,
+    plugin: Readonly<{ modules: string; entries: readonly string[] }>,
     host: string,
     scratch: string,
   ) {
     this.world = world;
     this.project = project;
-    this.#modules = modules;
+    this.#modules = plugin.modules;
+    this.#entries = plugin.entries;
     this.#host = host;
     this.#scratch = scratch;
     this.#epochMs = Date.parse(world.clock());
@@ -249,13 +308,19 @@ export class TernParityHost {
     const sources = await Promise.all(
       names.map(
         async (name) =>
-          `["./${name.slice(0, -5)}"]=${longString(await readFile(join(PLUGIN, name), "utf8"))}`,
+          `[${JSON.stringify(moduleName(name))}]=${longString(await readFile(join(PLUGIN, name), "utf8"))}`,
       ),
+    );
+    const manifest = PluginManifest.parse(
+      Bun.TOML.parse(await readFile(join(PLUGIN, "plugin.toml"), "utf8")),
     );
     const host = new TernParityHost(
       world,
       project,
-      `local MODULES={${sources.join(",\n")}}\n`,
+      {
+        modules: `local MODULES={${sources.join(",\n")}}\n`,
+        entries: [manifest.host, manifest.window].map(moduleName),
+      },
       await readFile(HOST, "utf8"),
       await mkdtemp("/tmp/tandem-parity-"),
     );
@@ -265,13 +330,22 @@ export class TernParityHost {
   }
 
   async close(): Promise<void> {
-    for (const reader of this.#readers.values()) await reader.settle();
+    for (const service of this.#services.values()) await service.shutdown();
     await rm(this.#scratch, { recursive: true, force: true });
   }
 
+  /** The scenario's commands, except that a lost browser reply fails after Tern acted. */
+  readonly #run: CommandRunner = async (request) => {
+    const result = await this.world.run(request);
+    const [program, verb] = request.argv;
+    if (this.loseBrowserReplies && basename(program ?? "") === "tern" && verb === "browser")
+      return { code: 1, stdout: "", stderr: "tern: the window stopped answering" };
+    return result;
+  };
+
   /** The panel opens the way a coordinator launch opens it, through the Tern backend. */
   async openPanel(project: ScenarioTernProject = this.project): Promise<number> {
-    const id = await terminalBackend(this.world.run, { home: this.world.home }).openPanel({
+    const id = await terminalBackend(this.#run, { home: this.world.home }).openPanel({
       coordinator: project.coordinator,
       cwd: project.worktree.path,
       project: project.repoPath,
@@ -280,56 +354,128 @@ export class TernParityHost {
     return Number(id);
   }
 
+  /** The project's coordinator service, which lives as long as the window. */
+  #service(project: ScenarioTernProject): TandemService {
+    const { home, sessionId, clock, idFactory, poolRoot } = this.world;
+    const existing = this.#services.get(project.repoPath);
+    if (existing !== undefined) return existing;
+    const service = createTandemService({
+      home,
+      sessionId,
+      poolRoot,
+      coordinatorPaneId: project.coordinator.paneId,
+      run: this.#run,
+      clock,
+      idFactory,
+    });
+    this.#services.set(project.repoPath, service);
+    return service;
+  }
+
   /**
-   * One coordinator tick: the board snapshot, alerts and native views, written by the same
-   * functions the coordinator's publisher composes. `snapshotAgeMs` models a board snapshot
-   * that is older than the read that publishes it.
+   * Coordinator ticks through the project's service until its native views stop waiting on
+   * GitHub or provider reads. `snapshotAgeMinutes` models a publisher that reads the board
+   * snapshot after the clock moved on from when the coordinator wrote it.
    */
   async publish(
     project: ScenarioTernProject = this.project,
-    options: Readonly<{ snapshotAgeMs?: number }> = {},
+    options: Readonly<{ snapshotAgeMinutes?: number }> = {},
   ): Promise<void> {
-    const { home, clock, run, sessionId } = this.world;
-    const terminal = terminalBackend(run, { home });
-    const records = await listCoordinatorRecords(home, sessionId);
-    const snapshot: BoardSnapshot = {
-      version: 1,
-      writtenAt: new Date(Date.parse(clock()) - (options.snapshotAgeMs ?? 0)).toISOString(),
-      board: await readBoard(home, clock),
-      coordinators: records.map((record) => ({
-        repoPath: record.repoPath,
-        project: basename(record.repoPath),
-        terminal: record.endpoint.terminal,
-        workspaceId: record.endpoint.workspaceId,
-        paneId: record.endpoint.paneId,
-      })),
-    };
-    await writeBoardSnapshot(home, snapshot);
-    const sessions = new Map(
-      records.map((record) => [
-        record.repoPath,
-        { terminal: "tern", sessionId: record.endpoint.sessionId },
-      ]),
-    );
-    const deps = { home, clock, run, terminal };
-    const reader = this.#readers.get(project.repoPath) ?? new NativeViewsReader(deps);
-    this.#readers.set(project.repoPath, reader);
-    await new NativeAlerts(deps).observe(snapshot, project.repoPath, sessionId);
-    for (let attempt = 0; ; attempt++) {
-      const view = await publishNativeViews(home, project.repoPath, () =>
-        reader.read(snapshot, project.repoPath, sessions),
+    const service = this.#service(project);
+    const age = options.snapshotAgeMinutes ?? 0;
+    for (let tick = 0; tick < 3; tick++) {
+      const board = await service.board();
+      this.world.advanceClock(-age);
+      await service.writeBoardSnapshot(board);
+      // The publisher reads the clock only after its first file I/O, so it sees the restored time.
+      this.world.advanceClock(age);
+      await service.nativeViewsIdle();
+      const { model } = PublishedWarnings.parse(
+        JSON.parse(await readFile(nativeViewsPath(this.world.home, project.repoPath), "utf8")),
       );
-      const refreshing = view.bundle.warnings.some((warning) => warning.includes("refreshing"));
-      if (!refreshing || attempt > 40) {
-        await recordNativePublication({
-          home,
-          project: project.repoPath,
-          signature: view.bundle.changeSignature,
-        });
-        return;
-      }
-      await Bun.sleep(5);
+      if (!model.warnings.some((warning) => warning.includes("refreshing"))) return;
     }
+    throw new Error("native views were still refreshing after three coordinator ticks");
+  }
+
+  /** Delivered alerts the user has not opened in the project's inbox. */
+  async unreadAlerts(project: ScenarioTernProject = this.project): Promise<number> {
+    return (await nativeAlertCounts(this.world.home, project.repoPath)).unread;
+  }
+
+  /** The panel's published file stops parsing, as a torn or foreign write leaves it. */
+  async corruptPanelView(): Promise<void> {
+    await writeFile(nativeViewsPath(this.world.home, this.project.repoPath), "{broken");
+  }
+
+  /** A task page's published detail stops parsing. */
+  async corruptTaskView(taskId: string): Promise<void> {
+    await writeFile(this.#detail(`task-${taskId}.json`), "{broken");
+  }
+
+  /** A task page's or brief's detail is not published yet. */
+  async unpublishDetail(view: Readonly<{ task: string } | { brief: string }>): Promise<void> {
+    await rm(this.#detail("task" in view ? `task-${view.task}.json` : `brief-${view.brief}.json`), {
+      force: true,
+    });
+  }
+
+  #detail(file: string): string {
+    return nativeDetailPath(this.world.home, this.project.repoPath, file);
+  }
+
+  /**
+   * The user works in `away` and comes back after `minutes`; `changed` says whether this
+   * project's views changed meanwhile. Visit gaps read the wall clock, so the visit is recorded
+   * as if it happened `minutes` ago.
+   */
+  async stepAway(away: ScenarioTernProject, minutes: number, changed: boolean): Promise<void> {
+    const { home, repoPath } = this.world;
+    const signature = (await readNativeBundle(home, this.project.repoPath)).changeSignature;
+    await this.focus(Number(away.coordinator.paneId));
+    await visitNativeProject(
+      {
+        home,
+        project: repoPath,
+        now: new Date(Date.parse(this.world.clock()) - minutes * 60_000).toISOString(),
+        signature: changed ? "before" : (signature ?? ""),
+      },
+      async () => {},
+    );
+    await this.focus(Number(this.project.coordinator.paneId));
+  }
+
+  /**
+   * A coordinator start offers Tern's sidebar and keys under `configDirectory`, answering the
+   * consent question with `answer`. Returns what the user saw and the settings Tern now has.
+   */
+  async offerTernPreferences(configDirectory: string, answer: boolean) {
+    const { home } = this.world;
+    const questions: string[] = [];
+    const printed: string[] = [];
+    const ready = await installTerminalPlugin(
+      home,
+      {
+        run: this.#run,
+        cwd: home,
+        binary: "tern",
+        env: { TERN_CONFIG_DIR: join(home, configDirectory) },
+        confirm: async (question) => {
+          questions.push(question);
+          return answer;
+        },
+        print: (text) => printed.push(text),
+      },
+      { status: "ready" },
+    );
+    const settings: unknown = await readFile(
+      join(home, configDirectory, "settings.json"),
+      "utf8",
+    ).then(
+      (text) => JSON.parse(text),
+      () => undefined,
+    );
+    return { ready, questions, printed, settings };
   }
 
   /** Lets every open block poll its file again, as Tern's one-second watch timers do. */
@@ -376,8 +522,16 @@ export class TernParityHost {
     return this.events.slice(mark);
   }
 
+  /**
+   * Toasts since `mark` as the user reads them. A CLI failure reaches Luau as stderr, so its
+   * `tandem: ` prefix and line ending are transport, not text.
+   */
   toasts(mark = 0): readonly Toast[] {
-    return this.since(mark).flatMap((event) => (event.toast === undefined ? [] : [event.toast]));
+    return this.since(mark).flatMap((event) =>
+      event.toast === undefined
+        ? []
+        : [{ ...event.toast, message: event.toast.message.replace(/^tandem: /u, "").trimEnd() }],
+    );
   }
 
   /** Every registered window command, and whether Tern's palette lists it. */
@@ -433,12 +587,12 @@ export class TernParityHost {
           TANDEM_SESSION: world.sessionId,
           TANDEM_POOL_ROOT: world.poolRoot,
         },
-        run: world.run,
-        terminal: terminalBackend(world.run, { home: world.home }),
+        run: this.#run,
+        terminal: terminalBackend(this.#run, { home: world.home }),
         createService: (options) =>
           createTandemService({
             ...options,
-            run: world.run,
+            run: this.#run,
             clock: world.clock,
             idFactory: world.idFactory,
           }),
@@ -471,6 +625,7 @@ export class TernParityHost {
         firstPaneId: FIRST_LUAU_PANE,
         firstTabId: FIRST_LUAU_TAB,
         env: { TERN_WINDOW_KEY: "parity-window" },
+        entries: this.#entries,
       })}\n`,
       `local COMMANDS={${this.#commands.map(lua).join(",\n")}}\n`,
       this.#host,
@@ -532,6 +687,13 @@ export class TernParityHost {
         await writeFile(event.write.path, event.write.text, { mode: 0o600 });
       }
       if (event.process !== undefined) this.#pending.push(event.process);
+      if (event.frame !== undefined) {
+        const frame = this.frames.get(event.frame.pane) ?? {};
+        for (const [operation, id] of event.frame.operations)
+          if ((operation === "focus" || operation === "reveal") && typeof id === "string")
+            frame[operation] = id;
+        this.frames.set(event.frame.pane, frame);
+      }
     }
   }
 
@@ -586,19 +748,33 @@ export class Screen {
   }
 
   async render(): Promise<Rendered> {
+    return (await this.#draw()).rendered;
+  }
+
+  async #draw(): Promise<Readonly<{ roots: Roots; rendered: Rendered }>> {
     const line = await this.#host.send({ op: "render", pane: this.pane });
     const view = line.events.find((event) => event.view !== undefined)?.view;
     if (view === undefined) throw new Error(`pane ${this.pane} did not render`);
-    const roots = [view.tree?.layer, view.tree?.main, view.tree?.dock].filter(
-      (node): node is ViewNode => node !== undefined,
-    );
-    const drawn = roots.flatMap((root) => spans(root));
+    const roots: Roots = (["layer", "main", "dock"] as const).flatMap((slot) => {
+      const node = view.tree?.[slot];
+      return node === undefined ? [] : [[slot, node] as const];
+    });
+    const drawn = roots.flatMap(([, root]) => spans(root));
+    const frame = this.#host.frames.get(this.pane);
+    const focused = frame?.focus === undefined ? undefined : nodeAt(roots, frame.focus);
+    const revealed = frame?.reveal === undefined ? undefined : nodeAt(roots, frame.reveal);
+    const placeholder = focused?.p.placeholder;
     return {
-      kind: view.kind,
-      title: view.title,
-      text: drawn.map((span) => span.text),
-      spans: drawn,
-      actions: roots.flatMap(clickable),
+      roots,
+      rendered: {
+        kind: view.kind,
+        title: view.title,
+        text: drawn.map((span) => span.text),
+        spans: drawn,
+        actions: roots.flatMap(([, root]) => clickable(root)),
+        focused: typeof placeholder === "string" ? placeholder : undefined,
+        revealed: revealed === undefined ? [] : spans(revealed).map((span) => span.text),
+      },
     };
   }
 
@@ -636,8 +812,12 @@ export class Screen {
     await this.#host.settle();
   }
 
-  /** Tern's focus event when the user clicks into a field. */
-  async focusField(id: string): Promise<void> {
+  /** The user clicks into the field whose placeholder is `placeholder`; Tern reports the focus. */
+  async focusField(placeholder: string): Promise<void> {
+    const { roots } = await this.#draw();
+    const id = idOf(roots, (node) => node.p.placeholder === placeholder);
+    if (id === undefined) throw new Error(`no field reads "${placeholder}" in pane ${this.pane}`);
+    this.#host.frames.set(this.pane, { ...this.#host.frames.get(this.pane), focus: id });
     await this.#host.send({ op: "event", pane: this.pane, event: { ev: "focus", id } });
     await this.#host.settle();
   }

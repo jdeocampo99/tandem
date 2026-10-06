@@ -457,8 +457,7 @@ end
 
 local operations = {}
 function operations.boot()
-	load("./host")
-	load("./window")
+	for _, entry in CONFIG.entries do load(entry) end
 end
 function operations.sync(command)
 	local present = {}
