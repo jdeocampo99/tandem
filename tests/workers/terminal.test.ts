@@ -129,9 +129,9 @@ test("review can coexist with a completed interactive writer, but not a busy del
     };
     const run = nativeRunner(inspection);
     await writeWorkerTerminal(job.jobPath, { ...state, phase: "busy", completed: false });
-    await expect(openReviewerEndpoint(terminalBackend(run, { terminal: "herdr" }), input)).rejects.toBeInstanceOf(
-      EndpointBusyError,
-    );
+    await expect(
+      openReviewerEndpoint(terminalBackend(run, { terminal: "herdr" }), input),
+    ).rejects.toBeInstanceOf(EndpointBusyError);
     await writeWorkerTerminal(job.jobPath, state);
     const reviewer = await openReviewerEndpoint(terminalBackend(run, { terminal: "herdr" }), input);
     expect(reviewer.paneId).toBe("review-pane");
@@ -273,7 +273,10 @@ test("a fresh pane still starting its shell is awaited before launch", async () 
     const settledRunner = nativeRunner(settled);
     const run: typeof runner = (request) =>
       ++calls < 3 ? runner(request) : settledRunner(request);
-    await prepareWorkerTerminal(terminalBackend(run, { terminal: "herdr" }), { endpoint, cwd: root });
+    await prepareWorkerTerminal(terminalBackend(run, { terminal: "herdr" }), {
+      endpoint,
+      cwd: root,
+    });
     expect(calls).toBeGreaterThan(2);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -421,12 +424,14 @@ test("closing a finished Claude Code worker sends Claude Code's two exit keys at
         }
       });
     }, 10);
-    await prepareWorkerTerminal(terminalBackend(run, { terminal: "herdr" }), { endpoint, cwd: root, job }).finally(
-      async () => {
-        clearInterval(answering);
-        await acknowledgements;
-      },
-    );
+    await prepareWorkerTerminal(terminalBackend(run, { terminal: "herdr" }), {
+      endpoint,
+      cwd: root,
+      job,
+    }).finally(async () => {
+      clearInterval(answering);
+      await acknowledgements;
+    });
     expect(sent).toEqual([["ctrl+d", "ctrl+d"]]);
   } finally {
     await rm(root, { recursive: true, force: true });

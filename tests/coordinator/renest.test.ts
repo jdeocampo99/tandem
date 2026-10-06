@@ -202,7 +202,9 @@ test("an unreadable Herdr session is a warning, never an error", async () => {
   await withWorld(async (world) => {
     await saveCoordinator(world.home, world.tagalog, "w1G");
     const report = await renestWorkspaces(
-      terminalBackend(async () => ({ code: 1, stdout: "", stderr: "no server" }), { terminal: "herdr" }),
+      terminalBackend(async () => ({ code: 1, stdout: "", stderr: "no server" }), {
+        terminal: "herdr",
+      }),
       { home: world.home, sessionId: SESSION, cwd: world.home, apply: true },
     );
     expect(report.moved).toBe(0);

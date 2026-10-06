@@ -365,7 +365,11 @@ test("closes a lone panel left after the coordinator's pane already closed", asy
     );
 
     expect(
-      await retireCoordinatorWorkspace(terminalBackend(runner.run, { terminal: "herdr" }), join(root, "home"), record),
+      await retireCoordinatorWorkspace(
+        terminalBackend(runner.run, { terminal: "herdr" }),
+        join(root, "home"),
+        record,
+      ),
     ).toEqual({
       outcome: "closed",
     });

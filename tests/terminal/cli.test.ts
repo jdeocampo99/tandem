@@ -689,6 +689,8 @@ test("CLI checks a new Claude Code coordinator's plugins before starting anythin
     const poolRoot = join(root, "coordinator-pool");
     const cleanRepo = join(poolRoot, "coordinator-worktree");
     await mkdir(repo, { recursive: true });
+    await mkdir(join(root, "home"), { recursive: true });
+    await writeFile(join(root, "home", "settings.toml"), 'terminal = "herdr"\n', "utf8");
     const base = defaultPolicy();
     const policy = {
       ...base,
@@ -1153,6 +1155,8 @@ async function withRunningOmpCoordinator(
     const cleanRepo = join(poolRoot, "coordinator-worktree");
     await mkdir(repo, { recursive: true });
     await mkdir(cleanRepo, { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
     await writeOmpProbe(root);
     const fixturePath = `${root}:/usr/bin:/bin`;
     const model = defaultPolicy().models.coordinator;

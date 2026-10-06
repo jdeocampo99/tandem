@@ -95,7 +95,10 @@ test("a manual verification item never reaches review as something to judge, and
 
     // The reviewer passes with no finding about the smoke test, and the task comes back clean.
     const endpoint = review.endpoint as Endpoint;
-    await terminalBackend(world.run, { terminal: "herdr" }).interrupt({ endpoint, cwd: lease.path });
+    await terminalBackend(world.run, { terminal: "herdr" }).interrupt({
+      endpoint,
+      cwd: lease.path,
+    });
     await writeWorkerReceipt(workerReceiptPath(review.jobPath), {
       schemaVersion: 1,
       jobId: review.id,

@@ -11,11 +11,7 @@ export type OnboardingFacts = Readonly<{
   readonly selfImprovementChosen: boolean;
 }>;
 
-export type OnboardingStep =
-  | "models"
-  | "code-folders"
-  | "self-improvement"
-  | "repositories";
+export type OnboardingStep = "models" | "code-folders" | "self-improvement" | "repositories";
 
 /**
  * In the order setup walks them. The fixed-choice questions come before repositories, so the

@@ -545,11 +545,15 @@ test("reconnects to a coordinator whose record predates harness choice as OMP", 
       ),
     ]);
 
-    const found = await findRunningCoordinator(runner.run, terminalBackend(runner.run, { terminal: "herdr" }), {
-      home: values.home,
-      sessionId: "tandem",
-      repoPath: values.repoA,
-    });
+    const found = await findRunningCoordinator(
+      runner.run,
+      terminalBackend(runner.run, { terminal: "herdr" }),
+      {
+        home: values.home,
+        sessionId: "tandem",
+        repoPath: values.repoA,
+      },
+    );
     expect(found?.harness).toBe(DEFAULT_HARNESS);
     expect(found).toEqual(values.recordA);
   } finally {
@@ -605,11 +609,15 @@ test("treats shell-only or missing panes as stale without deleting the stored le
       result(snapshotPayload()),
     ]);
     await expect(
-      findRunningCoordinator(missingPane.run, terminalBackend(missingPane.run, { terminal: "herdr" }), {
-        home: values.home,
-        sessionId: "tandem",
-        repoPath: values.repoA,
-      }),
+      findRunningCoordinator(
+        missingPane.run,
+        terminalBackend(missingPane.run, { terminal: "herdr" }),
+        {
+          home: values.home,
+          sessionId: "tandem",
+          repoPath: values.repoA,
+        },
+      ),
     ).resolves.toBeUndefined();
     await expect(listCoordinatorRecords(values.home, "tandem")).resolves.toEqual([values.recordA]);
   } finally {
@@ -639,11 +647,15 @@ test("treats the native inactive-server response as stale without probing or rep
     await saveCoordinatorRecord(values.home, values.recordA);
     const staleRecord = scriptedRunner([result(inactiveServer, 1), result(inactiveServer, 1)]);
     await expect(
-      findRunningCoordinator(staleRecord.run, terminalBackend(staleRecord.run, { terminal: "herdr" }), {
-        home: values.home,
-        sessionId: "tandem",
-        repoPath: values.repoA,
-      }),
+      findRunningCoordinator(
+        staleRecord.run,
+        terminalBackend(staleRecord.run, { terminal: "herdr" }),
+        {
+          home: values.home,
+          sessionId: "tandem",
+          repoPath: values.repoA,
+        },
+      ),
     ).resolves.toBeUndefined();
     await expect(listCoordinatorRecords(values.home, "tandem")).resolves.toEqual([values.recordA]);
   } finally {
@@ -827,11 +839,15 @@ test("fails closed on a live foreign process and leaves the record untouched", a
       result(processPayload(values.recordA)),
     ]);
     await expect(
-      findRunningCoordinator(cwdMismatch.run, terminalBackend(cwdMismatch.run, { terminal: "herdr" }), {
-        home: values.home,
-        sessionId: "tandem",
-        repoPath: values.repoA,
-      }),
+      findRunningCoordinator(
+        cwdMismatch.run,
+        terminalBackend(cwdMismatch.run, { terminal: "herdr" }),
+        {
+          home: values.home,
+          sessionId: "tandem",
+          repoPath: values.repoA,
+        },
+      ),
     ).rejects.toThrow(/cwd .* does not match lease/u);
     await expect(
       readFile(recordFile(values.home, "tandem", values.repoA), "utf8"),
@@ -856,11 +872,15 @@ test("resets selected owned idle and done coordinators without touching unrelate
       { record: unrelated, agentStatus: "working" },
     ]);
 
-    const stopped = await resetCoordinators(runner.run, terminalBackend(runner.run, { terminal: "herdr" }), {
-      home: values.home,
-      sessionId: "tandem",
-      repoPaths: [values.repoA, values.repoB],
-    });
+    const stopped = await resetCoordinators(
+      runner.run,
+      terminalBackend(runner.run, { terminal: "herdr" }),
+      {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA, values.repoB],
+      },
+    );
 
     expect(stopped.map((record) => record.repoPath).sort()).toEqual(
       [values.repoA, values.repoB].sort(),
@@ -898,14 +918,24 @@ for (const force of [false, true]) {
       const request = { home: values.home, sessionId: "tandem", repoPaths: [values.repoA], force };
 
       expect(
-        (await resetCoordinators(runner.run, terminalBackend(runner.run, { terminal: "herdr" }), request)).map(
-          (record) => record.repoPath,
-        ),
+        (
+          await resetCoordinators(
+            runner.run,
+            terminalBackend(runner.run, { terminal: "herdr" }),
+            request,
+          )
+        ).map((record) => record.repoPath),
       ).toEqual([values.repoA]);
       expect(runner.panes.get(values.recordA.endpoint.paneId)?.present).toBe(false);
       expect(runner.workspaces.has(values.recordA.endpoint.workspaceId)).toBe(false);
       expect(runner.panes.get(unrelated.endpoint.paneId)?.present).toBe(true);
-      expect(await resetCoordinators(runner.run, terminalBackend(runner.run, { terminal: "herdr" }), request)).toEqual([]);
+      expect(
+        await resetCoordinators(
+          runner.run,
+          terminalBackend(runner.run, { terminal: "herdr" }),
+          request,
+        ),
+      ).toEqual([]);
       expect([...runner.workspaces.keys()]).toEqual([unrelated.endpoint.workspaceId]);
     } finally {
       await cleanup(values.root);
@@ -1020,11 +1050,15 @@ test("allows reset when historical worker endpoints are no longer live", async (
     await seedTask(values.home, values.repoA, "implementation", [historicalEndpoint]);
     const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "idle" }]);
 
-    const stopped = await resetCoordinators(runner.run, terminalBackend(runner.run, { terminal: "herdr" }), {
-      home: values.home,
-      sessionId: "tandem",
-      repoPaths: [values.repoA],
-    });
+    const stopped = await resetCoordinators(
+      runner.run,
+      terminalBackend(runner.run, { terminal: "herdr" }),
+      {
+        home: values.home,
+        sessionId: "tandem",
+        repoPaths: [values.repoA],
+      },
+    );
 
     expect(stopped.map((record) => record.repoPath)).toEqual([values.repoA]);
     expect(
@@ -1091,11 +1125,15 @@ test("allows reset past a settled terminal stop intent but refuses a quarantined
         presentations: [],
       });
       const runner = nativeResetRunner([{ record: values.recordA, agentStatus: "idle" }]);
-      const reset = resetCoordinators(runner.run, terminalBackend(runner.run, { terminal: "herdr" }), {
-        home: values.home,
-        sessionId: "tandem",
-        repoPaths: [values.repoA],
-      });
+      const reset = resetCoordinators(
+        runner.run,
+        terminalBackend(runner.run, { terminal: "herdr" }),
+        {
+          home: values.home,
+          sessionId: "tandem",
+          repoPaths: [values.repoA],
+        },
+      );
 
       if (phase === "cancelled") {
         expect((await reset).map((record) => record.repoPath)).toEqual([values.repoA]);

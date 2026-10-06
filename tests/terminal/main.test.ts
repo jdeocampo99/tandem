@@ -1876,7 +1876,10 @@ test("update puts task workspaces back under the replacement coordinator", async
     tandemCheckout: repo,
     processEnvironment: {},
     run: (request) => (request.argv[0] === "herdr" ? sidebar.run(request) : runCommand(request)),
-    terminal: terminalBackend(sidebar.run, { terminal: "herdr", herdr: { moveWorkspace: sidebar.moveWorkspace } }),
+    terminal: terminalBackend(sidebar.run, {
+      terminal: "herdr",
+      herdr: { moveWorkspace: sidebar.moveWorkspace },
+    }),
     service: fake.service,
     application,
     isTTY: false,
@@ -1967,7 +1970,10 @@ test("fix re-nests task workspaces without asking, and says so in text and JSON"
       processEnvironment: {},
       isTTY: false,
       run: run(sidebar),
-      terminal: terminalBackend(run(sidebar), { terminal: "herdr", herdr: { moveWorkspace: sidebar.moveWorkspace } }),
+      terminal: terminalBackend(run(sidebar), {
+        terminal: "herdr",
+        herdr: { moveWorkspace: sidebar.moveWorkspace },
+      }),
       stdout: (text) => output.push(text),
       stderr: (text) => output.push(text),
     });

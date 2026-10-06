@@ -622,7 +622,11 @@ test("a finished scout kept open for mockups is closed when building starts, kee
         idFactory: () => "unused",
       });
       await closeFinishedScoutPanes(
-        { store, runtimePath: runtimeFile(home), terminal: terminalBackend(run, { terminal: "herdr" }) },
+        {
+          store,
+          runtimePath: runtimeFile(home),
+          terminal: terminalBackend(run, { terminal: "herdr" }),
+        },
         "task-1",
       ).finally(stop);
 
@@ -645,7 +649,11 @@ test("closing finished scout panes leaves a scout that is not finished alone", a
       idFactory: () => "unused",
     });
     await closeFinishedScoutPanes(
-      { store, runtimePath: runtimeFile(home), terminal: terminalBackend(run, { terminal: "herdr" }) },
+      {
+        store,
+        runtimePath: runtimeFile(home),
+        terminal: terminalBackend(run, { terminal: "herdr" }),
+      },
       "task-1",
     );
     expect(world.closedPanes).toEqual([]);

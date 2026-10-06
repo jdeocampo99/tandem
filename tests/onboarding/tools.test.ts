@@ -22,7 +22,10 @@ test("a ready machine passes every check", async () => {
     "git --version": ok("git version 2.50.0"),
     "gh auth status": ok("Logged in"),
   });
-  const checks = await checkTools(run, terminalBackend(run, { terminal: "herdr" }), { cwd: "/tmp", sessionId: "tandem" });
+  const checks = await checkTools(run, terminalBackend(run, { terminal: "herdr" }), {
+    cwd: "/tmp",
+    sessionId: "tandem",
+  });
   expect(checks.every((check) => check.ok)).toBe(true);
 });
 
@@ -34,7 +37,10 @@ test("each missing tool names the command that fixes it", async () => {
     "git --version": ok("git version 2.50.0"),
     "gh auth status": { code: 1, stdout: "", stderr: "not logged in" },
   });
-  const checks = await checkTools(run, terminalBackend(run, { terminal: "herdr" }), { cwd: "/tmp", sessionId: "tandem" });
+  const checks = await checkTools(run, terminalBackend(run, { terminal: "herdr" }), {
+    cwd: "/tmp",
+    sessionId: "tandem",
+  });
   const byName = new Map(checks.map((check) => [check.name, check]));
   expect(byName.get("Herdr")).toMatchObject({ ok: false, detail: "0.7.5, needs 0.8.2+" });
   expect(byName.get("OMP")).toMatchObject({

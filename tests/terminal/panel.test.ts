@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -325,6 +325,7 @@ test("tandem panel home finds the project from Herdr's plugin context, not the i
   const home = await mkdtemp(join(tmpdir(), "tandem-panel-action-"));
   try {
     await writeBoardSnapshot(home, SNAPSHOT);
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
     const ran: (readonly string[])[] = [];
     const result = await runTerminal(["panel", "home", "--home", home], {
       cwd: "/plugin",
@@ -395,7 +396,9 @@ function fakeTerminal() {
       readSnapshot: async () => SNAPSHOT,
       run: async () => ({ code: 0, stdout: "", stderr: "" }),
       terminal: {
-        ...terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" }), { terminal: "herdr" }),
+        ...terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" }), {
+          terminal: "herdr",
+        }),
         focusWorkspace: async () => ({ focused: false, code: 1, detail: "no such workspace" }),
         focusAgent: async () => false,
       },

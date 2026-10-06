@@ -69,7 +69,9 @@ test("opens the panel right of the coordinator and records it", async () => {
       throw new Error(`unexpected ${command}`);
     };
 
-    expect(await openPanelBeside(terminalBackend(run, { terminal: "herdr" }), home, record)).toBeUndefined();
+    expect(
+      await openPanelBeside(terminalBackend(run, { terminal: "herdr" }), home, record),
+    ).toBeUndefined();
 
     expect(calls.map((call) => call.argv.slice(3))).toEqual([
       [
@@ -114,17 +116,25 @@ test("keeps a recorded panel that is still open, and reports a failed open witho
   const { root, home, record } = await fixture();
   try {
     await openPanelBeside(
-      terminalBackend(async (request: CommandRequest) =>
-        request.argv[3] === "plugin" ? ok({ plugin_pane: { pane: { pane_id: "w1:p2" } } }) : ok({}), { terminal: "herdr" }),
+      terminalBackend(
+        async (request: CommandRequest) =>
+          request.argv[3] === "plugin"
+            ? ok({ plugin_pane: { pane: { pane_id: "w1:p2" } } })
+            : ok({}),
+        { terminal: "herdr" },
+      ),
       home,
       record,
     );
     const calls: string[] = [];
     const stillOpen = await openPanelBeside(
-      terminalBackend(async (request: CommandRequest) => {
-        calls.push(request.argv.slice(3).join(" "));
-        return ok({ pane: { pane_id: "w1:p2", workspace_id: "w1", label: "Tandem panel" } });
-      }, { terminal: "herdr" }),
+      terminalBackend(
+        async (request: CommandRequest) => {
+          calls.push(request.argv.slice(3).join(" "));
+          return ok({ pane: { pane_id: "w1:p2", workspace_id: "w1", label: "Tandem panel" } });
+        },
+        { terminal: "herdr" },
+      ),
       home,
       record,
     );
@@ -132,8 +142,11 @@ test("keeps a recorded panel that is still open, and reports a failed open witho
     expect(calls).toEqual(["pane get w1:p2"]);
 
     const failure = await openPanelBeside(
-      terminalBackend(async (request: CommandRequest) =>
-        request.argv[4] === "get" ? notFound("pane_not_found") : notFound("plugin_not_found"), { terminal: "herdr" }),
+      terminalBackend(
+        async (request: CommandRequest) =>
+          request.argv[4] === "get" ? notFound("pane_not_found") : notFound("plugin_not_found"),
+        { terminal: "herdr" },
+      ),
       home,
       record,
     );
