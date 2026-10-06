@@ -172,6 +172,20 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       await until(async () => JSON.stringify(await ctl("tree")).includes("+ Open another project"));
       await ctl("shot", "02-projects");
       await ctl("key", "escape");
+      const envelope = JSON.parse(await readFile(path, "utf8")) as {
+        model: Record<string, unknown>;
+      };
+      await writeFile(
+        path,
+        nativeViewText("panel", {
+          ...envelope.model,
+          panel: { ...panel, footer: undefined },
+        }),
+      );
+      await until(async () => !JSON.stringify(await ctl("tree")).includes("⌘⇧B board"));
+      const declined = JSON.stringify(await ctl("tree"));
+      expect(declined).toContain("⎇");
+      expect(declined).toContain("▦");
       const row = visit((await ctl("tree")).tree as Node[], "tdp-row")?.rect;
       if (!row) throw new Error("task row missing");
       await ctl("click", String((row[0] ?? 0) + 80), String((row[1] ?? 0) + 12));
@@ -181,6 +195,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       const argv = await readFile(join(root, "actions.log"), "utf8");
       expect(argv).toContain(
         `native\nopen\nbrief\ntern\n--home\n${home}\n--pane\n${pane}\n--cwd\n${root}`,
+      );
+      await ctl("key", "down");
+      await ctl("key", "enter");
+      await until(async () =>
+        (await readFile(join(root, "actions.log"), "utf8")).includes("open\ntask\nadapter"),
+      );
+      expect(await readFile(join(root, "actions.log"), "utf8")).toContain(
+        "native\nopen\ntask\nadapter",
       );
 
       const limit = visit((await ctl("tree")).tree as Node[], "tdp-limit")?.rect;
@@ -241,6 +263,13 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,
       );
+      const behindBoard = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "task", taskId: "behind-board" } },
+        root,
+        "task",
+        "task",
+        path,
+      );
       const board = await host.open(
         { coordinator, cwd: root, home, view: { kind: "board" } },
         root,
@@ -253,7 +282,27 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           (entry) => entry.block.id === board.paneId,
         )?.tab.id,
       ).not.toBe(coordinator.tabId);
-      await terminal.focusAgent({ sessionId: "fixture", cwd: root, paneId: coordinator.paneId });
+      await host.open(
+        {
+          coordinator,
+          cwd: root,
+          home,
+          view: { kind: "orchestrator" },
+          origin: { paneId: board.paneId, cwd: root },
+        },
+        root,
+        "panel",
+        "return",
+        path,
+      );
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          (entry) => entry.block.id === behindBoard.paneId,
+        ),
+      ).toBe(false);
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
       const other = await terminal.createWorkspace({
         sessionId: "other",
         cwd: root,

@@ -185,5 +185,6 @@ export function panelFixture(project: string): NativePanelView {
       },
       { title: "Recently done", count: 3, rows: [] },
     ],
+    footer: "⌘⇧B board · ⌘⇧P PRs · ⌘⇧U usage",
   };
 }
