@@ -100,8 +100,15 @@ export async function inspect(
     argv0: entry.argv[0],
     commandLine: undefined,
   }));
+  // Daemon-hosted Tandem blocks have no PTY. Only the native program identity proves
+  // this exception; a title or partial/contradictory process response never does.
+  const tandemBlock =
+    /^tandem\.[a-z][a-z0-9-]*$/u.test(found.block.program ?? "") &&
+    proc.child === null &&
+    proc.group === null &&
+    proc.foreground === null;
   // A live pane without native process evidence is ambiguous, never assumed idle.
-  if (found.block.live && proc.child === null)
+  if (found.block.live && proc.child === null && !tandemBlock)
     throw new AdapterProtocolError("tern process", "live block has no child process", "");
   return {
     endpoint: target.endpoint,
@@ -120,7 +127,7 @@ export async function inspect(
     activeWorker:
       (proc.foreground !== null && proc.child !== null && proc.foreground.pid !== proc.child.pid) ||
       foregroundProcesses.some(isWorkerProcess) ||
-      (found.block.live && proc.foreground === null) ||
+      (found.block.live && proc.foreground === null && !tandemBlock) ||
       (proc.child !== null &&
         isWorkerProcess({ ...proc.child, argv0: proc.child.argv[0], commandLine: undefined })),
   };

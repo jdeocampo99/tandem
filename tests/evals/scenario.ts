@@ -183,6 +183,7 @@ export type ScenarioSnapshot = Readonly<{
 type PaneState = {
   present: boolean;
   title?: string;
+  blockProgram?: string;
   ternSessionId?: string;
   workspaceId: string;
   tabId: string;
@@ -222,7 +223,12 @@ export type ScenarioWorld = Readonly<{
   readonly store: TaskStore;
   readonly failAt: (failure: ScenarioFailure) => void;
   readonly openPane: (
-    input: Readonly<{ readonly paneId: string; readonly cwd: string }>,
+    input: Readonly<{
+      readonly paneId: string;
+      readonly cwd: string;
+      /** A daemon-hosted Tern block, with no PTY child or foreground process. */
+      readonly blockProgram?: string;
+    }>,
   ) => Endpoint;
   readonly removePane: (paneId: string) => void;
   readonly titlePane: (paneId: string, title: string) => void;
@@ -466,9 +472,7 @@ export async function createScenarioWorld(
   };
   checkoutFor(repoPath).branch = "main";
 
-  const openPane = (
-    input: Readonly<{ readonly paneId: string; readonly cwd: string }>,
-  ): Endpoint => {
+  const openPane = (input: Parameters<ScenarioWorld["openPane"]>[0]): Endpoint => {
     nextPaneNumber += 1;
     nextPid += 1;
     const workspaceId =
@@ -477,12 +481,14 @@ export async function createScenarioWorld(
     if (options.terminal === "tern") ternSessions.set("100", "tandem-scenario");
     panes.set(input.paneId, {
       present: true,
+      ...(input.blockProgram === undefined ? {} : { blockProgram: input.blockProgram }),
       ...(options.terminal === "tern" ? { ternSessionId: "100" } : {}),
       workspaceId,
       tabId,
       foregroundCwd: input.cwd,
       shellPid: nextPid,
-      processes: [{ pid: nextPid, name: "sh", argv: ["sh"] }],
+      processes:
+        input.blockProgram === undefined ? [{ pid: nextPid, name: "sh", argv: ["sh"] }] : [],
     });
     workspaceLabels.set(workspaceId, `scenario ${input.paneId}`);
     return {
@@ -721,6 +727,7 @@ export async function createScenarioWorld(
                 title: p.title ?? paneId,
                 cwd: p.foregroundCwd,
                 live: true,
+                ...(p.blockProgram === undefined ? {} : { program: p.blockProgram }),
               })),
           })),
         })),
@@ -749,7 +756,10 @@ export async function createScenarioWorld(
       const foreground = pane.processes[0];
       return ok({
         pane: paneId,
-        child: { pid: pane.shellPid, name: "sh", argv: ["sh"], cwd: pane.foregroundCwd },
+        child:
+          pane.blockProgram === undefined
+            ? { pid: pane.shellPid, name: "sh", argv: ["sh"], cwd: pane.foregroundCwd }
+            : null,
         group: foreground?.pid ?? null,
         foreground: foreground === undefined ? null : { ...foreground, cwd: pane.foregroundCwd },
       });
