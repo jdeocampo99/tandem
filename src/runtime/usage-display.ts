@@ -36,9 +36,9 @@ const STAGES: Readonly<Record<string, string>> = {
   implementation: "Implementing",
   validation: "Validating",
   review: "Review",
-  fixing: "Fixing",
-  "fix-round": "Fixing",
-  waiting: "Waiting on you",
+  coordinator: "Coordinator",
+  verification: "Verification",
+  presentation: "Presentation",
 };
 
 /** Presentation values are derived here; native blocks only draw these labels and widths. */

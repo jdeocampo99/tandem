@@ -42,7 +42,7 @@ function card(
           pullRequest: {
             repo: "acme/app",
             number: pr,
-            draft: true,
+            draft: pr !== 278,
             url: `https://github.com/acme/app/pull/${pr}`,
           },
         }),

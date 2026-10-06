@@ -167,6 +167,7 @@
 .tdm-muted {
   opacity: 0.55;
 }
+/* Tern supplies inline root widths; keep this compact card centered within its full tab. */
 .tdm-catchup-screen {
   width: 680px !important;
   max-width: 90% !important;
