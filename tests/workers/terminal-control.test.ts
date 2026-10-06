@@ -89,7 +89,7 @@ async function writeTerminal(
 /** Writes an idle, completed worker and plays its side of the close: it acknowledges with "closing". */
 async function completedWorker(
   home: string,
-): Promise<{ job: WorkerTerminalJob; stopAck: () => Promise<void> }> {
+): Promise<{ job: WorkerTerminalJob; stopAck: () => void }> {
   const jobPath = join(home, "job.json");
   await writeFile(
     jobPath,
@@ -107,14 +107,11 @@ async function completedWorker(
     }),
   );
   await writeTerminal(jobPath, "idle");
-  let acknowledgements = Promise.resolve();
-  const timer = setInterval(() => {
-    acknowledgements = acknowledgements.then(async () => {
-      const command = await readFile(`${jobPath}.terminal.json.command`, "utf8").catch(() => "");
-      if (command === "") return;
-      const commandId = (JSON.parse(command) as { id: string }).id;
-      await writeTerminal(jobPath, "closing", commandId);
-    });
+  const timer = setInterval(async () => {
+    const command = await readFile(`${jobPath}.terminal.json.command`, "utf8").catch(() => "");
+    if (command === "") return;
+    const commandId = (JSON.parse(command) as { id: string }).id;
+    await writeTerminal(jobPath, "closing", commandId);
   }, 5);
   const job: WorkerTerminalJob = {
     id: "job-1",
@@ -124,13 +121,7 @@ async function completedWorker(
     cwd: home,
     jobPath,
   };
-  return {
-    job,
-    stopAck: async () => {
-      clearInterval(timer);
-      await acknowledgements;
-    },
-  };
+  return { job, stopAck: () => clearInterval(timer) };
 }
 
 const FAST: Parameters<typeof prepareWorkerTerminal>[2] = {
@@ -152,7 +143,7 @@ test("a close whose first exit keys are lost is completed by re-sending them (#2
     expect(pane.active).toBe(false);
     expect(pane.exitBursts).toBe(2);
   } finally {
-    await stopAck();
+    stopAck();
     await rm(home, { recursive: true, force: true });
   }
 });
@@ -171,7 +162,7 @@ test("a worker whose process never exits still fails closed after the wait", asy
     ).rejects.toThrow("has not exited");
     expect(pane.exitBursts).toBeGreaterThanOrEqual(2);
   } finally {
-    await stopAck();
+    stopAck();
     await rm(home, { recursive: true, force: true });
   }
 });
@@ -189,7 +180,7 @@ test("a close that takes on the first exit keys sends them only once", async () 
     expect(pane.active).toBe(false);
     expect(pane.exitBursts).toBe(1);
   } finally {
-    await stopAck();
+    stopAck();
     await rm(home, { recursive: true, force: true });
   }
 });
