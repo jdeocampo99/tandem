@@ -80,6 +80,8 @@ export type PostPrReviewResult = Readonly<{
 /** What the review workflow needs from the task service; everything else it does itself. */
 export type PrReviewDependencies = Readonly<{
   home: string;
+  /** Tern presents the same reviewed result in a native PR split instead of Lavish. */
+  openNativePage?: (task: TaskRecord) => Promise<void>;
   run: CommandRunner;
   clock: Clock;
   /** Folders crawled for a checkout, read on each use; see `projectRoots` in repos/locate.ts. */
@@ -155,6 +157,10 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     const { task, state, round } = await reviewed(taskId);
     const text = renderReviewText(state, round);
     if (options.page !== true && !(options.page === undefined && wantsPage(round))) {
+      return { taskId: task.id, text };
+    }
+    if (deps.openNativePage !== undefined) {
+      await deps.openNativePage(task);
       return { taskId: task.id, text };
     }
     const patch = await readFile(prReviewRunDiffPath(deps.home, task.id, round.generation), "utf8");

@@ -62,6 +62,7 @@ import type {
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { openProject } from "../coordinator/open-project.ts";
+import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
 import { type DeliveryPreflightResult, deliveryPreflight } from "../delivery/preflight.ts";
@@ -767,6 +768,28 @@ class TandemController {
     });
     this.#prReviews = createPrReviewWorkflow({
       home: deps.home,
+      ...(deps.terminal.name === "tern"
+        ? {
+            openNativePage: async (task: TaskRecord) => {
+              const owned = await findRunningCoordinator(deps.run, deps.terminal, {
+                home: deps.home,
+                sessionId: deps.sessionId,
+                repoPath: task.repoPath,
+              });
+              if (owned?.endpoint.terminal !== "tern")
+                throw new Error("Open this project's Tern coordinator before showing its review");
+              const result = await deps.terminal.openView({
+                coordinator: owned.endpoint,
+                cwd: owned.worktree.path,
+                home: deps.home,
+                view: { kind: "pr", taskId: task.id },
+                origin: { paneId: owned.endpoint.paneId, cwd: owned.worktree.path },
+              });
+              if (!result.opened)
+                throw new Error(result.warnings.join("; ") || "Native review did not open");
+            },
+          }
+        : {}),
       run: deps.run,
       clock: deps.clock,
       projectRoots: deps.projectRoots,

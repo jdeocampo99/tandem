@@ -84,7 +84,9 @@ test("native PR diff anchors both sides and replies while retaining outdated thr
   expect(view.tour[0]?.stops[0]?.rowIds).toEqual(["src/a.ts:2"]);
   expect(view.checks[0]).toMatchObject({ elapsedMs: 77000 });
   expect(view.checks[1]).toMatchObject({ duration: "9s" });
-  expect(prPaneView({ cached, now: "2030-01-01T13:00:00Z" })).toEqual(view);
+  expect(prPaneView({ cached, now: "2030-01-01T13:00:00Z" }).checks[0]).toMatchObject({
+    elapsedMs: 3677000,
+  });
   expect(view.commentDestination).toBe("worker");
 });
 
@@ -114,6 +116,7 @@ test("PRs without a tour hide its tab and reviews carry the commit and posted bi
   expect(view.tabs).toEqual(["Description", "Diff"]);
   expect(view.commentDestination).toBe("review");
   expect(view.review).toEqual(review);
+  expect(view.header.next).toBe("Waiting on you: choose comments and post your review");
   expect(view.files[0]?.rows[2]?.drafts[0]?.id).toBe("draft-1");
 });
 

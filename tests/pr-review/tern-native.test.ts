@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { prPaneView } from "../../src/pr-review/native-view.ts";
-import { nativeViewText } from "../../src/board/native-views.ts";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { nativeViewText } from "../../src/board/native-views.ts";
+import { prPaneView } from "../../src/pr-review/native-view.ts";
 
 const TERN_APP_BINARY = "/Applications/Tern.app/Contents/MacOS/tern";
 
