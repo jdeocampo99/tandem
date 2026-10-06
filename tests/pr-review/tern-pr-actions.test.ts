@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { uncertainPostMessage } from "../../src/pr-review/render.ts";
 
 // Run the standalone Luau CLI, with no Tern daemon, window or live Tandem state.
 const luau = process.env.TANDEM_LUAU_BINARY ?? Bun.which("luau");
@@ -30,6 +31,11 @@ const luau = process.env.TANDEM_LUAU_BINARY ?? Bun.which("luau");
         );
         source += `modules["./${name}"] = function()\n${module.replaceAll("require(", "loadModule(")}\nend\n`;
       }
+      const uncertainMessage = uncertainPostMessage(
+        "https://github.com/acme/app/pull/281",
+        "GitHub response was lost.",
+      );
+      source += `local uncertainMessage = ${JSON.stringify(uncertainMessage)}\nlocal uncertainOutput = ${JSON.stringify(JSON.stringify({ taskId: "review-1", posted: false, message: uncertainMessage }))}\n`;
       source += await readFile(
         fileURLToPath(new URL("./tern-pr-actions.luau", import.meta.url)),
         "utf8",

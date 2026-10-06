@@ -461,7 +461,9 @@ The shared `Invoke` completion receives the process result `{status,stdout,stder
 missing origin or spawn failure. Other action completions remain success-only. Content clears
 `posting` on completion, retains drafts on failure/refusal, and marks `submitted` only for
 exit zero with decoded CLI stdout containing `posted: true`. A `posted: false` result displays
-its message; an unreadable receipt asks the user to check the PR. No outcome retries an action.
+its service message verbatim, preserving distinct definite-refusal and uncertain-post guidance,
+including the confirmation required to recover an uncertain post. An unreadable receipt asks
+the user to check the PR. No outcome retries an action.
 The standalone PR block calls `cx:exit(0)` only after that confirmed posted receipt, as it does
 for its close control. Embedded content records success locally; its task host owns navigation.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
