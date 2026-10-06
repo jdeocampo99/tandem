@@ -66,7 +66,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   // Durable runtime quarantines a rejected effect; this guard also prevents local blind retries.
   const quarantined = new Set<string>();
   const guard = async <T>(key: string, operation: () => Promise<T>): Promise<T> => {
-    if (quarantined.has(key))
+    if (quarantined.has(key) || quarantined.has(`native-open:${key}`))
       throw new TernOutcomeUnknownError(key, "an earlier effect is quarantined");
     try {
       return await operation();
@@ -74,6 +74,18 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       if (error instanceof TernOutcomeUnknownError) quarantined.add(key);
       throw error;
     }
+  };
+  const guardOpen = async <T>(
+    key: string,
+    operation: () => Promise<T>,
+    recoveredNativeOpen = false,
+  ): Promise<T> => {
+    // Exact native intent recovery only settles an opening, never an unrelated close.
+    const openingKey = `native-open:${key}`;
+    if (recoveredNativeOpen) quarantined.delete(openingKey);
+    if (quarantined.has(key))
+      throw new TernOutcomeUnknownError(key, "an earlier effect is quarantined");
+    return guard(openingKey, operation);
   };
   const check = (target: EndpointTarget) => inspect(commands, target);
   const endpointFor = (target: SessionTarget, entry: LocatedBlock): Endpoint => ({
@@ -223,7 +235,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       import("../../board/snapshot.ts"),
     ]);
     return {
-      views: ternViewHost(commands, { clock, wait, guard }),
+      views: ternViewHost(commands, { clock, wait, guard, guardOpen }),
       projectForView,
       nativeViewsPath,
     };

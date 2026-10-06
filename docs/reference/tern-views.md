@@ -342,7 +342,8 @@ Changed or foreign programs/arguments refuse without closing anything. The recor
 remains usable when retirement has already closed the coordinator pane.
 
 Before any opening mutation, the host locks a private coordinator-bound intent under
-`<home>/native-host`. For panels, it lists the scoped session and reuses exactly one block
+`<home>/native-host`. Panels and root Board, Usage, Catch-up and PR list views list the
+scoped session inside that lock and reuse exactly one block
 with the full program and five launch arguments in the intended tab placement; duplicate
 matches refuse. A window-scoped lookup also reads the daemon-wide listing before concluding
 absence. Unresolved detached blocks or matching blocks outside the owning session/window
@@ -356,6 +357,15 @@ including failed or malformed verification reads. A later CLI/backend instance m
 retained intents and route tickets from that same exact block evidence before it can open.
 A missing receipt can be settled by the unique exact block; conflicting receipts or missing
 block evidence retain the fence and resources. Lock files remain for later callers.
+The durable fence governs native opens even within one backend instance, so exact recovery
+can settle a previous verification failure instead of being blocked by a process-local guard.
+Reused root views focus the exact existing pane without another layout opening.
+
+Return first attempts the same exact recovery. If the intent remains unprovable, it only focuses
+the exact recorded coordinator under the opening lock, preserving every view, ticket and intent.
+The CLI returns a plain warning displayed by the renderer: the user can continue in the conversation
+or use Tern's tab switcher, while new native openings remain fenced. This safe exit neither clears
+the uncertain operation nor retries its layout mutation.
 
 Task replacement and return additionally require a same-scope listing proving the replaced
 task pane is absent, with no detached ambiguity, before settling the opening intent. The intent

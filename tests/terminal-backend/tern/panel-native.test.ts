@@ -17,6 +17,7 @@ import {
   ternCommands,
 } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
@@ -141,9 +142,9 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           tasks: {},
           briefs: {},
           pullRequests: {},
-          board: {},
-          usage: {},
-          catchup: {},
+          board: nativeScreensFixture().board,
+          usage: nativeScreensFixture().usage,
+          catchup: nativeScreensFixture().catchup,
           warnings: [],
         }),
       );
@@ -175,7 +176,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       );
       const panelInput = { coordinator, cwd: root, project: root };
       await expect(uncertain.openPanel(panelInput)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-      await expect(uncertain.openPanel(panelInput)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+      expect(await uncertain.openPanel(panelInput)).toBeDefined();
       expect(mutationCount).toBe(1);
       const pane = await terminal.openPanel(panelInput);
       const fresh = ternBackend(run, { home, environment: env });
@@ -397,13 +398,50 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         ),
       ).toBe(false);
       for (const kind of ["usage", "catchup"] as const) {
-        const full = await host.open(
-          { coordinator, cwd: root, home, view: { kind } },
-          root,
-          kind,
-          "window",
-          path,
+        const repeated = await Promise.all(
+          Array.from({ length: 4 }, () =>
+            host.open({ coordinator, cwd: root, home, view: { kind } }, root, kind, "window", path),
+          ),
         );
+        const full = repeated[0];
+        if (full === undefined) throw new Error("missing repeated root result");
+        expect(new Set(repeated.map((result) => result.paneId)).size).toBe(1);
+        expect(
+          blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
+            (entry) => entry.block.program === `tandem.${kind}`,
+          ),
+        ).toHaveLength(1);
+        if (kind === "usage") {
+          await Bun.sleep(500);
+          await ctl("shot", "12-usage-reused");
+          expect(JSON.stringify(await ctl("tree"))).toContain("Opus");
+          const originalCli = await readFile(join(plugin, "tandem.sh"), "utf8");
+          const warningFile = join(root, "safe-return.json");
+          await writeFile(
+            warningFile,
+            JSON.stringify({
+              opened: true,
+              warnings: [
+                "Returned to your conversation. The uncertain view and recovery record were kept. Use Tern's tab switcher to continue.",
+              ],
+            }),
+          );
+          await writeFile(
+            join(plugin, "tandem.sh"),
+            `#!/bin/sh\nif [ "$2" = "view-file" ]; then cat '${warningFile}'; exit 0; fi\n${originalCli.replace("#!/bin/sh\n", "")}`,
+          );
+          await ctl("key", "escape");
+          await until(async () =>
+            JSON.stringify(await ctl("tree")).includes("Tandem kept an uncertain view"),
+          );
+          expect(
+            blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+              (entry) => entry.block.id === full.paneId,
+            ),
+          ).toBe(true);
+          await ctl("shot", "14-return-warning-keeps-view");
+          await writeFile(join(plugin, "tandem.sh"), originalCli);
+        }
         await host.open(
           {
             coordinator,
@@ -519,6 +557,19 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
       expect(browserOpens).toBe(1);
       await ctl("shot", "10-browser-quarantined");
+      const safeReturn = await fresh.openView({
+        coordinator,
+        cwd: root,
+        home,
+        view: { kind: "orchestrator" },
+      });
+      expect(safeReturn.opened).toBe(true);
+      expect(safeReturn.warnings[0]).toContain("Returned to your conversation");
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      await Bun.sleep(200);
+      await ctl("shot", "13-safe-return-quarantined");
 
       let panelCloses = 0;
       let loseCloseListing = false;

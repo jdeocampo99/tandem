@@ -145,6 +145,7 @@ export async function withNativeOpenIntent<T>(
     claimBrowser: (browser: z.infer<typeof BrowserIntent>["browser"]) => Promise<void>;
     settle: () => Promise<void>;
   }) => Promise<T>,
+  onUnresolved?: (cause: TernOutcomeUnknownError) => Promise<T>,
 ): Promise<T> {
   const directory = join(input.home, "native-host");
   await ensurePrivateDirectoryTree(directory, "native route directory");
@@ -166,6 +167,7 @@ export async function withNativeOpenIntent<T>(
   let claimedThisCall = false;
   let browserPending = false;
   let mutationAttempted = false;
+  let recovering = true;
   const settle = async () => {
     // Remove the fence last. Interrupted cleanup still leaves a recoverable intent.
     for (const attempt of pending) {
@@ -258,6 +260,7 @@ export async function withNativeOpenIntent<T>(
     const recovered = pending.length > 0;
     if (recovered) await settle();
     pending.length = 0;
+    recovering = false;
     return await operation({
       recovered,
       markMutationAttempted: () => {
@@ -290,6 +293,8 @@ export async function withNativeOpenIntent<T>(
     }
     if ((pending.length > 0 || browserPending) && !(cause instanceof TernOutcomeUnknownError))
       throw new TernOutcomeUnknownError("tern open verification", cause);
+    if (recovering && cause instanceof TernOutcomeUnknownError && onUnresolved !== undefined)
+      return await onUnresolved(cause);
     throw cause;
   } finally {
     await release();

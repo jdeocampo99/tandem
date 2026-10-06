@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { nativeBriefFile } from "../../../src/board/native-views.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
@@ -293,9 +293,15 @@ for (const kind of ["board"] as const) {
           await expect(close()).rejects.toThrow();
           expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
           if (mode === "unknown") {
-            expect(quarantined).toBe(true);
-            await expect(close()).rejects.toThrow();
+            expect(
+              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
+            ).toBe(true);
+            const returned = await close();
+            expect(returned.warnings?.[0]).toContain("recovery record were kept");
             expect(closeCalls).toBe(1);
+            expect(
+              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
+            ).toBe(true);
           }
         }
       } finally {

@@ -18,7 +18,17 @@ function M.run(origin: Origin, cx: BlockCx, args: {string}, onSuccess: (() -> ()
  local ok,problem=pcall(function()
   tern.process.run(argv,{cwd="."},function(result)
    if result.status~=0 then cx:toast("error","Tandem couldn't run that action",result.stderr)
-   elseif onSuccess then onSuccess() end
+   else
+    local hasWarnings=false
+    local decoded,value=pcall(function() return tern.json.decode(result.stdout) end)
+    if decoded and type(value)=="table" and type(value.warnings)=="table" then
+     for _,message in value.warnings do
+      if type(message)=="string" then hasWarnings=true; cx:toast("warning","Tandem kept an uncertain view",message) end
+     end
+    end
+    -- A warning can mean the CLI preserved an uncertain pane. Do not exit it.
+    if not hasWarnings and onSuccess then onSuccess() end
+   end
   end)
  end)
  if not ok then cx:toast("error","Tandem couldn't start that action",tostring(problem)) end

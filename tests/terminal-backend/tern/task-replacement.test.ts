@@ -169,9 +169,16 @@ for (const placement of ["task", "return"] as const) {
             focused = focuses;
           // Recovery must fence the complete outcome, even when the new task's
           // exact program and launch arguments are visible to a fresh CLI instance.
-          await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+          if (placement === "return") {
+            const returned = await open();
+            expect(returned.paneId).toBe("3");
+            expect(returned.warnings?.[0]).toContain("recovery record were kept");
+            expect(focuses).toBe(focused + 1); // safe focus only, no layout retry
+          } else {
+            await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+            expect(focuses).toBe(focused);
+          }
           expect(opens).toBe(before);
-          expect(focuses).toBe(focused);
           expect(await Bun.file(route).exists()).toBe(true);
           expect(await Bun.file(receipt).exists()).toBe(true);
           if (mode !== "legacy-route") expect(await Bun.file(path).exists()).toBe(true);
