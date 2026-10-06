@@ -215,15 +215,22 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           ),
         );
     });
-  // Native view data pulls in interactive harness policy. Process-only callers, including
-  // the validation worker, must not inherit those modules' signal handlers.
-  const views = async () => {
-    const { ternViewHost } = await import("./views.ts");
-    return ternViewHost(commands, { clock, wait, guard });
+  // Native screens load coordinator/model code only when requested. Ordinary worker startup
+  // must not load the interactive harness through this terminal port.
+  const native = async () => {
+    const [{ ternViewHost, projectForView }, { nativeViewsPath }] = await Promise.all([
+      import("./views.ts"),
+      import("../../board/snapshot.ts"),
+    ]);
+    return {
+      views: ternViewHost(commands, { clock, wait, guard }),
+      projectForView,
+      nativeViewsPath,
+    };
   };
   return {
     name: "tern",
-    openView: async (input) => (await views()).openView(input),
+    openView: async (input) => (await native()).views.openView(input),
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>
@@ -462,7 +469,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     focusAgent: async (target) => {
       try {
         if (target.originCoordinator && target.home) {
-          const cmd = await (await views()).scoped({
+          const cmd = await (await native()).views.scoped({
             coordinator: target.originCoordinator,
             cwd: target.cwd,
             home: target.home,
@@ -576,11 +583,10 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     },
     openWelcome: async (target) => {
       if (options.home === undefined) throw new Error("Tern welcome requires a Tandem home");
+      const { views, projectForView, nativeViewsPath } = await native();
       const coordinator = await byId(target, target.paneId);
-      const { projectForView } = await import("./views.ts");
-      const { nativeViewsPath } = await import("../../board/snapshot.ts");
       const project = await projectForView(options.home, coordinator);
-      await (await views()).open(
+      await views.open(
         { coordinator, cwd: target.cwd, home: options.home, view: { kind: "board" } },
         project,
         "welcome",
@@ -598,12 +604,10 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       ]);
     },
     openPanel: async (input) => {
-      const { nativeViewsPath } = await import("../../board/snapshot.ts");
       if (options.home === undefined) throw new Error("Tern panel requires a Tandem home");
+      const { views, nativeViewsPath } = await native();
       return (
-        await (
-          await views()
-        ).open(
+        await views.open(
           {
             coordinator: input.coordinator,
             cwd: input.cwd,
