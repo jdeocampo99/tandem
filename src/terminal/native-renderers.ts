@@ -33,10 +33,6 @@ export type NativeRendererHandler = (context: NativeRendererContext) => Promise<
 
 export type NativeRendererHandlers = Readonly<Record<NativeRendererCommand, NativeRendererHandler>>;
 
-async function unavailable(context: NativeRendererContext): Promise<CliCommandOutcome> {
-  throw new Error(`tandem native ${context.input.kind} is not implemented yet`);
-}
-
 /** The single implementation registration point for the wave-2 renderer commands. */
 export const nativeRendererHandlers: NativeRendererHandlers = {
   board: nativeBoard,
