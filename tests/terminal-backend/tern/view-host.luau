@@ -3,6 +3,7 @@
 local timers, writes, effects, toasts, panes = {}, {}, {}, {}, {}
 local active, calls, maximum, focused = false, 0, 0, 10
 local ticket
+local failMove=false
 local function charge(alive)
  assert(active and alive(), "expired window context")
  calls += 1
@@ -29,7 +30,7 @@ local function context()
   return 30
  end
  function cx.layout:focus(id) charge(alive); assert(panes[id]); focused=id; table.insert(effects,{name="focus",id=id}) end
- function cx.layout:move(id,_owner,_direction,_options) charge(alive); assert(panes[id]); table.insert(effects,{name="move"}); return true end
+ function cx.layout:move(id,_owner,_direction,_options) charge(alive); assert(panes[id]); table.insert(effects,{name="move"}); return not failMove end
  function cx.layout:resize(id,_direction,_amount) charge(alive); assert(panes[id]); table.insert(effects,{name="resize"}) end
  function cx.layout:close(id) charge(alive); assert(panes[id]); panes[id]=nil; table.insert(effects,{name="close",id=id}) end
  function cx.layout:float(id,_over,_corner,_options) charge(alive); panes[id].floating=true; table.insert(effects,{name="float"}); return true end
@@ -44,6 +45,7 @@ local function context()
 end
 local function reset(kind,placement)
  timers,writes,effects,toasts={}, {}, {}, {}
+ failMove=false
  panes={[10]={tab=11,block="shell",floating=false},[20]={tab=21,block="shell",floating=false}}
  ticket={version=1,kind=kind,placement=placement,args={"/b/index", "20", "/b", "", "/b/index"},coordinator="20",origin="20",session="2",receipt="/b/native-host/open.receipt.json"}
 end
@@ -80,6 +82,12 @@ reset("panel","panel"); open()
 drain(function(index) if index==5 then panes[20].block="foreign" end end)
 assert(#toasts==1 and writes[ticket.receipt]==nil and #effects==0)
 assert(#timers==0)
+
+reset("panel","panel"); failMove=true; open(); drain()
+local creations=0
+for _,effect in effects do if effect.name=="new" then creations+=1 end end
+assert(creations==1 and panes[30] and #toasts==1 and writes[ticket.receipt]==nil)
+assert(#effects==3 and #timers==0,"uncertain partial layout must stay retained without retry or receipt")
 
 reset("panel","panel"); ticket.session="1"; open(); drain()
 assert(#toasts==1 and writes[ticket.receipt]==nil and #effects==0,"foreign session must stay fenced")
