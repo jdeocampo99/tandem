@@ -232,10 +232,10 @@ const state = {
 };
 const repos = [];
 const pendingFolders = new Set(Array.isArray(VIEW.pendingFolders) ? VIEW.pendingFolders : []);
-document.getElementById("tern-choice").hidden = !VIEW.ternReady;
-document.querySelector('input[name="terminal"][value="tern"]').disabled = !VIEW.ternReady;
+document.getElementById("tern-choice").hidden = !VIEW.ternReady && VIEW.terminal !== "tern";
+document.querySelector('input[name="terminal"][value="tern"]').disabled = !VIEW.ternReady && VIEW.terminal !== "tern";
 document.getElementById("terminal-note").textContent = VIEW.terminalReason ?? "Tern is signed in and ready. Finish or stop running tasks before switching.";
-const initialTerminal = VIEW.ternReady ? (draft?.terminal ?? VIEW.terminal) : "herdr";
+const initialTerminal = VIEW.ternReady ? (draft?.terminal ?? VIEW.terminal) : VIEW.terminal;
 document.querySelector(`input[name="terminal"][value="${initialTerminal}"]`).checked = true;
 const initialSelfImprovement = draft?.selfImprovement ?? VIEW.selfImprovement;
 document.querySelector(`input[name="self"][value="${initialSelfImprovement}"]`).checked = true;

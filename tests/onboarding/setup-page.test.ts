@@ -43,6 +43,8 @@ async function machine(
     savedRoots?: (code: string, outside: string) => string[];
     availableModels?: readonly ModelRecord[];
     claudeCode?: ClaudeCodeAvailability;
+    terminal?: "herdr" | "tern";
+    terminalChosen?: boolean;
     tern?: import("../../src/terminal-backend/contract.ts").TerminalAvailability;
   }> = {},
 ) {
@@ -83,7 +85,7 @@ async function machine(
   };
   const saved: string[] = [];
   let settings: HomeSettings = {
-    terminal: "herdr",
+    ...(options.terminalChosen === false ? {} : { terminal: options.terminal ?? "herdr" }),
     selfImprovement: "off",
     selfImprovementChosen: false,
     projectRoots: options.savedRoots?.(code, outside) ?? [],
@@ -125,6 +127,7 @@ async function machine(
     probeTern: async () => options.tern ?? { status: "ready" },
     configureTerminal: async (terminal) => {
       await record(`terminal ${terminal}`)();
+      settings = { ...settings, terminal };
       return { requested: terminal, terminal };
     },
     saveSelfImprovement: async (mode) => record(`mode ${mode}`)(),
@@ -148,7 +151,11 @@ async function machine(
   };
 }
 
-function answerFeedback(repositories: readonly unknown[], scoutModel = "anthropic/opus"): string {
+function answerFeedback(
+  repositories: readonly unknown[],
+  scoutModel = "anthropic/opus",
+  terminal: "herdr" | "tern" = "herdr",
+): string {
   const answer = {
     tandemSetup: 1,
     models: Object.fromEntries(
@@ -158,7 +165,7 @@ function answerFeedback(repositories: readonly unknown[], scoutModel = "anthropi
       ]),
     ),
     repositories,
-    terminal: "herdr",
+    terminal,
     selfImprovement: "fix",
   };
   return [
@@ -250,7 +257,6 @@ test("a valid answer is stored for one Save and saved in order", async () => {
 
   const report = await workflow.apply("/tandem", "answer-1");
   expect(saved).toEqual([
-    "terminal herdr",
     "models anthropic",
     "mode fix",
     `folders ${code}`,
@@ -278,7 +284,7 @@ test("approved mixed-model choices enable only the providers used by those model
   if (event.kind !== "answer") throw new Error(`expected an answer, got ${event.kind}`);
   expect(saved).toEqual([]);
   await workflow.apply("/tandem", event.answerId);
-  expect(saved[1]).toBe("models anthropic,openai");
+  expect(saved[0]).toBe("models anthropic,openai");
 });
 
 test("a Claude Code role is saved without enabling Claude Code for spending", async () => {
@@ -289,7 +295,7 @@ test("a Claude Code role is saved without enabling Claude Code for spending", as
   const event = await workflow.listen("/tandem", new AbortController().signal);
   if (event.kind !== "answer") throw new Error(`expected an answer, got ${event.kind}`);
   await workflow.apply("/tandem", event.answerId);
-  expect(saved[1]).toBe("models anthropic");
+  expect(saved[0]).toBe("models anthropic");
 });
 
 test("a Claude Code role is refused when Claude Code isn't installed", async () => {
@@ -550,7 +556,7 @@ test("a failed step is reported without undoing the others, and its chat is not 
   expect(report.message).toContain("The issue setting was not saved: mode fix broke");
   expect(report.message).toContain(`api (${join(code, "api")}): not set up:`);
   expect(saved.some((entry) => entry.startsWith("open "))).toBe(false);
-  expect(saved[1]).toBe("models anthropic");
+  expect(saved[0]).toBe("models anthropic");
 });
 
 test("an answer that can't be saved comes back with every problem and stores nothing", async () => {
@@ -600,3 +606,60 @@ for (const tern of [
     }
   });
 }
+
+for (const tern of [
+  { status: "unknown", reason: "Temporary Tern outage." },
+  { status: "signedOut" },
+] as const) {
+  test(`saved Tern survives ${tern.status} while setup saves models and a repository`, async () => {
+    const { workflow, saved, code } = await machine({
+      terminal: "tern",
+      tern,
+      fail: () => new Set(["terminal herdr", "terminal tern"]),
+      polls: (code) => [
+        answerFeedback(
+          [{ path: join(code, "api"), validationCommands: ["make check"], setupCommands: [] }],
+          "anthropic/opus",
+          "tern",
+        ),
+      ],
+    });
+    const opened = await workflow.open("/tandem");
+    const view = pageData(await readFile(opened.path, "utf8"));
+    expect(view.terminal).toBe("tern");
+    expect(view.ternReady).toBe(false);
+    const event = await workflow.listen("/tandem", new AbortController().signal);
+    if (event.kind !== "answer") throw new Error(`expected answer, got ${event.kind}`);
+    const result = await workflow.apply("/tandem", event.answerId);
+    expect(result.complete).toBe(true);
+    expect(saved).toContain("models anthropic");
+    expect(saved).toContain("mode fix");
+    expect(saved).toContain(`open ${join(code, "api")}`);
+    expect(saved.some((step) => step.startsWith("terminal "))).toBe(false);
+  });
+}
+
+test("a changed page terminal choice is still configured before other setup saves", async () => {
+  const { workflow, saved } = await machine({
+    polls: () => [answerFeedback([], "anthropic/opus", "tern")],
+  });
+  await workflow.open("/tandem");
+  const event = await workflow.listen("/tandem", new AbortController().signal);
+  if (event.kind !== "answer") throw new Error(`expected answer, got ${event.kind}`);
+  expect((await workflow.apply("/tandem", event.answerId)).complete).toBe(true);
+  expect(saved.slice(0, 2)).toEqual(["terminal tern", "models anthropic"]);
+});
+
+test("first page setup saves an explicit Herdr choice once", async () => {
+  const { workflow, saved } = await machine({
+    terminalChosen: false,
+    polls: () => [answerFeedback([]), answerFeedback([])],
+  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await workflow.open("/tandem");
+    const event = await workflow.listen("/tandem", new AbortController().signal);
+    if (event.kind !== "answer") throw new Error(`expected answer, got ${event.kind}`);
+    expect((await workflow.apply("/tandem", event.answerId)).complete).toBe(true);
+  }
+  expect(saved.filter((step) => step.startsWith("terminal "))).toEqual(["terminal herdr"]);
+});

@@ -171,11 +171,14 @@ for (const tern of [
   { status: "signedOut" },
   { status: "unknown", reason: "Tern could not start." },
 ] as const) {
-  test(`${tern.status} Tern falls back before setup offers a terminal`, () => {
+  test(`${tern.status} Tern does not replace a saved terminal choice`, () => {
     const view = buildSetupView({ ...input, terminal: "tern", tern });
     expect(view.ternReady).toBe(false);
-    expect(view.terminal).toBe("herdr");
-    expect(view.terminalReason).toContain("Using Herdr.");
+    expect(view.terminal).toBe("tern");
+    expect(view.terminalReason).toContain("Keeping the saved Tern choice.");
+    const firstSetup = buildSetupView({ ...input, tern });
+    expect(firstSetup.terminal).toBe("herdr");
+    expect(firstSetup.terminalReason).toContain("Using Herdr.");
   });
 }
 
