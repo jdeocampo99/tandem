@@ -198,6 +198,32 @@ async function briefTabs(window: TernWindow): Promise<readonly string[]> {
 }
 
 /**
+ * Tern reports a new block before it takes clicks and keys, and input sent in between is dropped.
+ * `send` is repeated only after the view has ignored it for three seconds, until `done`.
+ */
+async function sendUntil(
+  window: TernWindow,
+  label: string,
+  send: () => Promise<unknown>,
+  done: () => Promise<boolean>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 5 && !(await done()); attempt += 1) {
+    await send();
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline && !(await done())) await Bun.sleep(100);
+  }
+  await window.until(label, done);
+}
+
+/** Clicks the control showing `text` unless an earlier click already took it off the screen. */
+async function clickIfShown(window: TernWindow, text: string): Promise<void> {
+  const node = (await window.nodes()).find(
+    (candidate) => candidate.text === text && candidate.rect,
+  );
+  if (node !== undefined) await window.click(node);
+}
+
+/**
  * Waits for the full-window view `program` showing `heading`, presses Esc in it, and waits until
  * it is gone and the conversation has focus again.
  */
@@ -207,23 +233,22 @@ async function escapeFullWindowView(
   program: string,
   heading: string,
   shot: string,
+  open: () => Promise<unknown>,
 ): Promise<void> {
   let pane: string | undefined;
-  await window.until(`${program} open`, async () => {
+  await sendUntil(window, `${program} open`, open, async () => {
     pane = (await blocks(window)).find((block) => block.program === program)?.id;
     return pane !== undefined && (await window.screen()).includes(heading);
   });
   await window.until(`${program} focused`, async () => (await window.focusedPane()) === pane);
   await window.shot(shot);
-  const open = async () => (await blocks(window)).some((block) => block.id === pane);
-  // A new block takes keyboard focus a few frames after Tern reports it focused, and a key sent
-  // before that is dropped; Esc is resent only once the view has stayed open for a while.
-  for (let attempt = 0; attempt < 5 && (await open()); attempt += 1) {
-    await window.ctl("key", "escape");
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline && (await open())) await Bun.sleep(100);
-  }
-  await window.until(`${program} closed by Esc`, async () => !(await open()));
+  const shown = async () => (await blocks(window)).some((block) => block.id === pane);
+  await sendUntil(
+    window,
+    `${program} closed by Esc`,
+    () => window.ctl("key", "escape"),
+    async () => !(await shown()),
+  );
   await window.until(
     `conversation focused after ${program}`,
     async () => (await window.focusedPane()) === project.endpoint.paneId,
@@ -278,9 +303,11 @@ workflow(
       expect(await window.screen()).toContain("Running · 2");
       await window.shot("01-panel-rows");
 
-      await window.click("Tern backend adapter");
-      await window.until("task page opened by click", async () =>
-        (await window.screen()).includes("task #adapter"),
+      await sendUntil(
+        window,
+        "task page opened by click",
+        () => clickIfShown(window, "Tern backend adapter"),
+        async () => (await window.screen()).includes("task #adapter"),
       );
       const page = await window.screen();
       expect(page).toContain("Tern backend adapter");
@@ -300,9 +327,10 @@ workflow(
         await window.shot(`01-task-tab-${tab.toLowerCase()}`);
       }
 
-      await window.click("← Orchestrator");
-      await window.until(
+      await sendUntil(
+        window,
         "conversation focused after ← Orchestrator",
+        () => clickIfShown(window, "← Orchestrator"),
         async () => (await window.focusedPane()) === project.endpoint.paneId,
       );
       await window.until(
@@ -328,9 +356,10 @@ workflow(
         (await window.screen()).includes("task #width"),
       );
       await window.shot("01-task-page-by-keyboard");
-      await window.click("← Orchestrator");
-      await window.until(
+      await sendUntil(
+        window,
         "conversation focused after the keyboard-opened task",
+        () => clickIfShown(window, "← Orchestrator"),
         async () => (await window.focusedPane()) === project.endpoint.paneId,
       );
     });
@@ -354,8 +383,12 @@ workflow(
       await project.publish();
       await project.panel();
       await window.until("stuck row", async () => (await window.screen()).includes("Close guard"));
-      await window.click("Close guard");
-      await window.until("stuck banner", async () => (await window.screen()).includes(reason));
+      await sendUntil(
+        window,
+        "stuck banner",
+        () => clickIfShown(window, "Close guard"),
+        async () => (await window.screen()).includes(reason),
+      );
       const banner = await window.nodes();
       expect(banner.some((node) => node.text === "Stuck")).toBe(true);
       expect(banner.some((node) => node.text === "Restart")).toBe(true);
@@ -421,9 +454,11 @@ workflow(
         );
         await window.shot("03-panel-brief-row");
 
-        await window.click(goal);
-        await window.until("brief pane at revision 1", async () =>
-          (await window.screen()).includes("Brief · Request brief · rev 1 ·"),
+        await sendUntil(
+          window,
+          "brief pane at revision 1",
+          () => clickIfShown(window, goal),
+          async () => (await window.screen()).includes("Brief · Request brief · rev 1 ·"),
         );
         expect(await briefTabs(window)).toEqual([project.endpoint.workspaceId]);
         await window.shot("03-brief-open");
@@ -613,9 +648,11 @@ workflow(
       await window.until("panel row", async () =>
         (await window.screen()).includes("Panel width fix"),
       );
-      await window.click("⎇");
-      await window.until("PR pane", async () =>
-        (await window.screen()).includes("#42 Fix panel width"),
+      await sendUntil(
+        window,
+        "PR pane",
+        () => clickIfShown(window, "⎇"),
+        async () => (await window.screen()).includes("#42 Fix panel width"),
       );
       const header = await window.nodes();
       expect(header.some((node) => node.text?.startsWith("✓ lint") === true)).toBe(true);
@@ -688,41 +725,58 @@ workflow(
       };
 
       await focusConversation();
-      await window.ctl("key", "cmd+shift+b");
-      await escapeFullWindowView(window, project, "tandem.board", "Board · tandem", "05-board-key");
-      await window.ctl("key", "cmd+shift+u");
-      await escapeFullWindowView(window, project, "tandem.usage", "Usage · tandem", "05-usage-key");
-      await window.click("▦");
+      await escapeFullWindowView(
+        window,
+        project,
+        "tandem.board",
+        "Board · tandem",
+        "05-board-key",
+        () => window.ctl("key", "cmd+shift+b"),
+      );
+      await escapeFullWindowView(
+        window,
+        project,
+        "tandem.usage",
+        "Usage · tandem",
+        "05-usage-key",
+        () => window.ctl("key", "cmd+shift+u"),
+      );
       await escapeFullWindowView(
         window,
         project,
         "tandem.board",
         "Board · tandem",
         "05-board-button",
+        () => clickIfShown(window, "▦"),
       );
-      await window.click("5h unavailable");
       await escapeFullWindowView(
         window,
         project,
         "tandem.usage",
         "Usage · tandem",
         "05-usage-button",
+        () => clickIfShown(window, "5h unavailable"),
       );
 
       // Away from the project in an unrelated shell for two hours while its work changed.
       const log = join(window.root, "driver.log");
       const outside = (await blocks(window)).find((block) => block.cwd === window.root)?.id;
       if (outside === undefined) throw new Error("No shell outside the project");
-      const aways = async () =>
-        (await Bun.file(log).text())
-          .split("\n")
-          .filter((line) => line.includes(`"away","--pane","${project.endpoint.paneId}"`)).length;
-      const before = await aways();
       await window.tern("focus", outside, "--json");
       await window.until(
-        "project left for the unrelated shell",
-        async () => (await aways()) > before,
+        "unrelated shell focused",
+        async () => (await window.focusedPane()) === outside,
       );
+      // The window reports each focus change to Tandem in turn, and leaving a project records it
+      // visible until then. The earlier visit is written once those reports have stopped.
+      let reported = await Bun.file(log).text();
+      await window.until("project left for the unrelated shell", async () => {
+        await Bun.sleep(2_000);
+        const latest = await Bun.file(log).text();
+        const settled = latest === reported;
+        reported = latest;
+        return settled;
+      });
       await visitNativeProject(
         {
           home: window.home,
@@ -735,7 +789,15 @@ workflow(
         },
       );
       await focusConversation();
-      await escapeFullWindowView(window, project, "tandem.catchup", "Since you left", "05-catchup");
+      // Entering the project is the only trigger; the catch-up must appear on its own.
+      await escapeFullWindowView(
+        window,
+        project,
+        "tandem.catchup",
+        "Since you left",
+        "05-catchup",
+        async () => {},
+      );
     });
   },
   120_000,
