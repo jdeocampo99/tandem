@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { blockArgs } from "../../../src/native/contract.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import {
   TernOutcomeUnknownError,
@@ -52,7 +52,7 @@ for (const mode of [
       role: "coordinator",
       generation: 0,
     };
-    const path = nativeViewsPath(home, cwd);
+    const path = viewIndexPath(home, cwd);
     const args: string[] = blockArgs(mode === "wrong-file" ? join(root, "foreign.json") : path, {
       coordinator: mode === "wrong-owner" ? "5" : coordinator.paneId,
       cwd: mode === "wrong-cwd" ? root : cwd,

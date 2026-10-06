@@ -1,24 +1,8 @@
-import { randomUUID } from "node:crypto";
-import { lstat, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
-import { repositoryKey } from "../config/repositories.ts";
-import { isNotFoundError } from "../config/storage.ts";
-import { ensurePrivateDirectoryTree } from "../coordinator/lock.ts";
 import type { CoordinatorRecord } from "../coordinator/record.ts";
-import { acquireDarwinFileLock } from "../tasks/store-lock.ts";
+import type { Visit } from "../native/store.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { shouldAutoShowCatchUp } from "./native-view.ts";
 
-const visit = z.object({
-  version: z.literal(1),
-  project: z.string(),
-  lastOpenedAt: z.string().datetime(),
-  lastVisibleAt: z.string().datetime().optional(),
-  previousSignature: z.string().min(1).optional(),
-  dismissedSignature: z.string().optional(),
-});
-export type NativeVisit = z.infer<typeof visit>;
 export type NativeVisitInput = Readonly<{
   home: string;
   project: string;
@@ -39,15 +23,10 @@ export async function maybeShowCatchUp(
   }>,
 ): Promise<boolean> {
   if (terminal.name !== "tern" || input.record.endpoint.terminal !== "tern") return false;
-  // Keep native publication dependencies out of unrelated terminal and worker startup paths.
-  const { readNativeBundle } = await import("../board/native-file.ts");
+  // Keep the native store out of unrelated terminal and worker startup paths.
+  const { readProjectState } = await import("../native/store.ts");
   const { record, home } = input;
-  let signature: string | undefined;
-  try {
-    signature = (await readNativeBundle(home, record.repoPath)).changeSignature;
-  } catch (error) {
-    if (!isNotFoundError(error)) throw error;
-  }
+  const signature = (await readProjectState(home, record.repoPath))?.published?.changeSignature;
   return visitNativeProject(
     {
       home,
@@ -86,39 +65,17 @@ export async function tryShowCatchUp(
   }
 }
 
-async function readVisit(path: string, project: string): Promise<NativeVisit | undefined> {
-  try {
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16384)
-      throw new Error("Native visit must be a bounded regular file");
-    const saved = visit.parse(JSON.parse(await readFile(path, "utf8")));
-    if (saved.project !== project) throw new Error("Native visit belongs to another project");
-    return saved;
-  } catch (error) {
-    if (isNotFoundError(error)) return undefined;
-    throw error;
-  }
-}
-
-/** Host navigation state lives in Tandem's home. No task state or Tern settings are changed. */
+/** Visit state lives in the project's native store. No task state or Tern settings are changed. */
 async function updateVisit(
   input: Pick<NativeVisitInput, "home" | "project">,
-  effect: (previous: NativeVisit | undefined) => Promise<NativeVisit | undefined>,
+  effect: (previous: Visit | undefined) => Promise<Visit | undefined>,
 ): Promise<void> {
-  const directory = join(input.home, "native-visits");
-  await ensurePrivateDirectoryTree(directory, "native visit directory");
-  const path = join(directory, `${repositoryKey(input.project)}.json`);
-  const release = await acquireDarwinFileLock(`${path}.lock`, 5000, 20);
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    const saved = await effect(await readVisit(path, input.project));
-    if (saved === undefined) return;
-    await writeFile(temporary, JSON.stringify(visit.parse(saved)), { flag: "wx", mode: 0o600 });
-    await rename(temporary, path);
-  } finally {
-    await rm(temporary, { force: true });
-    await release();
-  }
+  const { withProjectLock } = await import("../native/store.ts");
+  await withProjectLock(input.home, input.project, async (store) => {
+    const state = await store.read();
+    const visit = await effect(state.visit);
+    if (visit !== undefined) await store.write({ ...state, visit });
+  });
 }
 
 /** Invoke only on a project visit, never on a view poll. Failed/uncertain opens stay unacknowledged. */
@@ -150,8 +107,6 @@ export async function visitNativeProject(
     }
     const signature = input.signature ?? previous?.previousSignature;
     return {
-      version: 1,
-      project: input.project,
       lastOpenedAt: input.now,
       lastVisibleAt: input.now,
       ...(signature === undefined ? {} : { previousSignature: signature }),
@@ -164,8 +119,8 @@ export async function visitNativeProject(
 export async function recordNativePublication(
   input: Pick<NativeVisitInput, "home" | "project" | "signature">,
 ): Promise<void> {
-  const path = join(input.home, "native-visits", `${repositoryKey(input.project)}.json`);
-  const saved = await readVisit(path, input.project);
+  const { readProjectState } = await import("../native/store.ts");
+  const saved = (await readProjectState(input.home, input.project))?.visit;
   if (saved === undefined || saved.previousSignature !== undefined) return;
   await updateVisit(input, async (previous) =>
     previous === undefined || previous.previousSignature !== undefined
@@ -176,8 +131,6 @@ export async function recordNativePublication(
 
 export async function dismissNativeCatchUp(input: NativeVisitInput): Promise<void> {
   await updateVisit(input, async () => ({
-    version: 1,
-    project: input.project,
     lastOpenedAt: input.now,
     lastVisibleAt: input.now,
     previousSignature: input.signature,
@@ -202,8 +155,6 @@ export async function recordNativeVisibility(
     if (previous?.lastVisibleAt === lastVisibleAt && previous.previousSignature === signature)
       return undefined;
     return {
-      version: 1,
-      project: input.project,
       lastOpenedAt: previous?.lastOpenedAt ?? input.now,
       lastVisibleAt,
       ...(signature === undefined ? {} : { previousSignature: signature }),

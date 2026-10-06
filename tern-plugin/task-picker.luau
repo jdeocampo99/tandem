@@ -1,20 +1,10 @@
 --!strict
 local ui = tern.ui
-local views = require('./view-file')
 local fields = require('./text-field')
 local rt = require('./rt')
 local components = require('./components')
 type Task = { taskId: string, title: string, stage: string, model: string? }
-type Model = { project: string, tasks: { [string]: Task } }
-type State = { origin: rt.Origin, view: views.View<Model>, field: fields.Field, selected: number }
-local function parse(value: unknown): Model?
- if type(value) ~= 'table' or type(value.project) ~= 'string' or type(value.tasks) ~= 'table' then return nil end
- for id, task in value.tasks do
-  if type(id) ~= 'string' or type(task) ~= 'table' or task.taskId ~= id or not string.match(id, '^[%w_-]+$')
-   or type(task.title) ~= 'string' or type(task.stage) ~= 'string' or (task.model ~= nil and type(task.model) ~= 'string') then return nil end
- end
- return value :: Model
-end
+type State = { origin: rt.Origin, view: rt.Watch, field: fields.Field, selected: number }
 local function choices(state: State): { Task }
  local rows = {}
  if not state.view.model then return rows end
@@ -37,8 +27,7 @@ local function back(state: State, cx: BlockCx)
 end
 local block: BlockDef<State> = {
  init = function(cx, args)
-  local state = { origin = rt.origin(args), view = views.create(args[1] or '', 'panel', parse), field = fields.create(), selected = 1 }
-  views.refresh(state.view); views.watch(state.view, cx)
+  local state = { origin = rt.origin(args), view = rt.watch(cx, args[1] or '', 'index'), field = fields.create(), selected = 1 }
   return state
  end,
  title = function() return 'Open task…' end,

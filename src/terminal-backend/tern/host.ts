@@ -2,7 +2,6 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { EndpointOwnershipError } from "../../adapters/primitives.ts";
-import { nativeViewsPath } from "../../board/snapshot.ts";
 import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
 import {
@@ -14,6 +13,7 @@ import {
   Ticket,
   ViewKind,
 } from "../../native/contract.ts";
+import { openDirectories, openDirectory, viewIndexPath } from "../../native/store.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
 import type { RetainedViewOpen, TerminalBackend, ViewOrigin } from "../contract.ts";
@@ -360,24 +360,24 @@ export async function recoverViewOpens(
   home: string,
   now: number,
 ): Promise<void> {
-  const directory = join(home, "native-host");
-  for (const [key, tokens] of await ticketNames(directory)) {
-    let release: () => Promise<void>;
-    try {
-      release = await lockFor(directory, key, 0);
-    } catch (error) {
-      if (error instanceof StoreLockTimeoutError) continue;
-      throw error;
+  for (const directory of await openDirectories(home))
+    for (const [key, tokens] of await ticketNames(directory)) {
+      let release: () => Promise<void>;
+      try {
+        release = await lockFor(directory, key, 0);
+      } catch (error) {
+        if (error instanceof StoreLockTimeoutError) continue;
+        throw error;
+      }
+      try {
+        await recoverKey(directory, key, tokens, now, (ticket) => {
+          const window = parseBlockArgs(ticket.args)?.ctx.window;
+          return window === undefined ? commands : commands.scope({ windowKey: window });
+        });
+      } finally {
+        await release();
+      }
     }
-    try {
-      await recoverKey(directory, key, tokens, now, (ticket) => {
-        const window = parseBlockArgs(ticket.args)?.ctx.window;
-        return window === undefined ? commands : commands.scope({ windowKey: window });
-      });
-    } finally {
-      await release();
-    }
-  }
 }
 
 export type OpenInput = Readonly<{
@@ -408,7 +408,7 @@ export async function openView(
   viewPath: string,
 ): Promise<OpenResult> {
   const coordinator = ternEndpoint(input.coordinator);
-  const index = nativeViewsPath(input.home, project);
+  const index = viewIndexPath(input.home, project);
   const ctx: BlockContext = {
     coordinator: input.coordinator.paneId,
     cwd: input.cwd,
@@ -438,6 +438,7 @@ export async function openView(
   return withSettledOpens(
     cmd,
     input.coordinator,
+    project,
     ctx,
     async ({ directory, key, opened }) => {
       const reused =
@@ -568,11 +569,12 @@ export async function openView(
 export async function withSettledOpens<T>(
   cmd: TernCli,
   coordinator: Endpoint,
+  project: string,
   ctx: Pick<BlockContext, "cwd" | "home" | "index">,
   operation: (lease: Readonly<{ directory: string; key: string; opened: boolean }>) => Promise<T>,
   onRetained?: () => Promise<T>,
 ): Promise<T> {
-  const directory = join(ctx.home, "native-host");
+  const directory = openDirectory(ctx.home, project);
   await ensurePrivateDirectoryTree(directory, "native route directory");
   const key = coordinatorKey(coordinator, ctx);
   const release = await lockFor(directory, key);
@@ -671,47 +673,47 @@ function retainedReason(receipt: ObservedReceipt): string {
     : failureReason(receipt);
 }
 
-/** Every ticket under `<home>/native-host/`, read without changing anything. */
+/** Every project's staged open tickets, read without changing anything. */
 export async function listRetainedNativeOpens(home: string): Promise<RetainedViewOpen[]> {
-  const directory = join(home, "native-host");
   const opens: RetainedViewOpen[] = [];
-  for (const [key, tokens] of await ticketNames(directory))
-    for (const token of [...tokens].toSorted()) {
-      const stem = join(directory, `${key}.${token}`);
-      const path = `${stem}${TICKET}`;
-      try {
-        const record = JSON.stringify(await readPrivateJson(path));
-        const ticket = Ticket.parse(JSON.parse(record));
-        const ctx = parseBlockArgs(ticket.args)?.ctx;
-        if (ctx === undefined) throw new Error("Ticket arguments are not a native block's");
-        opens.push({
-          status: "readable",
-          path,
-          record,
-          coordinator: {
-            terminal: "tern",
-            sessionId: ticket.owner.sessionId,
-            terminalSessionId: ticket.session,
-            workspaceId: ticket.owner.workspaceId,
-            tabId: ticket.owner.tabId,
-            paneId: ticket.coordinator,
-            role: "coordinator",
-            generation: ticket.owner.generation,
-          },
-          cwd: ctx.cwd,
-          view: ticket.kind,
-          reason: retainedReason(await readReceipt(`${stem}${RECEIPT}`)),
-        });
-      } catch (error) {
-        // A receipt alone is an orphan the next recovery removes, not a paused view.
-        if (missing(error)) continue;
-        opens.push({
-          status: "unreadable",
-          path,
-          reason: error instanceof Error ? error.message : String(error),
-        });
+  for (const directory of await openDirectories(home))
+    for (const [key, tokens] of await ticketNames(directory))
+      for (const token of [...tokens].toSorted()) {
+        const stem = join(directory, `${key}.${token}`);
+        const path = `${stem}${TICKET}`;
+        try {
+          const record = JSON.stringify(await readPrivateJson(path));
+          const ticket = Ticket.parse(JSON.parse(record));
+          const ctx = parseBlockArgs(ticket.args)?.ctx;
+          if (ctx === undefined) throw new Error("Ticket arguments are not a native block's");
+          opens.push({
+            status: "readable",
+            path,
+            record,
+            coordinator: {
+              terminal: "tern",
+              sessionId: ticket.owner.sessionId,
+              terminalSessionId: ticket.session,
+              workspaceId: ticket.owner.workspaceId,
+              tabId: ticket.owner.tabId,
+              paneId: ticket.coordinator,
+              role: "coordinator",
+              generation: ticket.owner.generation,
+            },
+            cwd: ctx.cwd,
+            view: ticket.kind,
+            reason: retainedReason(await readReceipt(`${stem}${RECEIPT}`)),
+          });
+        } catch (error) {
+          // A receipt alone is an orphan the next recovery removes, not a paused view.
+          if (missing(error)) continue;
+          opens.push({
+            status: "unreadable",
+            path,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
-    }
   return opens;
 }
 

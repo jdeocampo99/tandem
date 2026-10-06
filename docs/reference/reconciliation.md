@@ -57,7 +57,7 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
 - Unreadable record file: listed with path and reason, never deleted.
 - Quarantine note: removed only when no record names its lease and Treehouse, re-read under the
   repository lock, no longer holds it. Kept when its lease cannot be read.
-- Retained native view open (Tern, under `<home>/native-host/`): an open whose outcome was never
+- Retained native view open (Tern, under `<home>/tern/<projectKey>/open/`): an open whose outcome was never
   proved, which pauses new native views for its coordinator. Listed with its view kind and why
   (no receipt, a failure after layout changes, or a done receipt without exact block proof).
   Applying abandons it only under that coordinator's open lock, while the record is unchanged,

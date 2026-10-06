@@ -8,8 +8,8 @@ import type { TernListing } from "../../src/terminal-backend/tern/protocol.ts";
 import { luauBinary } from "../luau.ts";
 
 const NOW_S = 1_800_000_000;
-const ROUTE = "/b/native-host/ab12.cd34.ticket.json";
-const ctx = { coordinator: "20", cwd: "/b", home: "/b", index: "/b/native-views/key.json" };
+const ROUTE = "/b/tern/0a1b/open/ab12.cd34.ticket.json";
+const ctx = { coordinator: "20", cwd: "/b", home: "/b", index: "/b/tern/0a1b/views/index.json" };
 
 function ticket(
   kind: Ticket["kind"],
@@ -26,7 +26,7 @@ function ticket(
     origin: "20",
     session: "2",
     owner: { sessionId: "s", workspaceId: "21", tabId: "21", generation: 0 },
-    receipt: "/b/native-host/ab12.cd34.receipt.json",
+    receipt: "/b/tern/0a1b/open/ab12.cd34.receipt.json",
     expiresAt: NOW_S * 1000 + 10_000,
     ...extra,
   });
@@ -36,9 +36,9 @@ function ticket(
 const TICKETS: Record<string, Ticket> = {
   "panel/panel": ticket("panel", "panel", ctx.index),
   "catchup/window": ticket("catchup", "window", ctx.index),
-  "brief/split": ticket("brief", "split", "/b/native-views/key/brief-r1.json"),
-  "task/task": ticket("task", "task", "/b/native-views/key/task-t1.json"),
-  "task/task-replace": ticket("task", "task", "/b/native-views/key/task-t2.json", {
+  "brief/split": ticket("brief", "split", "/b/tern/0a1b/views/brief-r1.json"),
+  "task/task": ticket("task", "task", "/b/tern/0a1b/views/task-t1.json"),
+  "task/task-replace": ticket("task", "task", "/b/tern/0a1b/views/task-t2.json", {
     origin: "40",
     replaced: "40",
   }),

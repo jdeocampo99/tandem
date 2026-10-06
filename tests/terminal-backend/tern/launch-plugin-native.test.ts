@@ -1,17 +1,17 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath, publishNativeViews } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { findRunningCoordinator } from "../../../src/coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { type Action, Outcome, parseBlockArgs } from "../../../src/native/contract.ts";
+import { publishViews, viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks } from "../../../src/terminal-backend/tern/protocol.ts";
+import { openFiles, viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
@@ -168,8 +168,8 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await mkdir(join(home, "native-views"), { recursive: true });
       const writePanelFixture = () =>
         writeFile(
-          nativeViewsPath(home, a),
-          nativeViewText("panel", {
+          viewIndexPath(home, a),
+          viewFileText("index", {
             version: 1,
             project: a,
             writtenAt: new Date().toISOString(),
@@ -259,7 +259,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         blocks(await commands.ls(b)).some((p) => p.block.id === initialSecondPanel.block.id),
       ).toBe(false);
       const publish = async (project: string) =>
-        publishNativeViews(home, project, async () => {
+        publishViews(home, project, async () => {
           const fixture = nativeScreensFixture();
           const panel = panelFixture(project);
           const projects = records.map((r, index) => ({
@@ -394,9 +394,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         blocks(listing).some((p) => p.block.args?.some((arg) => arg.endsWith(".ticket.json"))),
       ).toBe(false);
       expect(
-        (await readdir(join(home, "native-host"))).filter((name) =>
-          /\.(?:ticket|receipt)\.json$/u.test(name),
-        ),
+        (await openFiles(home)).filter((name) => /\.(?:ticket|receipt)\.json$/u.test(name)),
       ).toEqual([]);
       expect(await readFile(join(root, "logs", "tern.log"), "utf8")).not.toContain(
         "hook exceeded its budget",

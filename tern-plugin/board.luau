@@ -1,5 +1,4 @@
 --!strict
-local views = require("./view-file")
 local components = require("./components")
 local rt = require("./rt")
 local screen = require("./screen")
@@ -7,24 +6,7 @@ local ui = tern.ui
 
 type Card = { key: string, title: string, branch: string?, detail: string, time: string?, model: string?, costLabel: string?, harnessGlyph: string?, stuck: boolean, pullRequest: { number: number, draft: boolean, url: string }? }
 type Lane = { title: string, count: number, cards: { Card } }
-type Model = { project: string, board: { viewOnly: boolean, returnLabel: string, lanes: { Lane } } }
-type State = { view: views.View<Model>, args: { string }, origin: rt.Origin }
-
-local function parse(value: unknown): Model?
- if type(value) ~= "table" or type(value.project) ~= "string" or type(value.board) ~= "table" then return nil end
- local board = value.board
- if board.viewOnly ~= true or type(board.returnLabel) ~= "string" or type(board.lanes) ~= "table" or #board.lanes ~= 4 then return nil end
- for _, lane in board.lanes do
-  if type(lane) ~= "table" or type(lane.title) ~= "string" or type(lane.count) ~= "number" or type(lane.cards) ~= "table" then return nil end
-  for _, card in lane.cards do
-   if type(card) ~= "table" or type(card.key) ~= "string" or type(card.title) ~= "string" or type(card.detail) ~= "string" or type(card.stuck) ~= "boolean" then return nil end
-   for _, field in {"branch", "time", "model", "costLabel", "harnessGlyph"} do if card[field] ~= nil and type(card[field]) ~= "string" then return nil end end
-   local pr = card.pullRequest
-   if pr ~= nil and (type(pr) ~= "table" or type(pr.number) ~= "number" or type(pr.draft) ~= "boolean" or type(pr.url) ~= "string") then return nil end
-  end
- end
- return value :: Model
-end
+type State = { view: rt.Watch, args: { string }, origin: rt.Origin }
 
 local function cardNode(card: Card): Node
  local title = {ui.el("span", {class="tdm-harness", text=card.harnessGlyph or ""}), ui.el("strong", {text=card.title})}
@@ -44,8 +26,7 @@ end
 local block: BlockDef<State> = {
  init = function(cx, args, saved)
   local restored = screen.args(args, saved)
-  local state: State = {args=restored, origin=rt.origin(restored), view=views.create(screen.path(args, saved), "panel", parse)}
-  views.refresh(state.view); views.watch(state.view, cx)
+  local state: State = {args=restored, origin=rt.origin(restored), view=rt.watch(cx, screen.path(args, saved), "index")}
   return state
  end,
  title = function() return "Tandem board" end,

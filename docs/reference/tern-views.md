@@ -61,26 +61,26 @@ and recovery of the helper pane belong to the terminal backend.
 
 ## Shared rendering foundation
 
-Every native view file is one private JSON envelope:
+Every native view file is one private `ViewFile` (`src/native/contract.ts`):
 
 ```ts
-{ version: 1, kind: "brief", revision: "opaque-view-revision", model: briefView }
+{ v: 1, kind: "brief", epoch: "store-id", seq: 42, model: briefView }
 ```
 
-The views-data publisher uses `kind = "panel"` with the root `NativeViews` bundle, and
-`task`/`brief`/`pr` with direct domain models for detail files. Its revision is the canonical
-model content hash. A board or usage block reading that root file still expects envelope kind
-`panel` and extracts its model from the bundle; the native block id is separate from the file kind.
+`store.ts` writes `kind = "index"` with the root `NativeViews` bundle, and `task`/`brief`/`pr`
+with direct domain models for detail files, after validating each model against its schema in
+`VIEW_MODELS`. A board or usage block watching the index extracts its part of the bundle; the
+native block id is separate from the file kind.
 
-`revision` is an opaque presentation revision. Actions that approve or submit must also carry the
-authority's request revision, content/agreement digests or reviewed HEAD from their view model.
-This file never authorizes an action by itself.
+`seq` only orders files. Actions that approve or submit must also carry the authority's request
+revision, content/agreement digests or reviewed HEAD from their view model. This file never
+authorizes an action by itself.
 
 Luau modules load with relative `require` inside the package:
 
 | Module | API |
 | --- | --- |
-| `view-file` | `create(path, kind, parseModel)`, `refresh(state) -> changed`, `watch(state, cx, interval?) -> stop` |
+| `rt` | `watch(cx, path, kind) -> Watch`, `unwatch(cx, watch)`, `draw(view, state, cx)`, `origin(args)`, `act(cx, origin, action, done?, labels?)` |
 | `text-field` | `create(text?, multiline?)`, `key(field, key) -> outcome`, `node(field, key, placeholder?)` |
 | `diff-row` | `row(line, commentAction?, cards?)`, `card(key, author, markdown, actions?)` |
 | `components` | `button(text, action, tone?)`, `text(text, tone?)`, `keyed(node, key)` |
@@ -102,13 +102,17 @@ when that block opens. Later panes reuse the cached definition. The window entry
 registers commands and routes without requiring the hosting module; a matching open route
 consumes the ticket and stages that cold load before invoking the host in a fresh timer.
 
-The loader checks the envelope and runs the renderer's shape parser before replacing its model.
-Reads are bounded to 8 MiB, regular files only, and refuse symlinks. Missing, malformed, wrong-kind
-or unsupported-version files preserve the last good model and set `status = "unavailable"`.
-Renderers show that status and disable revision-bound actions until `status = "ready"`. No action
-may use an old model merely because it is still visible. Unchanged files do not trigger a repaint.
-The first poll runs after `init`, because a new block is absent from the pane list during `init`.
-Polling stops when its exact pane disappears, or when the returned stop function is called.
+`rt.watch` reads the file once at `init`, then once a second. It checks the envelope and accepts
+a file only when its `seq` is higher than the shown one, or its `epoch` differs. Screens have no
+shape parsers: the writer validated the model, and `host.luau` draws every block through
+`rt.draw`, which renders inside a `pcall`. A model that fails to draw is never shown; its watch
+goes back to the last model that drew and sets `status = "unavailable"` until a newer file
+arrives. Reads are bounded to 8 MiB. Missing, malformed, wrong-kind or older files likewise keep
+the last good model and set `status = "unavailable"`. Renderers show that status and disable
+revision-bound actions until `status = "ready"`. No action may use an old model merely because
+it is still visible. Unchanged files do not trigger a repaint. Polling starts in a timer, because a
+new block is absent from the pane list during `init`, and stops when its exact pane disappears or
+on `rt.unwatch`.
 
 Text fields keep transient text, a cursor and a selection anchor in code-point positions. Their
 nodes convert cursor and anchor to Tern's UTF-16 units, including supplementary Unicode characters.
@@ -268,7 +272,7 @@ The native brief pane and its loading, feedback and retirement behavior are defi
 `src/terminal-backend/tern/host.ts` owns every staged open. The cross-language shapes it writes
 (`Ticket`, `Receipt`, block arguments and `VIEW_KINDS`) are defined once in
 `src/native/contract.ts`. Each open writes a private ticket
-`<home>/native-host/<coordinatorKey>.<token>.ticket.json` and runs `tern open` on it. The window
+`<home>/tern/<projectKey>/open/<coordinatorKey>.<token>.ticket.json` and runs `tern open` on it. The window
 route hands the ticket to `tern-plugin/layout.luau`, which writes exactly one
 `<coordinatorKey>.<token>.receipt.json`: `done` with the exact pane, tab and session, or `failed`
 with its stage and the number of layout effects it applied. Tern 0.5.0 reports handled layout
@@ -360,7 +364,7 @@ and `tandem native act` parses it with `parseBlockContext`. `tern-plugin/rt.luau
 `origin(args)` and `act(cx, origin, action, done)` without action policy or retries. Screens that
 also watch the project index read `args[3]`, `indexPath` (equal to the context's `index`), so
 Luau never derives a path from another.
-Root inputs come from `nativeViewsPath`; detail inputs come from `nativeDetailPath`.
+Root inputs come from `viewIndexPath`; detail inputs come from `viewDetailPath`.
 Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
 board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
 coordinator, home, cwd and origin context.
@@ -408,10 +412,10 @@ coordinator and closes only the exact task block; it never closes or restarts th
 An `open` action with `ref: {kind: "orchestrator"}` performs that return.
 `ROOT#inbox` opens Tern's inbox, and `ROOT#open-project` sends the user's project-opening
 request to the verified coordinator. Other file paths must name an already published detail
-of the selected project. The view-file handler cannot open arbitrary renderer files.
+of the selected project. No handler opens arbitrary renderer files.
 
-Project navigation selects the published row by 1–9 or wraps prev/next, refuses stale/offline
-rows, re-proves the destination coordinator, and uses an exact-block `tern focus` session
+Project navigation selects the row the last publication recorded in `state.json` by 1–9 or
+wraps prev/next, refuses stale/offline rows, re-proves the destination coordinator, and uses an exact-block `tern focus` session
 switch. Supplied window keys are independently scoped and must contain the originating pane.
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
@@ -419,7 +423,7 @@ that scope. Multiple windows are refused rather than choosing one by ordering.
 ### Task page and picker
 
 `task.luau` draws the direct `TaskPageView` envelope as `tandem.task`. It uses the
-block arguments above and reads the project's root index through `navigation.root`.
+block arguments above and watches the project's root index, `args[3]`.
 Brief and PR detail references are project-relative filenames; they resolve beside the
 shown task detail file. The Brief tab reads saved lines; review and annotations open
 in the separate brief pane. Diff and PR use `pr-model` and `pr-content`, including
@@ -446,16 +450,13 @@ remain unchanged. Unknown or foreign identities never become native links.
 
 ### Reusing the native PR components
 
-`tern-plugin/pr-model.luau` exports `parse` for the direct PR model and `parseIndex` for
-the panel's PR index. `taskDetailPath(taskDetailPath, taskId, indexModel)` resolves exactly
+`tern-plugin/pr-model.luau` exports the PR model types. `taskDetailPath(taskDetailPath, taskId, indexModel)` resolves exactly
 one `header.taskId` association supplied by TypeScript to its sibling PR file. Missing or
 ambiguous associations and unsafe relative filenames return `nil`; PR numbers alone are
-not associations. `forTask(taskDetailPath, taskId, indexModel)` returns a refreshed
-`view-file.View<Model>` or `nil` when there is no safe association. It also checks that the
-loaded PR model names the same task. A missing, malformed or mismatched file returns a view
-with `status="unavailable"`; callers may retain and watch it with `view-file.watch`.
-Use `taskDetailPath` before reusing an existing watched view or cancelling it when the path
-changes. Pass the task model's `header.id` and the ready index from `navigation.root`.
+not associations. `forTask(cx, taskDetailPath, taskId, indexModel)` returns an `rt.watch` of
+that file or `nil` when there is no safe association. The task page shows the PR only while the
+loaded model names the same task. Use `taskDetailPath` before reusing an existing watch or
+`rt.unwatch` it when the path changes. Pass the task model's `header.id` and the ready index model.
 
 `tern-plugin/pr-content.luau` exports `create`, `view`, `event`, `key`, and `ready`.
 `view(state, model, ready, prefix?, strip?)` returns `{main,dock}`. Mount `dock` for the review
@@ -564,7 +565,7 @@ latest alert, with the helper tab's waiting badge. Herdr retains its existing ar
 ### Panel bell and user read semantics
 
 The bell is the originating project's confirmed Tandem alert deliveries since its user read
-cursor, persisted beside the transition cursor in `<home>/native-alerts/<repositoryKey>.json`.
+cursor, persisted beside the transition cursor in the project's `state.json` `alerts`.
 Only successful `notify` calls increment `delivered`: needs-you (including brief revisions and
 PR-watch rows), done (new draft PR), and stuck. Initial historical baselines, coordinator delivery
 backlogs, coordinator acknowledgements, failed or uncertain notification calls, and unrelated

@@ -1,15 +1,15 @@
 import { expect, test } from "bun:test";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { nativeViewText } from "../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import { type Action, Outcome } from "../../src/native/contract.ts";
+import { projectStoreDirectory, readProjectState } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
+import { publishFixture } from "../native/view-files.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 import { withScenario } from "./scenario.ts";
 
@@ -42,8 +42,7 @@ async function withScreens(
       worktree: lease,
     });
     const fixture = { ...nativeScreensFixture(), project: world.repoPath };
-    await mkdir(join(world.home, "native-views"), { recursive: true });
-    await writeFile(nativeViewsPath(world.home, world.repoPath), nativeViewText("panel", fixture));
+    await publishFixture(world.home, world.repoPath, fixture);
     const opened: TerminalView[] = [];
     let fail = false;
     // Reuse the scenario's terminal/process ownership ledger; capture only the presentation port.
@@ -126,22 +125,16 @@ test("PR link clicks resolve saved project identities, never arbitrary caller UR
 });
 
 test("Open what needs me returns to the orchestrator and opens the saved brief", async () => {
-  await withScreens(async ({ call, opened, home }) => {
+  await withScreens(async ({ call, opened, home, repo }) => {
     expect((await call({ verb: "catchup-open-needs" })).status).toBe("done");
     expect(opened).toEqual([{ kind: "orchestrator" }, { kind: "brief", requestId: "req-tern" }]);
-    const entries = await readdir(join(home, "native-visits"));
-    const record = entries.find((entry) => entry.endsWith(".json"));
-    expect(record).toBeDefined();
-    expect(
-      JSON.parse(await readFile(join(home, "native-visits", record ?? ""), "utf8"))
-        .dismissedSignature,
-    ).toBe("after");
+    expect((await readProjectState(home, repo))?.visit?.dismissedSignature).toBe("after");
   });
 });
 
 test("catch-up dismissal still returns when a live publication becomes malformed", async () => {
   await withScreens(async ({ call, opened, home, repo }) => {
-    await writeFile(nativeViewsPath(home, repo), "{broken");
+    await writeFile(join(projectStoreDirectory(home, repo), "state.json"), "{broken");
     expect((await call({ verb: "catchup-dismiss" })).status).toBe("done");
     expect(opened).toEqual([{ kind: "orchestrator" }]);
   });

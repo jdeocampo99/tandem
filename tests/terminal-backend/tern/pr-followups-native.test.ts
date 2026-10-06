@@ -3,13 +3,9 @@ import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativePrFile } from "../../../src/board/native-views.ts";
-import {
-  nativeDetailPath,
-  nativeViewsPath,
-  publishNativeViews,
-} from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { ActionEnvelope } from "../../../src/native/contract.ts";
+import { publishViews, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
@@ -64,10 +60,10 @@ printf '{"status":"done","notice":{"code":"review-posted","text":"https://github
     const publication = taskScreenPublication(root, true);
     const review = followupsFixture();
     const taskless = followupsFixture(true);
-    const index = nativeViewsPath(env.TANDEM_HOME, root);
-    const file = nativeDetailPath(env.TANDEM_HOME, root, nativePrFile("owner/repo", 281));
-    const tasklessFile = nativeDetailPath(env.TANDEM_HOME, root, nativePrFile("owner/repo", 282));
-    await publishNativeViews(env.TANDEM_HOME, root, async () => ({
+    const index = viewIndexPath(env.TANDEM_HOME, root);
+    const file = viewDetailPath(env.TANDEM_HOME, root, nativePrFile("owner/repo", 281));
+    const tasklessFile = viewDetailPath(env.TANDEM_HOME, root, nativePrFile("owner/repo", 282));
+    await publishViews(env.TANDEM_HOME, root, async () => ({
       ...publication,
       bundle: {
         ...publication.bundle,

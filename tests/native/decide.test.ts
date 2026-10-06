@@ -17,7 +17,7 @@ function ticket(extra: Partial<Ticket> = {}): Ticket {
     origin: "3",
     session: "1",
     owner: { sessionId: "s", workspaceId: "2", tabId: "2", generation: 0 },
-    receipt: "/h/native-host/k.t.receipt.json",
+    receipt: "/h/tern/0a1b/open/k.t.receipt.json",
     ...extra,
   });
 }

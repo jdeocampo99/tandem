@@ -225,7 +225,7 @@ local function host(path: string, receipt: string, run: Run): {[string]: string}
 end
 
 function M.open(req: OpenRequest, _cx: WindowCx): RouteDecision?
- local stem=string.match(req.path, "^(.*/native%-host/%x+%.[%x%-]+)%.ticket%.json$")
+ local stem=string.match(req.path, "^(.*/tern/%x+/open/%x+%.[%x%-]+)%.ticket%.json$")
  if not stem then return nil end
  local receipt=stem .. ".receipt.json"
  local run: Run={stage="ticket",applied=0}

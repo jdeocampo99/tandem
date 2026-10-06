@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
-import { nativeDetailPath, nativeViewsPath, publishNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { publishViews, viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { projectRequestBriefPane } from "../../src/requests/review-pane.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
@@ -86,7 +86,7 @@ for (const existing of [false, true]) {
         });
       const read = Promise.withResolvers<void>();
       const resume = Promise.withResolvers<void>();
-      const oldTick = publishNativeViews(world.home, world.repoPath, async () => {
+      const oldTick = publishViews(world.home, world.repoPath, async () => {
         const publication = await reader.read(snapshot, world.repoPath);
         read.resolve();
         await resume.promise;
@@ -105,7 +105,7 @@ for (const existing of [false, true]) {
         resume.resolve();
         await oldTick;
         const projected = await projection;
-        const detailPath = nativeDetailPath(world.home, world.repoPath, "brief-req-native.json");
+        const detailPath = viewDetailPath(world.home, world.repoPath, "brief-req-native.json");
         const expected = {
           kind: "brief",
           model: {
@@ -120,12 +120,10 @@ for (const existing of [false, true]) {
         expect(JSON.parse(await readFile(detailPath, "utf8"))).toMatchObject(expected);
         expect(projected.record.reviewPane?.renderedPath).toBe(detailPath);
         // A delayed tick still carries the old board input, but builds details from fresh SQLite.
-        await publishNativeViews(world.home, world.repoPath, () =>
-          reader.read(snapshot, world.repoPath),
-        );
+        await publishViews(world.home, world.repoPath, () => reader.read(snapshot, world.repoPath));
         expect(JSON.parse(await readFile(detailPath, "utf8"))).toMatchObject(expected);
         expect(
-          JSON.parse(await readFile(nativeViewsPath(world.home, world.repoPath), "utf8")),
+          JSON.parse(await readFile(viewIndexPath(world.home, world.repoPath), "utf8")),
         ).toMatchObject({
           model: { briefs: { "req-native": { revision: revised.record.draft.revision } } },
         });
@@ -324,7 +322,7 @@ for (const action of ["approve", "request-changes", "abandon"] as const) {
       expect(next.record.reviewPane?.renderedRevision).toBe(2);
       const file = JSON.parse(await readFile(next.record.reviewPane?.renderedPath ?? "", "utf8"));
       expect(file).toMatchObject({
-        version: 1,
+        v: 1,
         kind: "brief",
         model: {
           revision: 2,

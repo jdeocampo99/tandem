@@ -1,6 +1,5 @@
 --!strict
 local ui = tern.ui
-local files = require("./view-file")
 local fields = require("./text-field")
 local rows = require("./diff-row")
 local components = require("./components")
@@ -15,38 +14,19 @@ type Brief = {
 }
 type Draft = { lineId: string, text: string }
 type State = {
- file: files.View<Brief>, shown: Brief?, shownRevision: string?, origin: rt.Origin,
+ file: rt.Watch, shown: Brief?, shownSeq: number?, origin: rt.Origin,
  comments: { Draft }, editing: string?, editor: fields.Field, overall: fields.Field, active: string,
  submitted: boolean, notice: string?,
 }
 
-local function parse(value: unknown): Brief?
- if type(value) ~= "table" or type(value.requestId) ~= "string" or type(value.title) ~= "string"
-  or type(value.revision) ~= "number" or type(value.changes) ~= "number"
-  or type(value.approvalState) ~= "string" or type(value.abandoned) ~= "boolean"
-  or type(value.commentCount) ~= "number" or type(value.lines) ~= "table" or type(value.approval) ~= "table"
-  then return nil end
- local a = value.approval
- if type(a.briefRevision) ~= "number" or type(a.contentDigest) ~= "string" or type(a.agreementDigest) ~= "string"
-  or a.briefRevision ~= value.revision then return nil end
- if value.browserUrl ~= nil and type(value.browserUrl) ~= "string" then return nil end
- for _, line in value.lines do
-  if type(line) ~= "table" or type(line.id) ~= "string" or type(line.number) ~= "number"
-   or type(line.text) ~= "string" or type(line.kind) ~= "string" or type(line.isNew) ~= "boolean"
-   or type(line.comments) ~= "table" then return nil end
-  for _, comment in line.comments do
-   if type(comment) ~= "table" or type(comment.id) ~= "string" or type(comment.body) ~= "string"
-    or type(comment.author) ~= "string" then return nil end
-  end
- end
- return value :: Brief
-end
-
 -- A refreshed file never reattaches a user's pending comments to a later draft.
 local function sync(state: State)
- if state.file.status ~= "ready" then return end
+ local file = state.file
+ -- A draft that failed to draw was never shown; fall back to the one that did.
+ if file.rejected ~= nil and state.shownSeq == file.rejected then state.shown, state.shownSeq = file.model, nil end
+ if file.status ~= "ready" then return end
  if state.shown == nil or (#state.comments == 0 and state.editing == nil and state.overall.text == "" and not state.origin.busy and not state.submitted) then
-  state.shown, state.shownRevision = state.file.model, state.file.revision
+  state.shown, state.shownSeq = file.model, file.seq
  end
 end
 
@@ -104,12 +84,10 @@ end
 local brief: BlockDef<State> = {
  init = function(cx, args)
   local state: State = {
-   file = files.create(args[1] or "", "brief", parse), origin = rt.origin(args),
+   file = rt.watch(cx, args[1] or "", "brief"), origin = rt.origin(args),
    comments = {}, editor = fields.create(nil, true), overall = fields.create(), active = "overall", submitted = false,
   }
-  files.refresh(state.file)
   sync(state)
-  files.watch(state.file, cx)
   return state
  end,
  title = function(state) return if state.shown then "Brief · " .. state.shown.title else "Brief" end,
@@ -124,7 +102,7 @@ local brief: BlockDef<State> = {
   if state.notice then table.insert(document, components.text(state.notice, "warn")) end
   if state.file.status ~= "ready" then
    table.insert(document, components.text("Brief unavailable. Actions are disabled until the view file recovers.", "warn"))
-  elseif state.shownRevision ~= state.file.revision then
+  elseif state.shownSeq ~= state.file.seq then
    local refreshed: {Node} = { components.text("A newer revision is available. Your comments still describe this revision.", "warn") }
    if not state.submitted then table.insert(refreshed, components.button("Discard comments and refresh", "refresh")) end
    table.insert(document, ui.row(refreshed))

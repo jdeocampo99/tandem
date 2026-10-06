@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { EndpointOwnershipError } from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
@@ -10,8 +10,8 @@ import type {
 } from "../../../src/terminal-backend/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { missing, ternCli } from "../../../src/terminal-backend/tern/cli.ts";
-
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { openFiles, openPath } from "../../native/view-files.ts";
 
 const coordinator: Endpoint = {
   terminal: "tern",
@@ -108,7 +108,7 @@ const fix = (home: string, owner: () => Owner, apply: boolean) =>
   });
 
 const intents = async (home: string) =>
-  (await readdir(join(home, "native-host"))).filter((name) => !name.endsWith(".lock"));
+  (await openFiles(home)).filter((name) => !name.endsWith(".lock"));
 
 for (const owner of ["present", "gone"] as const) {
   test(`tandem fix lists a retained open and, with --yes, abandons it when its coordinator is ${owner}`, async () => {
@@ -159,7 +159,7 @@ test("tandem fix --yes keeps a retained open when the coordinator turns ambiguou
 test("tandem fix reports an unreadable open record and leaves it in place", async () => {
   await withRetainedOpen(async (home) => {
     const [name] = (await intents(home)).filter((each) => each.endsWith(".ticket.json"));
-    const path = join(home, "native-host", name ?? "");
+    const path = await openPath(home, name ?? "");
     await Bun.write(path, "{broken");
     const applied = await fix(home, () => "gone", true);
     expect(applied.quarantined).toEqual([expect.objectContaining({ kind: "native-open", path })]);
@@ -170,7 +170,7 @@ test("tandem fix reports an unreadable open record and leaves it in place", asyn
 test("tandem fix reports paused views it cannot list and still scans everything else", async () => {
   const home = await realpath(await mkdtemp("/tmp/tandem-native-open-fix-"));
   try {
-    await writeFile(join(home, "native-host"), "not a directory");
+    await writeFile(join(home, "tern"), "not a directory");
     const planned = await fix(home, () => "present", false);
     expect(planned.failed).toEqual([
       expect.objectContaining({

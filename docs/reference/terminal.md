@@ -180,11 +180,11 @@ GitHub/provider data and applies policy; Luau draws, keeps transient drafts and 
 Only `src/terminal-backend/tern/` calls the Tern CLI or parses its JSON. Only
 `src/harness/omp/` imports `@oh-my-pi/*`.
 
-Every published view is `{version:1,kind,revision,model}`. The root has `kind:"panel"` and
-`model:NativeViews`; task/brief/PR details contain their domain model directly. Use
-`nativeViewsPath` and `nativeDetailPath` to locate them. Missing or invalid files preserve the
-last readable display but disable revision-bound actions. These derived files never authorize
-an approval or post.
+Every published view is a `ViewFile` `{v:1,kind,epoch,seq,model}` written by
+`src/native/store.ts`. The index has `kind:"index"` and `model:NativeViews`; task/brief/PR details
+contain their domain model directly. Use `viewIndexPath` and `viewDetailPath` to locate them.
+Missing, older or invalid files preserve the last readable display but disable revision-bound
+actions. These derived files never authorize an approval or post.
 
 All blocks receive three strings, `[viewPath, ctxJson, indexPath]`, from `blockArgs` in
 `src/native/contract.ts`; listings are matched only through `parseBlockArgs`. Blocks treat
@@ -266,7 +266,7 @@ ownership at click time. See [task hosting](tern-views.md#task-page-and-picker) 
   unchanged work and timer-only repaints stay quiet. The full-window card lists merged PRs,
   Needs you, blocked work and saved workstream notes. Dismiss/Escape returns to the conversation;
   Open what needs me returns, then opens the first saved brief, task or inbox destination.
-- Private locked `<home>/native-visits/<repositoryKey>.json` records retain entry history,
+- The project's locked `<home>/tern/<repositoryKey>/state.json` `visit` record retains entry history,
   `lastVisibleAt` and signature. Serialized focus transitions and once-minute selected-project
   heartbeats capture visibility; a locked throttle shared across windows skips samples less
   than a minute apart. Transitions can update sooner. Duplicate/backwards samples never move

@@ -2,17 +2,17 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { parseBlockContext } from "../../../src/native/contract.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
+import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { recordedActions } from "./native-window.ts";
 
@@ -26,7 +26,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     const control = join(root, "w.sock");
     const home = join(root, "home");
     const project = join(root, "repo");
-    const path = nativeViewsPath(home, project);
+    const path = viewIndexPath(home, project);
     const log = join(root, "actions.log");
     const fail = join(root, "fail-action");
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
@@ -48,7 +48,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       recursive: true,
     });
     await mkdir(join(home, "native-views"));
-    await writeFile(path, nativeViewText("panel", { ...nativeScreensFixture(), project }), {
+    await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }), {
       mode: 0o600,
     });
     await writeFile(
@@ -206,7 +206,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           const writtenAt = "2030-01-02T12:02:00Z";
           await writeFile(
             path,
-            nativeViewText("panel", {
+            viewFileText("index", {
               ...fixture,
               writtenAt,
               warnings,
@@ -224,7 +224,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           expect(stale).toContain("View updated at 2030-01-02 12:02:00 UTC");
           expect(stale.indexOf(warning)).toBeLessThan(stale.indexOf("cost today"));
           if (shots) console.log(await ctl("shot", "usage-stale"));
-          await writeFile(path, nativeViewText("panel", fixture));
+          await writeFile(path, viewFileText("index", fixture));
           await until(async () => !(await ctl("tree")).includes(warning));
         }
         if (kind === "catchup") {
@@ -266,7 +266,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         expect(remaining.some((entry) => entry.block.id === viewPane)).toBe(false);
         expect(remaining.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
       }
-      await writeFile(path, nativeViewText("panel", { ...nativeScreensFixture(), project }));
+      await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }));
       expect(
         (
           await backend.openView({

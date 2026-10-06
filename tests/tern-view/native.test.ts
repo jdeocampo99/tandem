@@ -30,7 +30,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     await mkdir(plugin);
     await mkdir(env.ZDOTDIR);
     await mkdir(env.TANDEM_HOME);
-    for (const name of ["text-field", "view-file", "diff-row", "components"]) {
+    for (const name of ["text-field", "rt", "diff-row", "components"]) {
       await copyFile(
         fileURLToPath(new URL(`../../tern-plugin/${name}.luau`, import.meta.url)),
         join(plugin, `${name}.luau`),

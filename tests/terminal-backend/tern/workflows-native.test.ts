@@ -2,14 +2,14 @@ import { expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { NativeViewsPublisher } from "../../../src/board/native-publish.ts";
-import { NativeViewsReader } from "../../../src/board/native-read.ts";
+import { NativeViewsPublisher, NativeViewsReader } from "../../../src/board/native-read.ts";
 import { readBoard } from "../../../src/board/read.ts";
-import { type BoardSnapshot, publishNativeViews } from "../../../src/board/snapshot.ts";
+import type { BoardSnapshot } from "../../../src/board/snapshot.ts";
 import { onboardRepo } from "../../../src/config/repositories.ts";
 import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { publishViews } from "../../../src/native/store.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import {
   readRuntimeState,
@@ -111,7 +111,7 @@ async function seedProject(window: TernWindow, name: string): Promise<Project> {
       await reader.read(first.snapshot, first.project, first.sessions);
       await reader.settle();
       const next = await tick();
-      await publishNativeViews(window.home, next.project, () =>
+      await publishViews(window.home, next.project, () =>
         reader.read(next.snapshot, next.project, next.sessions),
       );
     },

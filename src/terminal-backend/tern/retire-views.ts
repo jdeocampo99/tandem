@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { EndpointOwnershipError } from "../../adapters/primitives.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
 import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
 import { parseBlockArgs, ViewKind } from "../../native/contract.ts";
+import { viewDetailPath, viewIndexPath } from "../../native/store.ts";
 import type { EndpointTarget } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
@@ -74,7 +74,7 @@ export async function planCoordinatorViews(
   const owner = await recordedCoordinator(home, target);
   if (owner === undefined)
     throw new EndpointOwnershipError(target.endpoint, "views have no unique recorded coordinator");
-  const index = nativeViewsPath(home, owner.repoPath);
+  const index = viewIndexPath(home, owner.repoPath);
   const coordinator = ternEndpoint(target.endpoint);
   const endpointFor = (entry: LocatedBlock) =>
     ternEndpoint({
@@ -90,7 +90,7 @@ export async function planCoordinatorViews(
     const expectedFile =
       kind.success && detailKinds.includes(kind.data)
         ? basename(file).startsWith(`${kind.data}-`)
-          ? nativeDetailPath(home, owner.repoPath, basename(file))
+          ? viewDetailPath(home, owner.repoPath, basename(file))
           : undefined
         : index;
     if (

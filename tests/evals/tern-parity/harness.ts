@@ -4,11 +4,10 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
-import { readNativeBundle } from "../../../src/board/native-file.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { runTerminal } from "../../../src/main.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { readProjectState, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import { createTandemService, type TandemService } from "../../../src/service/controller.ts";
 import { installTerminalPlugin, terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { luauBinary } from "../../luau.ts";
@@ -408,7 +407,7 @@ export class TernParityHost {
       this.world.advanceClock(age);
       await service.nativeViewsIdle();
       const { model } = PublishedWarnings.parse(
-        JSON.parse(await readFile(nativeViewsPath(this.world.home, project.repoPath), "utf8")),
+        JSON.parse(await readFile(viewIndexPath(this.world.home, project.repoPath), "utf8")),
       );
       if (!model.warnings.some((warning) => warning.includes("refreshing"))) return;
     }
@@ -422,7 +421,7 @@ export class TernParityHost {
 
   /** The panel's published file stops parsing, as a torn or foreign write leaves it. */
   async corruptPanelView(): Promise<void> {
-    await writeFile(nativeViewsPath(this.world.home, this.project.repoPath), "{broken");
+    await writeFile(viewIndexPath(this.world.home, this.project.repoPath), "{broken");
   }
 
   /** A task page's published detail stops parsing. */
@@ -442,7 +441,7 @@ export class TernParityHost {
 
   #detail(view: DetailView): string {
     const file = "task" in view ? `task-${view.task}.json` : `brief-${view.brief}.json`;
-    return nativeDetailPath(this.world.home, this.project.repoPath, file);
+    return viewDetailPath(this.world.home, this.project.repoPath, file);
   }
 
   /**
@@ -452,7 +451,8 @@ export class TernParityHost {
    */
   async stepAway(away: ScenarioTernProject, minutes: number, changed: boolean): Promise<void> {
     const { home, repoPath } = this.world;
-    const signature = (await readNativeBundle(home, this.project.repoPath)).changeSignature;
+    const signature = (await readProjectState(home, this.project.repoPath))?.published
+      ?.changeSignature;
     await this.focus(Number(away.coordinator.paneId));
     await visitNativeProject(
       {
@@ -728,10 +728,10 @@ export class TernParityHost {
       cwd: block.cwd,
     }));
     const paneKey = JSON.stringify(panes);
-    const paths = [
-      ...(await listFiles(join(this.world.home, "native-views"), /\.json$/u)),
-      ...(await listFiles(join(this.world.home, "native-host"), /\.ticket\.json$/u)),
-    ];
+    const paths = await listFiles(
+      join(this.world.home, "tern"),
+      /^(index|task-.+|brief-.+|pr-.+)\.json$|\.ticket\.json$/u,
+    );
     const files: Record<string, string | boolean> = {};
     for (const path of paths) {
       const text = await readFile(path, "utf8").catch(() => undefined);
