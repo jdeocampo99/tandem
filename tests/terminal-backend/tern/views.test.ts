@@ -265,7 +265,8 @@ for (const mode of [
       wait: async (ms) => {
         now += ms;
       },
-      guard: async (key, operation) => {
+      guard: async (key, operation, recoveredNativeOpen) => {
+        if (recoveredNativeOpen) quarantined.delete(key);
         if (quarantined.has(key)) throw new TernOutcomeUnknownError(key, "quarantined");
         try {
           return await operation();
@@ -412,13 +413,21 @@ for (const mode of [
           ].includes(mode)
         ) {
           const before = effects;
-          await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+          if (["verification-failed", "verification-malformed", "unknown"].includes(mode)) {
+            expect((await open()).paneId).toBe("4");
+            expect(await Bun.file(routePath).exists()).toBe(false);
+            expect(
+              (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
+            ).toEqual([]);
+          } else {
+            await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+            expect(await Bun.file(routePath).exists()).toBe(true);
+            expect(
+              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
+            ).toBe(true);
+          }
           expect(effects).toBe(before);
           expect(created).toBe(true);
-          expect(await Bun.file(routePath).exists()).toBe(true);
-          expect(
-            (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-          ).toBe(true);
         } else expect(effects).toBe(0);
       }
     } finally {
