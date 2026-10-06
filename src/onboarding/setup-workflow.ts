@@ -1,4 +1,5 @@
-import { basename, dirname, realpath, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import type { HomeSettings, SelfImprovementMode } from "../config/home-settings.ts";
 import type { ModelSettings } from "../config/models.ts";
 import type { Clock, CommandRunner, RepoPolicy } from "../contracts.ts";

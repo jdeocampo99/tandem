@@ -429,7 +429,10 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
 
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.approvalRequired).toBe(true);
-    expect(proposal.discovery).toEqual({ scripts: ["lint", "test"], lockfile: "pnpm-lock.yaml" });
+    expect(proposal.discovery).toEqual({
+      commands: ["pnpm run lint", "pnpm run test", "pnpm run build"],
+      lockfile: "pnpm-lock.yaml",
+    });
     const install = ["/bin/sh", "-c", "pnpm install --frozen-lockfile"];
     expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([install]);
 

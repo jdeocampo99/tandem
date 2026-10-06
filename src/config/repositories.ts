@@ -91,7 +91,7 @@ export type OnboardRepoResult = Readonly<{
   discovery: OnboardingDiscovery;
 }>;
 
-/** The commands that run the package.json checks, and the lockfile behind the install. */
+/** Every package.json script as the command that runs it, and the lockfile behind the install. */
 export type OnboardingDiscovery = Readonly<{
   commands: readonly string[];
   lockfile?: string;
@@ -617,6 +617,20 @@ function proposeValidationCommands(
   };
 }
 
+function packageScriptCommands(packageText: string | undefined, runner: string): readonly string[] {
+  if (packageText === undefined) return [];
+  let parsed: unknown;
+  try {
+    parsed = parseJson(packageText, "package.json");
+  } catch {
+    return [];
+  }
+  if (!isRecord(parsed) || !isRecord(parsed.scripts)) return [];
+  return Object.entries(parsed.scripts)
+    .filter(([, body]) => typeof body === "string" && body.trim().length > 0)
+    .map(([name]) => `${runner} run ${name}`);
+}
+
 type PackageManager = Readonly<{ install: string; runner: string; lockfile: string }>;
 
 /** Lockfile → the install that reproduces it exactly and the tool that runs package scripts. */
@@ -761,7 +775,8 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     false,
   );
   const manager = await detectPackageManager(checkoutRoot, options.readText);
-  const discovered = proposeValidationCommands(packageText, manager?.runner ?? "bun");
+  const runner = manager?.runner ?? "bun";
+  const discovered = proposeValidationCommands(packageText, runner);
   // Commands the user chose are theirs to vouch for, so they leave nothing unresolved.
   const proposal: ValidationProposal =
     options.validationCommands === undefined
@@ -801,7 +816,7 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     setupCommands: proposedPolicy.setupCommands,
     unresolved,
     discovery: {
-      commands: discovered.commands,
+      commands: packageScriptCommands(packageText, runner),
       ...(manager === undefined ? {} : { lockfile: manager.lockfile }),
     },
   };
