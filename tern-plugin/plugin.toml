@@ -5,16 +5,29 @@ version = "0.1.0"
 description = "Tandem views, project keys, palette commands and task links"
 host = "host.luau"
 window = "window.luau"
-styles = ["tandem.css", "board-usage.css"]
+styles = ["tandem.css", "panel.css", "board-usage.css"]
+
+[[blocks]]
+id = "panel"
+title = "Tandem panel"
+palette = false
+
+[[blocks]]
+id = "welcome"
+title = "Tandem welcome"
+palette = false
 
 [[blocks]]
 id = "board"
 title = "Tandem board"
+palette = false
 
 [[blocks]]
 id = "usage"
 title = "Tandem usage"
+palette = false
 
 [[blocks]]
 id = "catchup"
-title = "Tandem catch-up"
+title = "Tandem catchup"
+palette = false

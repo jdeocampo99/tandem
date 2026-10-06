@@ -51,7 +51,10 @@ tern.route.link(function(link, cx)
  return nil
 end)
 
+local viewHost = require("./view-host")
 tern.route.open(function(req, cx)
+ local hosted = viewHost.open(req, cx)
+ if hosted then return hosted end
  if string.match(req.path, "%.tandem%-view%.json$") then
   run(cx, { "view-file", req.path })
   return { handled = true }
