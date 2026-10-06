@@ -250,6 +250,9 @@ export async function withTernWindow(
     await ctl("account", "signed-in");
     const [width, height] = options.size ?? [1500, 950];
     await ctl("size", String(width), String(height));
+    // `ctl state` answers before the plugin host finishes starting; a route opened in that window
+    // never writes its receipt.
+    await Bun.sleep(500);
     await body(pending);
     console.log(`Native evidence: ${root}`);
   } catch (error) {
@@ -267,7 +270,13 @@ export async function withTernWindow(
   }
 }
 
-export type SeededCoordinator = Readonly<{ repo: string; checkout: string; endpoint: Endpoint }>;
+export type SeededCoordinator = Readonly<{
+  repo: string;
+  checkout: string;
+  endpoint: Endpoint;
+  /** Every line typed into the conversation, so prompts Tandem delivers are observable. */
+  transcript: string;
+}>;
 
 /**
  * A project at `<root>/<name>`: a Git repository with one commit, the coordinator's own worktree
@@ -281,6 +290,7 @@ export async function seedCoordinator(
   const repo = join(window.root, input.name);
   const checkout = join(window.root, `${input.name}-coordinator`);
   const branch = `tandem/coordinator-${input.name}`;
+  const transcript = join(window.root, `${input.name}-transcript.txt`);
   await mkdir(repo);
   await writeFile(join(repo, "README.md"), `# ${input.name}\n`);
   const git = async (...args: string[]) => {
@@ -325,8 +335,8 @@ export async function seedCoordinator(
     command: [
       "/bin/sh",
       "-c",
-      `clear; printf '%s\\n' 'You: Build Tern support.' 'Orchestrator: ${input.name} conversation is ready.'; while IFS= read -r line; do printf 'You: %s\\n' "$line"; done`,
+      `clear; printf '%s\\n' 'You: Build Tern support.' 'Orchestrator: ${input.name} conversation is ready.'; while IFS= read -r line; do printf 'You: %s\\n' "$line"; printf '%s\\n' "$line" >> '${transcript}'; done`,
     ],
   });
-  return { repo, checkout, endpoint };
+  return { repo, checkout, endpoint, transcript };
 }
