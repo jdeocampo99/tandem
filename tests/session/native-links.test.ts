@@ -108,7 +108,7 @@ test("reply links do not infer identities from task titles, counts, issue number
 });
 
 test("duplicate task titles and bare numbers never select a task or PR", () => {
-  const duplicate = task({ id: "104", repoPath: "/repo", title: record.title });
+  const duplicate = task({ id: "104", repoPath: "/repo", title: "Tern adapter" });
   const tasks = [record, duplicate];
   for (const text of ["Tern adapter is ready.", "102, 104 and 281.", "#102 and #281."]) {
     expect(nativeReplyLinks([{ role: "assistant", content: text }], tasks, [], "/repo")).toEqual(
