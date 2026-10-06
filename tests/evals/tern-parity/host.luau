@@ -146,6 +146,8 @@ end
 
 -- Window model. Layout trees use Tern's shape: leaves {pane=id}, splits {split="right", ratio, [1], [2]}.
 local WIDTH = 200
+-- Longer than the harness's settle window, so only a host that waits for absence sees it.
+local CLOSE_DELAY_MS = 120
 local clock = 0
 local timers = {}
 local timerSeq = 0
@@ -340,7 +342,12 @@ function windowCx()
 		end
 		return grow(findTab(pane.tab).root)
 	end
-	function cx.layout:close(id) closePane(id, true) end
+	-- Tern's raw close returns nothing and the session retires the pane later, so a closed
+	-- pane stays listed past the current gesture's staged callbacks.
+	function cx.layout:close(id)
+		timerSeq += 1
+		table.insert(timers, { due = clock + CLOSE_DELAY_MS, seq = timerSeq, callback = function() closePane(id, true) end })
+	end
 	function cx.layout:float(id)
 		local pane = panes[id]
 		if not pane then return false end
