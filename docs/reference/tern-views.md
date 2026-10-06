@@ -166,11 +166,14 @@ Every brief action carries the exact identity of the displayed draft:
 ```
 
 `brief-approve` sends only those three fields. `brief-comment` and `brief-request-changes` may
-also include `text` and `comments`, where each comment is `{ "line": 12, "text": "Feedback" }`.
-Line numbers are positive, one-based lines of the displayed brief Markdown, and the renderer
-copies revision and digests from its view model without recalculating them or refreshing them
+also include `text` and `comments`, where each comment is
+`{ "lineId": "TL;DR:0:0", "text": "Feedback" }`.
+The renderer copies the stable string id from `briefView.lines[].id` and copies revision and
+digests from its view model without recalculating them or refreshing them
 behind the user's click. The CLI owns shape, revision, digest and approval validation. Unknown
-fields are refused. Feedback allows at most 100 comments and 64,000 bytes of encoded feedback.
+fields and numeric `line` anchors are refused. Feedback resolves ids through `briefView` for the
+exact preserved historical revision. Unknown ids, missing historical revisions, and mismatched
+digests refuse the action before delivery. Feedback allows at most 100 comments and 64,000 bytes of encoded feedback.
 The JSON object does not contain `requestId`: the command's positional `REQUEST_ID` names it.
 
 For example, the caller passes this argv suffix, preserving paths with spaces as one argument:
@@ -236,9 +239,11 @@ after adding the mappings so it reads the settings.
 decision, exact added key/action pairs, original keybind-table presence, and sidebar's original
 presence/value plus installed value. A decline is remembered and leaves settings byte-identical.
 An approval records changes before applying them, allowing restoration after an interrupted write.
-A failed settings write removes its unchanged record when the intended settings did not commit,
-so the next attempt cannot claim an unapplied approval. If the settings did commit before a later
-failure, the record remains available for guarded restoration. An existing approved record reports
+A failed settings write removes its unchanged record only when the writer positively reports
+`PreferenceWriteNotCommittedError` before attempting atomic rename/link. Unclassified failures,
+commit-attempt failures and post-commit cleanup failures retain the record for guarded restoration,
+even if formatting or unrelated preferences changed after the commit. Byte differences never prove
+non-commit. An existing approved record reports
 `configured: true` only while its recorded settings are actually present; an interrupted write
 cannot claim application on the next launch. User edits are still never reapplied.
 Both files are regular, non-symlink files written atomically with mode 0600, and stale writes are
