@@ -3,10 +3,11 @@ import { writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NativeViewsPublisher } from "../../../src/board/native-publish.ts";
+import { NativeViewsReader } from "../../../src/board/native-read.ts";
 import { readBoard } from "../../../src/board/read.ts";
-import type { BoardSnapshot } from "../../../src/board/snapshot.ts";
+import { type BoardSnapshot, publishNativeViews } from "../../../src/board/snapshot.ts";
 import { onboardRepo } from "../../../src/config/repositories.ts";
-import type { IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
+import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import {
   readRuntimeState,
@@ -43,6 +44,11 @@ type Project = SeededCoordinator &
     store: TaskStore;
     /** The coordinator's own publication: board, task, brief and PR views from durable state. */
     publish: () => Promise<void>;
+    /**
+     * Publishes with GitHub answered by `github`. The reader refreshes pull requests in the
+     * background and shows them from its next read, so this reads twice like two coordinator ticks.
+     */
+    publishWithGithub: (github: CommandRunner) => Promise<void>;
     panel: () => Promise<string>;
   }>;
 
@@ -55,41 +61,56 @@ async function seedProject(window: TernWindow, name: string): Promise<Project> {
     idFactory: () => crypto.randomUUID(),
   });
   const run = isolatedRunner(window.run, join(window.root, "publisher.log"));
+  const tick = async () => {
+    const records = await listCoordinatorRecords(window.home, SESSION);
+    const snapshot: BoardSnapshot = {
+      version: 1,
+      writtenAt: clock(),
+      board: await readBoard(window.home, clock),
+      coordinators: records.map((record) => ({
+        repoPath: record.repoPath,
+        project: basename(record.repoPath),
+        terminal: record.endpoint.terminal,
+        workspaceId: record.endpoint.workspaceId,
+        paneId: record.endpoint.paneId,
+      })),
+    };
+    const sessions = new Map(
+      records.map((record) => [
+        record.repoPath,
+        { terminal: "tern", sessionId: record.endpoint.sessionId },
+      ]),
+    );
+    return { snapshot, project: coordinator.repo, sessions };
+  };
   return {
     ...coordinator,
     home: window.home,
     store,
     publish: async () => {
-      const records = await listCoordinatorRecords(window.home, SESSION);
-      const snapshot: BoardSnapshot = {
-        version: 1,
-        writtenAt: clock(),
-        board: await readBoard(window.home, clock),
-        coordinators: records.map((record) => ({
-          repoPath: record.repoPath,
-          project: basename(record.repoPath),
-          terminal: record.endpoint.terminal,
-          workspaceId: record.endpoint.workspaceId,
-          paneId: record.endpoint.paneId,
-        })),
-      };
       const publisher = new NativeViewsPublisher({
         home: window.home,
         clock,
         run,
         terminal: window.terminal,
       });
-      publisher.schedule({
-        snapshot,
-        project: coordinator.repo,
-        sessions: new Map(
-          records.map((record) => [
-            record.repoPath,
-            { terminal: "tern", sessionId: record.endpoint.sessionId },
-          ]),
-        ),
-      });
+      publisher.schedule(await tick());
       await publisher.settle();
+    },
+    publishWithGithub: async (github) => {
+      const reader = new NativeViewsReader({
+        home: window.home,
+        clock,
+        run: github,
+        terminal: window.terminal,
+      });
+      const first = await tick();
+      await reader.read(first.snapshot, first.project, first.sessions);
+      await reader.settle();
+      const next = await tick();
+      await publishNativeViews(window.home, next.project, () =>
+        reader.read(next.snapshot, next.project, next.sessions),
+      );
     },
     panel: () =>
       window.terminal.openPanel({
@@ -167,10 +188,11 @@ async function firstBriefLine(window: TernWindow): Promise<ControlNode | undefin
   );
 }
 
-/** Hovers a diff-style row so its gutter + appears, opens the line editor and saves `text`. */
+/** Hovers a diff-style row so its gutter + appears, types `text` into the line editor and saves it. */
 async function commentOnLine(
   window: TernWindow,
   row: ControlNode | undefined,
+  placeholder: string,
   text: string,
 ): Promise<void> {
   const gutter = flatten(row?.children ?? []).find((node) => node.text === "+" && node.rect);
@@ -184,7 +206,7 @@ async function commentOnLine(
     await window.click(plus);
     return (await window.nodes()).some((node) => node.text === "Comment");
   });
-  await window.typeInto("Comment on this line…", text);
+  await window.typeInto(placeholder, text);
   await window.click("Comment");
 }
 
@@ -359,7 +381,12 @@ workflow(
         await window.shot("03-brief-open");
 
         const lineNote = "Name the settings page in the scope.";
-        await commentOnLine(window, await firstBriefLine(window), lineNote);
+        await commentOnLine(
+          window,
+          await firstBriefLine(window),
+          "Comment on this line…",
+          lineNote,
+        );
         await window.until("pending line comment", async () =>
           (await window.screen()).includes("you · pending"),
         );
@@ -388,7 +415,12 @@ workflow(
         await window.until("brief pane at revision 2", async () =>
           (await window.screen()).includes("Brief · Request brief · rev 2 ·"),
         );
-        await commentOnLine(window, await firstBriefLine(window), "Pending on revision 2.");
+        await commentOnLine(
+          window,
+          await firstBriefLine(window),
+          "Comment on this line…",
+          "Pending on revision 2.",
+        );
         await window.until("pending comment on revision 2", async () =>
           (await window.screen()).includes("you · pending"),
         );
@@ -434,6 +466,155 @@ workflow(
       } finally {
         await service.shutdown();
       }
+    });
+  },
+  120_000,
+);
+
+const PR_HEAD = "4f1c2a9e";
+const PR_PATCH = `diff --git a/src/panel.ts b/src/panel.ts
+--- a/src/panel.ts
++++ b/src/panel.ts
+@@ -1,2 +1,3 @@
+ export const width = 40;
+-export const height = 10;
++export const height = 12;
++export const gap = 2;
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1,2 @@
+ # tandem
++Tern support.
+`;
+
+/** Answers the GitHub CLI calls of the native PR cache with one open PR; everything else goes to `fallback`. */
+function githubWithOnePr(fallback: CommandRunner): CommandRunner {
+  const answer = (value: unknown) => ({
+    code: 0,
+    stdout: typeof value === "string" ? value : JSON.stringify(value),
+    stderr: "",
+  });
+  const view = {
+    number: 42,
+    title: "Fix panel width",
+    url: "https://github.com/acme/tandem/pull/42",
+    headRefOid: PR_HEAD,
+    isDraft: false,
+    body: "Widens the panel so long task titles fit.",
+    commits: [{ oid: PR_HEAD }],
+    additions: 3,
+    deletions: 1,
+    statusCheckRollup: [
+      { name: "lint", status: "COMPLETED", conclusion: "SUCCESS", completedAt: clock() },
+      { name: "unit", status: "IN_PROGRESS", startedAt: clock() },
+      {
+        name: "e2e",
+        status: "COMPLETED",
+        conclusion: "FAILURE",
+        detailsUrl: "https://github.com/acme/tandem/actions/runs/1",
+      },
+    ],
+    comments: [],
+    reviews: [],
+  };
+  return async (request) => {
+    const [program, group, verb] = request.argv;
+    if (program !== "gh") return fallback(request);
+    if (group === "api" && verb === "graphql")
+      return answer({
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: PR_HEAD,
+              reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          },
+        },
+      });
+    if (group === "pr" && verb === "diff") return answer(PR_PATCH);
+    if (group === "pr" && verb === "view")
+      return answer(request.argv.at(-1) === "headRefOid" ? { headRefOid: PR_HEAD } : view);
+    return fallback(request);
+  };
+}
+
+workflow(
+  "PR pane: ⎇ opens the task's PR with its tabs, CI pills and file switcher, and a line comment reaches the worker as a fix request",
+  async () => {
+    await withTernWindow({ name: "wf-pr", driver }, async (window) => {
+      const project = await seedProject(window, "tandem");
+      await seedTask(project, {
+        id: "width",
+        title: "Panel width fix",
+        stage: "implementing",
+        pullRequest: {
+          repository: "acme/tandem",
+          number: 42,
+          url: "https://github.com/acme/tandem/pull/42",
+          title: "Fix panel width",
+          state: "open",
+          head: PR_HEAD,
+          base: "main",
+        },
+      });
+      await project.publishWithGithub(
+        githubWithOnePr(isolatedRunner(window.run, join(window.root, "publisher.log"))),
+      );
+      await project.panel();
+      await window.until("panel row", async () =>
+        (await window.screen()).includes("Panel width fix"),
+      );
+      await window.click("⎇");
+      await window.until("PR pane", async () =>
+        (await window.screen()).includes("#42 Fix panel width"),
+      );
+      const header = await window.nodes();
+      expect(header.some((node) => node.text?.startsWith("✓ lint") === true)).toBe(true);
+      expect(header.some((node) => node.text === "✗ e2e")).toBe(true);
+      expect(header.some((node) => node.text === "view log")).toBe(true);
+      expect(await window.screen()).toContain("unit · running");
+      expect(header.some((node) => node.text === "task width ↗")).toBe(true);
+      await window.shot("04-pr-pane");
+
+      await window.click("Description");
+      await window.until("Description tab", async () =>
+        (await window.screen()).includes("Widens the panel so long task titles fit."),
+      );
+      await window.shot("04-pr-description");
+      await window.click("Diff");
+      await window.until("Diff tab on the first file", async () =>
+        (await window.screen()).includes("+2 −1 · src/panel.ts"),
+      );
+      await window.click("README.md");
+      await window.until("file switcher shows README.md", async () =>
+        (await window.screen()).includes("+1 −0 · README.md"),
+      );
+      await window.shot("04-pr-diff-readme");
+      await window.click("src/panel.ts");
+      await window.until("file switcher shows src/panel.ts", async () =>
+        (await window.screen()).includes("+2 −1 · src/panel.ts"),
+      );
+
+      const note = "Keep the gap at 4 so rows breathe.";
+      const row = (await window.nodes()).find(
+        (node) =>
+          hasClass(node, "tdm-diff-row") &&
+          flatten(node.children ?? []).some((child) => child.text === "export const gap = 2;"),
+      );
+      await commentOnLine(window, row, "Comment…", note);
+      await window.until("comment sent to the worker", async () =>
+        (await window.screen()).includes("you · sent to worker"),
+      );
+      await window.until("fix request in the worker inbox", async () => {
+        const inbox = await readTaskInbox(taskInboxPath(window.home, "width"));
+        return (
+          inbox?.messages.some((message) =>
+            message.text.startsWith(`PR fix request: src/panel.ts:3: ${note}`),
+          ) === true
+        );
+      });
+      await window.shot("04-pr-line-comment");
     });
   },
   120_000,
