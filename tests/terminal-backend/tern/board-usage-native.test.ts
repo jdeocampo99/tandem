@@ -185,24 +185,22 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           await Bun.sleep(200);
           console.log(await ctl("shot", kind));
         }
-        if (kind === "catchup") await writeFile(fail, "fail");
-        await ctl("key", "escape");
-        actionCount += 1;
-        await until(
-          async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
-        );
         if (kind === "catchup") {
+          await writeFile(fail, "fail");
+          await ctl("key", "escape");
+          actionCount += 1;
+          await until(
+            async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
+          );
           await until(async () => (await ctl("tree")).includes("isolated action failure"));
           await Bun.sleep(100);
           expect((await readFile(log, "utf8")).match(/--pane/g)?.length).toBe(actionCount);
+          expect(
+            blocks(decode(await run("ls", "--json"), Listing, "failed action")).some(
+              (entry) => entry.block.id === viewPane,
+            ),
+          ).toBe(true);
           await rm(fail);
-        }
-        await until(async () =>
-          (await readFile(log, "utf8")).includes(
-            kind === "catchup" ? "catchup-dismiss" : `${path}#orchestrator`,
-          ),
-        );
-        if (kind === "catchup") {
           await writeFile(
             path,
             '{"version":1,"kind":"panel","revision":"broken","model":{"catchup":{"merged":[{}]}}}',
@@ -211,7 +209,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           expect(await ctl("tree")).toContain("Fix panel width");
           expect(await ctl("tree")).not.toContain("Open what needs me");
         }
-        // Real hosting proves toggle/return close only the exact view and preserve the coordinator.
+        // The CLI's host effect restores focus. Only the screen's successful callback exits itself.
         expect(
           (
             await backend.openView({
@@ -219,15 +217,59 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
               cwd: project,
               home,
               origin: { paneId: viewPane, cwd: project },
-              view: { kind: kind === "board" ? "board" : "orchestrator" },
+              view: { kind: "orchestrator" },
             })
           ).opened,
         ).toBe(true);
+        await run("focus", viewPane);
+        await ctl("key", "escape");
+        actionCount += 1;
+        await until(
+          async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
+        );
+        await until(
+          async () =>
+            !blocks(decode(await run("ls", "--json"), Listing, "callback exit")).some(
+              (entry) => entry.block.id === viewPane,
+            ),
+        );
+        expect(await readFile(log, "utf8")).toContain(
+          kind === "catchup" ? "catchup-dismiss" : `${path}#orchestrator`,
+        );
         const remaining = blocks(decode(await run("ls", "--json"), Listing, "fixture return"));
         expect(remaining.some((entry) => entry.block.id === viewPane)).toBe(false);
         expect(remaining.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
       }
       await writeFile(path, nativeViewText("panel", { ...nativeScreensFixture(), project }));
+      expect(
+        (
+          await backend.openView({
+            coordinator,
+            cwd: project,
+            home,
+            origin,
+            view: { kind: "board" },
+          })
+        ).opened,
+      ).toBe(true);
+      const toggled = blocks(decode(await run("ls", "--json"), Listing, "toggle open")).find(
+        (entry) => entry.block.program === "tandem.board",
+      )?.block.id;
+      if (!toggled) throw new Error("Toggle board is missing");
+      expect(
+        (
+          await backend.openView({
+            coordinator,
+            cwd: project,
+            home,
+            origin: { paneId: toggled, cwd: project },
+            view: { kind: "board" },
+          })
+        ).opened,
+      ).toBe(true);
+      const afterToggle = blocks(decode(await run("ls", "--json"), Listing, "toggle close"));
+      expect(afterToggle.some((entry) => entry.block.id === toggled)).toBe(false);
+      expect(afterToggle.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
       await visitNativeProject(
         {
           home,
@@ -261,6 +303,15 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           })
         ).opened,
       ).toBe(true);
+      await run("focus", catchupPane);
+      await ctl("key", "escape");
+      actionCount += 1;
+      await until(
+        async () =>
+          !blocks(decode(await run("ls", "--json"), Listing, "automatic dismiss exit")).some(
+            (entry) => entry.block.id === catchupPane,
+          ),
+      );
       expect(
         await maybeShowCatchUp(backend, {
           home,
@@ -281,7 +332,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       });
       expect(browser.opened).toBe(true);
       const actions = await readFile(log, "utf8");
-      expect(actions.match(/--pane/g)?.length).toBe(3);
+      expect(actions.match(/--pane/g)?.length).toBe(actionCount);
       expect(actions).toContain(`--cwd\n${project}`);
     } catch (error) {
       console.error(await readFile(join(root, "window.log"), "utf8").catch(() => ""));

@@ -342,8 +342,13 @@ that scope. Multiple windows are refused rather than choosing one by ordering.
 ## Board, usage and catch-up actions
 
 Board and usage are full-window tabs with Escape and “← Orchestrator” returns. Returning proves
-this coordinator's exact block program, root/detail path and launch arguments, closes only that
-screen and focuses the preserved coordinator. Invoking board from its own block toggles it closed.
+this coordinator's exact block program, root/detail path and launch arguments, then focuses the
+preserved coordinator. Hosting passes `keep_open=false`. Screen callbacks invoke `cx:exit(0)`
+only after CLI success; failures toast
+stderr and keep the screen open. Shared `navigation.run/back` accept an optional success callback.
+A window-command Board toggle has no `BlockCx`: the backend restores the coordinator and closes
+only the exact owned Board block after proving its program, five arguments, idle process and close
+acknowledgement. Uncertain closure is quarantined without retries.
 
 `maybeShowCatchUp` in `src/memory/native-visits.ts` owns the project-visit trigger. Visible front-door
 launches/reconnects, `coordinator/open-project.ts` after confirmed focus, and the project-switch

@@ -37,6 +37,9 @@ const returnPrograms = new Set(
   ),
 );
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
+type HostedCloseInput = Omit<Parameters<TerminalBackend["closeView"]>[0], "view"> & {
+  view: Readonly<{ kind: "brief"; requestId: string }> | Readonly<{ kind: "board" }>;
+};
 
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
   const records = (await listCoordinatorRecords(home, coordinator.sessionId)).filter(
@@ -259,16 +262,18 @@ export function ternViewHost(
       return { paneId: result.paneId, project };
     });
   };
-  const close = async (input: Parameters<TerminalBackend["closeView"]>[0], project: string) => {
+  const close = async (input: HostedCloseInput, project: string) => {
     if (input.origin.paneId === input.coordinator.paneId)
       throw new EndpointOwnershipError(
         input.coordinator,
-        "cannot retire the conversation as a brief",
+        "cannot retire the conversation as a native view",
       );
     const cmd = await scoped(input, true);
     return options.guard(input.coordinator.paneId, async () => {
       const args = [
-        nativeDetailPath(input.home, project, nativeBriefFile(input.view.requestId)),
+        input.view.kind === "brief"
+          ? nativeDetailPath(input.home, project, nativeBriefFile(input.view.requestId))
+          : nativeViewsPath(input.home, project),
         input.coordinator.paneId,
         input.cwd,
         input.origin.windowId ?? "",
@@ -280,7 +285,7 @@ export function ternViewHost(
         if (listing.detached.length > 0)
           throw new EndpointOwnershipError(
             input.coordinator,
-            "detached panes make brief closure ambiguous",
+            "detached panes make native view closure ambiguous",
           );
         return { closed: true, warnings: [] };
       }
@@ -293,13 +298,10 @@ export function ternViewHost(
       const prove = async () => {
         const current = await exactPane(cmd, { endpoint, cwd: input.cwd });
         if (
-          current.block.program !== "tandem.brief" ||
+          current.block.program !== `tandem.${input.view.kind}` ||
           JSON.stringify(current.block.args) !== JSON.stringify(args)
         )
-          throw new EndpointOwnershipError(
-            endpoint,
-            "origin is not this request's exact native brief",
-          );
+          throw new EndpointOwnershipError(endpoint, "origin is not this exact native view");
         const process = await cmd.read(input.cwd, ["process", endpoint.paneId], Processes);
         if (
           process.pane !== endpoint.paneId ||
@@ -314,7 +316,7 @@ export function ternViewHost(
       await prove();
       const ack = await cmd.mutate(input.cwd, ["close", endpoint.paneId], BlockAck);
       if (ack.block !== endpoint.paneId)
-        throw new TernOutcomeUnknownError("brief close", "acknowledged another block");
+        throw new TernOutcomeUnknownError(`${input.view.kind} close`, "acknowledged another block");
       try {
         const after = await cmd.ls(input.cwd);
         if (
@@ -323,7 +325,7 @@ export function ternViewHost(
         )
           throw new Error("closed block is still present or detached placement is ambiguous");
       } catch (cause) {
-        throw new TernOutcomeUnknownError("brief close", cause);
+        throw new TernOutcomeUnknownError(`${input.view.kind} close`, cause);
       }
       return { closed: true, warnings: [] };
     });
@@ -373,6 +375,14 @@ export function ternViewHost(
         );
         if (source?.block.program === "tandem.board") {
           await open(input, project, "panel", "return", nativeViewsPath(input.home, project));
+          await close(
+            {
+              ...input,
+              origin: { ...input.origin, paneId: source.block.id },
+              view: { kind: "board" },
+            },
+            project,
+          );
           return { opened: true, warnings: [] };
         }
       }
