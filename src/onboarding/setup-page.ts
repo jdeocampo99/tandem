@@ -638,15 +638,18 @@ export class SetupPageWorkflow {
         return false;
       }
     };
-    const terminalSaved = await step(
-      "Saved the terminal choice.",
-      "The terminal choice was not saved",
-      async () => {
-        const selected = await this.#deps.configureTerminal(answer.terminal);
-        if (selected.reason !== undefined) lines.push(selected.reason);
-      },
-    );
-    if (!terminalSaved) return { message: lines.join("\n"), complete: false };
+    const savedTerminal = savedTerminalPreference(facts.settings);
+    if (!savedTerminal.chosen || answer.terminal !== savedTerminal.terminal) {
+      const terminalSaved = await step(
+        "Saved the terminal choice.",
+        "The terminal choice was not saved",
+        async () => {
+          const selected = await this.#deps.configureTerminal(answer.terminal);
+          if (selected.reason !== undefined) lines.push(selected.reason);
+        },
+      );
+      if (!terminalSaved) return { message: lines.join("\n"), complete: false };
+    }
     await step("Saved the model choices and providers.", "Model choices were not saved", () =>
       this.#deps.saveModels({
         repoPath,

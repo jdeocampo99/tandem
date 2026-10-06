@@ -207,7 +207,11 @@ export function setupCatalogue(
 }
 
 export function buildSetupView(input: SetupViewInput): SetupView {
-  const terminalReason = ternFallbackReason(input.tern);
+  const fallbackReason = ternFallbackReason(input.tern);
+  const terminalReason =
+    input.terminal === "tern"
+      ? fallbackReason?.replace(/Using Herdr\.$/u, "Keeping the saved Tern choice.")
+      : fallbackReason;
   const models = setupCatalogue(input.ompCatalogue, input.claudeCode).map(setupModel);
   return {
     schemaVersion: 1,
@@ -245,7 +249,7 @@ export function buildSetupView(input: SetupViewInput): SetupView {
       .sort((left, right) => left.path.localeCompare(right.path))
       .map((repo) => setupRepo(repo, input.homeFolder)),
     selfImprovement: input.selfImprovement ?? "fix",
-    terminal: input.tern.status === "ready" ? (input.terminal ?? "herdr") : "herdr",
+    terminal: input.terminal ?? "herdr",
     ternReady: input.tern.status === "ready",
     ...(terminalReason === undefined ? {} : { terminalReason }),
     ...(input.draft === undefined ? {} : { draft: input.draft }),

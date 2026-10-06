@@ -6,6 +6,11 @@ import type { CommandRunner } from "../../contracts.ts";
 import type { TerminalAvailability } from "../contract.ts";
 
 export const TERN_EXECUTABLE = "/Applications/Tern.app/Contents/MacOS/tern";
+export type TernAvailabilityOptions = Readonly<{
+  binary?: string;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<unknown>;
+}>;
 const PROBE_TIMEOUT_MS = 8_000;
 const CONTROL_TIMEOUT_MS = 1_000;
 
@@ -19,10 +24,11 @@ function missingExecutable(error: unknown): boolean {
 /** The native account gate requires a brief owned window; headless Tern uses synthetic accounts. */
 export async function probeTern(
   run: CommandRunner,
-  timing: Readonly<{ now?: () => number; sleep?: (milliseconds: number) => Promise<unknown> }> = {},
+  options: TernAvailabilityOptions = {},
 ): Promise<TerminalAvailability> {
-  const now = timing.now ?? Date.now;
-  const sleep = timing.sleep ?? Bun.sleep;
+  const binary = options.binary ?? Bun.which("tern") ?? TERN_EXECUTABLE;
+  const now = options.now ?? Date.now;
+  const sleep = options.sleep ?? Bun.sleep;
   const deadline = now() + PROBE_TIMEOUT_MS;
   const budgetStop = new AbortController();
   const budgetTimer = setTimeout(() => budgetStop.abort(), PROBE_TIMEOUT_MS);
@@ -45,7 +51,7 @@ export async function probeTern(
   const inspect = async (): Promise<TerminalAvailability> => {
     try {
       const version = await run({
-        argv: [TERN_EXECUTABLE, "--version"],
+        argv: [binary, "--version"],
         cwd: tmpdir(),
         timeoutMs: Math.min(3_000, remaining()),
         signal: budgetStop.signal,
@@ -71,7 +77,7 @@ export async function probeTern(
     };
     const call = (args: readonly string[]) =>
       run({
-        argv: [TERN_EXECUTABLE, ...args],
+        argv: [binary, ...args],
         cwd,
         env,
         timeoutMs: Math.min(CONTROL_TIMEOUT_MS, remaining()),
@@ -83,7 +89,7 @@ export async function probeTern(
         .map((path) => mkdir(path)),
     );
     daemon = run({
-      argv: [TERN_EXECUTABLE, "daemon", "--socket", env.TERN_DAEMON_SOCKET],
+      argv: [binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET],
       cwd,
       env,
       signal: AbortSignal.any([daemonStop.signal, budgetStop.signal]),
@@ -104,13 +110,13 @@ export async function probeTern(
     // This is our own control socket. A failed quit still falls back to owned process-group abort.
     quit = async () =>
       run({
-        argv: [TERN_EXECUTABLE, "ctl", "--control", control, "quit"],
+        argv: [binary, "ctl", "--control", control, "quit"],
         cwd,
         env,
         timeoutMs: CONTROL_TIMEOUT_MS,
       });
     window = run({
-      argv: [TERN_EXECUTABLE, "--control", control, "--dir", cwd],
+      argv: [binary, "--control", control, "--dir", cwd],
       cwd,
       env,
       signal: AbortSignal.any([windowStop.signal, budgetStop.signal]),

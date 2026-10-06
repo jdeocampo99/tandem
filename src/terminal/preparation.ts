@@ -205,8 +205,9 @@ export async function prepareProjects(
         ],
         default: "herdr",
       });
-      if (terminal !== "herdr" && terminal !== "tern") return undefined;
-      const result = await service.configureTerminal(terminal);
+      if (terminal !== "herdr" && terminal !== "tern" && terminal !== "not-now") return undefined;
+      // Declining Tern keeps Herdr and records the choice so future launches do not ask again.
+      const result = await service.configureTerminal(terminal === "not-now" ? "herdr" : terminal);
       if (result.reason !== undefined) prompter.write(`${result.reason}\n`);
     }
   }

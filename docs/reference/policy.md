@@ -296,11 +296,15 @@ callers and scenario boundaries; that choice retains the same endpoint identity 
 
 The setup page, chat, and direct interactive onboarding offer Tern only when `probeTern` reports
 `ready`. Its other outcomes are `missing`, `signedOut`, or `unknown` with a reason; each shows a
-one-line explanation and selects Herdr. Page discovery keeps the probe result for that open page
-and probes again when reopened. The `terminal-setting` action rechecks availability before saving
-Tern. The probe reads the executable and account gate in a temporary, isolated daemon and window,
-closes its own resources, and changes no settings in the user's Tern configuration. The entire probe
-has an eight-second budget; shutdown gets one second for the owned control endpoint before both
+one-line explanation and defaults new setup to Herdr. A saved terminal choice stays selected even
+when readiness cannot be confirmed; saving other page settings never reconfigures an unchanged
+terminal. The CLI's "Not now" terminal choice saves Herdr and continues, so later launches do not
+repeat the offer. Page discovery keeps the probe result for that open page and probes again when
+reopened. The `terminal-setting` action rechecks availability before saving
+Tern. The probe accepts a resolved binary, otherwise choosing Tern from PATH before the app bundle.
+It reads the executable and account gate in a temporary, isolated daemon and window, closes its own
+resources, and changes no settings in the user's Tern configuration. The entire probe has an
+eight-second budget; shutdown gets one second for the owned control endpoint before both
 owned process groups are aborted and awaited, then temporary files are removed. Timeouts return
 `unknown`. Tern v0.4.5 needs a native window to prove the real account gate: its headless mode uses
 synthetic accounts. The isolated control window may briefly appear in front during onboarding; it
@@ -313,9 +317,9 @@ unconfirmed availability never reach plugin commands. A saved Tern choice outsid
 flow is probed again before plugin installation. `tandem update` reloads an existing selected Tern
 plugin and never installs one without consent.
 
-Switching is refused under the state lock while tasks are queued or running, jobs are active, or
-reservations or launch outcomes retain uncertain ownership, including presentations. Availability
-is checked outside the lock; the switch is checked again under the lock immediately before saving.
+Switching is refused under the state lock while any task is unfinished (including paused, blocked,
+ready, or awaiting approval), jobs are active, or tasks/presentations retain endpoints, reservations
+or uncertain launch outcomes. Availability is checked outside the lock; the switch is checked again under the lock immediately before saving.
 
 Endpoints and pending launch intents record their creating terminal. Historical records without
 that field are Herdr records. A record from the other terminal is quarantined before inspection,
