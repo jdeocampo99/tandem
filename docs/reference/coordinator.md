@@ -146,7 +146,9 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   `--session` explicitly for the target session. It accepts any saved canonical project after
   checking its settings and model choices; ordinary task creation, model lookup, and `onboard`
   remain bound to the coordinator's source context. Afterwards it focuses the project's coordinator
-  workspace from its record; a failed focus is reported, not an error.
+  workspace from its record; a failed focus is reported, not an error. After confirmed focus,
+  optional Tern catch-up failures return warnings while preserving the successful open result.
+  Catch-up never selects an arbitrary window, and a failed catch-up leaves the visit unacknowledged.
 - At each session start, while no saved project other than the Tandem checkout exists, it opens
   the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
   `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`
