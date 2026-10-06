@@ -107,8 +107,18 @@ Native hosting adds a private coordinator-bound intent lock, unique layout ticke
 It proves the exact program, all five launch arguments and placement, refusing duplicate matches
 and conflicting detached/window evidence. A supplied window key must contain the exact origin
 and coordinator; without one, exactly one attached window is required. Unknown openings retain
-their fence and resources until exact block evidence settles them. Native closes prove the full
-arguments and idle state again immediately before closing. See [hosting lifecycle](tern-views.md#native-hosting-and-renderer-launch-api).
+their fence and resources across fresh CLI calls. Native layout recovery requires exact block
+evidence; task replacement also proves the previous task pane absent. Browser listings cannot
+prove an uncertain opening's URL or picture-in-picture owner, so an unresolved browser intent
+fences both browser and native opens. Native and panel closes prove the full arguments and idle
+state again immediately before closing; failed verification quarantines the outcome.
+
+Panels and root Board, Usage and Catch-up views reuse one exact existing block under the opening
+lock, checking all five arguments and intended placement. Duplicate, detached or foreign-window
+matches refuse reuse. Root views focus the proven pane without another layout opening. If an
+uncertain intent cannot be settled, Orchestrator return can still focus the exact conversation
+and show a warning while preserving every view, ticket and fence.
+See [hosting lifecycle](tern-views.md#native-hosting-and-renderer-launch-api).
 
 ## Native views and actions
 
