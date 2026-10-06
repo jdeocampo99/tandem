@@ -790,7 +790,9 @@ export async function createScenarioWorld(
     const verb = argv[1];
     const present = () => [...panes.entries()].filter(([, pane]) => pane.present);
     const ok = (value: unknown) => commandResult(JSON.stringify(value));
-    if (verb === "inspect") return ok({ clients: [{ kind: "window" }] });
+    // A Tern window exists only once a scenario attaches one that handles `tern open`.
+    if (verb === "inspect")
+      return ok({ clients: ternRoutes === undefined ? [] : [{ kind: "window" }] });
     if (verb === "plugin") {
       if (argv[2] === "link") ternPluginLinks.push(argv[3] ?? "");
       else if (argv[2] !== "list")
