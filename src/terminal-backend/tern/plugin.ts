@@ -4,16 +4,15 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { AdapterCommandError, AdapterProtocolError } from "../../adapters/primitives.ts";
-import type { CommandRunner } from "../../contracts.ts";
+import { AdapterProtocolError } from "../../adapters/primitives.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
+import { type TernRunner, ternPlugin } from "./cli.ts";
 
 export const TANDEM_TERN_PLUGIN = "tandem";
 export const TERN_PLUGIN_DIRECTORY = fileURLToPath(
   new URL("../../../tern-plugin", import.meta.url),
 );
-export const TERN_APP_BINARY = "/Applications/Tern.app/Contents/MacOS/tern";
 
 // A waiting caller sits behind another caller's consent question, which a person answers.
 const SETUP_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
@@ -27,7 +26,7 @@ const catalogSchema = z.object({
 });
 
 export type TernPluginDependencies = Readonly<{
-  run: CommandRunner;
+  run: TernRunner;
   cwd: string;
   binary?: string;
   directory?: string;
@@ -86,23 +85,8 @@ const recordSchema = z
   })
   .strict();
 
-async function command(deps: TernPluginDependencies, args: readonly string[]) {
-  const binary =
-    deps.binary ??
-    Bun.which("tern", { PATH: deps.env?.PATH ?? process.env.PATH ?? "" }) ??
-    TERN_APP_BINARY;
-  const request = {
-    argv: [binary, "plugin", ...args, "--json"],
-    cwd: deps.cwd,
-    ...(deps.env === undefined ? {} : { env: deps.env }),
-  };
-  const result = await deps.run(request);
-  if (result.code !== 0) throw new AdapterCommandError("Tern plugin", request, result);
-  return result.stdout;
-}
-
 async function catalog(deps: TernPluginDependencies) {
-  const raw = await command(deps, ["list"]);
+  const raw = await ternPlugin(deps, ["list"]);
   try {
     return catalogSchema.parse(JSON.parse(raw));
   } catch {
@@ -423,7 +407,7 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
     if (before.plugins.some((plugin) => plugin.id === TANDEM_TERN_PLUGIN)) {
       if (!readyIn(before.plugins)) return false;
     } else {
-      await command(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
+      await ternPlugin(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
       if (!readyIn((await catalog(deps)).plugins)) return false;
     }
     printConfigureNotices(
@@ -476,7 +460,7 @@ export function reloadTernPlugin(deps: TernPluginDependencies): Promise<boolean>
   return withSetupLock(settingsInput(deps), async () => {
     const before = await catalog(deps);
     if (!before.plugins.some((plugin) => plugin.id === TANDEM_TERN_PLUGIN)) return false;
-    await command(deps, ["reload"]);
+    await ternPlugin(deps, ["reload"]);
     if (!readyIn((await catalog(deps)).plugins))
       throw new Error("Tandem's Tern plugin failed to reload");
     return true;

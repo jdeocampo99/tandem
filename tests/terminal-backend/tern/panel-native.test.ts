@@ -12,11 +12,8 @@ import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
-import {
-  blocks,
-  TernOutcomeUnknownError,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { blocks, TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
@@ -190,7 +187,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       const fresh = ternBackend(run, { home, environment: env });
       expect(await fresh.openPanel(panelInput)).toBe(pane);
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
+        blocks(await ternCli(run, { environment: env }).ls(root)).filter(
           (entry) =>
             entry.block.program === "tandem.panel" &&
             parseBlockArgs(entry.block.args)?.ctx.coordinator === coordinator.paneId,
@@ -254,11 +251,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await until(async () => JSON.stringify(await ctl("tree")).includes("fixture action refused"));
       expect(JSON.stringify(await ctl("tree"))).toContain("Tandem couldn't run that action");
       // Busy conversation must survive task replacement and return with exactly the same endpoint.
-      const host = ternViewHost(ternCommands(run, { environment: env }), {
-        clock: Date.now,
-        wait: Bun.sleep,
-        guard: async (_key, operation) => operation(),
-      });
+      const host = ternViewHost(ternCli(run, { environment: env }));
       const brief = await host.open(
         { coordinator, cwd: root, home, view: { kind: "brief", requestId: "req-native" } },
         root,
@@ -268,7 +261,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       );
       await ctl("key", "escape");
       await Bun.sleep(200);
-      const exited = blocks(await ternCommands(run, { environment: env }).ls(root)).find(
+      const exited = blocks(await ternCli(run, { environment: env }).ls(root)).find(
         (entry) => entry.block.id === brief.paneId,
       );
       expect(exited).toBeUndefined();
@@ -308,7 +301,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         ),
       ).toEqual({ closed: true, warnings: [] });
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === reopened.paneId,
         ),
       ).toBe(false);
@@ -339,7 +332,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         path,
       );
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === task.paneId,
         ),
       ).toBe(false);
@@ -377,7 +370,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         path,
       );
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).find(
+        blocks(await ternCli(run, { environment: env }).ls(root)).find(
           (entry) => entry.block.id === board.paneId,
         )?.tab.id,
       ).not.toBe(coordinator.tabId);
@@ -394,7 +387,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         ),
       ).toBe(true);
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === behindBoard.paneId,
         ),
       ).toBe(false);
@@ -402,7 +395,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         true,
       );
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === board.paneId,
         ),
       ).toBe(false);
@@ -416,7 +409,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         if (full === undefined) throw new Error("missing repeated root result");
         expect(new Set(repeated.map((result) => result.paneId)).size).toBe(1);
         expect(
-          blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
+          blocks(await ternCli(run, { environment: env }).ls(root)).filter(
             (entry) => entry.block.program === `tandem.${kind}`,
           ),
         ).toHaveLength(1);
@@ -444,7 +437,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
             JSON.stringify(await ctl("tree")).includes("Tandem kept an uncertain view"),
           );
           expect(
-            blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+            blocks(await ternCli(run, { environment: env }).ls(root)).some(
               (entry) => entry.block.id === full.paneId,
             ),
           ).toBe(true);
@@ -465,7 +458,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           path,
         );
         expect(
-          blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          blocks(await ternCli(run, { environment: env }).ls(root)).some(
             (entry) => entry.block.id === full.paneId,
           ),
         ).toBe(false);

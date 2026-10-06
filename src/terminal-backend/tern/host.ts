@@ -1,8 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { z } from "zod";
-import { EndpointBusyError, EndpointOwnershipError } from "../../adapters/primitives.ts";
+import { EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { nativeViewsPath } from "../../board/snapshot.ts";
 import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
@@ -18,30 +17,22 @@ import {
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
 import type { RetainedViewOpen, TerminalBackend, ViewOrigin } from "../contract.ts";
-import { exactPane } from "./endpoints.ts";
+import { ternEndpoint } from "../identity.ts";
+import type { TernCli, ViewTarget } from "./cli.ts";
 import {
-  BlockAck,
   blocks,
   Id,
   type LocatedBlock,
-  Processes,
-  type TernCommands,
   type TernListing,
   TernOutcomeUnknownError,
-  ternCommands,
 } from "./protocol.ts";
 
 /** How long `layout.luau` may start stages of a dispatched ticket. The click waits 5 s of it. */
 const TICKET_LIFETIME_MS = 10_000;
-const RECEIPT_WAIT_MS = 5_000;
 const TICKET = ".ticket.json";
 const RECEIPT = ".receipt.json";
 const reusableRoots: readonly ViewKind[] = ["board", "usage", "catchup", "prs"];
 const windowPrograms: readonly string[] = ["tandem.board", "tandem.usage", "tandem.catchup"];
-const Opened = z.object({
-  blocks: z.array(z.union([Id, z.number().int().safe().positive().transform(String)])),
-  discarded: z.boolean(),
-});
 
 /** The host failed before any layout effect, so the open settled and the user can retry it. */
 export class NativeViewNotOpenedError extends Error {
@@ -61,7 +52,6 @@ export class NativeViewClosedError extends Error {
 
 /** The window-scoped listing a ticket opened in, and every window's, to rule out duplicates. */
 export type ViewListing = Readonly<{ window: TernListing; all: TernListing }>;
-export type ObservedReceipt = Receipt | "torn" | undefined;
 
 /** What `decide` concludes about one ticket; see the staged open state machine. */
 export type Decision =
@@ -207,27 +197,19 @@ export function decide(
  * Both listings, read through the call's window scope when it has one. A return or inbox opens
  * nothing new, so only its own window matters.
  */
-async function listViews(
-  cmd: TernCommands,
-  cwd: string,
-  placement?: Placement,
-): Promise<ViewListing> {
+async function listViews(cmd: TernCli, cwd: string, placement?: Placement): Promise<ViewListing> {
   const window = await cmd.ls(cwd);
-  const request = cmd.request(cwd, []);
   // A window-scoped listing cannot prove that no matching block exists elsewhere.
   const all =
-    placement !== "return" && placement !== "inbox" && request.argv.includes("--window")
-      ? await ternCommands(cmd.run, {
-          binary: cmd.binary,
-          ...(request.env === undefined ? {} : { environment: request.env }),
-        }).ls(cwd)
+    placement !== "return" && placement !== "inbox" && cmd.windowed
+      ? await cmd.unscoped().ls(cwd)
       : window;
   return { window, all };
 }
 
 /** The exact launched view for a coordinator, or undefined; ambiguity is an unknown outcome. */
 export async function exactView(
-  cmd: TernCommands,
+  cmd: TernCli,
   cwd: string,
   coordinator: Endpoint,
   kind: ViewKind,
@@ -261,8 +243,10 @@ async function readPrivateJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
+export type ObservedReceipt = Receipt | "torn" | undefined;
+
 /** Tern's fs has no rename, so a receipt may be read mid-write. Only a whole receipt counts. */
-async function readReceipt(path: string): Promise<ObservedReceipt> {
+export async function readReceipt(path: string): Promise<ObservedReceipt> {
   try {
     return Receipt.parse(await readPrivateJson(path));
   } catch (error) {
@@ -327,7 +311,7 @@ async function recoverKey(
   key: string,
   tokens: ReadonlySet<string>,
   now: number,
-  commandsFor: (ticket: Ticket) => TernCommands,
+  commandsFor: (ticket: Ticket) => TernCli,
 ): Promise<Recovery> {
   let opened = false;
   const retained: string[] = [];
@@ -372,12 +356,11 @@ async function recoverKey(
  * decides it.
  */
 export async function recoverViewOpens(
-  commands: TernCommands,
+  commands: TernCli,
   home: string,
   now: number,
 ): Promise<void> {
   const directory = join(home, "native-host");
-  const request = commands.request(home, []);
   for (const [key, tokens] of await ticketNames(directory)) {
     let release: () => Promise<void>;
     try {
@@ -389,13 +372,7 @@ export async function recoverViewOpens(
     try {
       await recoverKey(directory, key, tokens, now, (ticket) => {
         const window = parseBlockArgs(ticket.args)?.ctx.window;
-        return window === undefined
-          ? commands
-          : ternCommands(commands.run, {
-              binary: commands.binary,
-              windowKey: window,
-              ...(request.env === undefined ? {} : { environment: request.env }),
-            });
+        return window === undefined ? commands : commands.scope({ windowKey: window });
       });
     } finally {
       await release();
@@ -423,14 +400,14 @@ export type OpenResult = {
  * call. Retained tickets are decided first; one still unresolved refuses the open.
  */
 export async function openView(
-  cmd: TernCommands,
+  cmd: TernCli,
   input: OpenInput,
   project: string,
   kind: ViewKind,
   placement: Placement,
   viewPath: string,
-  options: Readonly<{ wait: (ms: number) => Promise<void>; clock: () => number }>,
 ): Promise<OpenResult> {
+  const coordinator = ternEndpoint(input.coordinator);
   const index = nativeViewsPath(input.home, project);
   const ctx: BlockContext = {
     coordinator: input.coordinator.paneId,
@@ -462,7 +439,6 @@ export async function openView(
     cmd,
     input.coordinator,
     ctx,
-    options.clock,
     async ({ directory, key, opened }) => {
       const reused =
         placement === "panel" || placement === "split" || reusableRoots.includes(kind) || opened
@@ -473,9 +449,17 @@ export async function openView(
           const current = await exactView(cmd, input.cwd, input.coordinator, kind, placement, args);
           if (current?.block.id !== reused.block.id)
             throw new TernOutcomeUnknownError("tern open reuse", "native view identity changed");
-          const focused = await cmd.mutate(input.cwd, ["focus", reused.block.id], BlockAck);
-          if (focused.block !== reused.block.id)
-            throw new TernOutcomeUnknownError("tern focus", "acknowledgement names another block");
+          await cmd.mutate({
+            verb: "focus",
+            endpoint: ternEndpoint({
+              ...input.coordinator,
+              terminalSessionId: reused.session.id,
+              workspaceId: reused.tab.id,
+              tabId: reused.tab.id,
+              paneId: reused.block.id,
+            }),
+            cwd: input.cwd,
+          });
         }
         return resultFor(reused);
       }
@@ -523,68 +507,44 @@ export async function openView(
       },
       receipt: receiptPath,
       ...(replaced === undefined ? {} : { replaced }),
-      ...(closing === undefined ? {} : { closeOrigin: closing.paneId }),
+      ...(closing === undefined ? {} : { closeOrigin: closing.endpoint.paneId }),
     };
     await writeTicket(route, ticket);
     let dispatched = false;
     try {
       // The last exact-id read before dispatch. A failure drops the claimed ticket.
-      await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-      const dispatchedTicket = { ...ticket, expiresAt: options.clock() + TICKET_LIFETIME_MS };
+      await cmd.exactPane({ endpoint: coordinator, cwd: input.cwd });
+      const dispatchedTicket = { ...ticket, expiresAt: cmd.clock() + TICKET_LIFETIME_MS };
       await writeTicket(route, dispatchedTicket);
       dispatched = true;
-      const focused = await cmd.mutate(input.cwd, ["focus", input.coordinator.paneId], BlockAck);
-      if (focused.block !== input.coordinator.paneId)
-        throw new TernOutcomeUnknownError("tern focus", "acknowledgement names another block");
+      await cmd.mutate({ verb: "focus", endpoint: coordinator, cwd: input.cwd });
       // Freshly revealed background tabs receive their real window size asynchronously.
-      await options.wait(150);
-      // Recheck immediately before the opening effect.
-      await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-      await closing?.prove();
-      let acknowledged: readonly string[] = [];
-      try {
-        const outcome = await cmd.run(cmd.request(input.cwd, ["open", route]));
-        if (outcome.code === 0) acknowledged = Opened.parse(JSON.parse(outcome.stdout)).blocks;
-        else if (!outcome.stderr.includes("cannot open in a file block"))
-          throw new Error(outcome.stderr);
-        // Tern's CLI reports handled custom layout routes as no file block. Only the receipt
-        // and the exact listing decide; an exit-0 block list is corroboration.
-      } catch (cause) {
-        throw new TernOutcomeUnknownError("tern open", cause);
-      }
-      const deadline = options.clock() + RECEIPT_WAIT_MS;
-      while (options.clock() < deadline) {
-        const receipt = await readReceipt(receiptPath);
-        if (receipt !== undefined && receipt !== "torn") {
-          if (
-            receipt.status === "done" &&
-            acknowledged.length > 0 &&
-            !acknowledged.includes(receipt.paneId)
-          )
-            throw new TernOutcomeUnknownError("tern open", "acknowledgement names another block");
-          const listing =
-            receipt.status === "done"
-              ? await listViews(cmd, input.cwd, placement).catch(() => undefined)
-              : undefined;
-          const decision = decide(dispatchedTicket, receipt, listing, options.clock());
-          if (decision.action === "quarantine")
-            throw new TernOutcomeUnknownError("tern open", decision.reason);
-          if (decision.action === "settle") {
-            await rm(receiptPath, { force: true });
-            await rm(route, { force: true });
-            if (decision.outcome === "not-opened") throw new NativeViewNotOpenedError();
-            if (decision.outcome === "closed") throw new NativeViewClosedError();
-            return placement === "return" || placement === "inbox"
-              ? { paneId: decision.block.block.id, project }
-              : resultFor(decision.block);
-          }
-        }
-        await options.wait(50);
-      }
-      throw new TernOutcomeUnknownError(
-        "tern open",
-        "route receipt was not confirmed; keep route and resources",
-      );
+      await cmd.wait(150);
+      const receipt = await cmd.mutate({
+        verb: "open",
+        endpoint: coordinator,
+        cwd: input.cwd,
+        route,
+        receipt: receiptPath,
+        ...(closing === undefined ? {} : { closes: closing }),
+      });
+      const listing =
+        receipt.status === "done"
+          ? await listViews(cmd, input.cwd, placement).catch(() => undefined)
+          : undefined;
+      const decision = decide(dispatchedTicket, receipt, listing, cmd.clock());
+      if (decision.action !== "settle")
+        throw new TernOutcomeUnknownError(
+          "tern open",
+          decision.action === "quarantine" ? decision.reason : "route receipt was not decided",
+        );
+      await rm(receiptPath, { force: true });
+      await rm(route, { force: true });
+      if (decision.outcome === "not-opened") throw new NativeViewNotOpenedError();
+      if (decision.outcome === "closed") throw new NativeViewClosedError();
+      return placement === "return" || placement === "inbox"
+        ? { paneId: decision.block.block.id, project }
+        : resultFor(decision.block);
     } catch (cause) {
       if (!dispatched) {
         await rm(route, { force: true });
@@ -606,10 +566,9 @@ export async function openView(
  * One still unresolved refuses the operation unless `onRetained` offers a safe exit.
  */
 export async function withSettledOpens<T>(
-  cmd: TernCommands,
+  cmd: TernCli,
   coordinator: Endpoint,
   ctx: Pick<BlockContext, "cwd" | "home" | "index">,
-  clock: () => number,
   operation: (lease: Readonly<{ directory: string; key: string; opened: boolean }>) => Promise<T>,
   onRetained?: () => Promise<T>,
 ): Promise<T> {
@@ -622,7 +581,7 @@ export async function withSettledOpens<T>(
       directory,
       key,
       (await ticketNames(directory)).get(key) ?? new Set(),
-      clock(),
+      cmd.clock(),
       () => cmd,
     ).catch((cause: unknown) => {
       throw new TernOutcomeUnknownError("tern open recovery", cause);
@@ -642,14 +601,11 @@ export async function withSettledOpens<T>(
  * conversation and keep every resource.
  */
 async function returnToConversation(
-  cmd: TernCommands,
+  cmd: TernCli,
   input: OpenInput,
   project: string,
 ): Promise<OpenResult> {
-  await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-  const focused = await cmd.mutate(input.cwd, ["focus", input.coordinator.paneId], BlockAck);
-  if (focused.block !== input.coordinator.paneId)
-    throw new TernOutcomeUnknownError("tern return", "acknowledgement names another block");
+  await cmd.mutate({ verb: "focus", endpoint: ternEndpoint(input.coordinator), cwd: input.cwd });
   return {
     paneId: input.coordinator.paneId,
     project,
@@ -661,11 +617,11 @@ async function returnToConversation(
 
 /** A full-window view the return closes, proven exact and idle immediately before each effect. */
 async function closingOrigin(
-  cmd: TernCommands,
+  cmd: TernCli,
   input: OpenInput,
   placement: Placement,
   index: string,
-): Promise<Readonly<{ paneId: string; prove: () => Promise<void> }> | undefined> {
+): Promise<ViewTarget | undefined> {
   const originId = input.origin?.paneId;
   if (placement !== "return" || originId === undefined || originId === input.coordinator.paneId)
     return undefined;
@@ -684,38 +640,25 @@ async function closingOrigin(
       "return origin is not this coordinator's native view",
     );
   if (!windowPrograms.includes(source.block.program)) return undefined;
-  const endpoint: Endpoint = {
-    ...input.coordinator,
-    paneId: source.block.id,
-    workspaceId: source.tab.id,
-    tabId: source.tab.id,
-  };
-  const expected = blockArgs(index, {
-    coordinator: input.coordinator.paneId,
+  const target: ViewTarget = {
+    endpoint: {
+      ...input.coordinator,
+      paneId: source.block.id,
+      workspaceId: source.tab.id,
+      tabId: source.tab.id,
+    },
     cwd: input.cwd,
-    home: input.home,
-    index,
-    ...(listed.ctx.window === undefined ? {} : { window: listed.ctx.window }),
-  });
-  const proveIdentity = async () => {
-    const current = await exactPane(cmd, { endpoint, cwd: input.cwd });
-    if (current.block.program !== source.block.program || !sameView(current.block.args, expected))
-      throw new EndpointOwnershipError(endpoint, "return origin is not the exact full-window view");
+    program: source.block.program,
+    args: blockArgs(index, {
+      coordinator: input.coordinator.paneId,
+      cwd: input.cwd,
+      home: input.home,
+      index,
+      ...(listed.ctx.window === undefined ? {} : { window: listed.ctx.window }),
+    }),
   };
-  const prove = async () => {
-    await proveIdentity();
-    const process = await cmd.read(input.cwd, ["process", endpoint.paneId], Processes);
-    if (
-      process.pane !== endpoint.paneId ||
-      process.child !== null ||
-      process.foreground !== null ||
-      process.group !== null
-    )
-      throw new EndpointBusyError(endpoint);
-    await proveIdentity();
-  };
-  await prove();
-  return { paneId: source.block.id, prove };
+  await cmd.proveView(target);
+  return target;
 }
 
 function retainedReason(receipt: ObservedReceipt): string {

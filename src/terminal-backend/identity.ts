@@ -19,6 +19,15 @@ export function assertTerminalEndpoint(terminal: TerminalName, endpoint: Endpoin
   }
 }
 
+declare const ternIdentity: unique symbol;
+/** A Tern endpoint whose terminal tag was checked here. Tern mutations accept nothing else. */
+export type TernEndpoint = Endpoint & Readonly<{ terminal: "tern"; [ternIdentity]: true }>;
+
+export function ternEndpoint(endpoint: Endpoint): TernEndpoint {
+  assertTerminalEndpoint("tern", endpoint);
+  return endpoint as TernEndpoint;
+}
+
 /** Apply terminal ownership before every port operation that accepts a durable endpoint. */
 export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend {
   const check = (endpoint: Endpoint) => assertTerminalEndpoint(backend.name, endpoint);

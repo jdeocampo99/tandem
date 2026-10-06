@@ -5,10 +5,8 @@ import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { blockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import {
-  TernOutcomeUnknownError,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { detailForView, ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 const endpoint: Endpoint = {
@@ -265,26 +263,14 @@ for (const mode of [
       }
       throw new Error(`unexpected ${verb}`);
     };
-    const quarantined = new Set<string>();
-    const host = ternViewHost(ternCommands(run, {}), {
-      guardOpen: async (key, operation) => {
-        if (quarantined.has(key)) throw new TernOutcomeUnknownError(key, "quarantined");
-        return operation();
-      },
-      clock: () => now,
-      wait: async (ms) => {
-        now += ms;
-      },
-      guard: async (key, operation) => {
-        if (quarantined.has(key)) throw new TernOutcomeUnknownError(key, "quarantined");
-        try {
-          return await operation();
-        } catch (error) {
-          if (error instanceof TernOutcomeUnknownError) quarantined.add(key);
-          throw error;
-        }
-      },
-    });
+    const host = ternViewHost(
+      ternCli(run, {
+        clock: () => now,
+        wait: async (ms) => {
+          now += ms;
+        },
+      }),
+    );
     const open = () =>
       host.open(
         {

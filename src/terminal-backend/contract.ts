@@ -93,6 +93,22 @@ export type RetainedViewOpen =
     }>
   | Readonly<{ status: "unreadable"; path: string; reason: string }>;
 
+/** A pane whose last Tandem effect ended with an unknown outcome, so Tandem refuses to touch it. */
+export type QuarantinedPane =
+  | Readonly<{
+      status: "readable";
+      path: string;
+      /** The record exactly as listed, so a clear never removes one that changed since. */
+      record: string;
+      key: string;
+      operation: string;
+      reason: string;
+      at: string;
+      endpoint: Endpoint;
+      cwd: string;
+    }>
+  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+
 export type OpenViewResult = Readonly<{
   opened: boolean;
   warnings: readonly string[];
@@ -300,6 +316,19 @@ export type TerminalBackend = Readonly<{
     open: Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>,
     conclusive: () => Promise<boolean>,
   ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
+  /**
+   * Panes Tandem refuses to touch because an effect there ended with an unknown outcome, read
+   * without changing them. Throws when the records themselves cannot be listed.
+   */
+  quarantinedPanes(home: string): Promise<readonly QuarantinedPane[]>;
+  /**
+   * Removes one pane's quarantine record, never the pane, under the record's lock: only while
+   * the record is unchanged and `conclusive` re-proves the pane gone or idle.
+   */
+  clearPaneQuarantine(
+    pane: Extract<QuarantinedPane, Readonly<{ status: "readable" }>>,
+    conclusive: () => Promise<boolean>,
+  ): Promise<"cleared" | "settled" | "changed" | "unproven">;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;

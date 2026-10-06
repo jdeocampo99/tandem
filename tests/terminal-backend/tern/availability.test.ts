@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { CommandStartError, CommandTimeoutError } from "../../../src/adapters/commands.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
-import { probeTern } from "../../../src/terminal-backend/tern/availability.ts";
+import { probeTern } from "../../../src/terminal-backend/tern/cli.ts";
 
 test("missing Tern falls back without starting a daemon or window", async () => {
   const calls: CommandRequest[] = [];

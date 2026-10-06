@@ -11,8 +11,8 @@ import type {
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
 import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
-import { probeTern } from "./tern/availability.ts";
 import { type TernBackendOptions, ternBackend, ternNotificationEndpoint } from "./tern/backend.ts";
+import { probeTern } from "./tern/cli.ts";
 import { TERN_CONTEXT } from "./tern/context.ts";
 import {
   ensureTernPlugin,
@@ -105,6 +105,8 @@ export function terminalBackend(
     closeView: (input) => select().closeView(input),
     retainedViewOpens: (home) => select().retainedViewOpens(home),
     abandonViewOpen: (open, conclusive) => select().abandonViewOpen(open, conclusive),
+    quarantinedPanes: (home) => select().quarantinedPanes(home),
+    clearPaneQuarantine: (pane, conclusive) => select().clearPaneQuarantine(pane, conclusive),
     recoverViewOpens: (home) => select().recoverViewOpens(home),
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),

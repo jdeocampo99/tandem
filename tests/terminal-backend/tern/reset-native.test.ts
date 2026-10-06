@@ -9,7 +9,8 @@ import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
 import { parseBlockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { blocks, Processes, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { blocks, Processes } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 
 const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -151,7 +152,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       });
       await ctl("account", "signed-in");
       const terminal = ternBackend(run, { home, environment: env });
-      const commands = ternCommands(run, { environment: env });
+      const commands = ternCli(run, { environment: env });
       // Reproduce B independently of any native views: exec between Tern's process
       // snapshot and the native group read. Both observations come from real processes.
       const race = await terminal.createWorkspace({

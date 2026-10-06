@@ -19,7 +19,8 @@ import {
 import { createTandemService } from "../../../src/service/controller.ts";
 import { readTaskInbox, taskInboxPath } from "../../../src/tasks/communication-persistence.ts";
 import { createTaskStore, type TaskStore } from "../../../src/tasks/store.ts";
-import { ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+
 import { content } from "../../board/fixtures.ts";
 import { scenarioRuntimeTask } from "../../evals/scenario.ts";
 import { policy } from "../../session/fixtures.ts";
@@ -177,7 +178,7 @@ async function selectTab(window: TernWindow, tab: string): Promise<void> {
 type Block = Readonly<{ tab: string; id: string; program?: string | undefined; cwd: string }>;
 
 async function blocks(window: TernWindow): Promise<readonly Block[]> {
-  const listing = await ternCommands(window.run, { binary: window.binary }).ls(window.root);
+  const listing = await ternCli(window.run, { binary: window.binary }).ls(window.root);
   return listing.sessions.flatMap((session) =>
     session.tabs.flatMap((tab) =>
       tab.blocks.map((block) => ({

@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { TERN_BINARY } from "../../../src/terminal-backend/tern/cli.ts";
 import {
   blocks,
   decode,
   Listing,
-  TERN_BINARY,
   type TernListing,
 } from "../../../src/terminal-backend/tern/protocol.ts";
 

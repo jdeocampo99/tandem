@@ -10,12 +10,8 @@ import {
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { blockArgs } from "../../../src/native/contract.ts";
-import {
-  blocks,
-  Created,
-  decode,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { blocks, Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
 
@@ -141,7 +137,7 @@ type ControlNode = {
         return { stdout, stderr, code };
       };
       const host = ternViewHost(
-        ternCommands(commandRunner, {
+        ternCli(commandRunner, {
           binary,
           environment: Object.fromEntries(
             Object.entries(env).filter(
@@ -149,7 +145,6 @@ type ControlNode = {
             ),
           ),
         }),
-        { clock: Date.now, wait: Bun.sleep, guard: async (_key, fn) => fn() },
       );
       const input = {
         coordinator: endpoint,
@@ -159,7 +154,7 @@ type ControlNode = {
       };
       await host.open(input, root, "panel", "panel", index);
       let opened = await host.open(input, root, "task", "task", file);
-      const launched = blocks(await ternCommands(commandRunner, { binary }).ls(root)).find(
+      const launched = blocks(await ternCli(commandRunner, { binary }).ls(root)).find(
         (entry) => entry.block.id === opened.paneId,
       );
       expect(launched?.block.args).toEqual(
@@ -259,7 +254,7 @@ type ControlNode = {
         "return",
         index,
       );
-      const afterCancel = await ternCommands(commandRunner, { binary }).ls(root);
+      const afterCancel = await ternCli(commandRunner, { binary }).ls(root);
       expect(
         afterCancel.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === floatingPicker.paneId),
       ).toBe(false);
@@ -275,7 +270,7 @@ type ControlNode = {
         "task",
         file,
       );
-      const replaced = await ternCommands(commandRunner, { binary }).ls(root);
+      const replaced = await ternCli(commandRunner, { binary }).ls(root);
       expect(replaced.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === previous.paneId)).toBe(
         false,
       );
@@ -300,7 +295,7 @@ type ControlNode = {
         "return",
         index,
       );
-      const restored = await ternCommands(commandRunner, { binary }).ls(root);
+      const restored = await ternCli(commandRunner, { binary }).ls(root);
       expect(restored.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === endpoint.paneId)).toBe(
         true,
       );
@@ -321,7 +316,7 @@ type ControlNode = {
       );
       expect(picker.paneId).not.toBe(endpoint.paneId);
       await until(async () => {
-        const all = await ternCommands(commandRunner, { binary }).ls(root);
+        const all = await ternCli(commandRunner, { binary }).ls(root);
         return !all.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === picker.paneId);
       });
       const missing = await host.open(

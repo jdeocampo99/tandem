@@ -4,10 +4,7 @@ import { nativeBriefFile } from "../../../src/board/native-views.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { blockArgs } from "../../../src/native/contract.ts";
-import {
-  TernOutcomeUnknownError,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 for (const mode of [
@@ -18,14 +15,14 @@ for (const mode of [
   "foreign-program",
   "busy",
   "changed",
-  "removed-after-second-read",
-  "program-after-second-read",
-  "args-after-second-read",
-  "tab-after-second-read",
+  "removed-after-idle-read",
+  "program-after-idle-read",
+  "args-after-idle-read",
+  "tab-after-idle-read",
   "unknown",
 ] as const) {
   test(`retiring a native brief: ${mode} closes only the exact idle originating split`, async () => {
-    const home = "/tmp/native-brief-close-fixture";
+    const home = await mkdtemp("/tmp/native-brief-close-");
     const coordinator: Endpoint = {
       terminal: "tern",
       sessionId: "test",
@@ -61,7 +58,7 @@ for (const mode of [
                   name: null,
                   blocks: [
                     { id: "3", title: "Tandem brief", cwd: home, live: true },
-                    ...(removed || (mode === "tab-after-second-read" && processReads === 2)
+                    ...(removed || (mode === "tab-after-idle-read" && processReads === 1)
                       ? []
                       : [
                           {
@@ -71,20 +68,20 @@ for (const mode of [
                             live: false,
                             program:
                               mode === "foreign-program" ||
-                              (mode === "program-after-second-read" && processReads === 2)
+                              (mode === "program-after-idle-read" && processReads === 1)
                                 ? "unrelated.brief"
                                 : "tandem.brief",
                             args:
                               mode === "wrong-request" ||
                               (mode === "changed" && processReads > 0) ||
-                              (mode === "args-after-second-read" && processReads === 2)
+                              (mode === "args-after-idle-read" && processReads === 1)
                                 ? ["/foreign.json", args[1], args[2]]
                                 : args,
                           },
                         ]),
                   ],
                 },
-                ...(mode === "tab-after-second-read" && processReads === 2
+                ...(mode === "tab-after-idle-read" && processReads === 1
                   ? [
                       {
                         id: "5",
@@ -109,7 +106,7 @@ for (const mode of [
         };
       else if (verb === "process") {
         processReads++;
-        if (processReads === 2 && mode === "removed-after-second-read") removed = true;
+        if (processReads === 1 && mode === "removed-after-idle-read") removed = true;
         value = {
           pane: "4",
           child: mode === "busy" ? { pid: 10, name: "sh", argv: ["sh"], cwd: home } : null,
@@ -125,22 +122,8 @@ for (const mode of [
       } else throw new Error(`unexpected ${verb}`);
       return { code: 0, stderr: "", stdout: JSON.stringify(value) };
     };
-    let quarantined = false;
-    const host = ternViewHost(ternCommands(run, {}), {
-      clock: Date.now,
-      wait: Bun.sleep,
-      guard: async (_key, operation) => {
-        if (quarantined) throw new TernOutcomeUnknownError("brief close", "quarantined");
-        try {
-          return await operation();
-        } catch (error) {
-          if (error instanceof TernOutcomeUnknownError) quarantined = true;
-          throw error;
-        }
-      },
-    });
     const close = () =>
-      host.close(
+      ternViewHost(ternCli(run)).close(
         {
           coordinator,
           cwd: home,
@@ -150,16 +133,22 @@ for (const mode of [
         },
         home,
       );
-    if (mode === "closed" || mode === "missing") {
-      expect(await close()).toEqual({ closed: true, warnings: [] });
-      expect(closeCalls).toBe(mode === "missing" ? 0 : 1);
-    } else {
-      await expect(close()).rejects.toThrow();
-      expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
-      if (mode === "unknown") {
-        await expect(close()).rejects.toThrow("quarantine");
-        expect(closeCalls).toBe(1);
+    try {
+      if (mode === "closed" || mode === "missing") {
+        expect(await close()).toEqual({ closed: true, warnings: [] });
+        expect(closeCalls).toBe(mode === "missing" ? 0 : 1);
+      } else {
+        await expect(close()).rejects.toThrow();
+        expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
+        if (mode === "unknown") {
+          // The brief is now absent from an exact listing, so a later click finds it closed
+          // without repeating the close.
+          expect(await close()).toEqual({ closed: true, warnings: [] });
+          expect(closeCalls).toBe(1);
+        }
       }
+    } finally {
+      await rm(home, { recursive: true, force: true });
     }
   });
 }
@@ -262,23 +251,8 @@ for (const kind of ["board"] as const) {
         } else throw new Error(`unexpected ${verb}`);
         return { code: 0, stderr: "", stdout: JSON.stringify(value) };
       };
-      let quarantined = false;
-      const host = ternViewHost(ternCommands(run, {}), {
-        guardOpen: async (_key, operation) => operation(),
-        clock: Date.now,
-        wait: async () => {},
-        guard: async (_key, operation) => {
-          if (quarantined) throw new TernOutcomeUnknownError("brief close", "quarantined");
-          try {
-            return await operation();
-          } catch (error) {
-            if (error instanceof TernOutcomeUnknownError) quarantined = true;
-            throw error;
-          }
-        },
-      });
       const close = () =>
-        host.open(
+        ternViewHost(ternCli(run, { wait: async () => {} })).open(
           {
             coordinator,
             cwd: home,

@@ -349,8 +349,9 @@ the plain warning that new native openings stay paused. `tandem fix` lists every
 with its reason and, with `--yes`, abandons one only after proving its coordinator exactly present
 or exactly gone; see [reconciliation](reconciliation.md#tandem-fix).
 
-Panel-close verification failures quarantine the close in the backend guard and retain
-resources without a second close. Panel close refuses detached placement even before the effect.
+Panel-close verification failures record a durable quarantine against the panel pane in
+`mutate`, so no later process closes it again. Panel close refuses detached placement even before
+the effect.
 A unique recorded coordinator must bind the panel's session, tab, worktree cwd and its block
 arguments; the conversation itself cannot be closed as a panel. The full program and argument
 proof runs again after the idle process read, immediately before the close mutation. Changed or

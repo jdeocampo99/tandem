@@ -9,8 +9,8 @@ import type {
   TerminalBackend,
 } from "../../../src/terminal-backend/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { missing } from "../../../src/terminal-backend/tern/endpoints.ts";
-import { ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { missing, ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 const coordinator: Endpoint = {
@@ -57,13 +57,15 @@ async function withRetainedOpen(body: (home: string) => Promise<void>): Promise<
   };
   try {
     await expect(
-      ternViewHost(ternCommands(run, { binary: "tern" }), {
-        clock: () => now,
-        wait: async (ms) => {
-          now += ms;
-        },
-        guard: async (_key, operation) => operation(),
-      }).open(
+      ternViewHost(
+        ternCli(run, {
+          binary: "tern",
+          clock: () => now,
+          wait: async (ms) => {
+            now += ms;
+          },
+        }),
+      ).open(
         { home, cwd: home, coordinator, view: { kind: "task", taskId: "task-new" } },
         home,
         "task",

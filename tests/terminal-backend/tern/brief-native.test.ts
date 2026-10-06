@@ -14,8 +14,9 @@ import { RequestBriefWorkflow } from "../../../src/requests/workflow.ts";
 import { createTandemService } from "../../../src/service/controller.ts";
 import { executeTandemAction } from "../../../src/session/actions.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
-import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
 
@@ -129,7 +130,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       join(root, "src", "main.ts"),
       `import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ternCommands } from ${JSON.stringify(fileURLToPath(new URL("../../../src/terminal-backend/tern/protocol.ts", import.meta.url)))};
+import { ternCli } from ${JSON.stringify(fileURLToPath(new URL("../../../src/terminal-backend/tern/cli.ts", import.meta.url)))};
 import { ternViewHost } from ${JSON.stringify(fileURLToPath(new URL("../../../src/terminal-backend/tern/views.ts", import.meta.url)))};
 import type { CommandRunner, Endpoint } from ${JSON.stringify(fileURLToPath(new URL("../../../src/contracts.ts", import.meta.url)))};
 const root = ${JSON.stringify(root)};
@@ -156,9 +157,7 @@ if (existsSync(join(root, "refuse"))) {
     ]);
     return {stdout, stderr, code};
   };
-  const host = ternViewHost(ternCommands(runner, { binary: ${JSON.stringify(binary)} }), {
-    clock: Date.now, wait: (ms) => Bun.sleep(ms), guard: async (_key, operation) => operation(),
-  });
+  const host = ternViewHost(ternCli(runner, { binary: ${JSON.stringify(binary)} }));
   const coordinator: Endpoint = JSON.parse(readFileSync(join(root, "coordinator.json"), "utf8"));
   const windowId = argv.includes("--window") ? argv[argv.indexOf("--window") + 1] : undefined;
   const closed = await host.close({
@@ -317,16 +316,12 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         ]);
         return { stdout, stderr, code };
       };
-      const commands = ternCommands(runner, { binary });
+      const commands = ternCli(runner, { binary });
       const paneExists = async (id: string) =>
         (await commands.ls(root)).sessions.some((session) =>
           session.tabs.some((tab) => tab.blocks.some((block) => block.id === id)),
         );
-      const host = ternViewHost(commands, {
-        clock: Date.now,
-        wait: (ms) => Bun.sleep(ms),
-        guard: async (_key, operation) => operation(),
-      });
+      const host = ternViewHost(commands);
       const terminal = terminalBackend(runner, {
         terminal: "tern",
         home: env.TANDEM_HOME,
