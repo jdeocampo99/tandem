@@ -207,6 +207,11 @@ Choosing Herdr again restores settings Tandem changed, keeping any edits you mad
 
 From Board or Usage, press `Esc` or click **← Orchestrator** to return to the project's chat.
 Pressing `Cmd+Shift+B` again from Board also closes it.
+
+If a view fails before changing anything, Tern says "The Tandem view did not open and nothing
+changed. Open it again." If Tandem can't tell whether a view opened, it pauses new views for that
+project rather than risk a duplicate. **← Orchestrator** still takes you back to the chat, and
+`tandem fix` lists the paused view so you can clear it.
 [Terminal reference](docs/reference/terminal.md) covers the details.
 
 ## Requirements
@@ -297,7 +302,7 @@ Ask for help in Lavish's Conversation panel and Tandem answers there without mak
 | `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
 | `tandem memory [NAME]` | This project's workstreams; with a name, its catch-up and where its notes file is |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
-| `tandem fix` | Clean up leftovers from a crash or failed launch (asks first) |
+| `tandem fix` | Clean up leftovers from a crash or failed launch, including paused Tern views and panes Tandem stopped touching (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
 | `tandem config [PATH]` | Open the project's settings file |
 | `tandem welcome` | Show the welcome message again |

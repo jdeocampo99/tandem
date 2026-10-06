@@ -213,4 +213,4 @@ retried, and a `kept` outcome never invites a repeat.
 Native window lifecycle also sends `visit {event: entry|away|visible}` with the focused origin.
 These presentation-only actions prove the exact recorded project session; helper entry focuses
 the recorded coordinator and reads its alert cursor, and project entry applies the non-fatal
-catch-up rule. See [native visibility and alert semantics](tern-views.md).
+catch-up rule. See [catch-up](native-views.md#catch-up) and [the panel bell](native-views.md#panel-bell-and-read-cursor).
