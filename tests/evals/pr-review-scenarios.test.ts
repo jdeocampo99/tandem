@@ -60,7 +60,7 @@ type Posted = { body: string; stdin: string };
 /** Scripted `gh` and Lavish; real git for the PR checkout; the scenario world for the rest. */
 function composite(world: ScenarioWorld, prRoot: string, author: string, origin: string) {
   const posted: Posted[] = [];
-  const replies: string[] = [];
+  const replies: Record<string, unknown>[] = [];
   const reviews: Record<string, unknown>[] = [];
   const run: CommandRunner = async (request: CommandRequest): Promise<CommandResult> => {
     const [program, flag, path] = request.argv;
@@ -134,9 +134,15 @@ function composite(world: ScenarioWorld, prRoot: string, author: string, origin:
       reviews.push({ body: body.body, html_url: url });
       return ok(JSON.stringify({ html_url: url }));
     }
-    if (line.startsWith("gh api --method POST repos/acme/api/pulls/7/comments/501/replies")) {
-      replies.push(line);
-      return ok("{}");
+    if (line.startsWith("gh api --method POST repos/acme/api/pulls/7/comments")) {
+      const reply = JSON.parse(request.stdin ?? "{}") as Record<string, unknown>;
+      replies.push(reply);
+      return ok(
+        JSON.stringify({
+          in_reply_to_id: reply.in_reply_to,
+          html_url: `${URL}#discussion_r${600 + replies.length}`,
+        }),
+      );
     }
     return { code: 1, stdout: "", stderr: `unscripted: ${line}` };
   };
@@ -376,7 +382,9 @@ test("a PR review runs end to end: start, review, edit, post, re-review, questio
       event: "APPROVE",
       body: expect.stringContaining("Thanks, this looks good now."),
     });
-    expect(fake.replies).toHaveLength(1);
+    expect(fake.replies).toMatchObject([
+      { in_reply_to: 501, body: expect.stringContaining("Looks good, thanks!") },
+    ]);
 
     await service.steer({ taskId, text: "Why does retry take the file handle?" });
     const question = await latestJob(world, taskId);

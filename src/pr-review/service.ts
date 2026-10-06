@@ -10,13 +10,7 @@ import { applyEdits, type PrReviewEdits, submissionEdits } from "./edits.ts";
 import { buildReviewPage, parseReviewSubmission, type ReviewSubmission } from "./page.ts";
 import { readPageComment, readSubmissionText } from "./page-feedback.ts";
 import { readPageSources, reviewPageInput } from "./page-input.ts";
-import {
-  findPostedReview,
-  postReview,
-  type ReviewVerdict,
-  replyToComment,
-  reviewMarker,
-} from "./post.ts";
+import { findPostedReview, postReview, type ReviewVerdict, reviewMarker } from "./post.ts";
 import {
   acknowledgement,
   findPullRequestRef,
@@ -25,7 +19,7 @@ import {
   readPullRequest,
 } from "./pull-request.ts";
 import { renderReviewText, replyPostNotes, uncertainPostMessage, wantsPage } from "./render.ts";
-import { validateThreadReplies } from "./replies.ts";
+import { roundReplies, sentWithoutClaim, validateThreadReplies } from "./replies.ts";
 import { createReplyPosting } from "./reply-posting.ts";
 import type { ReviewLens } from "./review.ts";
 import {
@@ -333,17 +327,22 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       }
       if (recovery.kind === "post-reply-again" || recovery.kind === "mark-reply-posted") {
         const index = recovery.replyIndex;
+        const reply = roundReplies(round.review)[index];
         if (
           round.posted === undefined ||
           !Number.isSafeInteger(index) ||
           index < 0 ||
-          round.review.replies?.[index] === undefined
+          reply === undefined
         )
           throw new Error("Recovery must name a saved reply on a posted review.");
         if (verdict !== round.posted.verdict)
           throw new Error("Recovery must keep the saved review verdict.");
         if (round.replyPosts?.find((post) => post.index === index)?.kind === "posted")
           throw new Error("This reply already has a posted receipt.");
+        if (sentWithoutClaim(round, reply))
+          throw new Error(
+            "An earlier Tandem version already sent this reply without saving a receipt; there is nothing to recover.",
+          );
         if (recovery.kind === "mark-reply-posted") {
           await replyPosting.markPosted(
             task,
@@ -371,7 +370,13 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         task,
         replaceLatestRound(state, {
           ...confirmed,
-          posted: { url, verdict, postedAt: deps.clock(), confirmedByUser: true },
+          posted: {
+            url,
+            verdict,
+            postedAt: deps.clock(),
+            confirmedByUser: true,
+            priorRepliesClaimed: true,
+          },
         }),
       );
       return postedResult(
@@ -381,7 +386,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       );
     }
     if (round.posted !== undefined) {
-      await replyPosting.reconcile(task.id, round);
+      await replyPosting.postRemaining(task.id, round);
       return postedResult(task.id, round, "Already posted");
     }
     return publish(task, state, round, verdict);
@@ -484,6 +489,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
                   url: outcome.url,
                   verdict: pendingPost?.verdict ?? input.verdict,
                   postedAt,
+                  priorRepliesClaimed: true,
                 },
               }
             : candidate,
@@ -495,9 +501,8 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       (candidate) => candidate.generation === round.generation && candidate.head === round.head,
     );
     if (confirmed?.posted === undefined) throw new Error("The review receipt was not saved.");
-    // Only the caller recording the review receipt initiates the selected reply effects.
-    if (settled.changed) await postReplies(task.id, confirmedState, confirmed);
-    else await replyPosting.reconcile(task.id, confirmed);
+    // The receipt is durable first; every reply then claims and settles its own effect.
+    await replyPosting.postRemaining(task.id, confirmed);
     return postedResult(
       task.id,
       confirmed,
@@ -524,25 +529,6 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       url: round.posted.url,
       message: `${label}${count === 0 ? "" : ` with ${count} ${count === 1 ? "reply" : "replies"}`}: ${round.posted.url}${notes.length === 0 ? "" : `\n${notes.join("\n")}`}`,
     };
-  }
-
-  /** The review receipt is saved first; each native reply claims and settles its own effect. */
-  async function postReplies(
-    taskId: string,
-    state: PrReviewState,
-    round: PrReviewRound,
-  ): Promise<void> {
-    for (const index of (round.review.replies ?? []).keys())
-      await replyPosting.attempt(taskId, round, index, true);
-    for (const prior of round.review.priorComments) {
-      if (prior.status !== "addressed" || prior.reply === undefined) continue;
-      await replyToComment(deps.run, {
-        ref: state.ref,
-        commentId: prior.commentId,
-        body: prior.reply,
-        cwd: state.checkout,
-      });
-    }
   }
 
   /** Reviews the author's new pushes, checking each of the user's earlier comments. */

@@ -1,7 +1,8 @@
 import { isRecord } from "../adapters/primitives.ts";
 import type { CommandRunner } from "../contracts.ts";
 import type { PullRequestRef } from "./pull-request.ts";
-import type { PrReview, ReviewReply } from "./review.ts";
+import type { RoundReply } from "./replies.ts";
+import type { PrReview } from "./review.ts";
 
 /** The verdict is always the user's; Tandem never picks it. */
 export type ReviewVerdict = "comment" | "approve" | "request-changes";
@@ -106,31 +107,11 @@ export async function postReview(
   };
 }
 
-/** Posts a short reply on an earlier review thread, for comments marked addressed. */
-export async function replyToComment(
-  run: CommandRunner,
-  input: Readonly<{ ref: PullRequestRef; commentId: number; body: string; cwd: string }>,
-): Promise<boolean> {
-  const result = await run({
-    argv: [
-      "gh",
-      "api",
-      "--method",
-      "POST",
-      `repos/${input.ref.repo}/pulls/${input.ref.number}/comments/${input.commentId}/replies`,
-      "-f",
-      `body=${input.body}`,
-    ],
-    cwd: input.cwd,
-  });
-  return result.code === 0;
-}
-
 export type PostThreadReplyInput = Readonly<{
   ref: PullRequestRef;
   cwd: string;
   head: string;
-  reply: ReviewReply;
+  reply: RoundReply;
   marker: string;
 }>;
 
