@@ -41,7 +41,7 @@ export type NativeViewsPublication = Readonly<{
   retainedDetailFiles?: readonly string[];
 }>;
 
-/** Matches the host-plugin NativeViewFile wire envelope. Revisions describe only model content. */
+/** Writes the file envelope in docs/reference/native-views.md. Revisions describe only model content. */
 export function nativeViewText(kind: "panel" | NativeDetail["kind"], model: unknown): string {
   const json = nativeModelJson(model);
   const revision = createHash("sha256").update(json).digest("hex");
