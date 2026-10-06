@@ -3799,9 +3799,10 @@ test("persists full feedback evidence across a later poll and restart", async ()
     },
     async ({ home, run, service, runnerState }) => {
       await seedConsumedPresentation(home, "presentation-evidence");
-      await service.tick();
-      await runnerState.presentationStarted;
+      // Let the explicit poll own the first observation, then release its response only once
+      // it has reached the runner. A scheduler listener could finish before this call attaches.
       const firstFeedback = service.feedback("presentation-evidence");
+      await runnerState.presentationStarted;
       runnerState.releasePresentation();
       const first = await firstFeedback;
       expect(first.status).toBe("open");

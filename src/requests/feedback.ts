@@ -1,6 +1,6 @@
 import type { RequestBriefRecord, RequestBriefRevision } from "../contracts.ts";
 import { assertNotAbandoned, RequestBriefError } from "./brief.ts";
-import { renderRequestBriefMarkdown } from "./markdown.ts";
+import { briefView } from "./native-view.ts";
 
 /** The brief identity the native view displayed, carried unchanged by every brief action. */
 export type ViewedBrief = Readonly<{
@@ -13,7 +13,7 @@ export type ViewedBrief = Readonly<{
 export type BriefFeedback = ViewedBrief &
   Readonly<{
     text?: string;
-    comments: readonly Readonly<{ line: number; text: string }>[];
+    comments: readonly Readonly<{ lineId: string; text: string }>[];
   }>;
 
 /** Feedback may describe an older preserved draft, but may never claim text that was not shown. */
@@ -32,7 +32,7 @@ export function briefFeedbackPrompt(
   if (draft === undefined) {
     throw new RequestBriefError(
       "stale-revision",
-      "Feedback names an unknown brief revision",
+      "Feedback names a stale or unknown brief revision; the displayed revision is not preserved",
       record.id,
     );
   }
@@ -50,11 +50,14 @@ export function briefFeedbackPrompt(
       record.id,
     );
   }
-  const lines = renderRequestBriefMarkdown({ ...record, draft }).split("\n");
+  const lines = new Map(briefView({ ...record, draft }).lines.map((line) => [line.id, line]));
   const notes = feedback.comments.map((comment) => {
-    const line = lines[comment.line - 1];
-    if (line === undefined) throw new TypeError(`Brief line ${comment.line} does not exist`);
-    return `Line ${comment.line} (${line}):\n${comment.text}`;
+    const line = lines.get(comment.lineId);
+    if (line === undefined)
+      throw new TypeError(
+        `Unknown brief line id ${JSON.stringify(comment.lineId)} in revision ${draft.revision}`,
+      );
+    return `Line ${line.number} [${line.id}] (${line.text}):\n${comment.text}`;
   });
   if (feedback.text !== undefined) notes.push(feedback.text);
   if (notes.length === 0) throw new TypeError("Brief feedback requires a comment");
