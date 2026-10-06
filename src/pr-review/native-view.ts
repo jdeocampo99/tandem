@@ -70,7 +70,7 @@ export type PrPaneView = Readonly<{
   }>;
   readAt: IsoTimestamp;
   tabs: readonly string[];
-  checks: readonly (PrCheck & Readonly<{ elapsedMs?: number }>)[];
+  checks: readonly PrCheck[];
   description: Readonly<{ markdown: string; conversation: readonly PrComment[] }>;
   tour: readonly Readonly<{
     title: string;
@@ -170,17 +170,7 @@ export function prPaneView(
     },
     readAt: cached.readAt,
     tabs: ["Description", ...(cached.tour.length === 0 ? [] : ["Tour"]), "Diff"],
-    checks: cached.checks.map((check) => ({
-      ...check,
-      ...(check.startedAt === undefined
-        ? {}
-        : {
-            elapsedMs: Math.max(
-              0,
-              Date.parse(check.completedAt ?? input.now) - Date.parse(check.startedAt),
-            ),
-          }),
-    })),
+    checks: cached.checks,
     description: { markdown: cached.body, conversation: cached.conversation },
     files,
     unanchoredThreads: cached.threads.filter((thread) => !anchored.has(thread.id)),

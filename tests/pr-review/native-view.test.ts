@@ -78,7 +78,8 @@ test("native PR diff anchors both sides and replies while retaining outdated thr
   expect(view.files[0]?.rows[2]?.threads[0]?.comments).toHaveLength(2);
   expect(view.unanchoredThreads[0]?.id).toBe("outdated");
   expect(view.tour[0]?.stops[0]?.rowIds).toEqual(["src/a.ts:2"]);
-  expect(view.checks.map((check) => check.elapsedMs)).toEqual([77_000, 9_000]);
+  expect(view.checks).toEqual(cached.checks);
+  expect(prPaneView({ cached, now: "2030-01-01T13:00:00Z" })).toEqual(view);
   expect(view.commentDestination).toBe("worker");
 });
 
