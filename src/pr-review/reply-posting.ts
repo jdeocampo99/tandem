@@ -1,7 +1,7 @@
 import type { TaskRecord } from "../contracts.ts";
 import { readNativeThreads } from "../pr-watch/native-cache.ts";
 import { findPostedReply, postThreadReply } from "./post.ts";
-import { roundReplies, validateThreadReplies } from "./replies.ts";
+import { roundReplies, sentWithoutClaim, validateThreadReplies } from "./replies.ts";
 import type { PrReviewDependencies } from "./service.ts";
 import type { PrReviewRound, PrReviewState, ReplyPost } from "./state.ts";
 
@@ -27,6 +27,7 @@ export function createReplyPosting(
     const { state, round } = savedRound(task, binding);
     const reply = roundReplies(round.review)[index];
     if (reply === undefined) throw new Error("This round has no saved reply at that index.");
+    if (sentWithoutClaim(round, reply)) return;
     const previous = round.replyPosts?.find((post) => post.index === index);
     if (previous?.kind === "posted") return;
     if (send && previous !== undefined && recoveryRevision === undefined) {
@@ -104,7 +105,8 @@ export function createReplyPosting(
 
   /**
    * Sends every reply of a posted round that has no claim yet and reconciles the rest, so a crash
-   * mid-loop loses nothing on re-entry and a claimed reply is never sent twice.
+   * mid-loop loses nothing on re-entry and a claimed reply is never sent twice. Replies an older
+   * build already sent without a claim are skipped.
    */
   async function postRemaining(taskId: string, round: PrReviewRound) {
     for (const index of roundReplies(round.review).keys())

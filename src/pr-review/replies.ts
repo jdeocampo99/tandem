@@ -1,5 +1,6 @@
 import type { PrThread } from "./native-view.ts";
 import type { PrReview, ReviewReply } from "./review.ts";
+import type { PrReviewRound } from "./state.ts";
 
 /** One reply a posted round sends; `thread` is set for the user's selected thread replies. */
 export type RoundReply = Readonly<{ replyTo: number; body: string; thread?: ReviewReply }>;
@@ -21,6 +22,18 @@ export function roundReplies(review: PrReview): readonly RoundReply[] {
         : [],
     ),
   ];
+}
+
+/**
+ * A reply to an earlier comment on a round whose receipt was saved by an older build, which sent
+ * those replies itself with no claim or receipt. Tandem never sends, reports or recovers it again.
+ */
+export function sentWithoutClaim(round: PrReviewRound, reply: RoundReply): boolean {
+  return (
+    round.posted !== undefined &&
+    round.posted.priorRepliesClaimed !== true &&
+    reply.thread === undefined
+  );
 }
 
 /** A reply names the root of exactly one thread, including outdated or unanchored threads. */

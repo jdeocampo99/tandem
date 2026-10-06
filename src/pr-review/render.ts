@@ -1,4 +1,4 @@
-import { roundReplies } from "./replies.ts";
+import { roundReplies, sentWithoutClaim } from "./replies.ts";
 import type { PrReviewRound, PrReviewState } from "./state.ts";
 
 /** An uncertain submission needs the user's inspection and explicit choice before another POST. */
@@ -6,22 +6,34 @@ export function uncertainPostMessage(prUrl: string, detail?: string): string {
   return `GitHub may or may not have received this review; check the PR: ${prUrl}. Ask Tandem to post the saved review again (which may duplicate it), or mark it as posted with the review link you checked. Both require your confirmation.${detail === undefined ? "" : ` ${detail}`}`;
 }
 
-/** Saved reply text, receipts and recovery choices survive process/task reloads. */
+/**
+ * Saved reply text, receipts and recovery choices survive process/task reloads. Replies an older
+ * build already sent without a claim get no note, as that build showed none.
+ */
 export function replyPostNotes(prUrl: string, round: PrReviewRound): readonly string[] {
-  return roundReplies(round.review).map((reply, index) => {
+  return roundReplies(round.review).flatMap((reply, index) => {
+    if (sentWithoutClaim(round, reply)) return [];
     const post = round.replyPosts?.find((saved) => saved.index === index);
     const target =
       reply.thread === undefined
         ? `your earlier comment (GitHub ${reply.replyTo})`
         : `thread ${reply.thread.threadId} (root ${reply.thread.commentId}, GitHub ${reply.replyTo})`;
     const label = `Reply ${index} to ${target}: ${reply.body}`;
-    if (post?.kind === "posted") return `${label}\nPosted: ${post.url}`;
+    if (post?.kind === "posted") return [`${label}\nPosted: ${post.url}`];
     if (post === undefined)
-      return round.posted === undefined
-        ? `${label}\nSaved with this review; not yet sent.`
-        : `${label}\nNot sent. The next post or submission of this review sends it.`;
-    const detail = post.kind === "uncertain" || post.kind === "failed" ? ` ${post.message}` : "";
-    return `${label}\nThis reply has no confirmed receipt. GitHub may or may not have received it; check the PR: ${prUrl}. Tandem will not automatically retry. Ask to post saved reply ${index} again (which may duplicate it), or mark it as posted with the reply link you checked. Both require your confirmation.${detail}`;
+      return [
+        round.posted === undefined
+          ? `${label}\nSaved with this review; not yet sent.`
+          : `${label}\nNot sent. Posting this review again sends it.`,
+      ];
+    if (post.kind === "failed")
+      return [
+        `${label}\nNot sent: Tandem checked GitHub before posting and stopped, so GitHub did not receive it. Tandem will not automatically retry. Ask to post saved reply ${index} again, which requires your confirmation. Reason: ${post.message}`,
+      ];
+    const detail = post.kind === "uncertain" ? ` ${post.message}` : "";
+    return [
+      `${label}\nThis reply has no confirmed receipt. GitHub may or may not have received it; check the PR: ${prUrl}. Tandem will not automatically retry. Ask to post saved reply ${index} again (which may duplicate it), or mark it as posted with the reply link you checked. Both require your confirmation.${detail}`,
+    ];
   });
 }
 

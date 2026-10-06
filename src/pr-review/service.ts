@@ -19,7 +19,7 @@ import {
   readPullRequest,
 } from "./pull-request.ts";
 import { renderReviewText, replyPostNotes, uncertainPostMessage, wantsPage } from "./render.ts";
-import { roundReplies, validateThreadReplies } from "./replies.ts";
+import { roundReplies, sentWithoutClaim, validateThreadReplies } from "./replies.ts";
 import { createReplyPosting } from "./reply-posting.ts";
 import type { ReviewLens } from "./review.ts";
 import {
@@ -327,17 +327,22 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       }
       if (recovery.kind === "post-reply-again" || recovery.kind === "mark-reply-posted") {
         const index = recovery.replyIndex;
+        const reply = roundReplies(round.review)[index];
         if (
           round.posted === undefined ||
           !Number.isSafeInteger(index) ||
           index < 0 ||
-          roundReplies(round.review)[index] === undefined
+          reply === undefined
         )
           throw new Error("Recovery must name a saved reply on a posted review.");
         if (verdict !== round.posted.verdict)
           throw new Error("Recovery must keep the saved review verdict.");
         if (round.replyPosts?.find((post) => post.index === index)?.kind === "posted")
           throw new Error("This reply already has a posted receipt.");
+        if (sentWithoutClaim(round, reply))
+          throw new Error(
+            "An earlier Tandem version already sent this reply without saving a receipt; there is nothing to recover.",
+          );
         if (recovery.kind === "mark-reply-posted") {
           await replyPosting.markPosted(
             task,
@@ -365,7 +370,13 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         task,
         replaceLatestRound(state, {
           ...confirmed,
-          posted: { url, verdict, postedAt: deps.clock(), confirmedByUser: true },
+          posted: {
+            url,
+            verdict,
+            postedAt: deps.clock(),
+            confirmedByUser: true,
+            priorRepliesClaimed: true,
+          },
         }),
       );
       return postedResult(
@@ -478,6 +489,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
                   url: outcome.url,
                   verdict: pendingPost?.verdict ?? input.verdict,
                   postedAt,
+                  priorRepliesClaimed: true,
                 },
               }
             : candidate,

@@ -209,9 +209,17 @@ task/generation/index marker; unreadable head or marker reads refuse posting. A 
 reconciles the marker without retrying. Unconfirmed replies of both kinds are reported explicitly
 and are never automatically retried, including after restart. Review-show, HTML notes and native
 review notes retain each saved reply's index, text, target (thread/root identity, or the earlier
-comment's GitHub id), and its receipt or warning after reload. A reply on a posted round with no
-entry is reported as not sent, and the next review-post or submission sends it. The posted
-message counts every reply with a `posted` receipt.
+comment's GitHub id), and its receipt or warning after reload. A `failed` reply is reported as not
+sent with its reason, since the refusal came before any POST. A reply on a posted round with no
+entry is reported as not sent, and the next review-post sends it (a submission on a posted round is
+refused). The posted message counts every reply with a `posted` receipt.
+
+Older builds sent addressed prior-comment replies directly after saving the review receipt, with no
+claim, marker or `replyPosts` entry. Every receipt this build saves, from a publish or from
+`mark-posted` recovery, carries `priorRepliesClaimed:true`. On a posted round whose receipt lacks
+it, the build that saved the receipt already sent the prior-comment replies, so they are never
+claimed, POSTed, reported in notes or recoverable (`sentWithoutClaim`). Thread replies on such a
+round still follow the claim rules, as older builds claimed those too.
 
 Every review-post or submission that finds the receipt saved sends the round's unclaimed replies
 and reconciles the claimed ones, so a crash mid-loop loses no reply: on re-entry the sent ones are

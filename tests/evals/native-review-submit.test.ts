@@ -926,13 +926,19 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
         // Only a reply that never claimed its attempt is sent on re-entry; a claim is never retried.
         const unclaimed = crash === "review-receipt";
         const note = unclaimed
-          ? "Not sent. The next post or submission of this review sends it."
+          ? "Not sent. Posting this review again sends it."
           : "no confirmed receipt";
         const show = await restarted.reviewShow(SCENARIO_TASK_ID, { page: false });
         expect(show.text).toContain(threadReply.body);
         expect(show.text).toContain(note);
-        if (unclaimed) expect(show.text).not.toContain("may or may not have received it");
-        else expect(show.text).toContain("Tandem will not automatically retry");
+        if (unclaimed) {
+          expect(show.text).not.toContain("may or may not have received it");
+          expect(show.text).not.toContain("submission");
+          await expect(restarted.reviewSubmit(SCENARIO_TASK_ID, replySubmission)).rejects.toThrow(
+            "already posted",
+          );
+          expect(boundary.replies.length).toBe(before);
+        } else expect(show.text).toContain("Tandem will not automatically retry");
         const round = saved.prReview?.rounds[0];
         if (!round || !saved.prReview) throw new Error("Missing round");
         expect(reviewPageInput(saved.prReview, round, "", {}).notes.join("\n")).toContain(note);
@@ -1028,7 +1034,8 @@ function priorReplyGitHub(world: ScenarioWorld, prUrl: string, lostReplies = 0) 
   return { run, replies, reviewPosts: () => reviewPosts };
 }
 
-async function seedPriorReplies(world: ScenarioWorld) {
+/** `olderBuildReceipt` saves the round as posted by a build that sent prior replies unclaimed. */
+async function seedPriorReplies(world: ScenarioWorld, olderBuildReceipt = false) {
   const { round, state } = await seedReview(world);
   const initial = await world.store.read(SCENARIO_TASK_ID);
   if (initial === undefined) throw new Error("Missing scenario task");
@@ -1040,6 +1047,15 @@ async function seedPriorReplies(world: ScenarioWorld) {
       rounds: [
         {
           ...round,
+          ...(olderBuildReceipt
+            ? {
+                posted: {
+                  url: `${state.url}#pullrequestreview-1`,
+                  verdict: "comment" as const,
+                  postedAt: world.clock(),
+                },
+              }
+            : {}),
           review: {
             ...round.review,
             priorComments: [
@@ -1138,6 +1154,39 @@ test("an uncertain reply to an earlier comment is reported and recovered like a 
         { index: 0, kind: "posted", url: `${state.url}#discussion_r101` },
       ]);
       expect(github.reviewPosts()).toBe(1);
+    } finally {
+      await service.shutdown();
+    }
+  });
+}, 20_000);
+
+test("a round posted by an older build never resends or reports its unclaimed earlier-comment replies", async () => {
+  await withScenario({}, async (world) => {
+    const state = await seedPriorReplies(world, true);
+    const github = priorReplyGitHub(world, state.url);
+    const service = reviewService(world, github.run);
+    try {
+      const show = await service.reviewShow(SCENARIO_TASK_ID, { page: false });
+      expect(show.text).toContain(`Posted: ${state.url}#pullrequestreview-1`);
+      expect(show.text).not.toContain("Not sent");
+      expect(show.text).not.toContain("Reply 0");
+      const posted = await service.reviewPost(SCENARIO_TASK_ID, {
+        verdict: "comment",
+        approved: true,
+      });
+      expect(posted).toMatchObject({ posted: true, url: `${state.url}#pullrequestreview-1` });
+      expect(posted.message).toBe(`Already posted: ${state.url}#pullrequestreview-1`);
+      const saved = await service.get(SCENARIO_TASK_ID);
+      await expect(
+        service.reviewPost(SCENARIO_TASK_ID, {
+          verdict: "comment",
+          approved: true,
+          recovery: { kind: "post-reply-again", taskRevision: saved.revision, replyIndex: 0 },
+        }),
+      ).rejects.toThrow("already sent this reply");
+      expect(github.replies).toHaveLength(0);
+      expect(github.reviewPosts()).toBe(0);
+      expect((await service.get(SCENARIO_TASK_ID)).prReview?.rounds[0]?.replyPosts).toBeUndefined();
     } finally {
       await service.shutdown();
     }
@@ -1313,9 +1362,12 @@ test("reply preflight failure is saved and remains visible after task reload", a
         kind: "failed",
         message: `The PR moved to ${SCENARIO_NEXT_HEAD}.`,
       });
-      expect((await restarted.reviewShow(SCENARIO_TASK_ID, { page: false })).text).toContain(
-        `The PR moved to ${SCENARIO_NEXT_HEAD}.`,
+      const show = (await restarted.reviewShow(SCENARIO_TASK_ID, { page: false })).text;
+      expect(show).toContain(
+        `Reply 0 to thread ${threadReply.threadId} (root ${threadReply.commentId}, GitHub ${threadReply.replyTo}): ${threadReply.body}\nNot sent: Tandem checked GitHub before posting and stopped, so GitHub did not receive it.`,
       );
+      expect(show).toContain(`Reason: The PR moved to ${SCENARIO_NEXT_HEAD}.`);
+      expect(show).not.toContain("may or may not have received it");
       expect(boundary.replies).toHaveLength(0);
     } finally {
       await restarted.shutdown();
