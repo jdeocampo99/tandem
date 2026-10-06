@@ -1,9 +1,12 @@
+import { nativeCostLabel } from "../runtime/usage-display.ts";
 import type { NativePanelRow, NativeTaskSummary } from "./panel.ts";
 import { nativePanelView } from "./panel.ts";
 import type { BoardSnapshot } from "./snapshot.ts";
 
 export type NativeBoardCard = NativePanelRow &
   Readonly<{
+    costLabel?: string;
+    harnessGlyph?: string;
     harness?: string;
     branch?: string;
     costMicros?: number;
@@ -50,6 +53,8 @@ export function nativeBoardView(
               : "Working";
     const card: NativeBoardCard = {
       ...row,
+      costLabel: nativeCostLabel(task?.costMicros, task?.unpricedSamples),
+      harnessGlyph: task?.harness === "claude-code" ? "✻" : task?.harness === "omp" ? "ω" : "",
       ...(task?.harness === undefined ? {} : { harness: task.harness }),
       ...(task?.branch === undefined ? {} : { branch: task.branch }),
       ...(task?.costMicros === undefined ? {} : { costMicros: task.costMicros }),

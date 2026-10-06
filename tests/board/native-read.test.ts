@@ -204,6 +204,77 @@ test("provider refresh failure is visible and backs off while task data still pr
   });
 });
 
+test("retained provider limits carry their original fetch time and failed-refresh warning into Usage display", async () => {
+  await withScenario({}, async (world) => {
+    let attempts = 0;
+    const fetchedAt = Date.parse(world.clock());
+    const run: typeof world.run = async (request) => {
+      if (request.argv[0] !== "omp") return world.run(request);
+      attempts++;
+      return attempts === 1
+        ? {
+            code: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              reports: [
+                {
+                  provider: "anthropic",
+                  fetchedAt,
+                  limits: [
+                    {
+                      id: "five_hour",
+                      label: "5-hour",
+                      scope: { provider: "anthropic", accountId: "personal" },
+                      window: { id: "5h", label: "5-hour", resetsAt: fetchedAt + 10_800_000 },
+                      amount: { unit: "percent", used: 38 },
+                    },
+                  ],
+                },
+              ],
+            }),
+          }
+        : { code: 1, stderr: "provider unavailable", stdout: "" };
+    };
+    const reader = new NativeViewsReader({
+      home: world.home,
+      clock: world.clock,
+      run,
+      terminal: terminalBackend(run),
+    });
+    const snapshot = {
+      version: 1 as const,
+      writtenAt: world.clock(),
+      board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+      coordinators: [],
+    };
+    try {
+      await reader.read(snapshot, world.repoPath);
+      const fresh = await reader.read(snapshot, world.repoPath);
+      expect(fresh.bundle.usage.limits[0]?.remainingPercent).toBe(62);
+      world.advanceClock(2);
+      await reader.read(snapshot, world.repoPath);
+      const stale = await reader.read(snapshot, world.repoPath);
+      expect(attempts).toBe(2);
+      expect(stale.bundle.usage.limits[0]).toMatchObject({
+        remainingPercent: 62,
+        fetchedAt: "2030-01-01T00:00:00.000Z",
+      });
+      expect(stale.bundle.usage.display?.limitWarnings).toEqual(stale.bundle.warnings);
+      expect(stale.bundle.usage.display?.limitWarnings).toContain(
+        "Provider limit refresh failed; last known limits may be stale",
+      );
+      expect(stale.bundle.usage.display?.accounts[0]?.meters[0]).toMatchObject({
+        remaining: "62% left",
+        reset: "resets in 2h 58m",
+        fetched: "Fetched at 2030-01-01 00:00:00 UTC",
+      });
+      expect(stale.bundle.usage.display?.updated).toBe("View updated at 2030-01-01 00:02:00 UTC");
+    } finally {
+      await reader.settle();
+    }
+  });
+});
+
 test("slow remote usage never blocks native task snapshots and shutdown drains its refresh", async () => {
   await withScenario({}, async (world) => {
     let release: (() => void) | undefined;

@@ -13,6 +13,7 @@ import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
+import { visitNativeProject } from "../../src/memory/native-visits.ts";
 import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
@@ -1225,13 +1226,19 @@ test("native project lookup uses the terminal saved in the explicit home before 
             }),
           };
         },
+        nativeRendererHandlers: {
+          board: async (context) => {
+            expect(context.capabilities.terminal.name).toBe("tern");
+            throw new Error("fixture renderer unavailable");
+          },
+        },
         createService: () => {
           throw new Error("Unavailable renderer must not start a service");
         },
       },
     );
     expect(result.exitCode).not.toBe(0);
-    expect(result.error?.message).toBe("tandem native board is not implemented yet");
+    expect(result.error?.message).toBe("fixture renderer unavailable");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).not.toBe("herdr");
     expect(calls[0]?.slice(1)).toEqual(["ls", "--json"]);
@@ -1240,7 +1247,7 @@ test("native project lookup uses the terminal saved in the explicit home before 
   }
 });
 
-test("published wave-2 argv reaches an honest unavailable handler without starting a service", async () => {
+test("published wave-2 argv dispatches a registered renderer without starting a service", async () => {
   const f = await fixture();
   try {
     let starts = 0;
@@ -1252,6 +1259,11 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
       const result = await runTerminal(["native", ...command, "--pane", "101", "--cwd", f.clean], {
         ...dependencies,
         cwd: f.root,
+        nativeRendererHandlers: {
+          [command[0] ?? ""]: async () => {
+            throw new Error(`fixture ${command[0]} renderer unavailable`);
+          },
+        },
         createService: () => {
           starts += 1;
           return f.service;
@@ -1260,7 +1272,7 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
         stderr: (value) => errors.push(value),
       });
       expect(result.exitCode).not.toBe(0);
-      expect(result.error?.message).toBe(`tandem native ${command[0]} is not implemented yet`);
+      expect(result.error?.message).toBe(`fixture ${command[0]} renderer unavailable`);
       expect(errors.join("")).toContain(result.error?.message ?? "missing error");
       expect(output).toEqual([]);
     }
@@ -1339,7 +1351,7 @@ test("renderer commands reject missing context and invalid project/file input be
       ["project", "unknown", "--pane", "101", "--cwd", f.clean],
       ["project", "--pane", "101", "--cwd", f.clean],
       ["view-file", "--pane", "101", "--cwd", f.clean],
-      ["board", "extra", "--pane", "101", "--cwd", f.clean],
+      ["usage", "extra", "--pane", "101", "--cwd", f.clean],
     ];
     let attempts = 0;
     const handler: NativeRendererHandler = async () => {
@@ -1352,6 +1364,7 @@ test("renderer commands reject missing context and invalid project/file input be
         nativeRendererHandlers: {
           board: handler,
           prs: handler,
+          usage: handler,
           project: handler,
           "view-file": handler,
         },
@@ -1486,6 +1499,7 @@ test("native navigation selects published projects and details, refusing stale o
       version: 1,
       project: f.repo,
       writtenAt: new Date().toISOString(),
+      changeSignature: "changed-work",
       tasks: {},
       briefs: { [f.record.id]: { detailFile: "brief-native.json" } },
       pullRequests: {},
@@ -1501,6 +1515,15 @@ test("native navigation selects published projects and details, refusing stale o
     };
     const publish = (data: unknown) => writeFile(path, nativeViewText("panel", data));
     await publish(model);
+    await visitNativeProject(
+      {
+        home: f.home,
+        project: f.repo,
+        signature: "earlier-work",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+      },
+      async () => {},
+    );
     const action = (...args: string[]) =>
       runTerminal(["native", ...args, "--pane", "101", "--cwd", f.clean], f.deps);
     expect((await action("project", "next")).exitCode).toBe(0);
@@ -1513,7 +1536,7 @@ test("native navigation selects published projects and details, refusing stale o
         )
       ).exitCode,
     ).toBe(0);
-    expect(f.opened).toEqual([{ kind: "brief", requestId: f.record.id }]);
+    expect(f.opened).toEqual([{ kind: "catchup" }, { kind: "brief", requestId: f.record.id }]);
     expect((await action("view-file", join(f.root, "foreign.json"))).exitCode).not.toBe(0);
     await publish({ ...model, writtenAt: "2000-01-01T00:00:00Z" });
     expect((await action("project", "1")).exitCode).not.toBe(0);
@@ -1522,7 +1545,7 @@ test("native navigation selects published projects and details, refusing stale o
     await publish({ ...model, projects: [{ ...model.projects[0], offline: true }] });
     expect((await action("project", "1")).exitCode).not.toBe(0);
     expect(focused).toHaveLength(1);
-    expect(f.opened).toHaveLength(1);
+    expect(f.opened).toHaveLength(2);
   } finally {
     await f.close();
   }

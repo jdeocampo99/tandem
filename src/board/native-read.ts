@@ -16,6 +16,7 @@ import { createRequestBriefStore } from "../requests/store.ts";
 import { activeRuntimeJob, currentPrimaryJobs, taskRuntime } from "../runtime/activity.ts";
 import { withStateTransaction } from "../runtime/database.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
+import { usageDisplay } from "../runtime/usage-display.ts";
 import { createRequestUsageLedger, readTaskUsage } from "../runtime/usage-ledger.ts";
 import type { RequestUsageReadout } from "../runtime/usage-receipt.ts";
 import {
@@ -420,7 +421,7 @@ export class NativeViewsReader {
           ]),
         ),
         board: nativeBoardView(snapshot, project, summaries, now),
-        usage,
+        usage: { ...usage, display: usageDisplay(usage, { writtenAt: now, warnings }) },
         catchup: nativeCatchUpView(
           project,
           catchups,
