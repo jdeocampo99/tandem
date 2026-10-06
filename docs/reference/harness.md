@@ -487,7 +487,7 @@ repository's tsc and bun tests.
 | No session entries | `recordEntry` writes nothing. OMP saves these in its session file and nothing in Tandem reads them back; the store stays the record. |
 | No synchronous editor text | `$.prompt.read()` is async and `paneState()` is not, so the pane keeps `draft` from each `promptEdit` and clears it when a typed prompt is sent. A worker reads it to hold a close or a mockup back while the person types. |
 | No transcript reference | A Claude Code worker's result carries no `transcript` (OMP's session file and entry id); `tandem trace` has none to link. |
-| No `TodoWrite` | The to-do list is built from `TaskCreate` and `TaskUpdate` (above). There are no phases, so a playbook step matches an item's subject. |
+| No `TodoWrite` | The to-do list is built from `TaskCreate` and `TaskUpdate` (above). There are no phases, so a specialist step matches an item's subject. |
 | No message list at turn end | `agentEnd` carries the run's prompt (`turn.start`'s text) and final answer (`turn.complete`'s `answer`), which the core reads as one user message and one assistant message, so the setup page's wait for the coordinator's answer to a comment matches. Without a prompt there are no messages and nothing matches. |
 | No background-result wake | OMP marks a finished background command's wake, and a submitted worker aborts it. Claude Code sends a finished background task as a prompt whose origin is `task-notification`; a submitted worker answers it `handled`, the mod drops it, and no turn runs. |
 | Model id, not selector | `assertSelectedModel("claude-code/<alias>")` passes when the reported id is the alias or contains it as a word (`claude-opus-5-5` for `opus`), and fails closed when no model was reported. |
