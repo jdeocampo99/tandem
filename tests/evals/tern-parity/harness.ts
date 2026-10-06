@@ -1,5 +1,6 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { basename, isAbsolute, join, relative } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
@@ -9,7 +10,6 @@ import type { CommandRunner } from "../../../src/contracts.ts";
 import { runTerminal } from "../../../src/main.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { createTandemService, type TandemService } from "../../../src/service/controller.ts";
-import { withNativeInput } from "../../../src/terminal/native-input.ts";
 import { installTerminalPlugin, terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { luauBinary } from "../../luau.ts";
 import type { ScenarioTernProject, ScenarioWorld } from "../scenario.ts";
@@ -257,6 +257,7 @@ export type DetailView = Readonly<{ task: string } | { brief: string }>;
 
 export type CliRun = Readonly<{
   argv: readonly string[];
+  stdin: string | undefined;
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -589,47 +590,44 @@ export class TernParityHost {
 
   /**
    * The only transport later steps may change: Luau's argv and stdin run the real CLI
-   * in-process against the scenario home, exactly as `tandem.sh` and `native-input.sh` do.
+   * in-process against the scenario home, exactly as `tandem.sh` does.
    */
   async runCli(
     process: Readonly<{ argv: readonly string[]; stdin?: string | undefined }>,
   ): Promise<Readonly<{ exitCode: number; stdout: string; stderr: string }>> {
     const [shell, script, ...rest] = process.argv;
     if (shell !== "/bin/sh") throw new Error(`Tern plugin spawned ${shell}`);
+    if (script !== "tandem.sh") throw new Error(`Tern plugin ran unknown script ${script}`);
     const { world } = this;
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const invoke = (argv: readonly string[]) =>
-      runTerminal(argv, {
-        cwd: PLUGIN,
-        processEnvironment: {
-          TANDEM_HOME: world.home,
-          TANDEM_SESSION: world.sessionId,
-          TANDEM_POOL_ROOT: world.poolRoot,
-        },
-        run: this.#run,
-        terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
-        createService: (options) =>
-          createTandemService({
-            ...options,
-            run: this.#run,
-            clock: world.clock,
-            idFactory: world.idFactory,
-          }),
-        stdout: (text) => stdout.push(text),
-        stderr: (text) => stderr.push(text),
-      });
-    let exitCode: number;
-    if (script === "tandem.sh") exitCode = (await invoke(rest)).exitCode;
-    else if (script === "native-input.sh") {
-      const [verb, id, ...context] = rest;
-      if (verb === undefined || id === undefined) throw new Error("native-input.sh needs a verb");
-      exitCode = await withNativeInput(
-        process.stdin ?? "",
-        async (path) => (await invoke(["native", verb, id, "--input", path, ...context])).exitCode,
-      );
-    } else throw new Error(`Tern plugin ran unknown script ${script}`);
-    const run = { argv: process.argv, exitCode, stdout: stdout.join(""), stderr: stderr.join("") };
+    const { exitCode } = await runTerminal(rest, {
+      cwd: PLUGIN,
+      processEnvironment: {
+        TANDEM_HOME: world.home,
+        TANDEM_SESSION: world.sessionId,
+        TANDEM_POOL_ROOT: world.poolRoot,
+      },
+      run: this.#run,
+      terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
+      createService: (options) =>
+        createTandemService({
+          ...options,
+          run: this.#run,
+          clock: world.clock,
+          idFactory: world.idFactory,
+        }),
+      input: Readable.from([process.stdin ?? ""]),
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+    });
+    const run = {
+      argv: process.argv,
+      stdin: process.stdin,
+      exitCode,
+      stdout: stdout.join(""),
+      stderr: stderr.join(""),
+    };
     this.cli.push(run);
     return run;
   }

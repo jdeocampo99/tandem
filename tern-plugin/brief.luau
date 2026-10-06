@@ -4,7 +4,7 @@ local files = require("./view-file")
 local fields = require("./text-field")
 local rows = require("./diff-row")
 local components = require("./components")
-local navigation = require("./navigation")
+local rt = require("./rt")
 
 type Approval = { briefRevision: number, contentDigest: string, agreementDigest: string }
 type Comment = { id: string, body: string, author: string }
@@ -15,9 +15,9 @@ type Brief = {
 }
 type Draft = { lineId: string, text: string }
 type State = {
- file: files.View<Brief>, shown: Brief?, shownRevision: string?, pane: string, ctx: string,
+ file: files.View<Brief>, shown: Brief?, shownRevision: string?, origin: rt.Origin,
  comments: { Draft }, editing: string?, editor: fields.Field, overall: fields.Field, active: string,
- busy: boolean, submitted: boolean, notice: string?,
+ submitted: boolean, notice: string?,
 }
 
 local function parse(value: unknown): Brief?
@@ -45,7 +45,7 @@ end
 -- A refreshed file never reattaches a user's pending comments to a later draft.
 local function sync(state: State)
  if state.file.status ~= "ready" then return end
- if state.shown == nil or (#state.comments == 0 and state.editing == nil and state.overall.text == "" and not state.busy and not state.submitted) then
+ if state.shown == nil or (#state.comments == 0 and state.editing == nil and state.overall.text == "" and not state.origin.busy and not state.submitted) then
   state.shown, state.shownRevision = state.file.model, state.file.revision
  end
 end
@@ -60,7 +60,7 @@ local function saveComment(state: State)
 end
 
 local function submit(state: State, cx: BlockCx, verb: string)
- if state.busy or state.submitted then return end
+ if state.origin.busy or state.submitted then return end
  local model = state.shown
  if state.file.status ~= "ready" or not model or model.abandoned then
   cx:toast("error", "Brief unavailable", "Wait for a readable brief before sending an action.")
@@ -74,57 +74,38 @@ local function submit(state: State, cx: BlockCx, verb: string)
   cx:toast("warning", "Add a comment", "Explain what should change before requesting changes.")
   return
  end
- if state.ctx == "" or not string.match(state.pane, "^%d+$") then
+ if state.origin.ctx == "" then
   cx:toast("error", "Missing Tandem context", "Reopen the brief from the project's panel.")
   return
  end
- local payload = if verb == "brief-approve" then model.approval else {
-  briefRevision = model.approval.briefRevision, contentDigest = model.approval.contentDigest,
-  agreementDigest = model.approval.agreementDigest, comments = state.comments,
+ local approval = model.approval
+ local action = if verb == "brief-approve" then {
+  verb = verb, requestId = model.requestId, briefRevision = approval.briefRevision,
+  contentDigest = approval.contentDigest, agreementDigest = approval.agreementDigest,
+ } else {
+  verb = verb, requestId = model.requestId, briefRevision = approval.briefRevision,
+  contentDigest = approval.contentDigest, agreementDigest = approval.agreementDigest,
+  comments = tern.json.array(state.comments),
   text = if string.find(state.overall.text, "%S") then state.overall.text else nil,
  }
- local argv = { "/bin/sh", "native-input.sh", verb, model.requestId, "--pane", state.pane, "--ctx", state.ctx }
- state.busy = true
- local ok, problem = pcall(function()
-  tern.process.run(argv,
-   { cwd = ".", stdin = tern.json.encode(payload) }, function(result, callbackCx)
-    state.busy = false
-    if result.status ~= 0 then
-     local actionCx = callbackCx or cx
-     actionCx:toast("error", "Tandem couldn't send the brief", result.stderr)
-     actionCx:render()
-    else
-     state.submitted = true
-     local messages: {string} = {}
-     local decoded, value = pcall(function() return tern.json.decode(result.stdout) end)
-     if decoded and type(value) == "table" and type(value.warnings) == "table" then
-      for _, message in value.warnings do if type(message) == "string" then table.insert(messages, message) end end
-     end
-     state.notice = if #messages > 0 then table.concat(messages, "\n") else "This action completed. You can close this pane."
-     -- The CLI owns guarded native closure; a retained pane must not offer the action again.
-     -- Tern 0.5 may omit callbackCx. The captured context still renders a retained pane;
-     -- a pane already retired by the CLI has no UI left to update.
-     pcall(function()
-      local actionCx = callbackCx or cx
-      if #messages > 0 then actionCx:toast("warning", "Brief action completed", state.notice) end
-      actionCx:render()
-     end)
-    end
-   end)
- end)
- if not ok then
-  state.busy = false
-  cx:toast("error", "Tandem couldn't start that action", tostring(problem))
- end
+ rt.act(cx, state.origin, action, function(outcome)
+  if outcome == nil or outcome.status == "refused" then
+   pcall(function() cx:render() end)
+   return
+  end
+  state.submitted = true
+  state.notice = if outcome.notice then outcome.notice.text else "This action completed. You can close this pane."
+  -- The CLI owns guarded native closure; a retained pane must not offer the action again.
+  -- A pane already retired by the CLI has no UI left to update.
+  pcall(function() cx:render() end)
+ end, rt.BRIEF)
 end
 
 local brief: BlockDef<State> = {
  init = function(cx, args)
-  local origin = navigation.origin(args)
   local state: State = {
-   file = files.create(origin.path, "brief", parse),
-   pane = string.format("%.0f", cx.pane), ctx = origin.ctx,
-   comments = {}, editor = fields.create(nil, true), overall = fields.create(), active = "overall", busy = false, submitted = false,
+   file = files.create(args[1] or "", "brief", parse), origin = rt.origin(args),
+   comments = {}, editor = fields.create(nil, true), overall = fields.create(), active = "overall", submitted = false,
   }
   files.refresh(state.file)
   sync(state)
@@ -177,10 +158,10 @@ local brief: BlockDef<State> = {
   end
   local count = model.commentCount + #state.comments
   local actions: { Node } = { components.text(tostring(count) .. (if count == 1 then " comment" else " comments"), "strong"), fields.node(state.overall, "overall", "Overall comment (optional)") }
-  if state.file.status == "ready" and not model.abandoned and not state.busy and not state.submitted then
+  if state.file.status == "ready" and not model.abandoned and not state.origin.busy and not state.submitted then
    table.insert(actions, components.button("Approve", "approve", "success"))
    table.insert(actions, components.button("Request changes (" .. #state.comments .. ")", "changes"))
-  elseif state.busy then table.insert(actions, components.text("Sending…", "muted")) end
+  elseif state.origin.busy then table.insert(actions, components.text("Sending…", "muted")) end
   local header = {
    components.text("Brief · " .. model.title .. " · rev " .. model.revision .. " · " .. model.changes .. " changes", "strong"),
    components.button("×", "close"),
@@ -189,7 +170,7 @@ local brief: BlockDef<State> = {
   return { main = ui.col({ ui.el("div", { class = "brief-header" }, header), ui.el("div", { class = "brief-document", key = "document" }, document) }), dock = ui.col({ ui.el("div", { class = "brief-bottom" }, actions) }) }
  end,
  key = function(state, key, cx)
-  if state.busy or state.submitted then return false end
+  if state.origin.busy or state.submitted then return false end
   local field = if state.active == "comment" then state.editor else state.overall
   local outcome = fields.key(field, key)
   if outcome == "ignored" then return false end
@@ -207,7 +188,7 @@ local brief: BlockDef<State> = {
    cx:frame({ { "focus", ev.id } })
    return
   end
-  if ev.ev ~= "action" or state.busy then return end
+  if ev.ev ~= "action" or state.origin.busy then return end
   if state.submitted and ev.act ~= "close" and ev.act ~= "browser" then return end
   if ev.act == "add" then
    if state.editing and state.editor.text ~= "" then cx:toast("warning", "Finish your line comment", "Choose Comment or Cancel first."); return end
