@@ -1107,7 +1107,6 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
       ["board"],
       ["prs"],
       ["usage"],
-      ["new-request"],
       ["open-task"],
       ...["1", "2", "3", "4", "5", "6", "7", "8", "9", "prev", "next"].map((target) => [
         "project",
@@ -1230,6 +1229,73 @@ test("renderer commands reject missing context and invalid project/file input be
       expect(result.error?.message).not.toContain("Unexpected renderer invocation");
     }
     expect(attempts).toBe(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("New request focuses the owned coordinator and asks for conversational intake", async () => {
+  const f = await fixture();
+  const focused: string[] = [];
+  try {
+    const result = await runTerminal(["native", "new-request", "--pane", "101", "--cwd", f.clean], {
+      ...f.deps,
+      terminal: {
+        ...f.deps.terminal,
+        focusAgent: async (target) => {
+          focused.push(target.paneId);
+          return true;
+        },
+      },
+    });
+    expect(result.error).toBeUndefined();
+    expect(focused).toEqual(["101"]);
+    expect(f.prompts).toEqual([
+      "I'd like to start a new request. Ask me what I want to change, then help me plan it in this conversation.",
+    ]);
+    expect(await f.service.list()).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("New request refuses an occupied coordinator and sends nothing after failed focus", async () => {
+  const f = await fixture();
+  try {
+    f.setOwner(false);
+    const unrelated = await runTerminal(
+      ["native", "new-request", "--pane", "101", "--cwd", f.clean],
+      f.deps,
+    );
+    expect(unrelated.error).toBeDefined();
+    expect(f.prompts).toEqual([]);
+    f.setOwner(true);
+    const failed = await runTerminal(["native", "new-request", "--pane", "101", "--cwd", f.clean], {
+      ...f.deps,
+      terminal: { ...f.deps.terminal, focusAgent: async () => false },
+    });
+    expect(failed.error?.message).toContain("could not be focused");
+    expect(f.prompts).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("New request rechecks coordinator ownership after focusing before sending input", async () => {
+  const f = await fixture();
+  try {
+    const result = await runTerminal(["native", "new-request", "--pane", "101", "--cwd", f.clean], {
+      ...f.deps,
+      terminal: {
+        ...f.deps.terminal,
+        focusAgent: async () => {
+          f.setOwner(false);
+          return true;
+        },
+      },
+    });
+    expect(result.error).toBeDefined();
+    expect(f.prompts).toEqual([]);
   } finally {
     await f.close();
   }

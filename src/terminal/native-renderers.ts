@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { type CliInvocation, CliUsageError, pathText, text } from "./cli-arguments.ts";
 import type { CliCommandContext, CliCommandOutcome } from "./cli-commands.ts";
 import { validateNativeContext, viewOriginFrom } from "./cli-view-context.ts";
+import { newNativeRequest } from "./native-new-request.ts";
 
 export type NativeRendererCommand =
   | "board"
@@ -37,7 +38,7 @@ export const nativeRendererHandlers: NativeRendererHandlers = {
   board: unavailable,
   prs: unavailable,
   usage: unavailable,
-  "new-request": unavailable,
+  "new-request": newNativeRequest,
   "open-task": unavailable,
   project: unavailable,
   "view-file": unavailable,
