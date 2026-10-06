@@ -1,0 +1,323 @@
+import { expect, test } from "bun:test";
+import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { nativeViewText } from "../../../src/board/native-views.ts";
+import { nativeViewsPath } from "../../../src/board/snapshot.ts";
+import type { CommandRunner } from "../../../src/contracts.ts";
+import {
+  ternBackend,
+  ternNotificationEndpoint,
+} from "../../../src/terminal-backend/tern/backend.ts";
+import { blocks, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { panelFixture } from "./panel-fixture.ts";
+
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+(enabled ? test : test.skip)(
+  "isolated native panel, switcher, preserved task layout and three OSC inbox alerts",
+  async () => {
+    const root = await mkdtemp("/tmp/tandem-panel-proof-");
+    const config = join(root, "config"),
+      home = join(root, "home"),
+      plugin = join(root, "plugin"),
+      control = join(root, "w.sock");
+    const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
+    const env = {
+      HOME: root,
+      USER: "tandem-test",
+      LOGNAME: "tandem-test",
+      PATH: "/opt/homebrew/bin:/usr/bin:/bin",
+      SHELL: "/bin/zsh",
+      TERM: "xterm-256color",
+      ZDOTDIR: join(root, "zdot"),
+      TERN_CONFIG_DIR: config,
+      TERN_DAEMON_SOCKET: join(root, "d.sock"),
+      TANDEM_HOME: home,
+      STENCIL_LOG_DIR: join(root, "logs"),
+    };
+    await Promise.all([mkdir(config), mkdir(home), mkdir(env.ZDOTDIR), mkdir(join(root, "shots"))]);
+    await writeFile(
+      join(config, "settings.json"),
+      JSON.stringify({ tabs_autohide: true, layout: "rail", link_target: "Tern" }),
+    );
+    await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
+      recursive: true,
+    });
+    // A synthetic CLI records action argv; this proof never reaches the user's task store or GitHub.
+    await writeFile(
+      join(plugin, "tandem.sh"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" >> '${join(root, "actions.log")}'\nif [ "$2" = "usage" ]; then printf 'fixture action refused\\n' >&2; exit 7; fi\n`,
+    );
+    // Only layout fixtures: other workers own the actual task/board renderers.
+    await writeFile(
+      join(plugin, "layout-fixture.luau"),
+      'return {init=function(cx,args) return {} end, title=function() return "Layout fixture" end, view=function() return {main=tern.ui.col({tern.ui.text({tern.ui.span("Layout fixture")})})} end}',
+    );
+    await writeFile(
+      join(plugin, "host.luau"),
+      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("board", require("./layout-fixture"))\n`,
+    );
+    await writeFile(
+      join(plugin, "plugin.toml"),
+      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="board"\ntitle="Layout fixture board"\n`,
+    );
+    const run: CommandRunner = async (request) => {
+      const child = Bun.spawn([...request.argv], {
+        cwd: request.cwd,
+        env: { ...env, ...request.env },
+        timeout: request.timeoutMs ?? 8000,
+        killSignal: "SIGKILL",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+        child.exited,
+      ]);
+      return { stdout, stderr, code };
+    };
+    const ctl = async (...args: string[]) => {
+      const result = await run({ argv: [binary, "ctl", "--control", control, ...args], cwd: root });
+      if (result.code !== 0) throw new Error(result.stderr);
+      return JSON.parse(result.stdout) as Record<string, unknown>;
+    };
+    const until = async (check: () => Promise<boolean>) => {
+      const deadline = Date.now() + 15000;
+      while (!(await check().catch(() => false))) {
+        if (Date.now() > deadline) throw new Error("native proof timed out");
+        await Bun.sleep(100);
+      }
+    };
+    const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
+      env,
+      cwd: root,
+      stdout: "ignore",
+      stderr: Bun.file(join(root, "daemon.log")),
+    });
+    let window: ReturnType<typeof Bun.spawn> | undefined;
+    try {
+      await until(
+        async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
+      );
+      const linked = await run({ argv: [binary, "plugin", "link", plugin, "--json"], cwd: root });
+      expect(linked.stderr).toBe("");
+      const terminal = ternBackend(run, { home, environment: env });
+      const created = await terminal.createWorkspace({
+        sessionId: "fixture",
+        cwd: root,
+        role: "coordinator",
+        generation: 0,
+        label: "coordinator · tandem",
+      });
+      const coordinator = created.endpoint;
+      window = Bun.spawn(
+        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
+        { env, cwd: root, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
+      );
+      await until(async () => {
+        await ctl("state");
+        return true;
+      });
+      await ctl("account", "signed-in");
+      await Bun.sleep(500);
+      await mkdir(join(home, "native-views"));
+      const path = nativeViewsPath(home, root);
+      const panel = panelFixture(root);
+      await writeFile(
+        path,
+        nativeViewText("panel", {
+          version: 1,
+          project: root,
+          writtenAt: new Date().toISOString(),
+          summary: {},
+          panel,
+          projects: panel.header.projects,
+          tasks: {},
+          briefs: {},
+          pullRequests: {},
+          board: {},
+          usage: {},
+          catchup: {},
+          warnings: [],
+        }),
+      );
+      await terminal.runCommand({
+        endpoint: coordinator,
+        cwd: root,
+        command: [
+          "/bin/sh",
+          "-c",
+          'clear; printf "%s\\n" "You: Add a Tern terminal backend so Tandem can run its panes and board inside Tern." "" "Orchestrator: I drafted a brief covering the adapter, pane launch, and the board." "Nothing starts until you approve it." "" "You: Looks right, I will read the brief."; read -r answer',
+        ],
+      });
+      const pane = await terminal.openPanel({ coordinator, cwd: root, project: root });
+      expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(true);
+      await until(async () => JSON.stringify(await ctl("tree")).includes("Tern backend adapter"));
+      await ctl("shot", "01-panel");
+      const tree = await ctl("tree");
+      type Node = { class?: string; rect?: number[]; children?: Node[] };
+      const visit = (nodes: Node[], className = "tdp-switch"): Node | undefined => {
+        for (const node of nodes) {
+          if (node.class?.split(" ").includes(className)) return node;
+          const found = visit(node.children ?? [], className);
+          if (found) return found;
+        }
+        return undefined;
+      };
+      const switcher = visit(tree.tree as Node[])?.rect;
+      if (!switcher) throw new Error("switcher missing");
+      await ctl("click", String((switcher[0] ?? 0) + 10), String((switcher[1] ?? 0) + 7));
+      await until(async () => JSON.stringify(await ctl("tree")).includes("+ Open another project"));
+      await ctl("shot", "02-projects");
+      await ctl("key", "escape");
+      const row = visit((await ctl("tree")).tree as Node[], "tdp-row")?.rect;
+      if (!row) throw new Error("task row missing");
+      await ctl("click", String((row[0] ?? 0) + 80), String((row[1] ?? 0) + 12));
+      await until(async () =>
+        (await readFile(join(root, "actions.log"), "utf8")).includes("brief\ntern"),
+      );
+      const argv = await readFile(join(root, "actions.log"), "utf8");
+      expect(argv).toContain(
+        `native\nopen\nbrief\ntern\n--home\n${home}\n--pane\n${pane}\n--cwd\n${root}`,
+      );
+
+      const limit = visit((await ctl("tree")).tree as Node[], "tdp-limit")?.rect;
+      if (!limit) throw new Error("usage button missing");
+      await ctl("click", String((limit[0] ?? 0) + 30), String((limit[1] ?? 0) + 5));
+      await until(async () => JSON.stringify(await ctl("tree")).includes("fixture action refused"));
+      expect(JSON.stringify(await ctl("tree"))).toContain("Tandem couldn't run that action");
+      // Busy conversation must survive task replacement and return with exactly the same endpoint.
+      const host = ternViewHost(ternCommands(run, { environment: env }), {
+        clock: Date.now,
+        wait: Bun.sleep,
+        guard: async (_key, operation) => operation(),
+      });
+      const task = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "task", taskId: "adapter" } },
+        root,
+        "task",
+        "task",
+        path,
+      );
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      const replaced = await host.open(
+        {
+          coordinator,
+          cwd: root,
+          home,
+          view: { kind: "task", taskId: "another" },
+          origin: { paneId: task.paneId, cwd: root },
+        },
+        root,
+        "task",
+        "task",
+        path,
+      );
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          (entry) => entry.block.id === task.paneId,
+        ),
+      ).toBe(false);
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      await host.open(
+        {
+          coordinator,
+          cwd: root,
+          home,
+          view: { kind: "orchestrator" },
+          origin: { paneId: replaced.paneId, cwd: root },
+        },
+        root,
+        "panel",
+        "return",
+        path,
+      );
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      const board = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "board" } },
+        root,
+        "board",
+        "window",
+        path,
+      );
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).find(
+          (entry) => entry.block.id === board.paneId,
+        )?.tab.id,
+      ).not.toBe(coordinator.tabId);
+      await terminal.focusAgent({ sessionId: "fixture", cwd: root, paneId: coordinator.paneId });
+      const other = await terminal.createWorkspace({
+        sessionId: "other",
+        cwd: root,
+        role: "coordinator",
+        generation: 0,
+        label: "other coordinator",
+      });
+      expect(
+        await terminal.focusAgent({
+          sessionId: "other",
+          cwd: root,
+          paneId: other.endpoint.paneId,
+          originCoordinator: coordinator,
+          origin: { paneId: pane, cwd: root },
+          home,
+        }),
+      ).toBe(true);
+      await until(async () => JSON.stringify(await ctl("tree")).includes("other coordinator"));
+      expect(
+        await terminal.focusAgent({ sessionId: "fixture", cwd: root, paneId: coordinator.paneId }),
+      ).toBe(true);
+      const notify = ternBackend(run, {
+        environment: env,
+        notificationEndpoint: async () => ternNotificationEndpoint(coordinator),
+      });
+      let count = 0;
+      for (const [title, body, name] of [
+        ["Tandem: Needs you", "Approve brief: Tern backend", "09-needs-you"],
+        ["Tandem: Done", "Terminal port refactor · draft PR is open", "09-done"],
+        ["Tandem: Stuck", "Fix panel width", "09-stuck"],
+      ]) {
+        await notify.notify({
+          sessionId: "fixture",
+          cwd: root,
+          title: title ?? "",
+          body: body ?? "",
+        });
+        count++;
+        await until(async () => JSON.stringify(await ctl("state")).includes(title ?? "missing"));
+        if (count === 1) await ctl("inbox");
+        const state = JSON.stringify(await ctl("state"));
+        expect(state).toContain(title ?? "missing");
+        expect(state).toContain(`"count":${count}`);
+        expect(state).toContain('"alert":"waiting"');
+        await ctl("shot", name ?? "09-alerts");
+      }
+      await terminal.closePanel({ sessionId: "fixture", cwd: root, panelPaneId: pane });
+      expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(false);
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
+      console.log(
+        `Native proof artifacts: ${root}/shots/live/01-panel.png ${root}/shots/live/02-projects.png ${root}/shots/live/09-needs-you.png ${root}/shots/live/09-done.png ${root}/shots/live/09-stuck.png`,
+      );
+    } finally {
+      if (window) {
+        await ctl("quit").catch(() => {});
+        window.kill();
+        await window.exited;
+      }
+      daemon.kill();
+      await daemon.exited;
+      // Retain only this isolated proof directory for review and screenshot artifacts.
+    }
+  },
+  45000,
+);

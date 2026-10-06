@@ -58,8 +58,8 @@ local def:BlockDef<State> ={
   local limit=if meter and type(meter.remainingPercent)=="number" then "5h " .. tostring(math.floor(100-meter.remainingPercent)) .. "% · " .. (if type(meter.resetInMs)=="number" then tostring(math.floor(meter.resetInMs/3600000)) .. "h" .. tostring(math.floor(meter.resetInMs/60000)%60) .. "m" else "unavailable") else "5h unavailable"
   local head=el("tdp-header",{
    el("tdp-switch",name,"projects"),
-   el("tdp-limit",{text(limit,"tdp-dim"),el("tdp-meter",{tern.ui.node("el",{class="tdp-meter-fill",style={width=tostring(if meter and type(meter.remainingPercent)=="number" then 100-meter.remainingPercent else 0) .. "%"}})})},"usage"),
-   el("tdp-icon",{text("♧ " .. tostring(header.bellCount))},"inbox"),
+   el("tdp-limit",{text(limit,"tdp-dim"),el("tdp-meter",{tern.ui.node("el",{class="tdp-meter-fill",grow=if meter and type(meter.remainingPercent)=="number" then 100-meter.remainingPercent else 0}),tern.ui.node("el",{grow=if meter and type(meter.remainingPercent)=="number" then meter.remainingPercent else 100})})},"usage"),
+   el("tdp-icon",{text("🔔︎ " .. tostring(header.bellCount))},"inbox"),
    el("tdp-icon",{text("⎇")},"prs"),el("tdp-icon",{text("▦")},"board")})
   local body={head}
   if state.file.status~="ready" then table.insert(body,text("View unavailable · actions paused","tdp-unavailable")) end
