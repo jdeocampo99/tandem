@@ -138,8 +138,8 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   (`tandemPrReview:1`, `verdict`, `summary`, `drafts:[{id,decision,body?}]`,
   `yours:[{file,line,body}]`) plus the displayed `reviewHead` and `reviewGeneration`.
   Draft choices and new comments remain local until Post. The Post click is the user's approval;
-  no second dialog or `--yes` is needed. The same pinned-head, serialized, durable pending-post
-  workflow applies as for the page. The user still chooses the verdict.
+  no second dialog or `--yes` is needed. The same pinned-head, revision-checked pending-post claim
+  and receipt workflow applies as for the page. The user still chooses the verdict.
 - Native actions include `--pane ID --cwd ABSOLUTE_PATH [--window KEY]`; the shared
   [private JSON transport](terminal.md#native-views-and-actions) owns input-file cleanup.
   Nonzero stderr becomes a toast, local drafts remain available, and no outcome is retried.
