@@ -126,35 +126,43 @@ local function host(path: string)
    if not effect(function(cx) return cx.layout:move(pane,coordinator,"left",{focus=false}) end) then error("Panel could not move") end
    -- PaneInfo has no geometry, and daemon columns can remain 80 for hidden/native
    -- blocks. Calibrate against this window's usable layout after placement instead.
-   local function panelRatio(cx: WindowCx): number
+   type Geometry={ratio:number,span:number}
+   local function panelGeometry(cx: WindowCx): Geometry
     local layout=cx.session:layout(owner.tab)
-    local function find(tree: TabTree): number?
-     if tree.split=="right" and tree[1] and tree[1].pane==pane then return tree.ratio end
-     for _,child in tree do
-      if type(child)=="table" then
-       local ratio=find(child)
-       if ratio then return ratio end
+    local function find(tree: TabTree,span:number): Geometry?
+     if tree.split=="right" and tree[1] and tree[1].pane==pane and tree.ratio then
+      return {ratio=tree.ratio,span=span}
+     end
+     for index=1,2 do
+      local child=tree[index]
+      if child then
+       local share=if tree.split=="right" and tree.ratio then (if index==1 then tree.ratio else 1-tree.ratio) else 1
+       local geometry=find(child,span*share)
+       if geometry then return geometry end
       end
      end
      return nil
     end
-    local ratio=if layout then find(layout.root) else nil
-    if not ratio or ratio<=0 or ratio>=1 then error("Panel divider unavailable") end
-    return ratio
+    local geometry=if layout then find(layout.root,1) else nil
+    if not geometry or geometry.ratio<=0 or geometry.ratio>=1 or geometry.span<=0 then error("Panel divider unavailable") end
+    return geometry
    end
-   local before=effect(function(cx) return panelRatio(cx) end)
+   local before=effect(function(cx) return panelGeometry(cx) end)
    if not effect(function(cx) return cx.layout:resize(pane,"right",1) end) then error("Panel divider could not move") end
-   local after=effect(function(cx) return panelRatio(cx) end)
-   local step=after-before
-   if math.abs(step)<0.000001 then error("Panel geometry did not update") end
-   local target=45*math.abs(step)
-   local cells=math.round((target-after)/step)
+   local after=effect(function(cx) return panelGeometry(cx) end)
+   local step=after.ratio-before.ratio
+   if math.abs(step)<0.000001 or math.abs(after.span-before.span)>0.000001 then error("Panel geometry did not update consistently") end
+   -- Tern's resize cell step uses the full usable window width, even for a nested
+   -- divider. Account for every horizontal ancestor to keep the actual pane at 45 cells.
+   local target=45*math.abs(step)/after.span
+   local cells=math.round((target-after.ratio)/step)
    if cells~=0 and not effect(function(cx)
-    if math.abs(panelRatio(cx)-after)>0.000001 then error("Panel layout changed during sizing") end
+    local current=panelGeometry(cx)
+    if math.abs(current.ratio-after.ratio)>0.000001 or math.abs(current.span-after.span)>0.000001 then error("Panel layout changed during sizing") end
     return cx.layout:resize(pane,"right",cells)
    end) then error("Panel could not resize") end
-   local actual=effect(function(cx) return panelRatio(cx) end)
-   if math.abs(actual-target)>math.abs(step)*1.1 then error("Panel width could not be confirmed") end
+   local actual=effect(function(cx) return panelGeometry(cx) end)
+   if math.abs(actual.span-after.span)>0.000001 or math.abs(actual.ratio*actual.span-45*math.abs(step))>math.abs(step)*1.1 then error("Panel width could not be confirmed") end
    effect(function(cx) cx.layout:focus(coordinator) end)
   elseif ticket.placement=="task" then
    if not effect(function(cx)

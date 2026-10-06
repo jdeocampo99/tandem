@@ -175,6 +175,8 @@ retrying an action.
 
 Panel sizing measures the live divider after placement: a one-cell move calibrates the current
 usable layout, then a separate stage targets 45 cells (about 360 pixels at the default font).
+Horizontal ancestor ratios translate nested dividers into actual pane width when other views
+are already beside the conversation.
 It ignores daemon/pre-split column counts, including hidden project tabs. The host checks the
 result within one cell before writing its receipt. An unavailable, changed or clamped divider
 fails without a retry or receipt, preserving the opening intent and panes for recovery.

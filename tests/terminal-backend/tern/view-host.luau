@@ -5,6 +5,8 @@ local active, calls, maximum, focused = false, 0, 0, 10
 local ticket
 local failMove=false
 local width,ratio,failResize,ignoreResize=198,0.5,false,false
+ span=1
+local span=1
 local function charge(alive,cost)
  assert(active and alive(), "expired window context")
  calls += cost or 10
@@ -20,7 +22,12 @@ local function context()
  local cx={session={},layout={}}
  function cx.session:pane(id) charge(alive,5); return if panes[id] then table.clone(panes[id]) else nil end
  function cx.session:tabs() charge(alive,5); return {{id=11,session=1},{id=21,session=2},{id=22,session=2}} end
- function cx.session:layout(_tab) charge(alive,5); return {root={split="right",ratio=ratio,{pane=30},{pane=20}},floats=if panes[20].floating then {{pane=20}} else {}} end
+ function cx.session:layout(_tab)
+  charge(alive,5)
+  local root={split="right",ratio=ratio,{pane=30},{pane=20}}
+  if span~=1 then root={split="right",ratio=span,root,{pane=60}} end
+  return {root=root,floats=if panes[20].floating then {{pane=20}} else {}}
+ end
  function cx.session:tab_of(id) charge(alive,5); return if panes[id] then panes[id].tab else nil end
  function cx:new_block(kind,args,how,options)
   charge(alive)
@@ -53,6 +60,7 @@ local function reset(kind,placement)
  timers,writes,effects,toasts={}, {}, {}, {}
  failMove=false
  width,ratio,failResize,ignoreResize=198,0.5,false,false
+ span=1
  panes={[10]={tab=11,block="shell",floating=false},[20]={tab=21,block="shell",floating=false}}
  ticket={version=1,kind=kind,placement=placement,args={"/b/index", "20", "/b", "", "/b/index"},coordinator="20",origin="20",session="2",receipt="/b/native-host/open.receipt.json"}
 end
@@ -87,6 +95,13 @@ for _,liveWidth in {120,198,320} do
  reset("panel","panel"); width=liveWidth; ticket.columns=80; open(); drain()
  assert(#toasts==0 and writes[ticket.receipt] and math.abs(ratio*width-45)<=1)
 end
+-- Existing brief/PR splits put the panel divider inside a horizontal ancestor.
+-- Resize uses full-window cells on Tern 0.5.1, so local ratio alone halves the width.
+for _,ancestorShare in {0.5,0.75,0.3} do
+ reset("panel","panel"); span=ancestorShare; ticket.columns=80; open(); drain()
+ assert(#toasts==0 and writes[ticket.receipt] and math.abs(ratio*span*width-45)<=1,
+  "nested panel must occupy 45 actual full-window cells")
+end
 for _,failure in {"no-divider","no-update","clamped"} do
  reset("panel","panel")
  if failure=="no-divider" then failResize=true elseif failure=="no-update" then ignoreResize=true else width=600 end
@@ -94,6 +109,9 @@ for _,failure in {"no-divider","no-update","clamped"} do
  assert(#toasts==1 and writes[ticket.receipt]==nil,"unconfirmed panel width must not write a receipt")
  assert(panes[30] and panes[20] and #timers==0,"failed placement preserves ownership without retry")
 end
+reset("panel","panel"); open()
+drain(function(index) if index==9 then span=0.5 end end)
+assert(#toasts==1 and writes[ticket.receipt]==nil and panes[30],"ancestor changes between calibration stages must stay fenced")
 reset("catchup","window"); open(); drain()
 assert(#toasts==0 and writes[ticket.receipt].tabId=="22")
 assert(effects[2].kind=="tandem.catchup" and effects[2].how=="tab")
