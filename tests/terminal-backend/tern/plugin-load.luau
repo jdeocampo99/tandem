@@ -6,6 +6,7 @@ local imports = {}
 local function forbidden() error('LOAD performed file, process or layout work') end
 local tern = {
  block = {define = function(id, def) assert(definitions[id] == nil); definitions[id] = def end},
+ on = function(_event, callback) assert(type(callback)=="function") end,
  command = function(def) commands[def.id] = def end,
  route = {open = function(callback) openRoute = callback end, link = function(callback) linkRoute = callback end},
  fs = {read = forbidden, write = forbidden}, process = {run = forbidden},

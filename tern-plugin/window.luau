@@ -1,6 +1,5 @@
 --!strict
 -- Window routing only. The CLI owns state, project lookup, opening views, and every action guard.
-local nav=require("./navigation")
 type Origin={pane:number,cwd:string}
 local function run(cx: WindowCx, args: { string }, origin:Origin?, quiet:boolean?, done:((cx:WindowCx)->())?)
  local argv = { "/bin/sh", "tandem.sh", "native" }
@@ -22,7 +21,7 @@ local function run(cx: WindowCx, args: { string }, origin:Origin?, quiet:boolean
    if result.status ~= 0 and not quiet then
     (callbackCx or cx):toast("error", "Tandem couldn't run that action", result.stderr)
    elseif result.status == 0 then
-    local warnings=nav.warnings(result.stdout)
+    local warnings=require("./navigation").warnings(result.stdout)
     if #warnings>0 then (callbackCx or cx):toast("warning","Tandem action completed",table.concat(warnings,"\n")) end
    end
    if done then done(callbackCx or cx) end
