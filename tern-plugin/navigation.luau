@@ -1,12 +1,14 @@
 --!strict
 -- Common CLI calling convention for screen renderers. No durable state or retries.
 local M = {}
-export type Origin = {path:string, coordinator:string, cwd:string, window:string, home:string}
+export type Origin = {path:string, coordinator:string, cwd:string, window:string, indexPath:string, home:string}
 function M.origin(args: {string}): Origin
- return {path=args[1] or "",coordinator=args[2] or "",cwd=args[3] or "",window=args[4] or "",home=args[5] or ""}
+ local indexPath=args[5] or ""
+ local home=string.match(indexPath,"^(.*)/native%-views/[^/]+%.json$") or ""
+ return {path=args[1] or "",coordinator=args[2] or "",cwd=args[3] or "",window=args[4] or "",indexPath=indexPath,home=home}
 end
 function M.run(origin: Origin, cx: BlockCx, args: {string})
- if string.sub(origin.cwd,1,1)~="/" then cx:toast("error","Tandem action unavailable","Originating cwd is missing"); return end
+ if string.sub(origin.cwd,1,1)~="/" or string.sub(origin.home,1,1)~="/" then cx:toast("error","Tandem action unavailable","Originating cwd or index path is missing"); return end
  local argv={"/bin/sh","tandem.sh","native"}
  for _, arg in args do table.insert(argv,arg) end
  if origin.home~="" then table.insert(argv,"--home"); table.insert(argv,origin.home) end
@@ -21,12 +23,7 @@ function M.run(origin: Origin, cx: BlockCx, args: {string})
  if not ok then cx:toast("error","Tandem couldn't start that action",tostring(problem)) end
 end
 function M.root(origin: Origin): string
- local root=string.match(origin.path,"^(.*)/[^/]+/[^/]+%.json$")
- if string.match(origin.path,"/native%-views/[^/]+/[^/]+%.json$") and root then
-  local project=string.match(origin.path,"/native%-views/([^/]+)/")
-  return root .. "/" .. project .. ".json"
- end
- return origin.path
+ return origin.indexPath
 end
 function M.back(origin: Origin,cx: BlockCx)
  M.run(origin,cx,{"view-file",M.root(origin) .. "#orchestrator"})

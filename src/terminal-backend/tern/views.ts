@@ -19,6 +19,11 @@ const Opened = z.object({
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
 const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
+const returnPrograms = new Set(
+  ["panel", "task", "brief", "pr", "prs", "board", "usage", "catchup", "welcome"].map(
+    (kind) => `tandem.${kind}`,
+  ),
+);
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
 
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
@@ -55,6 +60,19 @@ export function ternViewHost(
   },
 ) {
   const scoped = async (input: ViewHostingInput) => {
+    // Luau's native layout API uses numbers. Reject ids it cannot represent exactly.
+    for (const id of [
+      input.coordinator.paneId,
+      input.coordinator.tabId,
+      input.coordinator.terminalSessionId,
+      input.origin?.paneId ?? input.coordinator.paneId,
+    ]) {
+      if (id === undefined || !/^[1-9][0-9]*$/u.test(id) || !Number.isSafeInteger(Number(id)))
+        throw new AdapterError(
+          "Native layout requires exactly representable Tern ids",
+          "tern open",
+        );
+    }
     const key = input.origin?.windowId;
 
     // A supplied key is scoped independently and must contain both exact panes.
@@ -95,25 +113,28 @@ export function ternViewHost(
   ) => {
     const cmd = await scoped(input);
     return options.guard(input.coordinator.paneId, async () => {
-      if (placement === "return") {
+      const indexPath = nativeViewsPath(input.home, project);
+      if (
+        placement === "return" &&
+        input.origin?.paneId !== undefined &&
+        input.origin.paneId !== input.coordinator.paneId
+      ) {
         const source = blocks(await cmd.ls(input.cwd)).find(
-          (entry) => entry.block.id === (input.origin?.paneId ?? input.coordinator.paneId),
+          (entry) => entry.block.id === input.origin?.paneId,
         );
-        const root = nativeViewsPath(input.home, project);
-        const ownedRoot = source?.block.args?.[0] === root;
-        const ownedTask =
-          source?.block.program === "tandem.task" &&
-          source.block.args?.[0]?.startsWith(`${root.slice(0, -5)}/task-`);
+        const program = source?.block.program;
+        const ownedRoot = source?.block.args?.[0] === indexPath;
+        const ownedDetail =
+          program !== undefined &&
+          ["tandem.task", "tandem.brief", "tandem.pr"].includes(program) &&
+          source?.block.args?.[0]?.startsWith(`${indexPath.slice(0, -5)}/${program.slice(7)}-`);
         if (
-          source?.block.id !== input.coordinator.paneId &&
-          (!source ||
-            !["tandem.board", "tandem.usage", "tandem.catchup", "tandem.task"].includes(
-              source.block.program ?? "",
-            ) ||
-            source.block.args?.[1] !== input.coordinator.paneId ||
-            source.block.args?.[2] !== input.cwd ||
-            source.block.args?.[4] !== input.home ||
-            (!ownedRoot && !ownedTask))
+          program === undefined ||
+          !returnPrograms.has(program) ||
+          source?.block.args?.[1] !== input.coordinator.paneId ||
+          source.block.args?.[2] !== input.cwd ||
+          source.block.args?.[4] !== indexPath ||
+          (!ownedRoot && !ownedDetail)
         )
           throw new EndpointOwnershipError(
             input.coordinator,
@@ -121,13 +142,13 @@ export function ternViewHost(
           );
       }
       const existingTasks =
-        placement === "task"
+        placement === "task" || placement === "return"
           ? blocks(await cmd.ls(input.cwd)).filter(
               (entry) =>
                 entry.tab.id === input.coordinator.tabId &&
                 entry.block.program === "tandem.task" &&
                 entry.block.args?.[1] === input.coordinator.paneId &&
-                entry.block.args?.[4] === input.home,
+                entry.block.args?.[4] === indexPath,
             )
           : [];
       if (existingTasks.length > 1)
@@ -154,7 +175,7 @@ export function ternViewHost(
         input.coordinator.paneId,
         input.cwd,
         input.origin?.windowId ?? "",
-        input.home,
+        indexPath,
       ];
       await writeFile(
         route,

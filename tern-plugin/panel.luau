@@ -74,7 +74,7 @@ local def:BlockDef<State> ={
      el("tdp-primary",{text("●","tdp-dot tdp-" .. row.state),text(row.title,"tdp-name"),text(row.stage,"tdp-stage"),text(row.time or "","tdp-time")}),el("tdp-second",second)},"row:" .. tostring(index),row.key))
    end
   end
-  table.insert(body,text(panel.footer or "⌘⇧B board · ⌘⇧P PRs · ⌘⇧U usage","tdp-footer"))
+  if panel.footer then table.insert(body,text(panel.footer,"tdp-footer")) end
   local layer:Node?=nil
   if state.dropdown then
    local items={}
@@ -108,7 +108,7 @@ local def:BlockDef<State> ={
   if urlIndex then local row=rows(state)[tonumber(urlIndex)]; if row and row.pullRequest then cx:open(row.pullRequest.url) end; return end
   local project=string.match(command,"^project:(%d+)$")
   if project then nav.run(state.origin,cx,{"project",project}); state.dropdown=false
-  elseif command=="inbox" or command=="open-project" then nav.run(state.origin,cx,{"view-file",state.origin.path .. "#" .. command})
+  elseif command=="inbox" or command=="open-project" then nav.run(state.origin,cx,{"view-file",nav.root(state.origin) .. "#" .. command})
   elseif command=="prs" or command=="board" or command=="usage" then nav.run(state.origin,cx,{command}) end
  end,
 }
