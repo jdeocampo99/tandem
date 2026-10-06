@@ -70,8 +70,12 @@ export type PrPaneView = Readonly<{
   }>;
   readAt: IsoTimestamp;
   tabs: readonly string[];
-  checks: readonly PrCheck[];
-  description: Readonly<{ markdown: string; conversation: readonly PrComment[] }>;
+  checks: readonly (PrCheck & Readonly<{ duration?: string; startedAtMs?: number }>)[];
+  description: Readonly<{
+    markdown: string;
+    blocks: readonly string[];
+    conversation: readonly PrComment[];
+  }>;
   tour: readonly Readonly<{
     title: string;
     why: string;
@@ -106,7 +110,6 @@ export function prPaneView(
   input: Readonly<{
     cached: CachedPullRequest;
     watch?: PrWatch;
-    now: IsoTimestamp;
     review?: PrPaneView["review"];
     taskId?: string;
   }>,
@@ -119,8 +122,7 @@ export function prPaneView(
     path: file.path,
     additions: file.adds,
     deletions: file.dels,
-    commentCount: cached.threads.filter((thread) => thread.file === file.path && !thread.resolved)
-      .length,
+    commentCount: cached.threads.filter((thread) => thread.file === file.path).length,
     rows: file.rows.map((row, index) => ({
       id: `${file.path}:${index}`,
       row,
@@ -159,6 +161,13 @@ export function prPaneView(
       head: cached.head,
       draft: cached.draft,
       next:
+        (input.review === undefined
+          ? undefined
+          : input.review.posted
+            ? "You posted this review"
+            : input.review.head !== input.review.currentHead
+              ? "The PR changed. Re-review before posting"
+              : "Waiting on you: choose comments and post your review") ||
         watch?.row?.note ||
         (cached.draft ? "Waiting on you: publish it (draft → ready)" : "Waiting for PR watch"),
       ...(taskId === undefined ? {} : { taskId }),
@@ -170,8 +179,12 @@ export function prPaneView(
     },
     readAt: cached.readAt,
     tabs: ["Description", ...(cached.tour.length === 0 ? [] : ["Tour"]), "Diff"],
-    checks: cached.checks,
-    description: { markdown: cached.body, conversation: cached.conversation },
+    checks: cached.checks.map(presentCheck),
+    description: {
+      markdown: cached.body,
+      blocks: prMarkdownBlocks(cached.body),
+      conversation: cached.conversation,
+    },
     files,
     unanchoredThreads: cached.threads.filter((thread) => !anchored.has(thread.id)),
     tour: cached.tour.map((chapter) => ({
@@ -194,4 +207,53 @@ export function prPaneView(
     commentDestination: input.review === undefined ? "worker" : "review",
     ...(input.review === undefined ? {} : { review: input.review }),
   };
+}
+
+/** Keep fenced code together, including blank lines, when drawing one Markdown node per block. */
+export function prMarkdownBlocks(markdown: string): readonly string[] {
+  const blocks: string[] = [];
+  let lines: string[] = [];
+  let fence: { marker: string; length: number } | undefined;
+  const flush = () => {
+    if (lines.length > 0) blocks.push(lines.join("\n"));
+    lines = [];
+  };
+  for (const line of markdown.replace(/\r\n/gu, "\n").split("\n")) {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    if (fence !== undefined) {
+      lines.push(line);
+      if (
+        marker?.[1]?.[0] === fence.marker &&
+        marker[1].length >= fence.length &&
+        marker[2]?.trim() === ""
+      ) {
+        fence = undefined;
+        flush();
+      }
+    } else if (marker?.[1] !== undefined) {
+      flush();
+      fence = { marker: marker[1][0] ?? "`", length: marker[1].length };
+      lines.push(line);
+    } else if (line.trim() === "") flush();
+    else if (/^ {0,3}#{1,6}\s/u.test(line)) {
+      flush();
+      blocks.push(line);
+    } else lines.push(line);
+  }
+  flush();
+  return blocks;
+}
+
+function presentCheck(check: PrCheck): PrPaneView["checks"][number] {
+  const start = Date.parse(check.startedAt ?? "");
+  const end = Date.parse(check.completedAt ?? "");
+  if (check.state === "running" && Number.isFinite(start)) return { ...check, startedAtMs: start };
+  if (check.state === "passed" && Number.isFinite(start) && Number.isFinite(end)) {
+    const seconds = Math.max(0, Math.round((end - start) / 1000));
+    return {
+      ...check,
+      duration: seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`,
+    };
+  }
+  return check;
 }

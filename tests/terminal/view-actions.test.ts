@@ -1233,7 +1233,7 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
   try {
     let starts = 0;
     const { service: _service, ...dependencies } = f.deps;
-    const commands = [["board"], ["prs"], ["usage"], ["new-request"], ["open-task"]];
+    const commands = [["board"], ["usage"], ["new-request"], ["open-task"]];
     for (const command of commands) {
       const errors: string[] = [];
       const output: string[] = [];
@@ -1349,6 +1349,49 @@ test("renderer commands reject missing context and invalid project/file input be
       expect(result.error?.message).not.toContain("Unexpected renderer invocation");
     }
     expect(attempts).toBe(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Show PRs opens the indexed durable task in the originating project without fetching GitHub", async () => {
+  const f = await fixture("tern");
+  try {
+    const task = await createPrTask(f);
+    const path = nativeViewsPath(f.home, f.repo);
+    await mkdir(join(f.home, "native-views"), { recursive: true });
+    const model = {
+      version: 1,
+      project: f.repo,
+      writtenAt: NOW,
+      tasks: {},
+      briefs: {},
+      projects: [],
+      pullRequests: {
+        "owner/repo#42": { header: { taskId: task.id }, detailFile: "pr-owner%2Frepo-42.json" },
+      },
+    };
+    await writeFile(path, nativeViewText("panel", model));
+    const result = await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps);
+    expect(result.exitCode).toBe(0);
+    expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+    await writeFile(path, nativeViewText("panel", { ...model, pullRequests: {} }));
+    expect(
+      (await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps)).exitCode,
+    ).toBe(1);
+    expect(f.opened).toHaveLength(1);
+    // Ownership is proved before reading the cache, even with a valid locating pane/cwd.
+    f.deps.terminal = {
+      ...f.deps.terminal,
+      inspect: async () => {
+        throw new Error("Cannot prove coordinator ownership");
+      },
+    };
+    await writeFile(path, "{broken");
+    const refused = await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.error?.message).toContain("Cannot prove coordinator ownership");
+    expect(f.opened).toHaveLength(1);
   } finally {
     await f.close();
   }
