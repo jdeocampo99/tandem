@@ -11,7 +11,7 @@ export type Row = { id: string, row: { kind: string, text: string?, old: number?
 export type File = { path: string, additions: number, deletions: number, commentCount: number, rows: { Row } }
 export type Model = {
  header: { repo: string, number: number, title: string, url: string, head: string, draft: boolean, next: string, taskId: string?, commits: number, additions: number, deletions: number, unresolved: number, firstThreadId: string? },
- readAt: string, clockAt: string, tabs: { string }, checks: { { name: string, state: string, elapsedMs: number?, duration: string?, logUrl: string? } },
+ readAt: string, tabs: { string }, checks: { { name: string, state: string, startedAtMs: number?, duration: string?, logUrl: string? } },
  description: { markdown: string, blocks: { string }, conversation: { Comment } },
  tour: { { title: string, why: string, stops: { { file: string, from: number, to: number, title: string, body: string, rowIds: { string } } } } },
  files: { File }, unanchoredThreads: { Thread }, commentDestination: string,
@@ -44,7 +44,7 @@ local function strings(value: unknown): boolean
  return true
 end
 function M.parse(value: unknown): Model?
- if type(value) ~= "table" or type(value.header) ~= "table" or type(value.readAt) ~= "string" or type(value.clockAt) ~= "string" then return nil end
+ if type(value) ~= "table" or type(value.header) ~= "table" or type(value.readAt) ~= "string" then return nil end
  local h = value.header
  for _, name in {"repo", "title", "url", "head", "next"} do if type(h[name]) ~= "string" then return nil end end
  for _, name in {"number", "commits", "additions", "deletions", "unresolved"} do if type(h[name]) ~= "number" then return nil end end
@@ -53,7 +53,7 @@ function M.parse(value: unknown): Model?
  for _, b in value.description.blocks do if type(b) ~= "string" then return nil end end
  if type(value.checks) ~= "table" or not strings(value.tabs) or type(value.tour) ~= "table" or type(value.files) ~= "table" or not threads(value.unanchoredThreads) then return nil end
  for _, check in value.checks do
-  if type(check) ~= "table" or type(check.name) ~= "string" or not table.find({"passed", "running", "failed", "pending"}, check.state) or (check.elapsedMs ~= nil and type(check.elapsedMs) ~= "number") or (check.duration ~= nil and type(check.duration) ~= "string") or (check.logUrl ~= nil and type(check.logUrl) ~= "string") then return nil end
+  if type(check) ~= "table" or type(check.name) ~= "string" or not table.find({"passed", "running", "failed", "pending"}, check.state) or (check.startedAtMs ~= nil and (type(check.startedAtMs) ~= "number" or check.startedAtMs ~= check.startedAtMs or math.abs(check.startedAtMs) == math.huge)) or (check.duration ~= nil and type(check.duration) ~= "string") or (check.logUrl ~= nil and type(check.logUrl) ~= "string") then return nil end
  end
  for _, chapter in value.tour do
   if type(chapter) ~= "table" or type(chapter.title) ~= "string" or type(chapter.why) ~= "string" or type(chapter.stops) ~= "table" then return nil end

@@ -69,10 +69,8 @@ export type PrPaneView = Readonly<{
     firstThreadId?: string;
   }>;
   readAt: IsoTimestamp;
-  /** Age basis for native elapsed nodes, sampled when the projection is written. */
-  clockAt: IsoTimestamp;
   tabs: readonly string[];
-  checks: readonly (PrCheck & Readonly<{ duration?: string; elapsedMs?: number }>)[];
+  checks: readonly (PrCheck & Readonly<{ duration?: string; startedAtMs?: number }>)[];
   description: Readonly<{
     markdown: string;
     blocks: readonly string[];
@@ -112,7 +110,6 @@ export function prPaneView(
   input: Readonly<{
     cached: CachedPullRequest;
     watch?: PrWatch;
-    now: IsoTimestamp;
     review?: PrPaneView["review"];
     taskId?: string;
   }>,
@@ -181,9 +178,8 @@ export function prPaneView(
       ...(unresolved[0] === undefined ? {} : { firstThreadId: unresolved[0].id }),
     },
     readAt: cached.readAt,
-    clockAt: cached.checks.some((check) => check.state === "running") ? input.now : cached.readAt,
     tabs: ["Description", ...(cached.tour.length === 0 ? [] : ["Tour"]), "Diff"],
-    checks: cached.checks.map((check) => presentCheck(check, input.now)),
+    checks: cached.checks.map(presentCheck),
     description: {
       markdown: cached.body,
       blocks: prMarkdownBlocks(cached.body),
@@ -248,11 +244,10 @@ export function prMarkdownBlocks(markdown: string): readonly string[] {
   return blocks;
 }
 
-function presentCheck(check: PrCheck, readAt: string): PrPaneView["checks"][number] {
+function presentCheck(check: PrCheck): PrPaneView["checks"][number] {
   const start = Date.parse(check.startedAt ?? "");
   const end = Date.parse(check.completedAt ?? "");
-  if (check.state === "running" && Number.isFinite(start))
-    return { ...check, elapsedMs: Math.max(0, Date.parse(readAt) - start) };
+  if (check.state === "running" && Number.isFinite(start)) return { ...check, startedAtMs: start };
   if (check.state === "passed" && Number.isFinite(start) && Number.isFinite(end)) {
     const seconds = Math.max(0, Math.round((end - start) / 1000));
     return {
