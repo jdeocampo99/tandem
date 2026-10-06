@@ -2,8 +2,16 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeNativeView } from "../../../src/tern-view/file.ts";
-import { taskScreenFixture } from "../../tasks/task-screen-fixture.ts";
+import { nativeTaskFile, nativeViewText } from "../../../src/board/native-views.ts";
+import {
+  nativeDetailPath,
+  nativeViewsPath,
+  writeNativeViews,
+} from "../../../src/board/snapshot.ts";
+import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
 type ControlNode = {
@@ -36,18 +44,12 @@ type ControlNode = {
     });
     await writeFile(
       join(plugin, "tandem.sh"),
-      `#!/bin/sh\nfor arg do printf '%s\\0' "$arg"; done >> '${join(root, "actions.log")}'\nprintf '\\n' >> '${join(root, "actions.log")}'\n`,
+      `#!/bin/sh\nfor arg do printf '%s\\0' "$arg"; done >> '${join(root, "actions.log")}'\nprintf '\\n' >> '${join(root, "actions.log")}'\nfor arg do if [ "$arg" = 'Reject this direction' ]; then printf 'Direction refused by saved task policy' >&2; exit 7; fi; done\n`,
     );
-    const file = await writeNativeView(env.TANDEM_HOME, {
-      version: 1,
-      kind: "task",
-      revision: "one",
-      model: taskScreenFixture(),
-    });
-    await writeFile(
-      join(plugin, "window.luau"),
-      `tern.on("window_start", function(cx) cx:new_block("tandem.task", {${JSON.stringify(file)}, "", "", ${JSON.stringify(root)}}, "tab") end)\n`,
-    );
+    const publication = taskScreenPublication(root);
+    await writeNativeViews(env.TANDEM_HOME, publication);
+    const file = nativeDetailPath(env.TANDEM_HOME, root, nativeTaskFile("102"));
+    const index = nativeViewsPath(env.TANDEM_HOME, root);
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
     const run = async (...args: string[]) => {
       const p = Bun.spawn([binary, ...args], { env, cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -92,7 +94,21 @@ type ControlNode = {
         return true;
       });
       await run("plugin", "link", plugin, "--json");
-      await run("new", "session", "task-proof", "--cwd", root, "--json");
+      const created = decode(
+        await run("new", "session", "task-proof", "--cwd", root, "--json"),
+        Created,
+        "isolated test session",
+      );
+      const endpoint: Endpoint = {
+        terminal: "tern",
+        sessionId: "task-proof",
+        terminalSessionId: created.session,
+        workspaceId: created.tab,
+        tabId: created.tab,
+        paneId: created.block,
+        role: "coordinator",
+        generation: 0,
+      };
       window = Bun.spawn([binary, "--control", control, "--out", root, "--dir", root], {
         env,
         cwd: root,
@@ -103,20 +119,66 @@ type ControlNode = {
         await ctl("state");
         return true;
       });
-      await ctl("size", "1280", "900");
+      await ctl("size", "1500", "950");
+      const commandRunner: CommandRunner = async (request) => {
+        const child = Bun.spawn([...request.argv], {
+          env,
+          cwd: request.cwd,
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [stdout, stderr, code] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ]);
+        return { stdout, stderr, code };
+      };
+      const host = ternViewHost(
+        ternCommands(commandRunner, {
+          binary,
+          environment: Object.fromEntries(
+            Object.entries(env).filter(
+              (entry): entry is [string, string] => entry[1] !== undefined,
+            ),
+          ),
+        }),
+        { clock: Date.now, wait: Bun.sleep, guard: async (_key, fn) => fn() },
+      );
+      const input = {
+        coordinator: endpoint,
+        cwd: root,
+        home: env.TANDEM_HOME,
+        view: { kind: "task" as const, taskId: "102" },
+      };
+      await host.open(input, root, "panel", "panel", index);
+      const opened = await host.open(input, root, "task", "task", file);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       expect(JSON.stringify(await tree())).toContain("round 1 of 2");
       await ctl("shot", "03-task");
       await click("Progress");
       await until(async () => JSON.stringify(await tree()).includes("PASS"));
+      expect(JSON.stringify(await tree())).toContain("FAIL");
+      expect(JSON.stringify(await tree())).toContain("adapter.ts:12");
       await ctl("shot", "03-task-progress");
       await click("Overview");
-      await writeNativeView(env.TANDEM_HOME, {
-        version: 1,
-        kind: "task",
-        revision: "two",
-        model: taskScreenFixture(true),
-      });
+      await click("Brief");
+      await until(async () =>
+        JSON.stringify(await tree()).includes("Preserve the live coordinator"),
+      );
+      await ctl("shot", "03-task-brief");
+      await click("Diff");
+      await until(async () => JSON.stringify(await tree()).includes("const terminal = tern();"));
+      await ctl("shot", "03-task-diff");
+      await click("PR");
+      await until(async () => JSON.stringify(await tree()).includes("exact pane ownership"));
+      await ctl("shot", "03-task-pr");
+      await click("Cost");
+      await until(async () => JSON.stringify(await tree()).includes("Usage receipt"));
+      expect(JSON.stringify(await tree())).toContain("unavailable");
+      await ctl("shot", "03-task-cost");
+      await click("Overview");
+      await writeFile(file, nativeViewText("task", taskScreenFixture(true)));
       await until(async () => JSON.stringify(await tree()).includes("Restart"));
       await ctl("shot", "03b-task-stuck");
       await click("Restart");
@@ -132,12 +194,53 @@ type ControlNode = {
       const log = await readFile(join(root, "actions.log"), "utf8");
       expect(log).toContain(`--cwd\0${root}\0`);
       expect(log).toContain("steer\0--task\x00102\0--text\0Try a safer close guard 😀");
+      await click("Steer…");
+      await ctl("type", JSON.stringify("Reject this direction"));
+      await ctl("key", "enter");
+      await until(async () =>
+        JSON.stringify(await tree()).includes("Direction refused by saved task policy"),
+      );
+      const failed = await readFile(join(root, "actions.log"), "utf8");
+      expect(failed.split("Reject this direction")).toHaveLength(2);
+      expect(JSON.stringify(await tree())).toContain("Reject this direction");
+      await Bun.sleep(300);
+      expect(await readFile(join(root, "actions.log"), "utf8")).toBe(failed);
       await writeFile(file, "broken");
       await until(async () => JSON.stringify(await tree()).includes("Actions are disabled"));
       const before = await readFile(join(root, "actions.log"), "utf8");
       await click("Restart");
       await Bun.sleep(300);
       expect(await readFile(join(root, "actions.log"), "utf8")).toBe(before);
+      await click("← Orchestrator");
+      await until(async () =>
+        (await readFile(join(root, "actions.log"), "utf8")).includes("#orchestrator"),
+      );
+      await host.open(
+        { ...input, origin: { paneId: opened.paneId, cwd: root } },
+        root,
+        "panel",
+        "return",
+        index,
+      );
+      const restored = await ternCommands(commandRunner, { binary }).ls(root);
+      expect(restored.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === endpoint.paneId)).toBe(
+        true,
+      );
+      expect(restored.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === opened.paneId)).toBe(false);
+      const picker = await host.open(
+        { ...input, view: { kind: "task-picker" } },
+        root,
+        "task-picker",
+        "split",
+        index,
+      );
+      await until(async () => JSON.stringify(await tree()).includes("Search tasks"));
+      await ctl("type", JSON.stringify("Tern"));
+      await ctl("key", "enter");
+      await until(async () =>
+        (await readFile(join(root, "actions.log"), "utf8")).includes("native\0open\0task\x00102"),
+      );
+      expect(picker.paneId).not.toBe(endpoint.paneId);
       console.log(`Native task proof: ${root}`);
     } finally {
       if (window) {

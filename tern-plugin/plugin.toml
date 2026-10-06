@@ -20,10 +20,12 @@ palette = false
 [[blocks]]
 id = "task"
 title = "Task"
+palette = false
 
 [[blocks]]
 id = "task-picker"
 title = "Open task…"
+palette = false
 
 [[blocks]]
 id = "pr"

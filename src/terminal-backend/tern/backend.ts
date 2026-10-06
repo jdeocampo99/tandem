@@ -6,7 +6,6 @@ import {
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
-import { nativeViewsPath } from "../../board/snapshot.ts";
 import type { CommandRunner, Endpoint, TerminalPaneLocation } from "../../contracts.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import { probeTern } from "./availability.ts";
@@ -572,6 +571,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       }
     },
     openWelcome: async (target) => {
+      const { nativeViewsPath } = await import("../../board/snapshot.ts");
       if (options.home === undefined) throw new Error("Tern welcome requires a Tandem home");
       const coordinator = await byId(target, target.paneId);
       const project = await projectForView(options.home, coordinator);
@@ -593,6 +593,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
       ]);
     },
     openPanel: async (input) => {
+      const { nativeViewsPath } = await import("../../board/snapshot.ts");
       if (options.home === undefined) throw new Error("Tern panel requires a Tandem home");
       return (
         await views.open(

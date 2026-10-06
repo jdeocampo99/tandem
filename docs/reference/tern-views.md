@@ -291,6 +291,7 @@ All renderers use these block ids and the same five string launch arguments:
 | --- | --- | --- |
 | `tandem.panel` | Root `panel` envelope | Left of the coordinator, about 360 pixels |
 | `tandem.task` | Direct `task` envelope | Conversation area, preserving its live coordinator |
+| `tandem.task-picker` | Root `panel` envelope | Disposable split beside the conversation |
 | `tandem.brief` | Direct `brief` envelope | Beside the conversation |
 | `tandem.pr` | Direct `pr` envelope | Beside the conversation |
 | `tandem.prs` | Root `panel` envelope | Beside the conversation |
@@ -319,3 +320,28 @@ rows, re-proves the destination coordinator, and uses an exact-block `tern focus
 switch. Supplied window keys are independently scoped and must contain the originating pane.
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
+
+### Task page and picker
+
+`task.luau` draws the direct `TaskPageView` envelope as `tandem.task`. It uses the
+five hosting arguments above and derives the root index through `navigation.root`.
+Brief and PR detail references are project-relative filenames; they resolve beside the
+shown task detail file. The Brief tab reads saved lines; review and annotations open
+in the separate brief pane. Diff and PR use `pr-model` and `pr-content`, including
+its displayed-HEAD guard and immutable action-input path. Cost shows recorded receipt
+fields and labels unknown samples as unavailable.
+
+`native open-task` proves the project's Tern coordinator and opens `tandem.task-picker`
+against the root index in a disposable split. It searches the saved project's tasks by
+title, id or stage; arrows choose a result and Enter or a click invokes `native open task`.
+Success closes only the picker. Cancel invokes the exact orchestrator return route.
+Task Restart and worker messaging call `native restart` and `native steer`; a failed
+CLI action shows stderr without retrying or clearing the user's unsent direction.
+Malformed detail files keep the last readable page and disable its actions until a
+valid file returns. Navigation back remains available.
+
+Coordinator adapters append a compact references row after a reply mentioning known
+task, brief or unambiguous PR identities in their project. The row prints OSC 8 routes
+for `tandem://task/ID`, `tandem://brief/ID` and `tandem://pr/NUMBER`. It is enabled only
+inside an unambiguous inherited Tern pane context. Herdr output and model reply text
+remain unchanged. Unknown or foreign identities never become native links.

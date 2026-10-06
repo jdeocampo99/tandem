@@ -1,7 +1,7 @@
 --!strict
 -- Only immutable backend-authored opening tickets can reach the native layout API.
 local M = {}
-local kinds = { panel=true, task=true, brief=true, pr=true, prs=true, board=true, usage=true, catchup=true, welcome=true }
+local kinds = { panel=true, task=true, brief=true, pr=true, prs=true, board=true, usage=true, catchup=true, welcome=true, ["task-picker"]=true }
 function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
  if not string.match(req.path, "/native%-host/[%w%-]+%.tandem%-open%.json$") then return nil end
  local ok, ticket = pcall(function() return tern.json.decode(tern.fs.read(req.path, 16384)) end)
@@ -28,8 +28,11 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
   cx:command("inbox")
   pane=origin
  elseif ticket.placement=="return" then
-  if source.block~="tandem.task" or not owner.floating then return {handled=true} end
-  if not cx.layout:dock(coordinator,origin,"right",{focus=false}) then return {handled=true} end
+  if source.block=="tandem.task-picker" and not owner.floating then
+   -- A picker is a disposable split; returning never docks or closes the coordinator.
+  elseif source.block=="tandem.task" and owner.floating then
+   if not cx.layout:dock(coordinator,origin,"right",{focus=false}) then return {handled=true} end
+  else return {handled=true} end
   cx.layout:close(origin)
   cx.layout:focus(coordinator)
   pane=coordinator

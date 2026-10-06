@@ -1,5 +1,16 @@
-import { taskUsageView } from "../../src/runtime/usage-view.ts";
+import {
+  type NativeViews,
+  type NativeViewsPublication,
+  nativeBriefFile,
+  nativePrFile,
+  nativeTaskFile,
+} from "../../src/board/native-views.ts";
+import { prPaneView } from "../../src/pr-review/native-view.ts";
+import { createRequestBriefRecord } from "../../src/requests/brief.ts";
+import { briefView } from "../../src/requests/native-view.ts";
+import { taskUsageView, usageView } from "../../src/runtime/usage-view.ts";
 import { taskPageView } from "../../src/tasks/page-view.ts";
+import { content } from "../board/fixtures.ts";
 import { task } from "../session/fixtures.ts";
 
 /** A real task projection used by the native screen interaction check. */
@@ -24,6 +35,20 @@ export function taskScreenFixture(blocked = false) {
       base: "main",
     },
     createdAt: "2030-01-02T03:04:05.000Z",
+    findingLedger: [
+      {
+        id: "close-guard",
+        lens: "review",
+        severity: "P1",
+        verdict: "confirmed",
+        description: "Closing by title could target an unrelated pane. Match the exact pane id.",
+        file: "adapter.ts",
+        line: 12,
+        status: "unresolved",
+        raisedAt: { head: "abc123", generation: 0, reviewRound: 1 },
+        statusAt: { head: "abc123", generation: 0, reviewRound: 1 },
+      },
+    ],
     validationEvidence: [
       {
         name: "bun run check",
@@ -33,6 +58,17 @@ export function taskScreenFixture(blocked = false) {
         argv: ["bun", "run", "check"],
         stdout: "",
         stderr: "",
+        origin: "local",
+        policyDigest: "fixture",
+      },
+      {
+        name: "bun test close guard",
+        exitCode: 1,
+        head: "abc123",
+        contract: "final",
+        argv: ["bun", "test", "close-guard"],
+        stdout: "",
+        stderr: "Pane identity mismatch",
         origin: "local",
         policyDigest: "fixture",
       },
@@ -141,4 +177,166 @@ export function taskScreenFixture(blocked = false) {
       },
     ],
   });
+}
+
+export function taskScreenPublication(project: string): NativeViewsPublication {
+  const taskView = taskScreenFixture();
+  const brief = briefView(
+    createRequestBriefRecord(
+      {
+        id: "req-tern",
+        repoPath: project,
+        content: {
+          ...content("Add a native Tern terminal backend"),
+          scope: ["Preserve the live coordinator", "Show native task progress"],
+          acceptanceCriteria: ["Ownership checks refuse unrelated panes"],
+        },
+      },
+      "2030-01-02T03:04:05.000Z",
+    ),
+  );
+  const pr = prPaneView({
+    taskId: "102",
+    now: "2030-01-02T03:16:05.000Z",
+    cached: {
+      repo: "owner/repo",
+      number: 281,
+      title: "Tern backend adapter",
+      url: "https://github.com/owner/repo/pull/281",
+      head: "abc123",
+      draft: true,
+      body: "## What this does\n\nAdds the Tern backend with exact pane ownership.",
+      commits: 3,
+      additions: 2,
+      deletions: 1,
+      readAt: "2030-01-02T03:16:05.000Z",
+      checks: [{ name: "TypeScript", state: "passed" }],
+      conversation: [],
+      threads: [],
+      tour: [],
+      patch:
+        "diff --git a/adapter.ts b/adapter.ts\n--- a/adapter.ts\n+++ b/adapter.ts\n@@ -1,1 +1,2 @@\n-const terminal = herdr();\n+const terminal = tern();\n+export { terminal };\n",
+    },
+  });
+  const at = new Date().toISOString();
+  const taskFile = nativeTaskFile("102"),
+    briefFile = nativeBriefFile("req-tern"),
+    prFile = nativePrFile("owner/repo", 281);
+  const panelRow = {
+    key: "102",
+    title: taskView.header.title,
+    state: "blue" as const,
+    stage: "fixing",
+    time: "12m",
+    model: "opus",
+    detail: "edit adapter.ts",
+    secondary: "opus · editing adapter.ts",
+    target: { kind: "task" as const, taskId: "102" },
+  };
+  const projectRow = {
+    terminal: "tern" as const,
+    repoPath: project,
+    name: "tandem",
+    current: true,
+    offline: false,
+    running: 1,
+    needsYou: 0,
+    status: "1 running",
+    shortcut: "1",
+  };
+  const bundle: NativeViews = {
+    version: 1,
+    project,
+    writtenAt: at,
+    summary: {
+      terminal: "tern",
+      repoPath: project,
+      name: "tandem",
+      writtenAt: at,
+      running: 1,
+      needsYou: 0,
+      ready: 0,
+      done: 0,
+    },
+    changeSignature: "fixture",
+    panel: {
+      header: {
+        title: "tandem",
+        project,
+        projects: [projectRow],
+        otherProjectsNeedYou: 0,
+        bellCount: 0,
+      },
+      sections: [
+        { title: "Needs you", count: 0, rows: [] },
+        { title: "Running", count: 1, rows: [panelRow] },
+        { title: "Ready", count: 0, rows: [] },
+        { title: "Recently done", count: 0, rows: [] },
+      ],
+    },
+    projects: [projectRow],
+    tasks: {
+      "102": {
+        taskId: "102",
+        title: taskView.header.title,
+        stage: "awaiting-fixes",
+        createdAt: at,
+        updatedAt: at,
+        model: "claude-code/opus",
+        unpricedSamples: 0,
+        detailFile: taskFile,
+      },
+      "103": {
+        taskId: "103",
+        title: "Fix the settings page",
+        stage: "ready",
+        createdAt: at,
+        updatedAt: at,
+        unpricedSamples: 0,
+        detailFile: nativeTaskFile("103"),
+      },
+    },
+    briefs: {
+      "req-tern": {
+        requestId: brief.requestId,
+        title: brief.title,
+        revision: brief.revision,
+        changes: brief.changes,
+        approvalState: brief.approvalState,
+        abandoned: false,
+        commentCount: 0,
+        detailFile: briefFile,
+      },
+    },
+    pullRequests: {
+      "owner/repo#281": { header: pr.header, readAt: pr.readAt, detailFile: prFile },
+    },
+    board: { viewOnly: true, returnLabel: "← Orchestrator", lanes: [] },
+    usage: usageView({
+      now: at,
+      todayStart: at,
+      weekStart: at,
+      limits: [],
+      readout: { events: [], malformedEvents: 0 },
+      finished: [],
+    }),
+    catchup: {
+      project,
+      merged: [],
+      needsYou: [],
+      blocked: [],
+      whereWeLeftOff: [],
+      workstreams: [],
+      actions: ["open-needs-you", "dismiss"],
+    },
+    warnings: [],
+  };
+  return {
+    bundle,
+    details: [
+      { file: taskFile, view: { version: 1, project, kind: "task", data: taskView } },
+      { file: briefFile, view: { version: 1, project, kind: "brief", data: brief } },
+      { file: prFile, view: { version: 1, project, kind: "pr", data: pr } },
+    ],
+  };
 }

@@ -3,6 +3,7 @@ import { type CliInvocation, CliUsageError, pathText, text } from "./cli-argumen
 import type { CliCommandContext, CliCommandOutcome } from "./cli-commands.ts";
 import { validateNativeContext, viewOriginFrom } from "./cli-view-context.ts";
 import { nativeProject, nativeViewFile } from "./native-navigation.ts";
+import { nativeOpenTask } from "./native-task-picker.ts";
 
 export type NativeRendererCommand =
   | "board"
@@ -39,7 +40,7 @@ export const nativeRendererHandlers: NativeRendererHandlers = {
   prs: unavailable,
   usage: unavailable,
   "new-request": unavailable,
-  "open-task": unavailable,
+  "open-task": nativeOpenTask,
   project: nativeProject,
   "view-file": nativeViewFile,
 };
