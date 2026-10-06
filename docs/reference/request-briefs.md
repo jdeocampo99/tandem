@@ -97,10 +97,14 @@ src/requests/plain-language.ts
 
 - `tandem native brief-comment REQUEST_ID --input FILE` and `brief-request-changes` carry the
   displayed `briefRevision`, `contentDigest`, and `agreementDigest`, plus optional overall `text`
-  and `comments: [{line, text}]`. Lines are one-based in the rendered brief Markdown. At least
+  and `comments: [{lineId, text}]`. Copy each stable string `lineId` from the displayed
+  `briefView.lines[].id`; numeric Markdown line anchors are refused. At least
   one comment is required; there are at most 100 comments and 64,000 bytes of feedback.
 - Feedback names the revision the user saw. A preserved older revision is accepted only with its
-  matching digests and valid line anchors. It reaches the ownership-proven running coordinator as
+  matching digests and valid line ids. The CLI rebuilds `briefView` for that exact historical
+  revision and resolves ids in that view, so a newer draft never supplies the quoted text or
+  changes an anchor. Unknown ids, unpreserved revisions, and mismatched digests are refused clearly.
+  It reaches the ownership-proven running coordinator as
   user input prefixed with "From the open review page:", with the request, revision, quoted lines,
   and comments. It never changes or approves the brief itself.
 - Request changes retires the owned brief projection after delivery, only while it still shows
