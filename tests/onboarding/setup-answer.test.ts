@@ -101,7 +101,7 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
       "The answer has an unknown field extra.",
       "The answer has an unknown field workerSkills.",
       "models has an unknown field verifier.",
-      "Visual mockups has no model.",
+      "Mockups has no model.",
       'selfImprovement must be "off", "fix", or "report".',
     ]),
   );
@@ -138,7 +138,7 @@ test("each problem on this machine is one sentence the user can act on", () => {
   });
   expect(problems).toEqual([
     "Review: anthropic/opus doesn't support thinking low.",
-    "Visual mockups: nobody/model isn't available on this computer.",
+    "Mockups: nobody/model isn't available on this computer.",
     "/code/api/src is inside the repository at /code/api; add that folder.",
     "/tmp/plain is not a Git repository.",
     "/code/done is already set up.",

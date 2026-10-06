@@ -90,7 +90,7 @@ async function machine(
     registeredProjects: async () => [join(code, "old")],
     inspectRepo: async () => ({
       validationCommands: ["bun run test"],
-      scripts: ["test"],
+      scriptCommands: ["bun run test"],
       setupCommands: ["bun install --frozen-lockfile"],
       lockfile: "bun.lock",
     }),
@@ -133,18 +133,14 @@ function answerOf(
   };
 }
 
-test("the view lists discovered checkouts, inspecting only the ones not yet set up", async () => {
+test("the view inspects every discovered checkout and splits those set up from those to add", async () => {
   const { workflow, code } = await machine();
   const view = await workflow.view("/tandem", "settings");
   expect(view.mode).toBe("settings");
-  expect(view.searchedFolders).toEqual(["~/code", "~/missing"]);
-  expect(view.repos.map((repo) => [repo.path, repo.setUp])).toEqual([
-    [join(code, "api"), false],
-    [join(code, "old"), true],
-  ]);
-  const [api, old] = view.repos;
-  expect(api?.validationCommands).toEqual(["bun run test"]);
-  expect(old?.validationCommands).toEqual([]);
+  expect(view.repos.map((repo) => repo.path)).toEqual([join(code, "old")]);
+  expect(view.candidates.map((repo) => repo.path)).toEqual([join(code, "api")]);
+  expect(view.repos[0]?.validationCommands).toEqual(["bun run test"]);
+  expect(view.candidates[0]?.setupCommands).toEqual(["bun install --frozen-lockfile"]);
 });
 
 test("a valid answer is saved in order", async () => {

@@ -32,7 +32,7 @@ export function remainingOnboardingSteps(facts: OnboardingFacts): readonly Onboa
 
 const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
   models:
-    "Choose models: call models, offer its presets by name (say why one is unavailable) and the Balanced profile, one line per role. They may pick a preset in plain words, then change any role. Recap all five roles with each one's harness, then configure-models; never list claude-code in enabledProviders.",
+    "Choose models: call models and offer its recommended model for each role (the Balanced profile), one line per role. They may accept it or change any role. Recap all five roles with each one's harness, then configure-models; never list claude-code in enabledProviders.",
   "code-folders": "Ask which folders hold their repositories and save them with save-code-folders.",
   "self-improvement":
     "Tandem asked about looking into its own problems; when they answer, call self-improvement with off, fix, or report.",

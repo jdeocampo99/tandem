@@ -926,10 +926,10 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
       );
       const view = await service.setupView(task.repoPath, "setup");
       const foreignPath = await realpath(foreign);
-      const foreignView = view.repos.find((repo) => repo.path === foreignPath);
+      const foreignView = view.candidates.find((repo) => repo.path === foreignPath);
       expect(foreignView).toBeDefined();
       expect(foreignView?.validationCommands).toEqual(["bun run check"]);
-      expect(foreignView?.install).toBe("bun install --frozen-lockfile");
+      expect(foreignView?.setupCommands).toEqual(["bun install --frozen-lockfile"]);
 
       const saved = await service.saveSetup(
         task.repoPath,

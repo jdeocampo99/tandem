@@ -91,9 +91,9 @@ export type OnboardRepoResult = Readonly<{
   discovery: OnboardingDiscovery;
 }>;
 
-/** The package.json scripts behind the discovered checks and the lockfile behind the install. */
+/** The commands that run the package.json checks, and the lockfile behind the install. */
 export type OnboardingDiscovery = Readonly<{
-  scripts: readonly string[];
+  commands: readonly string[];
   lockfile?: string;
 }>;
 
@@ -801,7 +801,7 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     setupCommands: proposedPolicy.setupCommands,
     unresolved,
     discovery: {
-      scripts: discovered.scripts,
+      commands: discovered.commands,
       ...(manager === undefined ? {} : { lockfile: manager.lockfile }),
     },
   };

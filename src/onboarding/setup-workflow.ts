@@ -109,21 +109,12 @@ export class SetupWorkflow {
     const repos: SetupRepoFacts[] = await Promise.all(
       facts.checkouts.map(async (checkout) => {
         const setUp = facts.registered.has(checkout.path);
-        let details: SetupRepoDetails | undefined;
-        let inspectionError: string | undefined;
-        if (!setUp) {
-          try {
-            details = await this.#deps.inspectRepo(checkout.path);
-          } catch (error) {
-            inspectionError = error instanceof Error ? error.message : String(error);
-          }
+        try {
+          return { ...checkout, setUp, details: await this.#deps.inspectRepo(checkout.path) };
+        } catch (error) {
+          const inspectionError = error instanceof Error ? error.message : String(error);
+          return { ...checkout, setUp, inspectionError };
         }
-        return {
-          ...checkout,
-          setUp,
-          ...(details === undefined ? {} : { details }),
-          ...(inspectionError === undefined ? {} : { inspectionError }),
-        };
       }),
     );
     const saved = facts.modelSettings;
@@ -134,7 +125,6 @@ export class SetupWorkflow {
       ompCatalogue: facts.ompCatalogue,
       claudeCode: facts.claudeCode,
       ...(saved.configured && saved.models !== undefined ? { savedModels: saved.models } : {}),
-      searchedFolders: facts.roots,
       repos,
       ...(facts.settings.selfImprovementChosen
         ? { selfImprovement: facts.settings.selfImprovement }

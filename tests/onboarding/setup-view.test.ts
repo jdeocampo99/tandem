@@ -1,7 +1,12 @@
 import { expect, test } from "bun:test";
 import type { RepoPolicy } from "../../src/contracts.ts";
 import type { ModelRecord } from "../../src/harness/contract.ts";
-import { buildSetupView, type SetupViewInput } from "../../src/onboarding/setup-view.ts";
+import {
+  buildSetupView,
+  priceLevel,
+  SETUP_ROLE_COPY,
+  type SetupViewInput,
+} from "../../src/onboarding/setup-view.ts";
 
 const catalogue: readonly ModelRecord[] = [
   {
@@ -30,19 +35,15 @@ const input: SetupViewInput = {
   homeFolder: "/Users/me",
   ompCatalogue: catalogue,
   claudeCode: "not-installed",
-  searchedFolders: ["/Users/me/code", "/srv/git"],
   repos: [
-    {
-      path: "/Users/me/code/web",
-      setUp: false,
-    },
+    { path: "/Users/me/code/web", setUp: false },
     {
       path: "/Users/me/code/api",
       repo: "acme/api",
       setUp: false,
       details: {
         validationCommands: ["bun run check", "bun run test"],
-        scripts: ["check", "test"],
+        scriptCommands: ["bun run check", "bun run typecheck", "bun run test"],
         setupCommands: ["bun install --frozen-lockfile"],
         lockfile: "bun.lock",
       },
@@ -51,20 +52,53 @@ const input: SetupViewInput = {
   ],
 };
 
-test("every job starts empty on a first run and all catalogue models are available", () => {
+test("every job starts without a saved pick and all catalogue models are available", () => {
   const view = buildSetupView(input);
   expect(view.roles.map((role) => role.name)).toEqual([
     "Planning",
     "Research",
     "Coding",
     "Review",
-    "Visual mockups",
+    "Mockups",
   ]);
   expect(view.roles.every((role) => role.pick === undefined)).toBe(true);
-  expect(view.roles[0]?.example).toBe("Claude Fable 5.1 on high");
   expect(view.models[0]?.thinking).toEqual(["low", "high", "max"]);
   expect(view.models[1]?.name).toBe("gpt");
   expect(view.selfImprovement).toBe("fix");
+});
+
+test("each role shows its hint and the Balanced profile's recommendation with its reason", () => {
+  const flagship: ModelRecord = {
+    selector: "openai-codex/flagship",
+    id: "flagship",
+    provider: "openai-codex",
+    reasoning: true,
+    thinking: ["low", "medium", "high", "max"],
+    cost: { input: 10, output: 50 },
+  };
+  const view = buildSetupView({ ...input, ompCatalogue: [flagship] });
+  expect(view.roles.map((role) => role.hint)).toEqual([
+    "your smartest model",
+    "cheap and fast",
+    "strong at code, high effort",
+    "smart, and different from Coding",
+    "cheap and fast",
+  ]);
+  expect(view.roles.map((role) => role.recommended?.model)).toEqual([
+    { model: flagship.selector, thinking: "high" },
+    { model: flagship.selector, thinking: "medium" },
+    { model: flagship.selector, thinking: "max" },
+    { model: flagship.selector, thinking: "max" },
+    { model: flagship.selector, thinking: "low" },
+  ]);
+  expect(view.roles.every((role) => (role.recommended?.reason.length ?? 0) > 0)).toBe(true);
+  for (const role of view.roles) expect(role.hint).toBe(SETUP_ROLE_COPY[role.id].hint);
+});
+
+test("a role the Balanced profile cannot fill has no recommendation", () => {
+  const view = buildSetupView({ ...input, ompCatalogue: [] });
+  expect(view.roles.every((role) => role.recommended === undefined)).toBe(true);
+  expect(view.harnesses[1]?.unavailable).toContain("No models yet");
 });
 
 test("saved choices remain available across providers while invalid model or thinking choices clear", () => {
@@ -102,11 +136,6 @@ test("pickers group Claude Code's models before OMP's, and only offer Claude Cod
   const missing = buildSetupView(input);
   expect(missing.models.map((model) => model.harness)).toEqual(["omp", "omp"]);
   expect(missing.harnesses[0]?.unavailable).toBe("Not installed on this computer.");
-  expect(missing.presets.map((preset) => [preset.id, preset.status])).toEqual([
-    ["claude-codex", "disabled"],
-    ["all-claude-code", "disabled"],
-    ["all-omp", "disabled"],
-  ]);
 });
 
 test("a saved Claude Code choice is kept only while Claude Code is ready", () => {
@@ -121,22 +150,49 @@ test("a saved Claude Code choice is kept only while Claude Code is ready", () =>
   expect(scoutPick({ setting: "disableAllHooks", source: "managed" })).toBeUndefined();
 });
 
-test("repositories say where their commands came from, with the home folder as ~", () => {
+test("price levels come from one table of output-price ceilings", () => {
+  expect(priceLevel({ output: 3 })).toBe("$");
+  expect(priceLevel({ output: 20 })).toBe("$");
+  expect(priceLevel({ output: 20.01 })).toBe("$$");
+  expect(priceLevel({ output: 60 })).toBe("$$");
+  expect(priceLevel({ output: 75 })).toBe("$$$");
   const view = buildSetupView(input);
-  expect(view.searchedFolders).toEqual(["~/code", "/srv/git"]);
-  const [api, tandem, web] = view.repos;
+  expect(view.models.map((model) => model.priceLevel)).toEqual(["$$", undefined]);
+});
+
+test("set-up repositories and candidates list their commands, suggestions, and sources", () => {
+  const view = buildSetupView(input);
+  expect(view.repos.map((repo) => repo.name)).toEqual(["tandem"]);
+  const [api, web] = view.candidates;
   expect(api).toMatchObject({
     name: "api",
     shownPath: "~/code/api",
     repo: "acme/api",
     validationCommands: ["bun run check", "bun run test"],
-    install: "bun install --frozen-lockfile",
+    setupCommands: ["bun install --frozen-lockfile"],
+    suggestions: ["bun run typecheck"],
+    detectedFrom: "package.json scripts and bun.lock",
   });
-  expect(api?.validationSource).toBe(
-    "Found in package.json scripts: check, test. Edit if these aren't what you run before merging.",
-  );
-  expect(api?.installSource).toBe("Picked from bun.lock.");
-  expect(tandem?.setUp).toBe(true);
-  expect(web?.validationSource).toStartWith("Could not inspect this repository:");
-  expect(web?.installSource).toStartWith("Could not inspect this repository:");
+  expect(web).toMatchObject({
+    name: "web",
+    validationCommands: [],
+    setupCommands: [],
+    suggestions: [],
+  });
+  expect(web?.detectedFrom).toBeUndefined();
+});
+
+test("a repository with nothing to suggest or detect names no source", () => {
+  const view = buildSetupView({
+    ...input,
+    repos: [
+      {
+        path: "/Users/me/code/plain",
+        setUp: false,
+        details: { validationCommands: ["make check"], scriptCommands: [], setupCommands: [] },
+      },
+    ],
+  });
+  expect(view.candidates[0]?.suggestions).toEqual([]);
+  expect(view.candidates[0]?.detectedFrom).toBeUndefined();
 });

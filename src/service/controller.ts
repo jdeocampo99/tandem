@@ -17,7 +17,6 @@ import {
   saveProjectRoots,
   saveSelfImprovement,
 } from "../config/home-settings.ts";
-import { type ModelPreset, modelPresets } from "../config/model-presets.ts";
 import {
   type JevSetting,
   type ModelSettings,
@@ -293,8 +292,6 @@ export type ModelOptionsResult = Readonly<{
   /** The Balanced profile resolved from `modelSettings.enabledProviders` against this catalogue. */
   readonly balancedProfile: BalancedProfileProposal;
   readonly claudeCode: ClaudeCodeAvailability;
-  /** One-click choices for all five roles; a disabled one says why in plain words. */
-  readonly presets: readonly ModelPreset[];
 }>;
 export type SourceRefreshResult = Readonly<{
   readonly head: string;
@@ -699,7 +696,7 @@ class TandemController {
         const onboarded = await this.setupOnboard(path, false);
         return {
           validationCommands: onboarded.validationCommands.map((command) => command.name),
-          scripts: onboarded.discovery.scripts,
+          scriptCommands: onboarded.discovery.commands,
           setupCommands: onboarded.setupCommands.map((command) => command.name),
           ...(onboarded.discovery.lockfile === undefined
             ? {}
@@ -1247,7 +1244,6 @@ class TandemController {
         enabledProviders: new Set(modelSettings.enabledProviders),
       }),
       claudeCode,
-      presets: modelPresets({ ompCatalogue: availableModels, claudeCode }),
     };
   }
 
