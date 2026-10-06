@@ -85,7 +85,7 @@ const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
   merge: "merge",
 };
 const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
-  board: 0,
+  board: 2,
   prs: 0,
   usage: 0,
   "new-request": 0,

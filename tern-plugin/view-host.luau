@@ -58,7 +58,7 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
    elseif #layout.floats>0 or previous then return {handled=true} end
   end
   cx.layout:focus(if ticket.placement=="task" and owner.floating then previous else coordinator)
-  pane=cx:new_block("tandem." .. ticket.kind,ticket.args,if ticket.placement=="window" then "tab" else "beside",{focus=ticket.placement~="panel"})
+  pane=cx:new_block("tandem." .. ticket.kind,ticket.args,if ticket.placement=="window" then "tab" else "beside",{focus=ticket.placement~="panel",keep_open=false})
   if not pane then return {handled=true} end
   if ticket.placement=="panel" then
    if not cx.layout:move(pane,coordinator,"left",{focus=false}) then return {handled=true} end

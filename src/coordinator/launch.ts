@@ -25,6 +25,7 @@ import {
 } from "../harness/contract.ts";
 import { launchIo } from "../harness/launch-io.ts";
 import { harnessFor } from "../harness/resolve.ts";
+import { maybeShowCatchUp } from "../memory/native-visits.ts";
 import { type CliOptions, CliUsageError, parseThinking, text } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
@@ -658,7 +659,15 @@ export async function launchCoordinatorUnlocked(
   if (running !== undefined) {
     await assertRunningCoordinatorSource(request, dependencies, running, context);
     if (request.restart !== true) {
-      const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, running);
+      let panelFailure = await openPanelBeside(dependencies.terminal, paths.home, running);
+      if (!headless)
+        await maybeShowCatchUp(dependencies.terminal, {
+          home: paths.home,
+          record: running,
+          now: (dependencies.clock ?? defaultClock)(),
+        }).catch((error: unknown) => {
+          panelFailure ??= error instanceof Error ? error.message : String(error);
+        });
       return {
         ...coordinatorResultFromRecord(running),
         ...(panelFailure === undefined ? {} : { panelFailure }),
@@ -1078,7 +1087,15 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     request.sessionId,
     paths.repo,
   );
-  const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, owned);
+  let panelFailure = await openPanelBeside(dependencies.terminal, paths.home, owned);
+  if (!headless)
+    await maybeShowCatchUp(dependencies.terminal, {
+      home: paths.home,
+      record: owned,
+      now: (dependencies.clock ?? defaultClock)(),
+    }).catch((error: unknown) => {
+      panelFailure ??= error instanceof Error ? error.message : String(error);
+    });
   return {
     command: argv,
     direct: false,

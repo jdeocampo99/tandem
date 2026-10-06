@@ -1,0 +1,201 @@
+.tdm-board-screen,
+.tdm-usage-screen,
+.tdm-catchup-screen {
+  font-family: system-ui;
+}
+.tdm-board-screen {
+  padding: 18px;
+}
+.tdm-screen-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 20px;
+}
+.tdm-screen-title {
+  flex-grow: 1;
+  font-size: 20px;
+}
+.tdm-board-lanes {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.tdm-board-lane {
+  flex-grow: 1;
+  flex-basis: 0;
+  min-width: 180px;
+}
+.tdm-lane-head {
+  display: flex;
+  padding: 10px 4px 14px;
+  font-weight: bold;
+}
+.tdm-working {
+  color: #78aaff;
+}
+.tdm-needs {
+  color: #e4b364;
+}
+.tdm-review {
+  color: #e9d36c;
+}
+.tdm-ready {
+  color: #82c9a0;
+}
+.tdm-board-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tdm-board-card {
+  background: rgba(160, 170, 190, 0.07);
+  border: 1px solid rgba(160, 170, 190, 0.16);
+  border-radius: 8px;
+  padding: 14px;
+}
+.tdm-board-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tdm-harness {
+  color: #b9a7da;
+  font-size: 18px;
+}
+.tdm-stuck {
+  color: #ee8580;
+  background: rgba(210, 70, 70, 0.14);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+.tdm-branch {
+  font-family: monospace;
+  opacity: 0.55;
+  margin-top: 10px;
+  font-size: 11px;
+}
+.tdm-board-reason {
+  display: flex;
+  gap: 10px;
+  border-top: 1px solid rgba(160, 170, 190, 0.16);
+  padding-top: 10px;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.tdm-age {
+  margin-left: auto;
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+.tdm-board-foot {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 12px;
+  font-size: 11px;
+  opacity: 0.8;
+  flex-wrap: wrap;
+}
+.tdm-usage-screen {
+  padding: 26px;
+}
+.tdm-usage-accounts,
+.tdm-usage-totals,
+.tdm-usage-breakdown {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 18px;
+  align-items: stretch;
+}
+.tdm-usage-card {
+  background: rgba(160, 170, 190, 0.06);
+  border: 1px solid rgba(160, 170, 190, 0.14);
+  padding: 18px;
+  border-radius: 8px;
+  flex-grow: 1;
+  flex-basis: 0;
+}
+.tdm-usage-label {
+  opacity: 0.6;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+.tdm-meter {
+  margin-top: 14px;
+}
+.tdm-meter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.tdm-total {
+  font-size: 26px;
+}
+.tdm-usage-totals .tdm-usage-label {
+  margin-top: 8px;
+  margin-bottom: 0;
+}
+.tdm-chart-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.tdm-chart-name {
+  width: 90px;
+}
+.tdm-chart-track {
+  flex-grow: 1;
+  flex-basis: 0;
+}
+.tdm-stage-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+.tdm-stage-row > span:first-child {
+  flex-grow: 1;
+}
+.tdm-stage-row > span {
+  min-width: 50px;
+}
+.tdm-muted {
+  opacity: 0.55;
+}
+/* Tern supplies inline root widths; keep this compact card centered within its full tab. */
+.tdm-catchup-screen {
+  width: 680px !important;
+  max-width: 90% !important;
+  align-self: center;
+  flex-grow: 0;
+  margin: 40px auto;
+  padding: 24px;
+  border: 1px solid rgba(160, 170, 190, 0.2);
+  border-radius: 10px;
+  background: rgba(160, 170, 190, 0.06);
+}
+.tdm-catchup-section {
+  margin-top: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tdm-catchup-heading {
+  font-size: 12px;
+}
+.tdm-catchup-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+.tdm-meter .sf-meter {
+  width: 100%;
+}
+.tdm-chart-track .sf-meter {
+  width: 100%;
+}

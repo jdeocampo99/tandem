@@ -1,3 +1,4 @@
+import { recordNativePublication } from "../memory/native-visits.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import { NativeAlerts } from "./native-alerts.ts";
 import { type NativeReadDependencies, NativeViewsReader } from "./native-read.ts";
@@ -41,6 +42,11 @@ export class NativeViewsPublisher {
               await this.#alerts.observe(next.snapshot, next.project, session.sessionId);
             const view = await this.#reader.read(next.snapshot, next.project, next.sessions);
             await writeNativeViews(this.#deps.home, view);
+            await recordNativePublication({
+              home: this.#deps.home,
+              project: next.project,
+              signature: view.bundle.changeSignature,
+            });
           } catch (error) {
             await appendDiagnosticEvent(
               this.#deps.home,
