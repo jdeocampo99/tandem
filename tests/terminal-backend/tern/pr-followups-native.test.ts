@@ -6,7 +6,7 @@ import { nativePrFile } from "../../../src/board/native-views.ts";
 import {
   nativeDetailPath,
   nativeViewsPath,
-  writeNativeViews,
+  publishNativeViews,
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
@@ -65,7 +65,7 @@ printf '{"posted":true,"url":"https://github.com/owner/repo/pull/281#review-1"}'
     const index = nativeViewsPath(env.TANDEM_HOME, root);
     const file = nativeDetailPath(env.TANDEM_HOME, root, nativePrFile("owner/repo", 281));
     const tasklessFile = nativeDetailPath(env.TANDEM_HOME, root, nativePrFile("owner/repo", 282));
-    await writeNativeViews(env.TANDEM_HOME, {
+    await publishNativeViews(env.TANDEM_HOME, root, async () => ({
       ...publication,
       bundle: {
         ...publication.bundle,
@@ -87,7 +87,7 @@ printf '{"posted":true,"url":"https://github.com/owner/repo/pull/281#review-1"}'
           view: { version: 1 as const, project: root, kind: "pr" as const, data },
         })),
       ],
-    });
+    }));
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
     const run = async (...args: string[]) => {
       const p = Bun.spawn([binary, ...args], { env, cwd: root, stdout: "pipe", stderr: "pipe" });
