@@ -67,6 +67,7 @@ export type FocusResult =
 
 /** A durable identity to show. The CLI validates it before asking a backend to present it. */
 export type TerminalView =
+  | Readonly<{ kind: "board" | "usage" | "prs" | "catchup" | "orchestrator" | "inbox" }>
   | Readonly<{ kind: "task"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>
   | Readonly<{ kind: "pr"; taskId: string }>;
@@ -225,7 +226,15 @@ export type TerminalBackend = Readonly<{
       Readonly<{ workspaceId: string; env?: Readonly<Record<string, string>> }>,
   ): Promise<FocusResult>;
   /** Focuses the exact pane; false when the terminal would not, which callers may ignore. */
-  focusAgent(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
+  focusAgent(
+    target: SessionTarget &
+      Readonly<{
+        paneId: string;
+        origin?: ViewOrigin;
+        originCoordinator?: Endpoint;
+        home?: string;
+      }>,
+  ): Promise<boolean>;
 
   /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
    * Supplied origin window/pane context must be honored or refused; never target another window.
