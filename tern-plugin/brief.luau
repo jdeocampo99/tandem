@@ -104,10 +104,13 @@ local function submit(state: State, cx: BlockCx, verb: string)
      end
      state.notice = if #messages > 0 then table.concat(messages, "\n") else "This action completed. You can close this pane."
      -- The CLI owns guarded native closure; a retained pane must not offer the action again.
-     if callbackCx then
-      if #messages > 0 then callbackCx:toast("warning", "Brief action completed", state.notice) end
-      callbackCx:render()
-     end
+     -- Tern 0.5 may omit callbackCx. The captured context still renders a retained pane;
+     -- a pane already retired by the CLI has no UI left to update.
+     pcall(function()
+      local actionCx = callbackCx or cx
+      if #messages > 0 then actionCx:toast("warning", "Brief action completed", state.notice) end
+      actionCx:render()
+     end)
     end
    end)
  end)
