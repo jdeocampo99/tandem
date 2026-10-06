@@ -28,7 +28,7 @@ local function choices(state: State): { Task }
 end
 local function open(state: State, cx: BlockCx, id: string)
  if state.busy or state.view.status ~= 'ready' or not state.view.model or not state.view.model.tasks[id] then return end
- if string.sub(state.cwd, 1, 1) ~= '/' then cx:toast('error', 'Task picker unavailable', 'An absolute originating cwd is required.'); return end
+ if string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then cx:toast('error', 'Task picker unavailable', 'An absolute originating cwd and index path are required.'); return end
  local argv = { '/bin/sh', 'tandem.sh', 'native', 'open', 'task', id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
  if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
  local window = state.origin.window

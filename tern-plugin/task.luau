@@ -237,7 +237,7 @@ end
 
 local function run(state: State, cx: BlockCx, args: { string }, clear: boolean?)
  if state.busy or state.view.status ~= 'ready' then return end
- if string.sub(state.cwd, 1, 1) ~= '/' then cx:toast('error', 'Tandem action unavailable', 'An absolute originating cwd is required.'); return end
+ if string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then cx:toast('error', 'Tandem action unavailable', 'An absolute originating cwd and index path are required.'); return end
  local argv = { '/bin/sh', 'tandem.sh', 'native' }
  for _, arg in args do table.insert(argv, arg) end
  table.insert(argv, '--pane'); table.insert(argv, string.format('%.0f', cx.pane))
@@ -260,7 +260,7 @@ local function invokePr(state: State, cx: BlockCx): prContent.Invoke
  return function(verb, id, payload, done)
   if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then return end
   if verb == 'open' and type(payload) == 'string' then run(state, cx, { 'open', id, payload }); return end
-  if state.busy or string.sub(state.cwd, 1, 1) ~= '/' then return end
+  if state.busy or string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then return end
   local argv = { '/bin/sh', 'native-input.sh', verb, id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
   if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
   local window = state.origin.window

@@ -15,6 +15,20 @@ const Opened = z.object({
 });
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
+const returnPrograms = new Set(
+  [
+    "panel",
+    "task",
+    "brief",
+    "pr",
+    "prs",
+    "board",
+    "usage",
+    "catchup",
+    "welcome",
+    "task-picker",
+  ].map((kind) => `tandem.${kind}`),
+);
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
 
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
@@ -52,6 +66,19 @@ export function ternViewHost(
   },
 ) {
   const scoped = async (input: ViewHostingInput) => {
+    // Luau's native layout API uses numbers. Reject ids it cannot represent exactly.
+    for (const id of [
+      input.coordinator.paneId,
+      input.coordinator.tabId,
+      input.coordinator.terminalSessionId,
+      input.origin?.paneId ?? input.coordinator.paneId,
+    ]) {
+      if (id === undefined || !/^[1-9][0-9]*$/u.test(id) || !Number.isSafeInteger(Number(id)))
+        throw new AdapterError(
+          "Native layout requires exactly representable Tern ids",
+          "tern open",
+        );
+    }
     const key = input.origin?.windowId;
 
     // A supplied key is scoped independently and must contain both exact panes.
@@ -91,8 +118,10 @@ export function ternViewHost(
     path: string,
   ) => {
     const { ensurePrivateDirectoryTree } = await import("../../coordinator/lock.ts");
+    const { nativeViewsPath } = await import("../../board/snapshot.ts");
     const cmd = await scoped(input);
     return options.guard(input.coordinator.paneId, async () => {
+      const indexPath = nativeViewsPath(input.home, project);
       if (
         placement === "return" &&
         input.origin?.paneId !== undefined &&
@@ -102,14 +131,14 @@ export function ternViewHost(
           (entry) => entry.block.id === input.origin?.paneId,
         );
         if (
-          !source ||
-          !["tandem.task", "tandem.task-picker"].includes(source.block.program ?? "") ||
+          source?.block.program === undefined ||
+          !returnPrograms.has(source.block.program) ||
           source.block.args?.[1] !== input.coordinator.paneId ||
-          source.block.args?.[4] !== input.home
+          source.block.args?.[4] !== indexPath
         )
           throw new EndpointOwnershipError(
             input.coordinator,
-            "return origin is not this coordinator's task block",
+            "return origin is not this coordinator's native view",
           );
       }
       const existingTasks =
@@ -119,7 +148,7 @@ export function ternViewHost(
                 entry.tab.id === input.coordinator.tabId &&
                 entry.block.program === "tandem.task" &&
                 entry.block.args?.[1] === input.coordinator.paneId &&
-                entry.block.args?.[4] === input.home,
+                entry.block.args?.[4] === indexPath,
             )
           : [];
       if (existingTasks.length > 1)
@@ -146,7 +175,7 @@ export function ternViewHost(
         input.coordinator.paneId,
         input.cwd,
         input.origin?.windowId ?? "",
-        input.home,
+        indexPath,
       ];
       await writeFile(
         route,

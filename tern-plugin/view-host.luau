@@ -27,23 +27,28 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
  end
  if not same or not sameOrigin then return {handled=true} end
  local pane: number?
+ local previous=if ticket.replaced then tonumber(ticket.replaced) else nil
  if ticket.placement=="inbox" then
   cx:command("inbox")
   pane=origin
  elseif ticket.placement=="return" then
-  local returningTask=if ticket.replaced then cx.session:pane(tonumber(ticket.replaced)) else nil
   if source.block=="tandem.task-picker" then
-   if owner.floating and (not returningTask or returningTask.block~="tandem.task" or returningTask.tab~=owner.tab or returningTask.floating) then return {handled=true} end
+   local old=if previous then cx.session:pane(previous) else nil
+   local layout=cx.session:layout(owner.tab)
+   if owner.floating and (not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
+    or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator) then return {handled=true} end
    cx.layout:close(origin)
   elseif owner.floating then
-   if source.block~="tandem.task" then return {handled=true} end
-   if not cx.layout:dock(coordinator,origin,"right",{focus=false}) then return {handled=true} end
-   cx.layout:close(origin)
+   local old=if previous then cx.session:pane(previous) else nil
+   local layout=cx.session:layout(owner.tab)
+   if not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
+    or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator then return {handled=true} end
+   if not cx.layout:dock(coordinator,previous,"right",{focus=false}) then return {handled=true} end
+   cx.layout:close(previous)
   end
   cx.layout:focus(if source.block=="tandem.task-picker" and owner.floating then tonumber(ticket.replaced) else coordinator)
   pane=coordinator
  else
-  local previous=if ticket.replaced then tonumber(ticket.replaced) else nil
   if ticket.placement=="task" then
    local layout=cx.session:layout(owner.tab)
    if not layout then return {handled=true} end
