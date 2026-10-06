@@ -141,6 +141,15 @@ Every native command requires exact decimal `--pane` and absolute originating-pa
 missing or invalid context is refused before handler effects. Shared non-native callers retain
 optional origin fields. `--window` is an optional opaque control window key.
 
+- The native boundary also registers `board`, `prs`, `usage`, `new-request`, `open-task`,
+  `project 1..9|prev|next`, and `view-file PATH`. Each dispatches once through the typed
+  `nativeRendererHandlers` registration in `src/terminal/native-renderers.ts`. Until its renderer
+  is installed, it exits nonzero with `not implemented yet`, without opening a view or starting
+  a service. Renderer implementations receive the resolved project environment, required origin,
+  normalized command input, lazy service, and existing capabilities. Relative view-file paths
+  resolve against the explicit originating pane cwd, never the plugin's process cwd. Installing
+  a renderer replaces its one registration entry; the native dispatcher stays unchanged.
+
 - `open task|brief|pr ID` validates the durable task or request, proves its running coordinator,
   and asks `TerminalBackend.openView` to replace the main area (task) or open a split (brief/PR).
   For `pr`, ID is the linked task id (including a `pr-review` task) or a PR number. A number

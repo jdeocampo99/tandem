@@ -1,4 +1,5 @@
 import type { CreatableTaskKind, ThinkingLevel } from "../contracts.ts";
+import type { NativeRendererCommand } from "./native-renderers.ts";
 
 /** Paths and opaque native identifiers preserve their literal argv spelling. */
 const LITERAL_OPTIONS: Readonly<Record<string, true>> = {
@@ -33,6 +34,13 @@ const MERGE_METHODS: Readonly<Record<MergeMethod, true>> = {
   rebase: true,
 };
 const CLI_COMMANDS: Readonly<Record<string, CliCommand>> = {
+  board: "board",
+  prs: "prs",
+  usage: "usage",
+  "new-request": "new-request",
+  "open-task": "open-task",
+  project: "project",
+  "view-file": "view-file",
   "brief-comment": "brief-comment",
   "brief-request-changes": "brief-request-changes",
   "brief-approve": "brief-approve",
@@ -77,6 +85,13 @@ const PR_COMMANDS: Readonly<Record<string, CliCommand>> = {
   merge: "merge",
 };
 const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
+  board: 0,
+  prs: 0,
+  usage: 0,
+  "new-request": 0,
+  "open-task": 0,
+  project: 1,
+  "view-file": 1,
   "brief-comment": 1,
   "brief-request-changes": 1,
   "brief-approve": 1,
@@ -118,6 +133,7 @@ const CLI_POSITIONAL_LIMITS: Readonly<Record<CliCommand, number>> = {
 export type MergeMethod = "merge" | "squash" | "rebase";
 
 export type CliCommand =
+  | NativeRendererCommand
   | "brief-comment"
   | "brief-request-changes"
   | "brief-approve"

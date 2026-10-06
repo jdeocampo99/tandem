@@ -29,10 +29,12 @@ import {
 } from "./cli-process.ts";
 
 import { resolveViewActionEnvironment } from "./cli-view-context.ts";
+import type { NativeRendererHandlers } from "./native-renderers.ts";
 
 const DEFAULT_COORDINATOR_SESSION = "tandem";
 
 export type CliDependencies = Readonly<{
+  readonly nativeRendererHandlers?: Partial<NativeRendererHandlers>;
   readonly cwd?: string;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly run?: CommandRunner;
@@ -127,6 +129,9 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
   let shutdownPromise: Promise<void> | undefined;
   const run = dependencies.run ?? runCommand;
   const capabilities: CliCapabilities = {
+    ...(dependencies.nativeRendererHandlers === undefined
+      ? {}
+      : { nativeRendererHandlers: dependencies.nativeRendererHandlers }),
     run,
     terminal: dependencies.terminal ?? terminalBackend(run),
     statPath: dependencies.statPath ?? defaultStatPath,

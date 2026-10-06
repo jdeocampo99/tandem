@@ -11,6 +11,11 @@ import { runTerminal } from "../../src/main.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
+import type {
+  NativeRendererContext,
+  NativeRendererHandler,
+  NativeRendererInput,
+} from "../../src/terminal/native-renderers.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
 
@@ -828,6 +833,143 @@ test("native PR comment explicitly refuses a completed implementation worker", a
     expect(result.exitCode).not.toBe(0);
     expect(result.error?.message).toContain("worker has finished");
     expect((await f.service.get(task.id)).communication?.messages).toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});
+
+test("published wave-2 argv reaches an honest unavailable handler without starting a service", async () => {
+  const f = await fixture();
+  try {
+    let starts = 0;
+    const { service: _service, ...dependencies } = f.deps;
+    const commands = [
+      ["board"],
+      ["prs"],
+      ["usage"],
+      ["new-request"],
+      ["open-task"],
+      ...["1", "2", "3", "4", "5", "6", "7", "8", "9", "prev", "next"].map((target) => [
+        "project",
+        target,
+      ]),
+      ["view-file", join(f.root, "my view.tandem-view.json")],
+    ];
+    for (const command of commands) {
+      const errors: string[] = [];
+      const output: string[] = [];
+      const result = await runTerminal(["native", ...command, "--pane", "101", "--cwd", f.clean], {
+        ...dependencies,
+        cwd: f.root,
+        createService: () => {
+          starts += 1;
+          return f.service;
+        },
+        stdout: (value) => output.push(value),
+        stderr: (value) => errors.push(value),
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.error?.message).toBe(`tandem native ${command[0]} is not implemented yet`);
+      expect(errors.join("")).toContain(result.error?.message ?? "missing error");
+      expect(output).toEqual([]);
+    }
+    expect(starts).toBe(0);
+    expect(f.opened).toEqual([]);
+    expect(f.prompts).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("one registered renderer receives normalized input and the explicit project/pane context", async () => {
+  const f = await fixture();
+  try {
+    const commands: readonly Readonly<{ argv: readonly string[]; input: NativeRendererInput }>[] = [
+      { argv: ["board"], input: { kind: "board" } },
+      { argv: ["prs"], input: { kind: "prs" } },
+      { argv: ["usage"], input: { kind: "usage" } },
+      { argv: ["new-request"], input: { kind: "new-request" } },
+      { argv: ["open-task"], input: { kind: "open-task" } },
+      { argv: ["project", "3"], input: { kind: "project", target: 3 } },
+      {
+        argv: ["view-file", "my view.tandem-view.json"],
+        input: { kind: "view-file", path: join(f.clean, "my view.tandem-view.json") },
+      },
+    ];
+    for (const command of commands) {
+      const received: NativeRendererContext[] = [];
+      const handler: NativeRendererHandler = async (context) => {
+        received.push(context);
+        return { value: { handled: context.input.kind } };
+      };
+      const result = await runTerminal(
+        [
+          "native",
+          ...command.argv,
+          "--pane",
+          "101",
+          "--cwd",
+          f.clean,
+          "--window",
+          "opaque control key",
+        ],
+        {
+          ...f.deps,
+          cwd: f.root,
+          nativeRendererHandlers: { [command.input.kind]: handler },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(received).toHaveLength(1);
+      expect(received[0]?.input).toEqual(command.input);
+      expect(received[0]?.origin).toEqual({
+        paneId: "101",
+        cwd: f.clean,
+        windowId: "opaque control key",
+      });
+      expect(received[0]?.environment.repo).toBe(f.repo);
+      expect(received[0]?.environment.sourceRepo).toBe(f.clean);
+    }
+    expect(f.opened).toEqual([]);
+    expect(f.prompts).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("renderer commands reject missing context and invalid project/file input before dispatch", async () => {
+  const f = await fixture();
+  try {
+    const cases = [
+      ["board"],
+      ["prs", "--pane", "101"],
+      ["project", "0", "--pane", "101", "--cwd", f.clean],
+      ["project", "10", "--pane", "101", "--cwd", f.clean],
+      ["project", "unknown", "--pane", "101", "--cwd", f.clean],
+      ["project", "--pane", "101", "--cwd", f.clean],
+      ["view-file", "--pane", "101", "--cwd", f.clean],
+      ["board", "extra", "--pane", "101", "--cwd", f.clean],
+    ];
+    let attempts = 0;
+    const handler: NativeRendererHandler = async () => {
+      attempts += 1;
+      throw new Error("Unexpected renderer invocation");
+    };
+    for (const argv of cases) {
+      const result = await runTerminal(["native", ...argv], {
+        ...f.deps,
+        nativeRendererHandlers: {
+          board: handler,
+          prs: handler,
+          project: handler,
+          "view-file": handler,
+        },
+      });
+      expect(result.exitCode).not.toBe(0);
+      expect(result.error?.message).not.toContain("not implemented yet");
+      expect(result.error?.message).not.toContain("Unexpected renderer invocation");
+    }
+    expect(attempts).toBe(0);
   } finally {
     await f.close();
   }

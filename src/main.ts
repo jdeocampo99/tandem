@@ -49,6 +49,11 @@ import {
   workspaceRetirementFromLaunch,
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
+import {
+  isNativeCommand,
+  type NativeRendererHandlers,
+  nativeCommandNames,
+} from "./terminal/native-renderers.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
 import { type PanelAction, runPanel, runPanelAction } from "./terminal/panel.ts";
 import {
@@ -103,7 +108,8 @@ Usage:
                            --popup closes on Esc or after going somewhere
   tandem panel home|prev|next
                            Go to this project's chat, or the previous or next project
-  tandem native COMMAND    Run a native view action (open, brief-comment, brief-request-changes,\n                           brief-approve, pr-comment, restart, steer, review-submit)\n  tandem welcome           Show the welcome message again
+  tandem native COMMAND    Run a native action or view (requires --pane ID --cwd PATH)
+  tandem welcome           Show the welcome message again
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
@@ -116,6 +122,7 @@ Options:
 `;
 
 export type TerminalMainDependencies = Readonly<{
+  readonly nativeRendererHandlers?: Partial<NativeRendererHandlers>;
   readonly cwd?: string;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly run?: CommandRunner;
@@ -809,25 +816,14 @@ export async function runTerminal(
   try {
     if (argv[0] === "native") {
       const action = argv[1];
-      if (
-        action === undefined ||
-        ![
-          "open",
-          "brief-comment",
-          "brief-request-changes",
-          "brief-approve",
-          "pr-comment",
-          "restart",
-          "steer",
-          "review-submit",
-        ].includes(action)
-      ) {
-        throw new Error(
-          "tandem native requires open, brief-comment, brief-request-changes, brief-approve, pr-comment, restart, steer, or review-submit",
-        );
+      if (action === undefined || !isNativeCommand(action)) {
+        throw new Error(`tandem native requires one of: ${nativeCommandNames.join(", ")}`);
       }
       validateNativeContext(parseCliArgs(argv.slice(1)));
       const result = await runCli(argv.slice(1), {
+        ...(dependencies.nativeRendererHandlers === undefined
+          ? {}
+          : { nativeRendererHandlers: dependencies.nativeRendererHandlers }),
         ...(dependencies.cwd === undefined ? {} : { cwd: dependencies.cwd }),
         ...(dependencies.processEnvironment === undefined
           ? {}
