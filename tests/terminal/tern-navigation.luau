@@ -11,7 +11,7 @@ tern.json={decode=function(raw)
 end}
 tern.process={run=function(_argv,_options,done) calls+=1; callback=done end}
 local navigation=loadNavigation()
-local origin={path='/home/native-views/repo.json',coordinator='42',cwd='/repo',window='window',indexPath='/home/native-views/repo.json',home='/home'}
+local origin=navigation.origin({'/home/native-views/repo.json','{"coordinator":"42"}','/home/native-views/repo.json'})
 local cx={pane=123,toast=function(_,level,title,message) table.insert(toasts,{level=level,title=title,message=message}) end}
 local catchup='Project opened, but catch-up is unavailable: fixture catch-up failure'
 local retention='Returned to your conversation. An earlier view could not be verified, so its views and recovery record were kept.'
