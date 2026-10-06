@@ -527,7 +527,10 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       expect(approved.record.reviewPane?.status).toBe("closed");
       expect(await paneExists(conversationPane)).toBe(false);
       expect(await paneExists(coordinator.paneId)).toBe(true);
-      if (shots) await ctl("shot", "brief-workflow-closed");
+      if (shots) {
+        await Bun.sleep(1000);
+        await ctl("shot", "brief-workflow-closed");
+      }
     } catch (error) {
       if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-failed").catch(() => {});
       console.error(
