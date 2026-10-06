@@ -15,7 +15,11 @@ record filenames use the full path digest; saved settings already provide the sh
 project key, so native views do not introduce another identity.
 Use `nativeViewsPath(home, canonicalRepoPath)` from `src/board/snapshot.ts` to locate it. Two
 checkouts with the same basename have different files. The project's coordinator is the single
-writer, through the existing `writeBoardSnapshot` service operation, only for a Tern backend.
+writer, scheduled by the existing `writeBoardSnapshot` service operation, only for a Tern backend.
+`NativeViewsPublisher` runs task inspection, timelines and derived-file writes in a serial background
+queue. Snapshot ticks enqueue the newest input without waiting for those reads; while a publication
+runs, later ticks replace a single pending input. Finished-task history stays available in details.
+Shutdown drains the last queued publication and cache reads.
 
 Task timelines, brief lines and PR patches/threads/tours live in separate detail files:
 
@@ -32,9 +36,11 @@ Directories are private (0700); files are 0600. The writer compares the serializ
 the existing file and leaves an unchanged file's inode and modification time intact. Each changed
 file uses a unique temporary file and atomic rename. Details publish before the small index;
 there is no transaction across files. Actions still validate authoritative revision/head bindings.
-On failure, the last index remains readable and the existing coordinator snapshot error reporting
-handles the failed projection. No native file is authority.
-The normal coordinator reconciliation updates it. GitHub and provider cache refreshes run in a
+After a successful index write, the same owner prunes its task/brief/PR detail files for entities no
+longer present. Pending provider/GitHub refreshes retain live PRs' last detail until their replacement
+is ready. Foreign project files, unrelated files, symlinks and temporary files are preserved.
+On failure, the last good files remain readable and `native-views-publish-failed` diagnostics record
+the failure. No native file is authority. The normal coordinator reconciliation schedules updates. GitHub and provider cache refreshes run in a
 serial background queue, at most once per minute per PR/provider read, with command timeouts.
 They never hold up the snapshot. Shutdown drains the queue.
 
@@ -124,7 +130,8 @@ NativeDetail =
 `NativeTaskSummary` contains `{taskId,title,stage,createdAt,updatedAt,previousStage?,model?,
 harness?,branch?,costMicros?,unpricedSamples,pullRequest?}`. No timeline, findings, brief lines,
 conversation, patch or tour is embedded in these index entries. `NativeViewsPublication` is the
-in-process `{bundle:NativeViews,details:{file,view:NativeDetail}[]}` returned by `NativeViewsReader`;
+in-process `{bundle:NativeViews,details:{file,view:NativeDetail}[],retainedDetailFiles?:string[]}`
+returned by `NativeViewsReader`; retained filenames identify live PRs awaiting a cached detail;
 it is not a file schema. The writer uses each detail's `data` as the file envelope's `model`.
 It refuses detail paths that escape the project directory or publication metadata belonging to
 another project.
@@ -239,6 +246,7 @@ the action handler must still recheck the authoritative revision and both digest
 `tandem native brief-approve REQUEST_ID --input FILE`. Write those three values to the input
 file untouched; use `file.model.requestId` as the positional request id. All three values come
 from the same draft used to produce the visible lines, including its agreement digest.
+The `brief-approve` CLI handler lands with #284.
 The builder accepts comments and a browser URL; their collection and CLI actions belong to the
 annotation/action integration, which can supply them when opening the pane.
 
@@ -255,7 +263,8 @@ The existing HTML review page and native view share `parsePatch` in `src/pr-revi
 - `readAt`: timestamp of the last complete cached GitHub read.
 - `tabs`: Description, optional Tour, Diff. Tour appears only with chapters.
 - `checks`: `{name,state:"passed"|"running"|"failed"|"pending",startedAt?,completedAt?,
-  logUrl?,elapsedMs?}[]`. Running timers use the start timestamp; finished timers stop at completion.
+  logUrl?}[]`. Renderers derive running timers from `startedAt` and stop them at `completedAt`.
+  Advancing the clock alone does not change PR detail bytes or their presentation revision.
 - `description`: `{markdown,conversation:PrComment[]}` for top-level comments/reviews.
 - `tour`: `{title,why,stops:(TourStopInput & {rowIds:string[]})[]}[]`. `rowIds` selects the
   existing diff rows touched by the stop's new-side inclusive range.
@@ -295,6 +304,8 @@ Only that adapter imports pi-ai. Raw payloads, metadata, keys and tokens never l
 - `limits`: `{provider,account,window:"five-hour"|"weekly",label,
   remainingPercent:number|"unavailable",resetsAt?,fetchedAt,resetInMs:number|"unavailable"}[]`.
   Group meters by provider/account; show limits before cost. Percentages are clamped to 0–100.
+  Email-shaped account identities become stable `provider-<12 hex digest>` labels. Friendly
+  non-email account labels stay readable; metadata emails never reach the native files.
 - `today`, `week`: `{costMicros,unpricedSamples,agentMs,tasksDone}`.
 - `byModel`: `{provider,model,today:UsageTotals,week:UsageTotals}[]`.
 - `byStage`: `{stage:RequestWorkKind,todayMs,weekMs}[]`.

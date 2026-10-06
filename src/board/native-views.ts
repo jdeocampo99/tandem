@@ -37,6 +37,8 @@ export type NativeDetail =
 export type NativeViewsPublication = Readonly<{
   bundle: NativeViews;
   details: readonly Readonly<{ file: string; view: NativeDetail }>[];
+  /** Existing entities awaiting a cache refresh. Ownership metadata, never written to the index. */
+  retainedDetailFiles?: readonly string[];
 }>;
 
 /** Matches the host-plugin NativeViewFile wire envelope. Revisions describe only model content. */

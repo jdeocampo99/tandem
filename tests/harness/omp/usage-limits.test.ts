@@ -59,3 +59,21 @@ test("OMP usage command uses the pi-ai schema and rejects malformed provider win
     ),
   ).rejects.toThrow("Invalid OMP usage report");
 });
+
+test("native account labels keep email identities out of files and group their windows stably", () => {
+  const reports = [
+    {
+      ...report,
+      metadata: { accountId: "someone@example.test" },
+      limits: report.limits.map((limit) => ({
+        ...limit,
+        scope: { ...limit.scope, accountId: "someone@example.test" },
+      })),
+    },
+  ];
+  const limits = ompUsageLimits(reports);
+  expect(limits[0]?.account).toMatch(/^anthropic-[a-f0-9]{12}$/);
+  expect(limits[1]?.account).toBe(limits[0]?.account);
+  expect(JSON.stringify(limits)).not.toContain("someone@example.test");
+  expect(ompUsageLimits(reports)).toEqual(limits);
+});

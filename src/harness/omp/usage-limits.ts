@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { resolveUsedFraction, type UsageReport, usageReportSchema } from "@oh-my-pi/pi-ai/usage";
 import { parseJson, requiredRecord, runChecked } from "../../adapters/primitives.ts";
 import type { CommandRunner } from "../../contracts.ts";
@@ -53,10 +54,14 @@ export function ompUsageLimits(reports: readonly UsageReport[]): readonly Accoun
         (typeof report.metadata?.accountId === "string"
           ? report.metadata.accountId
           : `${report.provider}-${index + 1}`);
+      // Native meters use account labels; credential identities may be email addresses.
+      const displayAccount = account.includes("@")
+        ? `${report.provider}-${createHash("sha256").update(account).digest("hex").slice(0, 12)}`
+        : account;
       return [
         {
           provider: report.provider,
-          account,
+          account: displayAccount,
           window,
           label: limit.label,
           remainingPercent:

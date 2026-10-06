@@ -325,6 +325,7 @@ export class NativeViewsReader {
           (typeof b.remainingPercent === "number" ? b.remainingPercent : 101),
       )[0];
     return {
+      retainedDetailFiles: references.map((ref) => nativePrFile(ref.repo, ref.number)),
       details: [
         ...Object.entries(pages).map(([id, data]) => ({
           file: nativeTaskFile(id),

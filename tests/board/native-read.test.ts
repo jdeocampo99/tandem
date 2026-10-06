@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
@@ -362,5 +362,73 @@ test("native publication refuses cross-project details and escaping filenames be
       "ENOENT",
     );
     await reader.settle();
+  });
+});
+
+test("publication prunes absent task/brief/PR details only in its own project and retains warming PRs", async () => {
+  await withScenario({}, async (world) => {
+    const task = await seedScenarioTask(world, { kind: "implementation", stage: "blocked" });
+    await world.store.update(task.id, task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      pullRequest: {
+        repository: "acme/app",
+        number: 4,
+        state: "draft",
+        head: "head-4",
+        base: "base-4",
+      },
+    }));
+    const reader = new NativeViewsReader({
+      home: world.home,
+      clock: world.clock,
+      run: world.run,
+      terminal: terminalBackend(world.run),
+    });
+    try {
+      const publication = await reader.read(
+        {
+          version: 1,
+          writtenAt: world.clock(),
+          board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+          coordinators: [],
+        },
+        world.repoPath,
+      );
+      expect(publication.retainedDetailFiles).toContain("pr-acme%2Fapp-4.json");
+      await writeNativeViews(world.home, publication);
+      const directory = join(world.home, "native-views", repositoryKey(world.repoPath));
+      const stale = ["task-deleted.json", "brief-deleted.json", "pr-acme%2Fapp-3.json"];
+      for (const file of [...stale, "pr-acme%2Fapp-4.json", "notes.json", "task-write.json.tmp"])
+        await writeFile(join(directory, file), "previous content");
+      const foreign = nativeDetailPath(world.home, "/another/app", "task-foreign.json");
+      await mkdir(join(world.home, "native-views", repositoryKey("/another/app")), {
+        recursive: true,
+      });
+      await writeFile(foreign, "another owner's content");
+      await writeNativeViews(world.home, publication);
+      for (const file of stale)
+        await expect(stat(join(directory, file))).rejects.toHaveProperty("code", "ENOENT");
+      expect(await readFile(join(directory, "pr-acme%2Fapp-4.json"), "utf8")).toBe(
+        "previous content",
+      );
+      expect(await readFile(foreign, "utf8")).toBe("another owner's content");
+      expect(await readFile(join(directory, "notes.json"), "utf8")).toBe("previous content");
+      expect(await readFile(join(directory, "task-write.json.tmp"), "utf8")).toBe(
+        "previous content",
+      );
+      // When the entities disappear, even the last good cached detail goes away.
+      await writeNativeViews(world.home, {
+        bundle: { ...publication.bundle, tasks: {}, briefs: {}, pullRequests: {} },
+        details: [],
+        retainedDetailFiles: [],
+      });
+      expect((await readdir(directory)).toSorted()).toEqual(
+        ["notes.json", "task-write.json.tmp"].toSorted(),
+      );
+      expect(await readFile(foreign, "utf8")).toBe("another owner's content");
+    } finally {
+      await reader.settle();
+    }
   });
 });

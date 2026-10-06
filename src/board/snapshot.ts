@@ -112,6 +112,14 @@ export async function writeNativeViews(
   publication: NativeViewsPublication,
 ): Promise<void> {
   const { bundle, details } = publication;
+  const retained = new Set([
+    ...details.map((detail) => detail.file),
+    ...Object.values(bundle.tasks).map((task) => task.detailFile),
+    ...Object.values(bundle.briefs).map((brief) => brief.detailFile),
+    ...Object.values(bundle.pullRequests).map((pr) => pr.detailFile),
+    ...(publication.retainedDetailFiles ?? []),
+  ]);
+  for (const file of retained) nativeDetailPath(home, bundle.project, file);
   for (const detail of details) {
     if (detail.view.project !== bundle.project)
       throw new TypeError("A coordinator cannot publish another project's detail");
@@ -129,6 +137,22 @@ export async function writeNativeViews(
       nativeViewText(detail.view.kind, detail.view.data),
     );
   await writeNativeFile(nativeViewsPath(home, bundle.project), nativeViewText("panel", bundle));
+  const directory = join(home, "native-views", repositoryKey(bundle.project));
+  let entries: Dirent[];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error) {
+    if (isMissing(error)) return;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (
+      entry.isFile() &&
+      /^(task-|brief-|pr-)[^/\\\0]+\.json$/.test(entry.name) &&
+      !retained.has(entry.name)
+    )
+      await rm(nativeDetailPath(home, bundle.project, entry.name), { force: true });
+  }
 }
 
 async function writeNativeFile(path: string, text: string): Promise<void> {
