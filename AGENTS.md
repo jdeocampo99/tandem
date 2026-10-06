@@ -90,6 +90,14 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   [scenario.ts](tests/evals/scenario.ts) for its temporary home, fake Herdr/Treehouse/git/OMP/TypeSafe
   boundaries, scripted failures, event trace, and retained/released/failed/quarantined resource ledger
   rather than writing another external-boundary fake. Focused unit tests stay the regression suite.
+- The Tern parity contract is [tests/evals/tern-parity/](tests/evals/tern-parity/): `inventory.ts` drives
+  every native view row through the real `tern-plugin/*.luau` screens (`host.luau` stands in for Tern)
+  and the real CLI. `TernParityHost` in `harness.ts` owns every store path, plugin entry, toast
+  normalization and transport detail (`runCli`, `publish` through the coordinator service); when one
+  moves, change it, not the assertions. `known-divergence.ts` pins known bugs to flip on fix.
+  Luau tests need `luau` and fail without it ([tests/luau.ts](tests/luau.ts)). Real-Tern probes
+  ([probes-native.test.ts](tests/terminal-backend/tern/probes-native.test.ts)) run only with
+  `TANDEM_TERN_NATIVE=1`.
 - Only the parent runs project-wide gates after integration; child workers run no tests, builds,
   formatters, or linters. From the repository root:
 

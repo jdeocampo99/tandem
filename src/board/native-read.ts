@@ -464,10 +464,19 @@ export class NativeViewsReader {
     };
   }
 
+  /** Resolves once the remote reads started so far have finished; later reads still refresh. */
+  async idle(): Promise<void> {
+    let queue: Promise<void>;
+    do {
+      queue = this.#remoteQueue;
+      await queue;
+    } while (queue !== this.#remoteQueue);
+  }
+
   /** Service shutdown drains the read-only remote work; no refresh starts after this call. */
   async settle(): Promise<void> {
     this.#closed = true;
-    await this.#remoteQueue;
+    await this.idle();
   }
 
   private enqueue(operation: () => Promise<void>): void {

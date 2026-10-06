@@ -537,6 +537,8 @@ export type TandemService = Readonly<{
   readonly notifyNeedsYou: (repoPath: string, rows: readonly BoardRow[]) => Promise<void>;
   /** Saves `board` with this session's open coordinators as the snapshot panels draw from. */
   readonly writeBoardSnapshot: (board: BoardView) => Promise<void>;
+  /** Resolves once queued native-view publications and the remote reads they started finish. */
+  readonly nativeViewsIdle: () => Promise<void>;
   /** The PR watch view, after reading GitHub unless another Tandem is reading it right now. */
   readonly prWatch: () => Promise<PrWatchView>;
   /** Watches a pull request: a link, `owner/repo#N`, or `#N` in `repoPath` (default: this project). */
@@ -1094,6 +1096,7 @@ class TandemController {
           });
         }
       },
+      nativeViewsIdle: () => this.#nativeViews.idle(),
       prWatch: () => this.#prWatch.view(),
       prWatchStart: async (input) => this.#prWatch.start(await this.namedPullRequest(input)),
       prWatchStop: async (input) => this.#prWatch.stop((await this.namedPullRequest(input)).ref),
