@@ -119,4 +119,11 @@ content.event(embedded,model,true,{ev='action',act='pr-post'},cx,function(_,_,_,
 assert(embedded.posting and complete~=nil)
 complete({status=0,stdout='{"posted":true,"url":"https://github.com/acme/app/pull/281#pullrequestreview-1"}',stderr=''})
 assert(embedded.submitted and not embedded.posting and exits==0)
+-- The production renderer also carries custom home through its non-JSON shell path.
+block.event(uncertain,{ev='action',act='pr-task'},cx)
+assert(#pending==7)
+assert(table.concat(pending[7].argv,'|')=='/bin/sh|tandem.sh|native|open|task|review-1|--pane|123|--cwd|/original repo|--home|/custom home|--window|opaque-window')
+assert(pending[7].opts.stdin==nil)
+pending[7].callback({status=0,stdout='{}',stderr=''})
+assert(exits==0 and #pending==7)
 print('PR action result, home forwarding and draft retention checks passed')
