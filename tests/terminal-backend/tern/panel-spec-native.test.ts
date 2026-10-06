@@ -21,7 +21,7 @@ import { state } from "../../board/fixtures.ts";
 import { policy } from "../../session/fixtures.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type Node = {
   class?: string | undefined;
   text?: string | undefined;

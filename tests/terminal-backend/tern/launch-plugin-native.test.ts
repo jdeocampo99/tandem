@@ -13,7 +13,7 @@ import { blocks, ternCommands } from "../../../src/terminal-backend/tern/protoco
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
-const native = process.platform === "darwin" && process.env.TANDEM_TERN_LAUNCH_NATIVE === "1";
+const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (native ? test : test.skip)(
   "front door and action CLI launch projects and keep panel and catch-up routing available",
   async () => {

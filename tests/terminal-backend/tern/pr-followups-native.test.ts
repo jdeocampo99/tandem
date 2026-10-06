@@ -14,7 +14,7 @@ import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { followupsFixture } from "../../pr-review/followups-fixture.ts";
 import { taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
   text?: string;
   rect?: [number, number, number, number];

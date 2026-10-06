@@ -20,7 +20,7 @@ import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (enabled ? test : test.skip)(
   "isolated native panel, switcher, preserved task layout and three OSC inbox alerts",
   async () => {

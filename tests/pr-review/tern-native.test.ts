@@ -7,7 +7,7 @@ import { prPaneView } from "../../src/pr-review/native-view.ts";
 
 const TERN_BINARY = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 
 // Opt in on a machine with Tern. No window or user's daemon is needed for the host VM checks.
 (enabled ? test : test.skip)(
