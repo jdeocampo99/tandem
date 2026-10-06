@@ -63,6 +63,9 @@ src/requests/plain-language.ts
   Unknown opening outcomes keep the host's durable intent and resources quarantined; no legacy
   shell pane or automatic retry follows. Unknown closure leaves approval or feedback standing
   and quarantines the receipt. Tiny in-chat fixes still open no pane.
+- A review receipt tagged for another terminal is quarantined with a plain warning before any
+  terminal call. Approval, abandonment and feedback retirement preserve that receipt and its pane;
+  none closes it through the active backend or marks it closed.
 - `reviewPane: true` renders read-only Markdown at `<home>/request-briefs/<requestId>.md` in one
   owned temporary pane, an unfocused split right of the coordinator's pane. Without an active Herdr
   context (`HERDR_ENV`, `HERDR_PANE_ID`) in the Tandem session, it opens a separate

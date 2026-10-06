@@ -7,6 +7,7 @@ import { repositoryKey } from "../config/repositories.ts";
 import type { IsoTimestamp, TerminalName } from "../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../coordinator/lock.ts";
 import type { BriefView } from "../requests/native-view.ts";
+import { acquireDarwinFileLock } from "../tasks/store-lock.ts";
 import {
   type NativeProjectSummary,
   type NativeViewsPublication,
@@ -109,23 +110,41 @@ export function nativeDetailPath(home: string, repoPath: string, file: string): 
   return join(home, "native-views", repositoryKey(repoPath), file);
 }
 
-/** Publish a just-drafted brief before opening it, without waiting for a board tick. */
-export async function writeNativeBriefDetail(
-  home: string,
-  project: string,
-  view: BriefView,
-): Promise<string> {
-  const path = nativeDetailPath(home, project, nativeBriefFile(view.requestId));
-  await ensurePrivateDirectoryTree(join(path, ".."), "native brief directory");
-  await writeNativeFile(path, nativeViewText("brief", view));
-  return path;
+/**
+ * One project writer across coordinator ticks and CLI processes. Build from fresh state only
+ * after acquiring the lock, and hold it through detail/index writes and cleanup. An older tick
+ * finishes before a new brief can publish; a later tick reads that brief's current revision.
+ */
+export async function publishNativeViews<
+  Publication extends NativeViewsPublication | { brief: BriefView },
+>(home: string, project: string, build: () => Promise<Publication>): Promise<Publication> {
+  const directory = join(home, "native-views");
+  await ensurePrivateDirectoryTree(directory, "native views directory");
+  const release = await acquireDarwinFileLock(
+    join(directory, `${repositoryKey(project)}.lock`),
+    60_000,
+    20,
+  );
+  try {
+    const publication = await build();
+    if ("brief" in publication) {
+      const view = publication.brief;
+      const path = nativeDetailPath(home, project, nativeBriefFile(view.requestId));
+      await ensurePrivateDirectoryTree(join(path, ".."), "native brief directory");
+      await writeNativeFile(path, nativeViewText("brief", view));
+    } else {
+      if (publication.bundle.project !== project)
+        throw new TypeError("A coordinator cannot publish another project's views");
+      await writeNativeViews(home, publication);
+    }
+    return publication;
+  } finally {
+    await release();
+  }
 }
 
 /** The coordinator writes its own details first, then its small pollable index. Other files are read-only. */
-export async function writeNativeViews(
-  home: string,
-  publication: NativeViewsPublication,
-): Promise<void> {
+async function writeNativeViews(home: string, publication: NativeViewsPublication): Promise<void> {
   const { bundle, details } = publication;
   const retained = new Set([
     ...details.map((detail) => detail.file),
