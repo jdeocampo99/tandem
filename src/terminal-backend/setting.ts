@@ -17,7 +17,7 @@ export function ternFallbackReason(availability: TerminalAvailability): string |
   }
 }
 
-/** Switching is refused while any job or uncertain reservation could still own terminal work. */
+/** Switching is refused while unfinished tasks or retained resources could still need their terminal. */
 export function assertTerminalSwitch(
   current: TerminalName,
   chosen: TerminalName,
@@ -25,13 +25,10 @@ export function assertTerminalSwitch(
   state: RuntimeState,
 ): void {
   if (current === chosen) return;
-  const running = tasks.find((task) =>
-    ["queued", "scouting", "implementing", "validating", "reviewing", "awaiting-fixes"].includes(
-      task.stage,
-    ),
-  );
+  const running = tasks.find((task) => !["cancelled", "completed", "merged"].includes(task.stage));
   const owned = state.tasks.find(
     (task) =>
+      task.endpoints.length > 0 ||
       task.jobs.some(activeRuntimeJob) ||
       unreleasedReservation(task.reservation) ||
       task.endpointLaunch !== undefined ||
@@ -39,6 +36,7 @@ export function assertTerminalSwitch(
   );
   const drawing = state.presentations.find(
     (presentation) =>
+      presentation.endpoint !== undefined ||
       (presentation.job !== undefined && activeRuntimeJob(presentation.job)) ||
       unreleasedReservation(presentation.reservation) ||
       presentation.endpointLaunch !== undefined ||
