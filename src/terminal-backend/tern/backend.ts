@@ -655,8 +655,16 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         const ack = await commands.mutate(target.cwd, ["close", endpoint.paneId], BlockAck);
         if (ack.block !== endpoint.paneId)
           throw new TernOutcomeUnknownError("panel close", "acknowledged another block");
-        if (blocks(await commands.ls(target.cwd)).some((each) => each.block.id === endpoint.paneId))
-          throw new TernOutcomeUnknownError("panel close", "block still present");
+        try {
+          const after = await commands.ls(target.cwd);
+          if (
+            after.detached.length > 0 ||
+            blocks(after).some((each) => each.block.id === endpoint.paneId)
+          )
+            throw new Error("closed block is still present or detached placement is ambiguous");
+        } catch (cause) {
+          throw new TernOutcomeUnknownError("panel close", cause);
+        }
       }),
     fitPanel: async (target) => ({
       fittedWidth: target.fittedWidth,
