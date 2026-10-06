@@ -19,6 +19,7 @@ import {
   parsePanelInput,
   renderPanel,
   runPanel,
+  runPanelAction,
 } from "../../src/terminal/panel.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { NOW, state, watch } from "../board/fixtures.ts";
@@ -427,6 +428,34 @@ test("a signal closes the panel and puts the terminal back", async () => {
   expect(terminal.written.at(-1)).toContain("\x1b[?1049l");
 });
 
+test("a terminal that cannot resize the panel explains the limitation in its footer", async () => {
+  const terminal = fakeTerminal();
+  const deps = terminal.deps();
+  const { promise: warned, resolve: warningShown } = Promise.withResolvers<void>();
+  const running = runPanel({
+    ...deps,
+    paneId: "panel",
+    terminal: {
+      ...deps.terminal,
+      fitPanel: async (input) => ({
+        fittedWidth: input.fittedWidth,
+        warnings: ["Cannot resize this pane."],
+      }),
+    },
+    write: (text) => {
+      deps.write(text);
+      if (text.includes("Cannot resize this pane.")) warningShown();
+    },
+  });
+  try {
+    await warned;
+    expect(terminal.written.join("")).toContain("Cannot resize this pane.");
+  } finally {
+    terminal.stop();
+    await running;
+  }
+});
+
 test("a drawing failure still puts the terminal back before it surfaces", async () => {
   const terminal = fakeTerminal();
   let calls = 0;
@@ -513,3 +542,27 @@ test("the tool line cuts its target from the left, keeping the file name, to fit
   expect(Bun.stringWidth(lines[at] ?? "")).toBe(46);
   expect(lines[at - 1]).toBe("    Write the test");
 });
+
+for (const terminalName of ["herdr", "tern"] as const) {
+  test(`the ${terminalName} panel refuses the other terminal's coordinator navigation`, async () => {
+    const calls: unknown[] = [];
+    const run = async (request: unknown) => {
+      calls.push(request);
+      throw new Error("foreign navigation reached the runner");
+    };
+    const foreign = terminalName === "herdr" ? "tern" : "herdr";
+    const result = await runPanelAction("home", {
+      run,
+      terminal: { ...terminalBackend(run), name: terminalName },
+      sessionId: "test",
+      cwd: APP,
+      focus: { cwd: APP },
+      readSnapshot: async () => ({
+        ...SNAPSHOT,
+        coordinators: COORDINATORS.map((coordinator) => ({ ...coordinator, terminal: foreign })),
+      }),
+    });
+    expect(result).toContain("couldn't focus");
+    expect(calls).toEqual([]);
+  });
+}

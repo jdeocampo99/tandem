@@ -10,7 +10,7 @@ import {
 } from "../board/panel.ts";
 import type { BoardSnapshot, PanelCoordinator } from "../board/snapshot.ts";
 import { draw, fit, fitStart, type Line, lineWidth, span, type Tone } from "../board/terminal.ts";
-import type { CommandRunner } from "../contracts.ts";
+import type { CommandRunner, TerminalName } from "../contracts.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 
 export type PanelInput =
@@ -56,8 +56,16 @@ export type PanelEffect =
 /** One move toward a target; when it fails and has a `failure`, the effect stops there and says so. */
 export type NavigationStep = Readonly<{ readonly failure?: string }> &
   (
-    | Readonly<{ readonly kind: "workspace"; readonly workspaceId: string }>
-    | Readonly<{ readonly kind: "agent"; readonly paneId: string }>
+    | Readonly<{
+        readonly kind: "workspace";
+        readonly terminal?: TerminalName;
+        readonly workspaceId: string;
+      }>
+    | Readonly<{
+        readonly kind: "agent";
+        readonly terminal?: TerminalName;
+        readonly paneId: string;
+      }>
     | Readonly<{ readonly kind: "url"; readonly url: string }>
   );
 
@@ -216,20 +224,31 @@ export function navigationSteps(
   effect: Exclude<PanelEffect, { kind: "close" }>,
   coordinators: readonly PanelCoordinator[],
 ): readonly NavigationStep[] {
-  const focus = (workspaceId: string, paneId?: string): NavigationStep[] => [
-    { kind: "workspace", workspaceId, failure: "⚠ Herdr couldn't focus it" },
-    ...(paneId === undefined ? [] : [{ kind: "agent" as const, paneId }]),
+  const focus = (
+    workspaceId: string,
+    paneId?: string,
+    terminal?: TerminalName,
+  ): NavigationStep[] => [
+    {
+      kind: "workspace",
+      workspaceId,
+      ...(terminal === undefined ? {} : { terminal }),
+      failure: "⚠ Herdr couldn't focus it",
+    },
+    ...(paneId === undefined
+      ? []
+      : [{ kind: "agent" as const, paneId, ...(terminal === undefined ? {} : { terminal }) }]),
   ];
   const chat = (repoPath: string) => {
     const found = coordinators.find((candidate) => candidate.repoPath === repoPath);
-    return found === undefined ? [] : focus(found.workspaceId, found.paneId);
+    return found === undefined ? [] : focus(found.workspaceId, found.paneId, found.terminal);
   };
   if (effect.kind === "switch") return chat(effect.repoPath);
   const { target } = effect;
   if (target.kind === "url") {
     return [{ kind: "url", url: target.url, failure: "⚠ couldn't open the link" }];
   }
-  if (target.kind === "pane") return focus(target.workspaceId, target.paneId);
+  if (target.kind === "pane") return focus(target.workspaceId, target.paneId, target.terminal);
   if (target.kind === "chat") return chat(target.repoPath);
   return [];
 }
@@ -281,6 +300,7 @@ type StepDeps = Readonly<{
 /** Takes one step; whether it got there. */
 async function takeStep(step: NavigationStep, deps: StepDeps): Promise<boolean> {
   const { sessionId, cwd } = deps;
+  if (step.kind !== "url" && (step.terminal ?? "herdr") !== deps.terminal.name) return false;
   if (step.kind === "workspace") {
     return (await deps.terminal.focusWorkspace({ sessionId, cwd, workspaceId: step.workspaceId }))
       .focused;
@@ -601,13 +621,18 @@ export async function runPanel(deps: PanelDeps): Promise<void> {
     if (paneId === undefined) return;
     fitting = fitting
       .then(async () => {
-        fittedAreaWidth = await deps.terminal.fitPanel({
+        const fitted = await deps.terminal.fitPanel({
           sessionId: deps.sessionId,
           cwd: deps.cwd,
           paneId,
           columns: PANEL_WIDTH,
           fittedWidth: fittedAreaWidth,
         });
+        fittedAreaWidth = fitted.fittedWidth;
+        if (fitted.warnings.length > 0) {
+          state = { ...state, notice: fitted.warnings.join(" ") };
+          guarded(redraw);
+        }
       })
       .catch(() => undefined);
   };

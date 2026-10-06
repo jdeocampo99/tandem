@@ -827,7 +827,7 @@ export async function finishPendingScoutCleanup(
     }),
     runtimePath: runtimeFile(home),
     run,
-    terminal: input.terminal ?? terminalBackend(run),
+    terminal: input.terminal ?? terminalBackend(run, { home }),
     clock,
     cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home }),
   };
@@ -878,7 +878,7 @@ export async function finishPendingImplementationCleanup(
     }),
     runtimePath: runtimeFile(home),
     run,
-    terminal: input.terminal ?? terminalBackend(run),
+    terminal: input.terminal ?? terminalBackend(run, { home }),
     clock,
     cleanupCommands: (repoPath) => readCleanupCommands({ repoPath, home }),
   };

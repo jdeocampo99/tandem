@@ -56,6 +56,7 @@ async function withWorktrees(
 
 function launchAt(cwd: string): DurableEndpointLaunch {
   return {
+    terminal: "herdr" as const,
     schemaVersion: 1,
     reservationId: "reservation-1",
     sessionId: "session-1",

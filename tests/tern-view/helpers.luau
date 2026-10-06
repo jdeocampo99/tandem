@@ -1,0 +1,31 @@
+--!strict
+local fields = require('./text-field')
+local views = require('./view-file')
+local diff = require('./diff-row')
+local components = require('./components')
+local function key(name, text, shift, meta)
+ return {name=name,text=text,shift=shift or false,meta=meta or false,ctrl=false,alt=false}
+end
+local f=fields.create('a😀é')
+assert(f.cursor==3)
+fields.key(f,key('backspace'));assert(f.text=='a😀')
+local n=fields.node(f,'field');assert(n.p.cursor==3 and n.p.anchor==3)
+fields.key(f,key('left',nil,true));fields.key(f,key('paste','Z'));assert(f.text=='aZ')
+fields.key(f,key('a',nil,false,true));fields.key(f,key('paste','new\nline'));assert(f.text=='new line')
+assert(fields.key(f,key('enter'))=='submit')
+local multi=fields.create('',true);fields.key(multi,key('enter',nil,true));assert(multi.text=='\n')
+assert(fields.key(multi,key('escape'))=='cancel')
+local path='test.tandem-view.json'
+if tern.fs.exists(path) then tern.fs.remove(path) end
+local view=views.create(path,'panel',function(value) if type(value)=='table' and type(value.summary)=='string' then return value end return nil end)
+assert(views.refresh(view) and view.status=='unavailable')
+tern.fs.write(path,tern.json.encode({version=1,kind='panel',revision='one',model={summary='fresh'}}))
+assert(views.refresh(view) and view.status=='ready' and view.revision=='one')
+assert(not views.refresh(view))
+tern.fs.write(path,'invalid')
+assert(views.refresh(view) and view.status=='unavailable' and view.model.summary=='fresh')
+tern.fs.write(path,tern.json.encode({version=1,kind='panel',revision='two',model={summary='after'}}))
+assert(views.refresh(view) and view.status=='ready' and view.revision=='two')
+local row=diff.row({key='line-1',old=1,new=1,kind='ctx',code='text'},'comment=1',{diff.card('c1','you','hello',{components.button('Reply','reply')})})
+assert(#row.c==2 and row.c[1].c[4].p.actions.click=='comment=1')
+tern.fs.write('results.json',tern.json.encode({textField=true,loader=true,diff=true}))

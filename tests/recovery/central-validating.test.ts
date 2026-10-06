@@ -62,6 +62,7 @@ function lease(path: string): WorktreeLease {
 
 function reviewerEndpoint(paneId: string): Endpoint {
   return {
+    terminal: "herdr" as const,
     sessionId: "session-1",
     workspaceId: "workspace-1",
     tabId: "tab-1",

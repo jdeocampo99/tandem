@@ -4,7 +4,7 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import { z } from "zod";
 import { repositoryKey } from "../config/repositories.ts";
-import type { IsoTimestamp } from "../contracts.ts";
+import type { IsoTimestamp, TerminalName } from "../contracts.ts";
 import {
   type NativeProjectSummary,
   type NativeViewsPublication,
@@ -14,6 +14,7 @@ import { type BoardView, isBoardView } from "./view.ts";
 
 /** A project's open coordinator chat, so the panel can focus it. */
 export type PanelCoordinator = Readonly<{
+  readonly terminal?: TerminalName;
   readonly repoPath: string;
   readonly project: string;
   readonly workspaceId: string;
@@ -85,6 +86,7 @@ function isPanelCoordinator(value: unknown): value is PanelCoordinator {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Record<string, unknown>;
   return (
+    (entry.terminal === undefined || entry.terminal === "herdr" || entry.terminal === "tern") &&
     typeof entry.repoPath === "string" &&
     typeof entry.project === "string" &&
     typeof entry.workspaceId === "string" &&

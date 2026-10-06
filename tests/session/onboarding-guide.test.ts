@@ -41,6 +41,7 @@ function guide(initial: OnboardingFacts, tools: readonly ToolCheck[] = []) {
 
 const unfinished: OnboardingFacts = {
   modelsChosen: true,
+  terminalChosen: true,
   codeFolders: ["/Users/me/code"],
   projects: [],
   selfImprovementChosen: false,

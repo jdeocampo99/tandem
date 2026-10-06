@@ -6,6 +6,7 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import { ternFallbackReason } from "../terminal-backend/setting.ts";
 import type { TerminalRunResult } from "./arguments.ts";
 import type { RunInteractive } from "./cli-process.ts";
 import type { TerminalEnvironment } from "./environment.ts";
@@ -181,6 +182,34 @@ export async function prepareProjects(
   interactive: boolean,
   tandemProject: string | undefined,
 ): Promise<readonly ProjectState[] | undefined> {
+  const anchor = states[0];
+  if (
+    anchor !== undefined &&
+    tandemProject === undefined &&
+    interactive &&
+    prompter !== undefined
+  ) {
+    const facts = await service.onboardingFacts(anchor.repoPath);
+    if (!facts.terminalChosen) {
+      const reason = ternFallbackReason(
+        facts.tern ?? { status: "unknown", reason: "Tern has not been checked." },
+      );
+      if (reason !== undefined) prompter.write(`${reason}\n`);
+      const terminal = await prompter.ask("Which terminal should Tandem use?", {
+        choices: [
+          { name: "Herdr", value: "herdr" },
+          ...(facts.tern?.status === "ready"
+            ? [{ name: "Tern", value: "tern", description: "Signed in and ready" }]
+            : []),
+          { name: "Not now", value: "not-now" },
+        ],
+        default: "herdr",
+      });
+      if (terminal !== "herdr" && terminal !== "tern") return undefined;
+      const result = await service.configureTerminal(terminal);
+      if (result.reason !== undefined) prompter.write(`${result.reason}\n`);
+    }
+  }
   const settings = firstModelSettings(states);
   const needsSettings = (state: ProjectState) =>
     !state.existingConfig && state.repoPath !== tandemProject;

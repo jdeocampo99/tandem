@@ -281,6 +281,7 @@ function parseCreatedEndpoint(
   const tabId = requiredString(tab.tab_id, "result.tab.tab_id", operation, response);
   const paneId = requiredString(rootPane.pane_id, "result.root_pane.pane_id", operation, response);
   return {
+    terminal: "herdr",
     sessionId: checkedText(sessionId, "sessionId"),
     workspaceId,
     tabId,
@@ -319,6 +320,7 @@ function parseSplitEndpoint(
     throw new AdapterProtocolError(operation, "split reused the anchor pane id", response);
   }
   return {
+    terminal: "herdr",
     sessionId: anchor.sessionId,
     workspaceId,
     tabId,
@@ -429,6 +431,7 @@ export async function splitBeside(
   const payload = requiredRecord(root.result, "result", operation, result.stdout);
   const pane = requiredRecord(payload.pane, "result.pane", operation, result.stdout);
   const anchor: Endpoint = {
+    terminal: "herdr",
     sessionId: checkedText(input.sessionId, "sessionId"),
     workspaceId: requiredString(
       pane.workspace_id,

@@ -62,6 +62,7 @@ function deadValidationJob(paneId: string, cwd: string): DurableJob {
     createdAt: SCENARIO_NOW,
     consumedAt: RAN_FOR_THIRTY_SECONDS,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: "scenario-session",
       workspaceId: "workspace-dead",
       tabId: "tab-dead",
@@ -84,6 +85,7 @@ async function seedStuckValidating(world: ScenarioWorld) {
   };
   const deadPaneId = "pane-validation-dead";
   const deadEndpoint: Endpoint = {
+    terminal: "herdr" as const,
     sessionId: "scenario-session",
     workspaceId: "workspace-dead",
     tabId: "tab-dead",

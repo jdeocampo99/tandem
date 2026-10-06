@@ -1,4 +1,4 @@
-import type { BlockCauseKind, TaskStage } from "../contracts.ts";
+import type { BlockCauseKind, TaskStage, TerminalName } from "../contracts.ts";
 import type { TodoItem } from "../playbooks/progress.ts";
 import { elapsed } from "../pr-watch/view.ts";
 import type { LimitMeter } from "../runtime/usage-view.ts";
@@ -17,7 +17,7 @@ export type PanelColor = "yellow" | "red" | "blue" | "magenta" | "green";
 /** Where `Enter` on a row goes. */
 export type PanelTarget =
   | Readonly<{ kind: "chat"; repoPath: string }>
-  | Readonly<{ kind: "pane"; workspaceId: string; paneId: string }>
+  | Readonly<{ kind: "pane"; terminal?: TerminalName; workspaceId: string; paneId: string }>
   | Readonly<{ kind: "url"; url: string }>
   | Readonly<{ kind: "none" }>;
 
@@ -429,7 +429,12 @@ function runningEntry(row: RunningBoardRow, now: string): Entry {
       target:
         row.worker === undefined
           ? { kind: "none" }
-          : { kind: "pane", workspaceId: row.worker.workspaceId, paneId: row.worker.paneId },
+          : {
+              kind: "pane",
+              ...(row.worker.terminal === undefined ? {} : { terminal: row.worker.terminal }),
+              workspaceId: row.worker.workspaceId,
+              paneId: row.worker.paneId,
+            },
     },
   };
 }

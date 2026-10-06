@@ -8,6 +8,7 @@ import type {
   SessionPane,
   TerminalBackend,
 } from "../terminal-backend/contract.ts";
+import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
@@ -82,6 +83,7 @@ async function findUnrecordedCoordinator(
   const harnesses = coordinatorHarnesses();
   for (const pane of panes) {
     const endpoint: Endpoint = {
+      terminal: terminal.name,
       sessionId,
       workspaceId: pane.workspaceId,
       tabId: pane.tabId,
@@ -191,6 +193,7 @@ async function findOwnedCoordinator(
   const path = recordPath(home, sessionId, repoPath);
   const record = await readCoordinatorRecord(path);
   if (record === undefined) return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
+  assertTerminalEndpoint(terminal.name, record.endpoint);
   if (record.repoPath !== repoPath) {
     throw ownershipFailure(`record ${path} belongs to ${JSON.stringify(record.repoPath)}`);
   }
@@ -236,7 +239,10 @@ async function findOwnedCoordinator(
     );
   }
   if (matchingProcesses.length === 0) {
-    if (inspection.activeWorker) {
+    const foreground = inspection.processInfo.foregroundProcesses;
+    const stoppedBootstrap =
+      foreground.length === 1 && isCoordinatorBootstrap(foreground[0]?.argv ?? []);
+    if (inspection.activeWorker && !stoppedBootstrap) {
       const livePid = await liveCoordinatorProcess(run, record);
       if (livePid !== undefined) {
         throw ownershipFailure(
@@ -280,7 +286,7 @@ export function assertStoppedCoordinatorShell(inspection: EndpointInspection): v
   const { shellPid, foregroundProcesses } = inspection.processInfo;
   const only = foregroundProcesses.length === 1 ? foregroundProcesses[0] : undefined;
   if (
-    inspection.activeWorker ||
+    (inspection.activeWorker && !isCoordinatorBootstrap(only?.argv ?? [])) ||
     shellPid === undefined ||
     only === undefined ||
     (only.pid !== shellPid && !isCoordinatorBootstrap(only.argv))

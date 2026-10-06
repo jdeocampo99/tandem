@@ -49,6 +49,7 @@ function ownsEndpoint(job: DurableJob, endpoint: Endpoint): boolean {
   const owned = job.endpoint;
   return (
     owned !== undefined &&
+    owned.terminal === endpoint.terminal &&
     owned.sessionId === endpoint.sessionId &&
     owned.workspaceId === endpoint.workspaceId &&
     owned.tabId === endpoint.tabId &&

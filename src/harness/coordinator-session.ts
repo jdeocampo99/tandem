@@ -26,7 +26,7 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "../tasks/research-continuation-classifier.ts";
-import { terminalBackend } from "../terminal-backend/compose.ts";
+import { installTerminalPlugin, terminalBackend } from "../terminal-backend/compose.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -54,6 +54,7 @@ function createCoordinatorService(
   options: CoordinatorOptions,
   environment: TandemBoundaryEnvironment,
   environmentSnapshot: TandemEnvironmentSource,
+  host: SessionDeps["host"],
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const jevConfig = researchContinuationClassifierConfig(environmentSnapshot);
@@ -62,6 +63,24 @@ function createCoordinatorService(
   return createService({
     home: environment.home,
     sessionId: environment.sessionId,
+    installTerminalPlugin: (readiness) =>
+      installTerminalPlugin(
+        environment.home,
+        {
+          run: options.run ?? runCommand,
+          cwd: environment.repo,
+          confirm: (question) => host.confirm("Tandem's Tern integration", question),
+          env: {
+            ...(environmentSnapshot.TERN_CONFIG_DIR === undefined
+              ? {}
+              : { TERN_CONFIG_DIR: environmentSnapshot.TERN_CONFIG_DIR }),
+            ...(environmentSnapshot.TERN_DAEMON_SOCKET === undefined
+              ? {}
+              : { TERN_DAEMON_SOCKET: environmentSnapshot.TERN_DAEMON_SOCKET }),
+          },
+        },
+        readiness,
+      ),
     ...(environment.parentWorkspaceId === undefined
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
@@ -87,7 +106,7 @@ function createCoordinatorService(
               repoPath: environment.repo,
               sourceRepoPath: sourceRepo,
               run: runCommand,
-              terminal: terminalBackend(runCommand),
+              terminal: terminalBackend(runCommand, { home: environment.home }),
             }),
         }),
   });
@@ -103,7 +122,7 @@ export function bindCoordinator(
     cwd: harness.cwd,
     sessionId: harness.sessionId,
   });
-  const terminal = terminalBackend(options.run ?? runCommand);
+  const terminal = terminalBackend(options.run ?? runCommand, { home: environment.home });
   const session = new CoordinatorSession({
     host: harness.host,
     clock: { now: () => Date.now(), monotonic: () => performance.now() },
@@ -117,7 +136,8 @@ export function bindCoordinator(
     }),
     logError: harness.logError,
     environment,
-    createService: () => createCoordinatorService(options, environment, environmentSnapshot),
+    createService: () =>
+      createCoordinatorService(options, environment, environmentSnapshot, harness.host),
     realpath: (path) => realpath(path),
     isTandemCheckout: () => isTandemCheckout(environment.repo),
     openWelcome: async () => {

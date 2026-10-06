@@ -114,6 +114,7 @@ function previousRecord(
     repoPath: "/repo",
     harness: DEFAULT_HARNESS,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: SESSION_ID,
       workspaceId: "workspace-a",
       tabId: "tab-a",
