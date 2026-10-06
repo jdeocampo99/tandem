@@ -285,7 +285,10 @@ local block: BlockDef<State> = {
  view = function(state, cx)
   related(state, cx)
   local model = state.view.model
-  if not model then return { main = text('Task view unavailable. Waiting for its saved detail file.', 'warn') } end
+  if not model then return { main = ui.el('div', { class = 'tt-page' }, {
+   ui.el('div', { class = 'tt-title-row' }, { ui.el('h1', { text = 'Task unavailable' }), button('← Orchestrator', 'orchestrator') }),
+   text('Task view unavailable. Waiting for its saved detail file.', 'warn'),
+  }) } end
   if not table.find(model.tabs, state.tab) then state.tab = 'Overview' end
   local track, tabs = {}, {}
   for i, step in model.stageTrack do

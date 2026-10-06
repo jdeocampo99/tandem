@@ -200,6 +200,7 @@ type ControlNode = {
       await until(async () =>
         JSON.stringify(await tree()).includes("Direction refused by saved task policy"),
       );
+      await ctl("shot", "03-task-action-error");
       const failed = await readFile(join(root, "actions.log"), "utf8");
       expect(failed.split("Reject this direction")).toHaveLength(2);
       expect(JSON.stringify(await tree())).toContain("Reject this direction");
@@ -241,6 +242,27 @@ type ControlNode = {
         (await readFile(join(root, "actions.log"), "utf8")).includes("native\0open\0task\x00102"),
       );
       expect(picker.paneId).not.toBe(endpoint.paneId);
+      await until(async () => {
+        const all = await ternCommands(commandRunner, { binary }).ls(root);
+        return !all.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === picker.paneId);
+      });
+      const missing = await host.open(
+        { ...input, view: { kind: "task", taskId: "103" } },
+        root,
+        "task",
+        "task",
+        nativeDetailPath(env.TANDEM_HOME, root, nativeTaskFile("103")),
+      );
+      await until(async () => JSON.stringify(await tree()).includes("Task unavailable"));
+      await click("← Orchestrator");
+      await host.open(
+        { ...input, origin: { paneId: missing.paneId, cwd: root } },
+        root,
+        "panel",
+        "return",
+        index,
+      );
+
       console.log(`Native task proof: ${root}`);
     } finally {
       if (window) {
