@@ -11,6 +11,7 @@ import {
 } from "./registry.ts";
 import {
   applyCoordinatorReplacement,
+  assertCoordinatorEffectsSettled,
   type CoordinatorResourceOutcome,
   decideCoordinatorReplacement,
   observeCoordinatorCheckout,
@@ -270,6 +271,7 @@ export async function claimRepositoryCoordinator(
     home: await canonicalHome(input.home),
     repoPath: await canonicalPath(input.repoPath, "repoPath"),
   };
+  await assertCoordinatorEffectsSettled(location.home, location.repoPath);
   const discovery = await discoverCoordinatorRecords(location);
   const misplaced = discovery.records.filter((found) => found.placement === "foreign-directory");
   const otherSessionRecords = discovery.records.filter(

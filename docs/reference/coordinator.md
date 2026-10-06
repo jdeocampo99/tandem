@@ -321,6 +321,10 @@ decides from that evidence alone:
   Treehouse refusal) becomes a durable note under `<home>/coordinator-quarantine/` naming lease,
   pane, and reason, and the launch error names that note.
 - A lease the previous record still points at is never rolled back; the record stays its owner.
+- A durable Tern endpoint quarantine fences launch and restart for that repository across sessions,
+  before retirement, lease acquisition or owner replacement, even when the old pane or tab is gone.
+  The parallel-coordinator setting does not bypass it. The refusal names the note and `tandem fix`;
+  fix reports the quarantined coordinator and retains its lease instead of retrying its effects.
 - A previous lease that cannot be released becomes a quarantine note rather than blocking launch.
   No coordinator lease is left untracked, and the user is never locked out of their coordinator.
 

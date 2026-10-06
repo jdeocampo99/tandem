@@ -44,6 +44,7 @@ import { COORDINATOR_LEASE_HOLDER_PREFIX, type CoordinatorRecord, recordPath } f
 import { readCoordinatorRecord, saveCoordinatorRecord } from "./registry.ts";
 import {
   applyCoordinatorReplacement,
+  assertCoordinatorEffectsSettled,
   type CoordinatorResourceOutcome,
   decideCoordinatorReplacement,
   observeCoordinatorCheckout,
@@ -635,6 +636,7 @@ export async function launchCoordinatorUnlocked(
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorLaunchResult> {
   const paths = coordinatorPaths(request);
+  await assertCoordinatorEffectsSettled(paths.home, paths.repo);
   const inherited = terminalContextFor(dependencies.terminal.name).inheritedPane(
     dependencies.processEnvironment,
   );
@@ -1128,6 +1130,7 @@ export async function withClaimedCoordinatorRepository<Result>(
   const paths = coordinatorPaths(request);
   return withCoordinatorRepositoryLock(paths.home, paths.repo, () =>
     withCoordinatorLaunchLock(paths.home, request.sessionId, async () => {
+      await assertCoordinatorEffectsSettled(paths.home, paths.repo);
       if (parallelCoordinatorsAllowed(dependencies.processEnvironment)) return operation([]);
       const reconciliations = await claimRepositoryCoordinator({
         run: dependencies.run,

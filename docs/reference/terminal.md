@@ -103,6 +103,8 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   Brief, Board and Usage tabs, and finally the alert helper. Unrelated panes remain open.
   Unknown view-close acknowledgements or absence proofs retain the lease and a durable
   coordinator quarantine note; fresh adapters refuse to repeat the quarantined operation.
+  Launch and restart also check that durable fence before replacing ownership or reusing the lease,
+  including missing-pane/tab and cross-session paths. `tandem fix` lists and preserves the quarantine.
 - Tern and macOS process-group reads are separate observations. A shell may exec or change
   groups between them. A failed native match can resample only after an exact-pane recheck and
   a demonstrably changed Tern process snapshot, for at most three attempts. Every successful

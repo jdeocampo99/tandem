@@ -9,6 +9,7 @@ import { ensurePrivateDirectoryTree } from "./lock.ts";
 import {
   type CoordinatorRecord,
   canonicalHome,
+  canonicalPath,
   isMissing,
   isRecord,
   parseEndpoint,
@@ -211,6 +212,32 @@ export async function listCoordinatorQuarantineRecords(
     records.push(parseQuarantineRecord(parsed, path));
   }
   return records;
+}
+
+/** Tern endpoint notes protect uncertain native effects even after their pane disappears. */
+export function isCoordinatorEffectQuarantine(record: CoordinatorQuarantineRecord): boolean {
+  return record.endpoint?.terminal === "tern";
+}
+
+/** Refuse relaunch before it can close, reuse a lease, or replace an uncertain native owner. */
+export async function assertCoordinatorEffectsSettled(
+  home: string,
+  repoPath: string,
+): Promise<void> {
+  const repo = await canonicalPath(repoPath, "repoPath");
+  const note = (await listCoordinatorQuarantineRecords(home)).find(
+    (record) => isCoordinatorEffectQuarantine(record) && record.repoPath === repo,
+  );
+  if (note === undefined) return;
+  const path = join(
+    coordinatorQuarantineDirectory(await canonicalHome(home)),
+    quarantineFileName(note.quarantineId),
+  );
+  throw new Error(
+    `Tandem refuses to replace a coordinator for ${JSON.stringify(repo)}: ${note.reason}. ` +
+      `Its native effect is quarantined; lease ${note.lease.leaseId} and recorded ownership are retained. ` +
+      `Run tandem fix to inspect quarantine record ${path}.`,
+  );
 }
 
 async function gitOutput(
@@ -548,6 +575,9 @@ export async function applyCoordinatorReplacement(
   input: CoordinatorReplacementInput,
 ): Promise<CoordinatorResourceOutcome> {
   const decision = input.decision;
+  if (decision.kind === "reuse" || decision.kind === "release") {
+    await assertCoordinatorEffectsSettled(input.home, input.repoPath);
+  }
   if (decision.kind === "allocate") return { outcome: "allocated", reason: decision.reason };
   if (decision.kind === "reuse") return { outcome: "reused", reason: decision.reason };
   if (decision.kind === "retain") return { outcome: "retained", reason: decision.reason };

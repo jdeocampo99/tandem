@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
 import { nativeDetailPath, nativeViewsPath } from "../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../src/contracts.ts";
-import { launchCoordinator } from "../../src/coordinator/launch.ts";
+import { launchCoordinator, launchCoordinatorUnlocked } from "../../src/coordinator/launch.ts";
+import { reconcileTandemResources } from "../../src/coordinator/reconcile.ts";
 import { listCoordinatorRecords } from "../../src/coordinator/registry.ts";
 import { resetCoordinators } from "../../src/coordinator/reset.ts";
 import { listCoordinatorQuarantineRecords } from "../../src/coordinator/resources.ts";
+import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "./scenario.ts";
 
@@ -13,6 +15,7 @@ for (const mode of [
   "busy-view",
   "changed-args",
   "unknown-close",
+  "unknown-close-missing-tab",
   "foreign-file",
 ] as const) {
   test(`Tern reset ${mode} retires only proven idle coordinator views`, async () => {
@@ -22,7 +25,11 @@ for (const mode of [
       const run: CommandRunner = async (request) => {
         if (request.argv[1] === "process" && request.argv[2] === "9001") viewProcessRead = true;
         const result = await world.run(request);
-        if (request.argv[1] === "close" && request.argv[2] === "9002" && mode === "unknown-close")
+        if (
+          request.argv[1] === "close" &&
+          request.argv[2] === "9002" &&
+          mode.startsWith("unknown-close")
+        )
           return { code: 1, stdout: "", stderr: "lost acknowledgement" };
         if (closing && request.argv[1] === "ls" && viewProcessRead && mode === "changed-args")
           return {
@@ -34,14 +41,18 @@ for (const mode of [
         return result;
       };
       const terminal = terminalBackend(run, { home: world.home, terminal: "tern" });
-      const launch = () =>
-        launchCoordinator(
+      const launch = (
+        operation = launchCoordinator,
+        sessionId = world.sessionId,
+        processEnvironment = {},
+      ) =>
+        operation(
           {
             cwd: world.repoPath,
             repo: world.repoPath,
             home: world.home,
             poolRoot: world.poolRoot,
-            sessionId: world.sessionId,
+            sessionId,
             model: undefined,
             continueSession: false,
             headless: true,
@@ -49,13 +60,13 @@ for (const mode of [
           },
           {
             run,
-            terminal,
+            terminal: terminalBackend(run, { home: world.home, terminal: "tern" }),
             startPersistent: async () => undefined,
             runInteractive: async () => {
               throw new Error("interactive launch forbidden");
             },
             sleep: async () => {},
-            processEnvironment: {},
+            processEnvironment,
           },
         );
       await launch();
@@ -98,7 +109,7 @@ for (const mode of [
       const unrelated = world.openPane({
         paneId: "9900",
         cwd: record.worktree.path,
-        anchor: record.endpoint,
+        ...(mode === "unknown-close-missing-tab" ? {} : { anchor: record.endpoint }),
       });
       world.titlePane(unrelated.paneId, "Tandem usage");
       if (mode === "busy-view") world.replaceForeground("9001", ["sh", "foreign-job.sh"]);
@@ -120,14 +131,74 @@ for (const mode of [
         expect(replacement?.endpoint.paneId).not.toBe(record.endpoint.paneId);
       } else {
         await expect(reset()).rejects.toThrow();
-        expect(world.paneIsPresent(record.endpoint.paneId)).toBe(mode !== "unknown-close");
-        if (mode === "unknown-close") {
+        expect(world.paneIsPresent(record.endpoint.paneId)).toBe(!mode.startsWith("unknown-close"));
+        if (mode.startsWith("unknown-close")) {
           expect(await listCoordinatorQuarantineRecords(world.home)).toHaveLength(1);
           // A new adapter process must also obey the durable quarantine.
           const fresh = terminalBackend(run, { home: world.home, terminal: "tern" });
           await expect(
             fresh.close({ endpoint: record.endpoint, cwd: record.worktree.path }),
           ).rejects.toThrow("quarantine");
+          if (mode === "unknown-close-missing-tab") {
+            // Simulate the old conversation tab disappearing after the uncertain close.
+            for (const paneId of ["9004", "9005", "9006", "9007", "9008", "9009"])
+              world.removePane(paneId);
+            expect(
+              await fresh.workspaceLabel({
+                sessionId: world.sessionId,
+                cwd: world.repoPath,
+                workspaceId: record.endpoint.workspaceId,
+              }),
+            ).toBeUndefined();
+          }
+          const notes = await listCoordinatorQuarantineRecords(world.home);
+          const before = (await world.snapshot()).resources;
+          expect(before.retained).toContain(`lease:${record.worktree.leaseId}`);
+          expect(before.quarantined).toHaveLength(1);
+          const effects = world
+            .trace()
+            .filter((event) =>
+              ["tern close", "tern new", "treehouse get", "treehouse return"].includes(
+                event.action,
+              ),
+            );
+          // Missing conversation/tab must not bypass the durable close-outcome fence.
+          for (const attempt of [
+            () => launch(),
+            () => launch(restartCoordinator),
+            () => launch(launchCoordinatorUnlocked),
+            () => launch(launchCoordinator, "replacement-session"),
+            () =>
+              launch(launchCoordinator, world.sessionId, {
+                TANDEM_ALLOW_PARALLEL_COORDINATORS: "1",
+              }),
+          ]) {
+            await expect(attempt()).rejects.toThrow("quarantine");
+            expect(await listCoordinatorRecords(world.home, world.sessionId)).toEqual([record]);
+            expect(await listCoordinatorQuarantineRecords(world.home)).toEqual(notes);
+            expect((await world.snapshot()).resources).toEqual(before);
+          }
+          expect(
+            world
+              .trace()
+              .filter((event) =>
+                ["tern close", "tern new", "treehouse get", "treehouse return"].includes(
+                  event.action,
+                ),
+              ),
+          ).toEqual(effects);
+          const fix = await reconcileTandemResources({
+            run,
+            terminal: fresh,
+            home: world.home,
+            poolRoot: world.poolRoot,
+            repoPaths: [world.repoPath],
+            apply: true,
+          });
+          expect(fix.quarantined.some((entry) => entry.kind === "coordinator")).toBe(true);
+          expect(fix.quarantined.some((entry) => entry.kind === "quarantine-note")).toBe(true);
+          expect(await listCoordinatorRecords(world.home, world.sessionId)).toEqual([record]);
+          expect((await world.snapshot()).resources).toEqual(before);
           expect(world.paneIsPresent("9003")).toBe(true);
         } else expect(world.trace().filter((e) => e.action === "tern close")).toHaveLength(0);
       }
