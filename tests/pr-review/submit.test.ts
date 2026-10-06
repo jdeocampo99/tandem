@@ -106,6 +106,12 @@ function workflow(head: string, overrides: Partial<TaskRecord> = {}) {
       record = { ...record, prReview: next };
       return record;
     },
+    mutatePrReview: async (_taskId, update) => {
+      const next = update(record);
+      const changed = next !== record.prReview;
+      record = { ...record, prReview: next };
+      return { task: record, changed };
+    },
     runAgain: async () => undefined,
     settle: async () => undefined,
   });
