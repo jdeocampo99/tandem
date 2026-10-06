@@ -51,9 +51,10 @@ tern.route.link(function(link, cx)
  return nil
 end)
 
-local viewHost = require("./view-host")
 tern.route.open(function(req, cx)
- local hosted = viewHost.open(req, cx)
+ -- Skip unrelated files without loading the hosting module or doing file/layout work.
+ if not string.match(req.path, "%.tandem%-open%.json$") and not string.match(req.path, "%.tandem%-view%.json$") then return nil end
+ local hosted = require("./view-host").open(req, cx)
  if hosted then return hosted end
  if string.match(req.path, "%.tandem%-view%.json$") then
   run(cx, { "view-file", req.path })
