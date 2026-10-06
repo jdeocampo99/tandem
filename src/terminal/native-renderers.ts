@@ -2,8 +2,8 @@ import { resolve } from "node:path";
 import { type CliInvocation, CliUsageError, pathText, text } from "./cli-arguments.ts";
 import type { CliCommandContext, CliCommandOutcome } from "./cli-commands.ts";
 import { validateNativeContext, viewOriginFrom } from "./cli-view-context.ts";
-import { newNativeRequest } from "./native-new-request.ts";
 import { nativeProject, nativeViewFile } from "./native-navigation.ts";
+import { newNativeRequest } from "./native-new-request.ts";
 
 export type NativeRendererCommand =
   | "board"

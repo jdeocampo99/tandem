@@ -3,12 +3,12 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
-import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { nativeDetailPath } from "../../../src/board/snapshot.ts";
+import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { briefView } from "../../../src/requests/native-view.ts";
+import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
