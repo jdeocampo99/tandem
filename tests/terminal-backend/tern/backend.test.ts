@@ -15,7 +15,6 @@ import {
   decode,
   Listing,
   TernOutcomeUnknownError,
-  TernUnsupportedOperationError,
 } from "../../../src/terminal-backend/tern/protocol.ts";
 import {
   scenarioRuntimeTask,
@@ -121,7 +120,7 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
         cwd: world.repoPath,
         project: world.repoPath,
       }),
-    ).rejects.toBeInstanceOf(TernUnsupportedOperationError);
+    ).rejects.toThrow("requires a Tandem home");
     await terminal.closeOwned({ endpoint: split, cwd: world.repoPath, strictProof: true });
     await terminal.close({ endpoint: worker.endpoint, cwd: world.repoPath });
     await terminal.close(target);
@@ -322,7 +321,7 @@ test("a busy recorded helper refuses project closure before either pane is close
   });
 });
 
-test("native views report unavailable without opening anything or typing into a pane", async () => {
+test("native views without a recorded coordinator refuse before any terminal effects", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const coordinator = world.openPane({ paneId: "46", cwd: world.repoPath });
     const terminal = ternBackend(world.run);
@@ -332,14 +331,14 @@ test("native views report unavailable without opening anything or typing into a 
       { kind: "pr", taskId: "task-1" },
     ];
     for (const view of views) {
-      const result = await terminal.openView({
-        coordinator,
-        cwd: world.repoPath,
-        home: world.home,
-        view,
-      });
-      expect(result.opened).toBe(false);
-      expect(result.warnings.length).toBeGreaterThan(0);
+      await expect(
+        terminal.openView({
+          coordinator,
+          cwd: world.repoPath,
+          home: world.home,
+          view,
+        }),
+      ).rejects.toThrow("exactly one recorded coordinator");
     }
     expect(world.trace()).toEqual([]);
     expect(world.paneIsPresent(coordinator.paneId)).toBe(true);

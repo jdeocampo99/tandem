@@ -80,6 +80,7 @@ export function terminalBackend(
         ? herdrBackend(run, options.herdr)
         : ternBackend(run, {
             ...options.tern,
+            ...(home === undefined ? {} : { home }),
             ...(notificationEndpoint === undefined
               ? {}
               : {
@@ -101,6 +102,7 @@ export function terminalBackend(
       return select().name;
     },
     openView: (input) => select().openView(input),
+    closeView: (input) => select().closeView(input),
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),

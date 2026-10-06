@@ -284,3 +284,112 @@ The two-argument callers remain valid. Update reloads after successful coordinat
 prompt. On switching to Herdr, the shared configure callback restores preferences after saving the
 choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
 plugin consent. The Tern package stays linked for later use.
+
+## Native hosting and renderer launch API
+
+The Tern backend opens private, unique `<home>/native-host/<uuid>.tandem-open.json`
+layout tickets with `tern open`. The window route uses `cx:new_block`; a private receipt
+records the exact resulting pane, tab and session. Tern 0.5.0 reports handled layout routes
+as "cannot open in a file block", even after opening them. Success therefore requires the
+receipt and a scoped listing proving the exact block program and launch arguments. Missing
+or conflicting evidence quarantines the opening, retaining its ticket and resources.
+A confirmed opening removes its transient ticket and receipt. No title proves ownership.
+Before any opening mutation, the host locks a private coordinator-bound intent under
+`<home>/native-host`. For panels, it lists the scoped session and reuses exactly one block
+with the full program and five launch arguments in the intended tab placement; duplicate
+matches refuse. A window-scoped lookup also reads the daemon-wide listing before concluding
+absence. Unresolved detached blocks or matching blocks outside the owning session/window
+refuse an opening; they never authorize a duplicate. A different window launch argument for
+this coordinator and view also refuses reuse. Successful task opens retain their replacement behavior.
+The read-only exact coordinator check runs immediately before focus. A known failure before
+this invocation attempts any mutation cancels only its own new intent, so failed or malformed
+pre-focus reads leave no fence. Earlier uncertain intents are never cancelled by a failed read.
+The intent is claimed before the first mutation and remains on every unconfirmed outcome,
+including failed or malformed verification reads. A later CLI/backend instance must settle
+retained intents and route tickets from that same exact block evidence before it can open.
+A missing receipt can be settled by the unique exact block; conflicting receipts or missing
+block evidence retain the fence and resources. Lock files remain for later callers.
+
+All renderers use these block ids and the same five string launch arguments:
+
+| Block id | Input | Placement |
+| --- | --- | --- |
+| `tandem.panel` | Root `panel` envelope | Left of the coordinator, about 360 pixels |
+| `tandem.task` | Direct `task` envelope | Conversation area, preserving its live coordinator |
+| `tandem.brief` | Direct `brief` envelope | Beside the conversation |
+| `tandem.pr` | Direct `pr` envelope | Beside the conversation |
+| `tandem.prs` | Root `panel` envelope | Beside the conversation |
+| `tandem.board`, `tandem.usage`, `tandem.catchup` | Root `panel` envelope | Own full-window tab |
+| `tandem.welcome` | Root path (static welcome) | Beside the conversation |
+
+`args = {modelPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, indexPath}`.
+The renderer passes its **own** `cx.pane`, plus the supplied cwd and optional window key,
+to every native CLI action. `tern-plugin/navigation.luau` provides `origin(args)`,
+`run(origin, cx, argv)`, `root(origin)` and `back(origin, cx)` without action policy or retries.
+`origin.indexPath` is explicit; `root` returns it and `origin.home` is derived from its
+`<home>/native-views/<project>.json` location for custom-home CLI flags.
+Root inputs come from `nativeViewsPath`; detail inputs come from `nativeDetailPath`.
+Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
+board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
+coordinator, home, cwd and origin context.
+
+`TerminalBackend.closeView({coordinator,cwd,home,origin,view:{kind:"brief",requestId}})`
+retires only the exact originating native brief split. The caller checks the durable revision
+and completes approval/feedback first; close errors become successful-action warnings, never retries.
+The host proves the block's program, all launch arguments, scoped session and idle state twice,
+rechecks exact identity and full arguments after the final process read immediately before
+closing, then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
+are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
+
+The host never sets `keep_open` when launching split/detail blocks or task replacements.
+Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.
+An exited retained pane can still report `live=true`. Neither `live` nor `exited` proves closure:
+only the exact pane id's absence from a scoped `tern ls` does.
+For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0 under this default.
+`BlockCx` has no other close API; renderers must not use the raw window-level layout close API.
+Successful hosting already removed its private ticket and receipt, so no host cleanup remains.
+Task pages use the Orchestrator return action instead, which restores the hidden conversation
+before removing its replacement block.
+
+`openView` with kind `board` toggles back when its exact originating block is this project's
+board, using the same guarded return and closure. Other origins open the board normally;
+renderers never parse Tern program metadata or guess pane ownership.
+
+Known owned renderer back buttons all restore the conversation. When the coordinator is floated,
+the host proves its exact task block by program, coordinator and index launch arguments before
+docking the coordinator and closing that task. Returning from Board, Usage or Catch-up also
+closes only its exact idle originating block; the backend proves all launch arguments before
+the guarded route and exact pane id absence afterwards. Brief/PR panes remain open on return.
+
+Task hosting floats and hides the conversation in its **same recorded tab**, retaining its
+exact endpoint and process. It refuses unrelated pictures in picture. Opening a second task proves the previous task block's
+coordinator and index launch arguments, replaces only that block, and keeps the floated
+coordinator in its recorded tab. Returning docks that
+coordinator and closes only the exact task block; it never closes or restarts the agent.
+`native view-file ROOT#orchestrator` performs that return; `navigation.back` builds it.
+`ROOT#inbox` opens Tern's inbox, and `ROOT#open-project` sends the user's project-opening
+request to the verified coordinator. Other file paths must name an already published detail
+of the selected project. The view-file handler cannot open arbitrary renderer files.
+
+Project navigation selects the published row by 1–9 or wraps prev/next, refuses stale/offline
+rows, re-proves the destination coordinator, and uses an exact-block `tern focus` session
+switch. Supplied window keys are independently scoped and must contain the originating pane.
+Without a key, the backend requires exactly one attached window and proves the origin in
+that scope. Multiple windows are refused rather than choosing one by ordering.
+
+
+### Transition delivery
+
+The native publisher consumes durable task timeline events for questions, approval waits and
+blocked transitions. It observes new draft PR identities for `done`, and new brief or failing-PR
+Needs you rows. Model-routing questions use their stable routing-decision row identity,
+including queued admission waits and questions raised during an active task stage. Their
+claimed identities survive temporary row absence, wording changes and coordinator relaunch;
+timeline admission waits do not emit a duplicate alert. A private per-project delivery cursor under `<home>/native-alerts` is saved
+under a cross-process lock before sending OSC. Repeated ticks, relaunches and unknown delivery outcomes never resend a
+claimed transition. The first snapshot establishes a baseline without replaying historical alerts.
+These cursors are presentation delivery state, not task authority.
+
+Tern groups notifications from the same helper pane into one inbox entry, increasing its count
+and showing the latest title/body. Each of the three kinds therefore appears as that entry's
+latest alert, with the helper tab's waiting badge. Herdr retains its existing arrival notifications.

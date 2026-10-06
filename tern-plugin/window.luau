@@ -15,8 +15,8 @@ local function run(cx: WindowCx, args: { string })
  if window and window ~= "" then table.insert(argv, "--window"); table.insert(argv, window) end
  local ok, problem = pcall(function()
   tern.process.run(argv, { cwd = "." }, function(result, callbackCx)
-   if result.status ~= 0 and callbackCx then
-    callbackCx:toast("error", "Tandem couldn't run that action", result.stderr)
+   if result.status ~= 0 then
+    (callbackCx or cx):toast("error", "Tandem couldn't run that action", result.stderr)
    end
   end)
  end)
@@ -51,7 +51,10 @@ tern.route.link(function(link, cx)
  return nil
 end)
 
+local viewHost = require("./view-host")
 tern.route.open(function(req, cx)
+ local hosted = viewHost.open(req, cx)
+ if hosted then return hosted end
  if string.match(req.path, "%.tandem%-view%.json$") then
   run(cx, { "view-file", req.path })
   return { handled = true }
