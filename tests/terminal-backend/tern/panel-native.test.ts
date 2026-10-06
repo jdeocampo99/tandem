@@ -196,6 +196,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       expect(argv).toContain(
         `native\nopen\nbrief\ntern\n--home\n${home}\n--pane\n${pane}\n--cwd\n${root}`,
       );
+      await ctl("key", "down");
+      await ctl("key", "enter");
+      await until(async () =>
+        (await readFile(join(root, "actions.log"), "utf8")).includes("open\ntask\nadapter"),
+      );
+      expect(await readFile(join(root, "actions.log"), "utf8")).toContain(
+        "native\nopen\ntask\nadapter",
+      );
 
       const limit = visit((await ctl("tree")).tree as Node[], "tdp-limit")?.rect;
       if (!limit) throw new Error("usage button missing");
