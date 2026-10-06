@@ -7,6 +7,7 @@ import {
 } from "../../../src/terminal-backend/tern/plugin-keys.ts";
 import {
   configureTernPluginSettings,
+  PreferenceWriteNotCommittedError,
   restoreTernPluginSettings,
 } from "../../../src/terminal-backend/tern/plugin-settings.ts";
 
@@ -177,7 +178,8 @@ test("a settings-write failure removes its consent record so the next attempt re
         { path, approved: true },
         {
           replaceFile: async (destination, _before, text) => {
-            if (destination === path) throw new Error("settings disk write failed");
+            if (destination === path)
+              throw new PreferenceWriteNotCommittedError("settings disk write failed");
             await writeFile(destination, text, { flag: "wx", mode: 0o600 });
           },
         },
@@ -231,6 +233,62 @@ test("an interrupted pre-settings write never reports the saved approval as appl
     expect(await readFile(path, "utf8")).toBe('{"tabs_autohide":false}');
     await restoreTernPluginSettings({ path });
     expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("post-commit formatting and unrelated edits keep restoration ownership after failure", async () => {
+  const root = await mkdtemp("/tmp/tandem-keys-edited-commit-");
+  const path = join(root, "settings.json");
+  try {
+    await writeFile(path, '{"tabs_autohide":false,"opacity":42}');
+    await expect(
+      configureTernPluginSettings(
+        { path, approved: true },
+        {
+          replaceFile: async (destination, _before, text) => {
+            await writeFile(destination, text, { mode: 0o600 });
+            if (destination === path) {
+              const committed = JSON.parse(await readFile(path, "utf8"));
+              await writeFile(path, JSON.stringify({ ...committed, opacity: 60 }));
+              throw new Error("post-commit cleanup failed after edit");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("post-commit cleanup failed after edit");
+    expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(true);
+    const restored = await restoreTernPluginSettings({ path });
+    expect(restored.restored).toContain("cmd+shift+b");
+    expect(restored.restored).toContain("sidebar");
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ tabs_autohide: false, opacity: 60 });
+    expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an unclassified write failure preserves its receipt without claiming configuration", async () => {
+  const root = await mkdtemp("/tmp/tandem-keys-unknown-write-");
+  const path = join(root, "settings.json");
+  try {
+    await writeFile(path, '{"tabs_autohide":false}');
+    await expect(
+      configureTernPluginSettings(
+        { path, approved: true },
+        {
+          replaceFile: async (destination, _before, text) => {
+            if (destination === path) throw new Error("write outcome unknown");
+            await writeFile(destination, text, { flag: "wx", mode: 0o600 });
+          },
+        },
+      ),
+    ).rejects.toThrow("write outcome unknown");
+    expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(true);
+    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(false);
+    await restoreTernPluginSettings({ path });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ tabs_autohide: false });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -58,22 +58,34 @@ async function readPreferenceFile(
   }
 }
 
+/** Proof supplied by the writer before attempting its atomic commit. Other errors are uncertain. */
+export class PreferenceWriteNotCommittedError extends Error {}
+
 async function replacePreferenceFile(
   path: string,
   before: Readonly<{ text: string; exists: boolean }>,
   text: string,
 ): Promise<void> {
-  const parent = await lstat(dirname(path));
-  if (!parent.isDirectory() || parent.isSymbolicLink())
-    throw new Error("Tern config must be a regular directory");
   const temporary = `${path}.${randomUUID()}.tmp`;
+  let commitAttempted = false;
   try {
+    const parent = await lstat(dirname(path));
+    if (!parent.isDirectory() || parent.isSymbolicLink())
+      throw new Error("Tern config must be a regular directory");
     await writeFile(temporary, text, { flag: "wx", mode: 0o600 });
     const current = await readPreferenceFile(path);
     if (current.text !== before.text || current.exists !== before.exists)
       throw new Error("Tern settings changed while configuring preferences");
+    commitAttempted = true;
     if (before.exists) await rename(temporary, path);
     else await link(temporary, path);
+  } catch (error) {
+    if (!commitAttempted)
+      throw new PreferenceWriteNotCommittedError(
+        error instanceof Error ? error.message : String(error),
+        { cause: error },
+      );
+    throw error;
   } finally {
     await rm(temporary, { force: true });
   }
@@ -136,9 +148,9 @@ export async function configureTernPluginSettings(
     try {
       await effects.replaceFile(path, raw, installedText);
     } catch (error) {
-      // Retain recovery ownership if the settings committed before an uncertain failure.
-      const applied = await readPreferenceFile(path);
-      if (applied.text !== installedText) {
+      // Byte differences cannot prove a failed commit: a user may have edited afterward.
+      // Only an explicit pre-commit proof permits abandoning restoration ownership.
+      if (error instanceof PreferenceWriteNotCommittedError) {
         const saved = await readPreferenceFile(recordPath);
         if (saved.exists && saved.text === recordText) await rm(recordPath);
       }
