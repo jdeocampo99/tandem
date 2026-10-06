@@ -480,7 +480,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     serverCommand: () => [commands.binary, "daemon"],
     clientCommand: () => [commands.binary],
     checkInstall: async () => {
-      const result = await probeTern(run, { now: clock, sleep: wait });
+      const result = await probeTern(run, { binary: commands.binary, now: clock, sleep: wait });
       if (result.status === "unknown")
         return [{ name: "Tern", ok: false, detail: `readiness unknown: ${result.reason}` }];
       if (result.status === "ready") return [{ name: "Tern", ok: true, detail: "ready" }];
