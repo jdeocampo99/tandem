@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,14 +8,11 @@ export async function withNativeInput<T>(
   input: string,
   invoke: (path: string) => Promise<T>,
 ): Promise<T> {
-  // Reject malformed input before creating any files. The native CLI validates the domain shape.
-  const value: unknown = JSON.parse(input);
-  if (value === null || typeof value !== "object" || Array.isArray(value))
-    throw new TypeError("Native action input must be a JSON object");
   const directory = await mkdtemp(join(tmpdir(), "tandem-native-input-"));
   try {
     const path = join(directory, "input.json");
     await writeFile(path, input, { flag: "wx", mode: 0o600 });
+    await chmod(path, 0o400);
     return await invoke(path);
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -25,19 +22,9 @@ export async function withNativeInput<T>(
 if (import.meta.main) {
   try {
     const [verb, id, ...context] = Bun.argv.slice(2);
-    if (
-      verb === undefined ||
-      ![
-        "brief-comment",
-        "brief-request-changes",
-        "brief-approve",
-        "pr-comment",
-        "review-submit",
-      ].includes(verb)
-    )
-      throw new TypeError("Unknown native JSON input action");
-    if (id === undefined || !/^[A-Za-z0-9_-]+$/u.test(id))
-      throw new TypeError("Native action requires a task or request id");
+    // The native CLI owns its verb allow-list, context and domain validation.
+    if (verb === undefined || id === undefined)
+      throw new TypeError("Native input caller requires a verb and positional id");
     const code = await withNativeInput(await Bun.stdin.text(), async (path) => {
       const child = Bun.spawn(
         [
