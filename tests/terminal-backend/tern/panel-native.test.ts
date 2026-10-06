@@ -56,11 +56,11 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
     );
     await writeFile(
       join(plugin, "host.luau"),
-      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("board", require("./layout-fixture"))\ntern.block.define("brief", require("./layout-fixture"))\n`,
+      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("board", require("./layout-fixture"))\ntern.block.define("brief", require("./layout-fixture"))\ntern.block.define("usage", require("./layout-fixture"))\ntern.block.define("catchup", require("./layout-fixture"))\n`,
     );
     await writeFile(
       join(plugin, "plugin.toml"),
-      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="board"\ntitle="Layout fixture board"\n[[blocks]]\nid="brief"\ntitle="Layout fixture brief"\n`,
+      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="board"\ntitle="Layout fixture board"\n[[blocks]]\nid="brief"\ntitle="Layout fixture brief"\n[[blocks]]\nid="usage"\ntitle="Layout fixture usage"\n[[blocks]]\nid="catchup"\ntitle="Layout fixture catch-up"\n`,
     );
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
@@ -359,6 +359,41 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,
       );
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          (entry) => entry.block.id === board.paneId,
+        ),
+      ).toBe(false);
+      for (const kind of ["usage", "catchup"] as const) {
+        const full = await host.open(
+          { coordinator, cwd: root, home, view: { kind } },
+          root,
+          kind,
+          "window",
+          path,
+        );
+        await host.open(
+          {
+            coordinator,
+            cwd: root,
+            home,
+            view: { kind: "orchestrator" },
+            origin: { paneId: full.paneId },
+          },
+          root,
+          "panel",
+          "return",
+          path,
+        );
+        expect(
+          blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+            (entry) => entry.block.id === full.paneId,
+          ),
+        ).toBe(false);
+        expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+          true,
+        );
+      }
       const other = await terminal.createWorkspace({
         sessionId: "other",
         cwd: root,

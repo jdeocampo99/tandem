@@ -330,7 +330,9 @@ before removing its replacement block.
 
 Known owned renderer back buttons all restore the conversation. When the coordinator is floated,
 the host proves its exact task block by program, coordinator and index launch arguments before
-docking the coordinator and closing that task. Other native tabs remain open.
+docking the coordinator and closing that task. Returning from Board, Usage or Catch-up also
+closes only its exact idle originating block; the backend proves all launch arguments before
+the guarded route and exact pane id absence afterwards. Brief/PR panes remain open on return.
 
 Task hosting floats and hides the conversation in its **same recorded tab**, retaining its
 exact endpoint and process. It refuses unrelated pictures in picture. Opening a second task proves the previous task block's
