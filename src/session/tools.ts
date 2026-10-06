@@ -319,6 +319,22 @@ export const tandemRequestSchema = z.strictObject({
       action: z.literal("review-post"),
       taskId: z.string(),
       verdict: z.enum(["comment", "approve", "request-changes"]),
+      recovery: z
+        .discriminatedUnion("kind", [
+          z.strictObject({
+            kind: z.literal("post-again"),
+            taskRevision: z.number().int().nonnegative(),
+          }),
+          z.strictObject({
+            kind: z.literal("mark-posted"),
+            taskRevision: z.number().int().nonnegative(),
+            url: z.string(),
+          }),
+        ])
+        .optional()
+        .describe(
+          "Only after the user checks the PR and explicitly chooses how to recover an uncertain post. Use the saved verdict and latest full task record revision. post-again warns that it may duplicate a received review; mark-posted requires its GitHub review link.",
+        ),
     }),
     z.strictObject({ action: z.literal("review-again"), taskId: z.string() }),
     z.strictObject({ action: z.literal("review-close"), taskId: z.string() }),

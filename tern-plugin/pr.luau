@@ -24,6 +24,7 @@ local function invoke(s: State, cx: BlockCx): content.Invoke
     s.content.diff.busy = false
     if result.status ~= 0 then cx:toast("error", "Tandem couldn't run that action", result.stderr)
     elseif done then done() end
+    if result.status == 0 and verb == "review-submit" then cx:exit(0); return end
     cx:render()
    end)
   end)
