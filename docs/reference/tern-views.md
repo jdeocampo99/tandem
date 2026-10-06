@@ -399,9 +399,12 @@ Include `pr.css` with the foundation stylesheet. The pane uses Tern's native sur
 for wheel and keyboard input; the review dock remains visible while the content scrolls.
 
 PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. The shared
-`src/terminal/native-input.ts` helper writes one exclusive 0600 file in a private unique
-directory, invokes the native action once, and removes
-the directory after that invocation settles. Draft decisions and new review comments remain
+`src/terminal/native-input.ts` helper creates one exclusive 0600 file in a private unique
+0700 directory, makes it read-only (0400) before invoking the native action once, and removes
+the directory in `finally` after that invocation settles. The wrapper accepts `VERB ID` plus
+explicit `--pane`, `--cwd`, optional `--window` and `--home` arguments, preserving their argv
+boundaries and the child's stdout, stderr and exit status. The native CLI owns the verb
+allow-list and all context, JSON and domain validation. Draft decisions and new review comments remain
 local until Post; displayed HEAD/generation are included in the submission for authority checks.
 Pass `native-input.sh` the verb, task/request ID, and the native CLI context flags
 (`--pane`, `--cwd`, optional `--window` and `--home`), with the JSON object on stdin.
