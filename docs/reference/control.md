@@ -185,7 +185,16 @@ different matching project. When no readable/live candidate matches, the command
 - `restart TASK_ID` uses central recovery; `steer --task TASK_ID --text TEXT` uses the existing
   message path. These actions do not implement a second recovery or messaging mechanism.
 - `review-submit TASK_ID --input FILE` parses the same `ReviewSubmission` as the review page,
-  then calls the existing submit service. The click is confirmation; pinned-head refusal and
+  with required native input fields `reviewHead` and `reviewGeneration` copied from the displayed
+  `PrPaneView.review.head` and `.generation`. The CLI passes this binding separately to the
+  existing submit service. While serialized with task mutations, it refuses a different latest
+  round head/generation or an advanced re-review task generation before applying choices or posting.
+  A question follow-up retains the existing finished round and its binding.
+  The click is confirmation; pinned-head refusal and
   duplicate-post prevention remain in that service. Plain comments never become submissions.
+  Uncertain submissions explain that GitHub may or may not have received the review and ask the
+  user to check the PR. The conversation's `review-post` action offers explicitly confirmed
+  recovery to post saved choices again or record the review link the user checked; ordinary native
+  submissions never choose either path. See [uncertain review recovery](pr-review.md#recovering-an-uncertain-post).
 - The native action namespace does not expose publication or merge commands. Publishing, merging,
   deployment, and destructive operations retain their separate conversation approvals.

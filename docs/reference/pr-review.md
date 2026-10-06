@@ -98,17 +98,54 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
 - `submit` maps the page's choices onto the round: a draft marked `post` is kept (with the user's
   `body` when they edited it), `drop`, `undecided`, and unmentioned drafts are left out, `yours` are
   added like `review-edit` `add`, and `summary` replaces the summary comment. A draft id the round
-  does not have is an error. It refuses a round already posted, then posts as below. Nothing is
-  saved unless the post lands, so a refused submission can be sent again.
+  does not have is an error. It refuses a round already posted, then posts as below. Preflight
+  refusals leave the drafts unchanged. Before the GitHub POST, the exact edited round and verdict
+  are saved with `pendingPost`; a later submission reconciles those saved choices without replacing
+  them with new choices.
+- Native `review-submit` input also requires the displayed `reviewHead` and `reviewGeneration`.
+  These travel separately from `ReviewSubmission` to the submit workflow. The service serializes
+  every chat/page/native posting entry point with task mutations through the authoritative read,
+  GitHub posting and saving the receipt; it refuses a
+  head/round generation mismatch or an advanced re-review task generation before applying draft choices.
+  Question follow-ups retain the same finished review round, so its unchanged binding remains valid.
+  A stale pane must reopen before submitting. The HTML submission shape remains unchanged.
 - `review-edit` rewrites, re-labels, or drops comments by id, adds the user's own comments
   (`add: [{file, line, body}]`), and replaces the summary, until the round is posted. An added
   comment must sit on a line the run's diff can anchor; otherwise the error names the lines that
   can. Added comments get ids `u1`, `u2`, ... that do not collide with existing ids.
+  A round with an uncertain `pendingPost` cannot be edited until its receipt is reconciled.
 - `review-post` from chat needs the user's approval and verdict (`comment`, `approve`,
   `request-changes`); Tandem never picks the verdict. Posting, from chat or the page, sends one
   review pinned to the reviewed `commit_id` and refuses when the PR moved. A hidden
-  `tandem-review:TASK_ID:GENERATION` marker is looked for before and after posting, so an
-  uncertain failure never posts twice. Replies for addressed earlier comments are posted after it.
+  `tandem-review:TASK_ID:GENERATION` marker is looked for before and after posting. An unreadable
+  marker list or PR head refuses a new POST. `pendingPost` is durable before the POST begins;
+  a lost response, malformed receipt, or failure to save the receipt leaves that attempt uncertain
+  across restarts. Retries only look for its marker and save the original verdict/choices as posted
+  when found. Even a currently absent marker cannot prove an uncertain POST will never appear, so
+  it does not permit an automatic POST. This also
+  means a crash after saving the attempt but before sending it needs reconciliation rather than a
+  blind repost. The receipt is saved before replies for addressed earlier comments are sent.
+
+### Recovering an uncertain post
+
+- An uncertain result, `review-show`, and native PR review notes say: "GitHub may or may not have
+  received this review; check the PR." They link the PR and offer two choices through the Tandem
+  conversation. Ordinary `review-post` and native/page submissions still only reconcile the marker.
+- After checking the PR, the user can ask to post the saved review again. The coordinator uses
+  `review-post` with the saved verdict and `recovery: {kind: "post-again", taskRevision}`. The
+  confirmation warns that GitHub may already have it and this can create a duplicate. Reposting
+  preserves the exact saved choices, checks the current head and readable marker list again, and
+  persists a fresh attempt before sending it. A found marker saves its receipt without reposting.
+- The user can instead supply the GitHub review link they checked and ask to mark it as posted:
+  `recovery: {kind: "mark-posted", taskRevision, url}`. The URL must belong to this PR and include
+  its `#pullrequestreview-N` anchor. Confirmation saves a receipt with `confirmedByUser: true`,
+  preserves the saved choices/verdict, and clears the pending state without any GitHub requests or
+  thread replies. This works even when GitHub API reads are unavailable.
+- Both choices require explicit human confirmation through the existing approval dialog or its
+  code-written conversation confirmation. `taskRevision` comes from the latest full task record;
+  it binds consent to that exact pending attempt. Any intervening change refuses recovery, so a
+  confirmation cannot be reused after a second uncertain attempt, even with an identical clock.
+  No model, polling loop, or ordinary resubmission chooses recovery on its own.
 
 ## Follow-ups and close
 

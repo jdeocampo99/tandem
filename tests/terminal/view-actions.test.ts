@@ -743,8 +743,8 @@ test("native review submit routes to the existing page submission service and re
     const submissions: unknown[] = [];
     const service = {
       ...f.service,
-      reviewSubmit: async (_id: string, submission: unknown) => {
-        submissions.push(submission);
+      reviewSubmit: async (_id: string, submission: unknown, expected: unknown) => {
+        submissions.push({ submission, expected });
         return { taskId: _id, posted: false, message: "The reviewed head moved" };
       },
     };
@@ -755,7 +755,7 @@ test("native review submit routes to the existing page submission service and re
       drafts: [],
       yours: [],
     };
-    await f.write(input);
+    await f.write({ ...input, reviewHead: "displayed-head", reviewGeneration: 0 });
     const result = await runCli(["review-submit", "task-review", "--input", f.input], {
       ...f.deps,
       service,
@@ -765,7 +765,37 @@ test("native review submit routes to the existing page submission service and re
       posted: false,
       message: "The reviewed head moved",
     });
-    expect(submissions).toEqual([input]);
+    expect(submissions).toEqual([
+      { submission: input, expected: { head: "displayed-head", generation: 0 } },
+    ]);
+    for (const invalid of [
+      {},
+      { reviewHead: "displayed-head" },
+      { reviewGeneration: 0 },
+      { reviewHead: "displayed-head", reviewGeneration: -1 },
+      { reviewHead: "displayed-head", reviewGeneration: 0.5 },
+      { reviewHead: "displayed-head", reviewGeneration: Number.MAX_SAFE_INTEGER + 1 },
+      { reviewHead: " displayed-head ", reviewGeneration: 0 },
+    ]) {
+      await f.write({ ...input, ...invalid });
+      const refused = await runTerminal(
+        [
+          "native",
+          "review-submit",
+          "task-review",
+          "--input",
+          f.input,
+          "--pane",
+          "101",
+          "--cwd",
+          f.clean,
+        ],
+        { ...f.deps, service },
+      );
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.error?.message).toContain("review-submit requires");
+    }
+    expect(submissions).toHaveLength(1);
     await f.write({ text: "a comment containing JSON is not a submission" });
     expect(
       (await runCli(["review-submit", "task-review", "--input", f.input], { ...f.deps, service }))
