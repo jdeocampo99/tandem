@@ -101,6 +101,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
+    // The native-slot wrapper can stop only these exact owned processes on abort.
+    console.log(
+      `Native proof process: ${JSON.stringify({ pid: daemon.pid, argv: [binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET] })}`,
+    );
     let window: ReturnType<typeof Bun.spawn> | undefined;
     try {
       await until(
@@ -120,6 +124,9 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       window = Bun.spawn(
         [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
         { env, cwd: root, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
+      );
+      console.log(
+        `Native proof process: ${JSON.stringify({ pid: window.pid, argv: [binary, "--control", control, "--dir", root, "--out", join(root, "shots")] })}`,
       );
       await until(async () => {
         await ctl("state");

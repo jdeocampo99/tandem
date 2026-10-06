@@ -47,6 +47,10 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | Workstream memory: catch-ups, handoffs, follow-ups | [memory/](src/memory/): `workstream.ts` (pure sections, cap, catch-up view), `view.ts` (card and list), `store.ts` (files in the home), `service.ts`; `tandem memory` in [main.ts](src/main.ts) |
 | Self-improvement: trigger rules, investigations, report-mode issues | [self-improvement/](src/self-improvement/): `triggers.ts` (pure rules), `issue-draft.ts` (scrub and Jev check), `service.ts` |
 | Terminal port: panes, workspaces, process proof, close, focus, panel, notifications, inherited pane context | [terminal-backend/](src/terminal-backend/): `contract.ts` (`TerminalBackend`, `TerminalContext`), `compose.ts` (the one place a backend is picked). Herdr implementation: [terminal-backend/herdr/](src/terminal-backend/herdr/). Only that folder and its tests may import Herdr modules (Biome enforces it) |
+| Tern backend: readiness, exact ids, process proof, native hosting and global preferences | [terminal-backend/tern/](src/terminal-backend/tern/): `availability.ts`, `backend.ts`, `endpoints.ts`, `protocol.ts`, `views.ts`, `view-intent.ts`, `plugin.ts`, `plugin-settings.ts`; selection and foreign-endpoint guards: [terminal-backend/compose.ts](src/terminal-backend/compose.ts), `setting.ts`, `identity.ts`. Only `tern/` may call the Tern CLI or parse its JSON |
+| Native Tern blocks, window keys/palette/routes, shared drawing API | [tern-plugin/](tern-plugin/): `host.luau`, `window.luau`, `view-host.luau`, `navigation.luau`, `plugin.toml`; foundation: `view-file.luau`, `text-field.luau`, `diff-row.luau`, `components.luau`; [tern-view/file.ts](src/tern-view/file.ts). One registration line and manifest entry per block |
+| Native view files, models, hosting and transition alerts | [board/](src/board/): `native-views.ts`, `native-read.ts`, `native-publish.ts`, `native-file.ts`, `native-alerts.ts`; paths and scheduling: `snapshot.ts`, [service/controller.ts](src/service/controller.ts); domain models: `tasks/page-view.ts`, `requests/native-view.ts`, `pr-review/native-view.ts`, `runtime/usage-view.ts`, `runtime/usage-display.ts`, `memory/native-view.ts`; visit/dismiss tracking: `memory/native-visits.ts` |
+| `tandem native` actions, screen command slots and private JSON input | [terminal/](src/terminal/): `cli-view-context.ts`, `cli-view-actions.ts`, `native-renderers.ts` (handler registration), `native-navigation.ts`, `native-screens.ts` (Board/Usage/Catch-up actions), `native-task-picker.ts`, `native-input.ts`; reply links: [session/native-links.ts](src/session/native-links.ts), `harness/omp/native-links.ts` and the Claude Code coordinator adapter; transport: [tern-plugin/native-input.sh](tern-plugin/native-input.sh). State and policy stay in TypeScript |
 | Treehouse, Lavish, Git/GitHub commands | [adapters/](src/adapters/); OMP commands: [harness/omp/adapter.ts](src/harness/omp/adapter.ts) |
 
 ## Safety boundaries
@@ -107,6 +111,8 @@ not the normal `tandem` front door.
 
 Before changing behavior, read its contract in [docs/reference/](docs/reference/):
 
+- Herdr/Tern selection, backend mapping, ownership, native hosting and consent: [terminal.md](docs/reference/terminal.md).
+- Tern Luau hosting and shared drawing API: [tern-views.md](docs/reference/tern-views.md); JSON publication contracts: [native-views.md](docs/reference/native-views.md).
 - Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
 - Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
 - Harnesses (OMP, Claude Code), how a role's model picks one, where it is recorded, the launch port, the Claude Code sidecar protocol: [harness.md](docs/reference/harness.md).
