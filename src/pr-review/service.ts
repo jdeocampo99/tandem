@@ -19,7 +19,7 @@ import {
   readPullRequest,
 } from "./pull-request.ts";
 import { renderReviewText, replyPostNotes, uncertainPostMessage, wantsPage } from "./render.ts";
-import { validateThreadReplies } from "./replies.ts";
+import { roundReplies, validateThreadReplies } from "./replies.ts";
 import { createReplyPosting } from "./reply-posting.ts";
 import type { ReviewLens } from "./review.ts";
 import {
@@ -331,7 +331,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
           round.posted === undefined ||
           !Number.isSafeInteger(index) ||
           index < 0 ||
-          round.review.replies?.[index] === undefined
+          roundReplies(round.review)[index] === undefined
         )
           throw new Error("Recovery must name a saved reply on a posted review.");
         if (verdict !== round.posted.verdict)
@@ -509,11 +509,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       (candidate) => candidate.generation === binding.generation && candidate.head === binding.head,
     );
     if (round?.posted === undefined) throw new Error("The review receipt was not saved.");
-    // The receipt message counts the user's selected thread replies, not reviewer-marked ones.
-    const threadCount = round.review.replies?.length ?? 0;
-    const count =
-      round.replyPosts?.filter((post) => post.kind === "posted" && post.index < threadCount)
-        .length ?? 0;
+    const count = round.replyPosts?.filter((post) => post.kind === "posted").length ?? 0;
     const notes = replyPostNotes(state.url, round);
     return {
       taskId,

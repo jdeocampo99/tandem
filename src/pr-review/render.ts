@@ -1,3 +1,4 @@
+import { roundReplies } from "./replies.ts";
 import type { PrReviewRound, PrReviewState } from "./state.ts";
 
 /** An uncertain submission needs the user's inspection and explicit choice before another POST. */
@@ -7,13 +8,19 @@ export function uncertainPostMessage(prUrl: string, detail?: string): string {
 
 /** Saved reply text, receipts and recovery choices survive process/task reloads. */
 export function replyPostNotes(prUrl: string, round: PrReviewRound): readonly string[] {
-  return (round.review.replies ?? []).map((reply, index) => {
+  return roundReplies(round.review).map((reply, index) => {
     const post = round.replyPosts?.find((saved) => saved.index === index);
-    const label = `Reply ${index} to thread ${reply.threadId} (root ${reply.commentId}, GitHub ${reply.replyTo}): ${reply.body}`;
+    const target =
+      reply.thread === undefined
+        ? `your earlier comment (GitHub ${reply.replyTo})`
+        : `thread ${reply.thread.threadId} (root ${reply.thread.commentId}, GitHub ${reply.replyTo})`;
+    const label = `Reply ${index} to ${target}: ${reply.body}`;
     if (post?.kind === "posted") return `${label}\nPosted: ${post.url}`;
-    if (round.posted === undefined && post === undefined)
-      return `${label}\nSaved with this review; not yet sent.`;
-    const detail = post?.kind === "uncertain" || post?.kind === "failed" ? ` ${post.message}` : "";
+    if (post === undefined)
+      return round.posted === undefined
+        ? `${label}\nSaved with this review; not yet sent.`
+        : `${label}\nNot sent. The next post or submission of this review sends it.`;
+    const detail = post.kind === "uncertain" || post.kind === "failed" ? ` ${post.message}` : "";
     return `${label}\nThis reply has no confirmed receipt. GitHub may or may not have received it; check the PR: ${prUrl}. Tandem will not automatically retry. Ask to post saved reply ${index} again (which may duplicate it), or mark it as posted with the reply link you checked. Both require your confirmation.${detail}`;
   });
 }

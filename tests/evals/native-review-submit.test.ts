@@ -923,14 +923,19 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
           });
         if (crash === "claim" || crash === "reply-receipt")
           expect(saved.prReview?.rounds[0]?.replyPosts?.[0]?.kind).toBe("pending");
+        // Only a reply that never claimed its attempt is sent on re-entry; a claim is never retried.
+        const unclaimed = crash === "review-receipt";
+        const note = unclaimed
+          ? "Not sent. The next post or submission of this review sends it."
+          : "no confirmed receipt";
         const show = await restarted.reviewShow(SCENARIO_TASK_ID, { page: false });
         expect(show.text).toContain(threadReply.body);
-        expect(show.text).toContain("Tandem will not automatically retry");
+        expect(show.text).toContain(note);
+        if (unclaimed) expect(show.text).not.toContain("may or may not have received it");
+        else expect(show.text).toContain("Tandem will not automatically retry");
         const round = saved.prReview?.rounds[0];
         if (!round || !saved.prReview) throw new Error("Missing round");
-        expect(reviewPageInput(saved.prReview, round, "", {}).notes.join("\n")).toContain(
-          "no confirmed receipt",
-        );
+        expect(reviewPageInput(saved.prReview, round, "", {}).notes.join("\n")).toContain(note);
         const nativeReader = new NativeViewsReader({
           home: world.home,
           clock: world.clock,
@@ -947,12 +952,8 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
         await nativeReader.settle();
         const publication = await nativeReader.read(snapshot, world.repoPath);
         const pr = publication.details.find((entry) => entry.view.kind === "pr")?.view;
-        expect(pr?.kind === "pr" ? pr.data.review?.notes.join("\n") : undefined).toContain(
-          "no confirmed receipt",
-        );
+        expect(pr?.kind === "pr" ? pr.data.review?.notes.join("\n") : undefined).toContain(note);
         await nativeReader.settle();
-        // Only a reply that never claimed its attempt is sent on re-entry; a claim is never retried.
-        const unclaimed = crash === "review-receipt";
         const sent = before + (unclaimed ? 1 : 0);
         expect(
           await restarted.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true }),
@@ -984,9 +985,10 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
 }
 
 /** A small GitHub that remembers every reply it accepted and serves it back with its marker. */
-function priorReplyGitHub(world: ScenarioWorld, prUrl: string) {
+function priorReplyGitHub(world: ScenarioWorld, prUrl: string, lostReplies = 0) {
   const replies: Record<string, unknown>[] = [];
   let reviewPosts = 0;
+  let lost = 0;
   const run: CommandRunner = async (request) => {
     if (request.argv[0] !== "gh") return world.run(request);
     const endpoint = request.argv.find((arg) => arg.startsWith("repos/")) ?? "";
@@ -1008,6 +1010,10 @@ function priorReplyGitHub(world: ScenarioWorld, prUrl: string) {
       return { code: 0, stdout: JSON.stringify({ html_url: `${prUrl}#review-1` }), stderr: "" };
     }
     if (request.argv.includes("POST") && endpoint.endsWith("/comments")) {
+      if (lost < lostReplies) {
+        lost += 1;
+        return { code: 1, stdout: "", stderr: "reply response lost" };
+      }
       const payload = JSON.parse(request.stdin ?? "{}") as Record<string, unknown>;
       const receipt = {
         in_reply_to_id: payload.in_reply_to,
@@ -1022,40 +1028,50 @@ function priorReplyGitHub(world: ScenarioWorld, prUrl: string) {
   return { run, replies, reviewPosts: () => reviewPosts };
 }
 
+async function seedPriorReplies(world: ScenarioWorld) {
+  const { round, state } = await seedReview(world);
+  const initial = await world.store.read(SCENARIO_TASK_ID);
+  if (initial === undefined) throw new Error("Missing scenario task");
+  await world.store.update(initial.id, initial.revision, (task) => ({
+    ...task,
+    revision: task.revision + 1,
+    prReview: {
+      ...state,
+      rounds: [
+        {
+          ...round,
+          review: {
+            ...round.review,
+            priorComments: [
+              { commentId: 42, status: "addressed", reply: "Thanks, this is capped now." },
+              { commentId: 43, status: "not-addressed" },
+              { commentId: 44, status: "addressed", reply: "Logged per attempt, thanks." },
+            ],
+          },
+        },
+      ],
+    },
+  }));
+  return state;
+}
+
+const priorSubmission: ReviewSubmission = {
+  tandemPrReview: 1,
+  verdict: "comment",
+  summary: "Saved review",
+  drafts: [],
+  yours: [],
+};
+
 test("replies to addressed earlier comments survive a crash mid-loop and each posts exactly once", async () => {
   await withScenario({}, async (world) => {
-    const { round, state } = await seedReview(world);
-    const initial = await world.store.read(SCENARIO_TASK_ID);
-    if (initial === undefined) throw new Error("Missing scenario task");
-    await world.store.update(initial.id, initial.revision, (task) => ({
-      ...task,
-      revision: task.revision + 1,
-      prReview: {
-        ...state,
-        rounds: [
-          {
-            ...round,
-            review: {
-              ...round.review,
-              priorComments: [
-                { commentId: 42, status: "addressed", reply: "Thanks, this is capped now." },
-                { commentId: 43, status: "not-addressed" },
-                { commentId: 44, status: "addressed", reply: "Logged per attempt, thanks." },
-              ],
-            },
-          },
-        ],
-      },
-    }));
+    const state = await seedPriorReplies(world);
     const github = priorReplyGitHub(world, state.url);
     await expect(
-      crashReplyWorkflow(world, github.run, "first-reply-receipt").submit(SCENARIO_TASK_ID, {
-        tandemPrReview: 1,
-        verdict: "comment",
-        summary: "Saved review",
-        drafts: [],
-        yours: [],
-      }),
+      crashReplyWorkflow(world, github.run, "first-reply-receipt").submit(
+        SCENARIO_TASK_ID,
+        priorSubmission,
+      ),
     ).rejects.toThrow("crash after the first reply receipt");
     expect(github.replies.map((reply) => reply.in_reply_to_id)).toEqual([42]);
     const restarted = reviewService(world, github.run);
@@ -1084,6 +1100,46 @@ test("replies to addressed earlier comments survive a crash mid-loop and each po
       expect(github.reviewPosts()).toBe(1);
     } finally {
       await restarted.shutdown();
+    }
+  });
+}, 20_000);
+
+test("an uncertain reply to an earlier comment is reported and recovered like a thread reply", async () => {
+  await withScenario({}, async (world) => {
+    const state = await seedPriorReplies(world);
+    const github = priorReplyGitHub(world, state.url, 1);
+    const service = reviewService(world, github.run);
+    try {
+      const submitted = await service.reviewSubmit(SCENARIO_TASK_ID, priorSubmission);
+      expect(submitted.message).toContain(
+        "Reply 0 to your earlier comment (GitHub 42): Thanks, this is capped now.\nThis reply has no confirmed receipt.",
+      );
+      expect(submitted.message).toContain("reply response lost");
+      expect(submitted.message).toContain(`Posted: ${state.url}#discussion_r100`);
+      expect(submitted.message).toContain("with 1 reply:");
+      expect(github.replies.map((reply) => reply.in_reply_to_id)).toEqual([44]);
+      const show = await service.reviewShow(SCENARIO_TASK_ID, { page: false });
+      expect(show.text).toContain("Ask to post saved reply 0 again");
+
+      await service.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true });
+      expect(github.replies).toHaveLength(1);
+
+      const saved = await service.get(SCENARIO_TASK_ID);
+      const recovered = await service.reviewPost(SCENARIO_TASK_ID, {
+        verdict: "comment",
+        approved: true,
+        recovery: { kind: "post-reply-again", taskRevision: saved.revision, replyIndex: 0 },
+      });
+      expect(recovered.message).toContain("with 2 replies:");
+      expect(recovered.message).not.toContain("no confirmed receipt");
+      expect(github.replies.map((reply) => reply.in_reply_to_id)).toEqual([44, 42]);
+      expect((await service.get(SCENARIO_TASK_ID)).prReview?.rounds[0]?.replyPosts).toMatchObject([
+        { index: 1, kind: "posted", url: `${state.url}#discussion_r100` },
+        { index: 0, kind: "posted", url: `${state.url}#discussion_r101` },
+      ]);
+      expect(github.reviewPosts()).toBe(1);
+    } finally {
+      await service.shutdown();
     }
   });
 }, 20_000);

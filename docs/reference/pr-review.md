@@ -206,9 +206,12 @@ head/generation/reply under a short lock, preserving concurrent task changes: `p
 `url`/`postedAt`, `uncertain` keeps the attempt and failure detail, and a preflight refusal saves
 `failed` with its reason. Each reply uses `in_reply_to`, the pinned `commit_id`, and its own hidden
 task/generation/index marker; unreadable head or marker reads refuse posting. A lost response
-reconciles the marker without retrying. Unconfirmed replies are reported explicitly and are never
-automatically retried, including after restart. Review-show, HTML notes and native review notes
-retain each saved thread reply's text, thread/root identity, receipt or warning after reload.
+reconciles the marker without retrying. Unconfirmed replies of both kinds are reported explicitly
+and are never automatically retried, including after restart. Review-show, HTML notes and native
+review notes retain each saved reply's index, text, target (thread/root identity, or the earlier
+comment's GitHub id), and its receipt or warning after reload. A reply on a posted round with no
+entry is reported as not sent, and the next review-post or submission sends it. The posted
+message counts every reply with a `posted` receipt.
 
 Every review-post or submission that finds the receipt saved sends the round's unclaimed replies
 and reconciles the claimed ones, so a crash mid-loop loses no reply: on re-entry the sent ones are
@@ -219,8 +222,10 @@ blocks or undoes the review receipt, and a review receipt does not certify every
 
 The user can recover one saved reply through review-post with the saved review verdict and
 `recovery:{kind:"post-reply-again", taskRevision, replyIndex}`, after a confirmation warning that
-this can duplicate a reply. It preserves the exact body/root and rechecks thread identity, marker
-and pinned head before saving a fresh claim. Two callers or a stale task revision cannot claim it.
+this can duplicate a reply. It works for any `roundReplies` index, so a prior-comment reply
+recovers exactly like a thread reply. It preserves the exact body/root, rechecks thread identity
+for a thread reply, then the marker and pinned head before saving a fresh claim. Two callers or a
+stale task revision cannot claim it.
 Alternatively `recovery:{kind:"mark-reply-posted", taskRevision, replyIndex, url}` records the
 checked same-PR `#discussion_rN` URL with `confirmedByUser:true`, without any GitHub requests.
 Both use the same approval flow as review recovery, bind to the latest full task revision, and
