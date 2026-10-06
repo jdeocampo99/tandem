@@ -5,84 +5,98 @@ and [tern-views.md](tern-views.md) for hosting and the shared Luau API. All mode
 TypeScript. The terminal renderer reads the JSON and runs CLI actions. It never fetches
 GitHub, provider limits, or the task store itself.
 
-## Files and ownership
+## Store and ownership
 
 `<home>/board-snapshot.json` retains its version-1 shape and Herdr behavior.
 
-`<home>/native-views/<key>.json` is the small native index polled by renderers. `key` reuses
+`src/native/store.ts` owns `<home>/tern/<key>/`, one directory per project. `key` reuses
 `repositoryKey(canonicalRepoPath)` from `src/config/repositories.ts`, the existing 24-character
-lowercase key for saved project settings and coordinator session directories. The registry's
-record filenames use the full path digest; saved settings already provide the shorter stable
-project key, so native views do not introduce another identity.
-Use `nativeViewsPath(home, canonicalRepoPath)` from `src/board/snapshot.ts` to locate it. Two
-checkouts with the same basename have different files. The project's coordinator is the single
-writer, scheduled by the existing `writeBoardSnapshot` service operation, only for a Tern backend.
-`NativeViewsPublisher` runs task inspection, timelines and derived-file writes in a serial background
-queue. Snapshot ticks enqueue the newest input without waiting for those reads; while a publication
-runs, later ticks replace a single pending input. Finished-task history stays available in details.
-Shutdown drains the last queued publication and cache reads.
+lowercase key for saved project settings and coordinator session directories, so two checkouts
+with the same basename have different directories. The directory holds:
 
-Immediate brief projection uses the same `publishNativeViews` writer as background publication.
-A private per-project O_EXLOCK serializes both paths across coordinator and CLI processes. The
-writer acquires it before building models from fresh durable state and holds it through detail
-writes, index replacement and cleanup. An older tick therefore finishes before a new brief detail
-can publish, and a later tick reads the current revision even with an older board input. Cleanup
-cannot delete a detail published after the snapshot it used. Brief opening waits for this writer.
+- `views/index.json`, the small index every screen without a detail file watches
+  (`viewIndexPath(home, canonicalRepoPath)`).
+- `views/task-<encodedTaskId>.json`, `views/brief-<encodedRequestId>.json` and
+  `views/pr-<encodedOwnerRepo>-<number>.json`, the detail files
+  (`viewDetailPath(home, canonicalRepoPath, detailFile)`). Identifiers use `encodeURIComponent`,
+  so each filename is one path segment; PR filenames include the repository.
+- `state.json`: the store's `epoch` and `seq`, the alert cursors (`board/native-alerts.ts`), the
+  visit record (`memory/native-visits.ts`) and `published`, what the last full publication showed.
+- `open/<coordinatorKey>.<token>.{ticket,receipt}.json`, staged open tickets and their receipts
+  (`terminal-backend/tern/host.ts`).
 
-Task timelines, brief lines and PR patches/threads/tours live in separate detail files:
+One lock per project (`state.lock`) serializes `views/` and `state.json` across coordinator and
+CLI processes; `withProjectLock` is the only way to change `state.json`. Staged opens keep their
+own per-coordinator lock in `open/`, because an open holds it while Tern applies the layout, and
+publication must not wait for that. For the same reason a project visit decides under the lock, opens
+catch-up outside it, and records the visit under it again.
 
-- `<home>/native-views/<key>/task-<encodedTaskId>.json`
-- `<home>/native-views/<key>/brief-<encodedRequestId>.json`
-- `<home>/native-views/<key>/pr-<encodedOwnerRepo>-<number>.json`
+The project's coordinator is the single writer of full publications, scheduled by the existing
+`writeBoardSnapshot` service operation, only for a Tern backend. `NativeViewsPublisher`
+(`board/native-read.ts`) runs task inspection, timelines and derived-file writes in a serial
+background queue. Snapshot ticks enqueue the newest input without waiting for those reads; while a
+publication runs, later ticks replace a single pending input. Shutdown drains the last queued
+publication and cache reads.
 
-Identifiers use `encodeURIComponent`, so each filename remains one path segment. PR filenames
-include the repository to avoid collisions between reviews of the same number in different repos.
-`detailFile` in each index entry is relative to `<home>/native-views/<key>/`; resolve it using
-`nativeDetailPath(home, canonicalRepoPath, detailFile)`. Renderers read detail files when needed.
+`publishViews(home, project, build)` is the only writer of `views/`. Immediate brief projection
+uses it too. It takes the project lock, then builds from fresh durable state, then validates every
+model against its schema, and holds the lock through detail writes, index replacement and cleanup.
+An older tick therefore finishes before a new brief detail can publish, and a later tick reads the
+current revision even with an older board input. Cleanup cannot delete a detail published after the
+snapshot it used. Brief opening waits for this writer.
 
-Directories are private (0700); files are 0600. The writer compares the serialized content with
-the existing file and leaves an unchanged file's inode and modification time intact. Each changed
-file uses a unique temporary file and atomic rename. Details publish before the small index;
-there is no transaction across files. Actions still validate authoritative revision/head bindings.
-After a successful index write, the same owner prunes its task/brief/PR detail files for entities no
-longer present. Pending provider/GitHub refreshes retain live PRs' last detail until their replacement
-is ready. Foreign project files, unrelated files, symlinks and temporary files are preserved.
-On failure, the last good files remain readable and `native-views-publish-failed` diagnostics record
-the failure. No native file is authority. The normal coordinator reconciliation schedules updates. GitHub and provider cache refreshes run in a
-serial background queue, at most once per minute per PR/provider read, with command timeouts.
+Directories are private (0700); files are 0600. A file is rewritten only when its canonical model
+JSON changed, so an unchanged file keeps its inode, modification time and `seq`. Each changed file
+uses a unique temporary file and atomic rename. Details publish before the index; there is no
+transaction across files. Actions still validate authoritative revision/head bindings. After a
+successful index write, the same owner prunes its task/brief/PR detail files for entities no
+longer present. Pending provider/GitHub refreshes retain live PRs' last detail until their
+replacement is ready. Foreign project files, unrelated files, symlinks and temporary files are
+preserved. On failure, the last good files remain readable and `native-views-publish-failed`
+diagnostics record the failure. No view file is authority. GitHub and provider cache refreshes run
+in a serial background queue, at most once per minute per PR/provider read, with command timeouts.
 They never hold up the snapshot. Shutdown drains the queue.
 
-A missing bundle means no snapshot yet. An unknown `version` must be refused. A stale
-`writtenAt` should be displayed as stale, as the panel does. Read-only cached remote data may
-be older than the bundle: PRs have `readAt`, limits have `fetchedAt`, and `warnings` records
-refreshing/failing sources. The in-memory remote cache starts empty on a coordinator relaunch
-and fills in subsequent reconciliations. No empty or failing read means zero usage or passing CI.
+TypeScript never parses a view file to decide anything. Project switching (`published.projects`
+and the summary's `writtenAt`, refused when more than 10 seconds old), board and catch-up links
+(`published.boardLinks`, `published.merged`), Show PRs and opening a PR by number
+(`published.pullRequests`), task and PR detail availability (`published.tasks`,
+`published.pullRequests`), catch-up's first need (`published.needsYou`) and visit signatures
+(`published.changeSignature`) read `state.json`, written in the same locked publication as the
+views. Other projects' rows in the switcher come from their own `published.summary`.
 
-## JSON schema (version 1)
+The format never shipped to other users, so the earlier `native-views/`, `native-alerts/`,
+`native-visits/` and `native-host/` directories are not migrated or read.
 
-Every native index and per-entity file is one envelope:
+A missing index means no publication yet. A stale `writtenAt` is displayed as stale, as the panel
+does. Read-only cached remote data may be older than the index: PRs have `readAt`, limits have
+`fetchedAt`, and `warnings` records refreshing/failing sources. The in-memory remote cache starts
+empty on a coordinator relaunch and fills in subsequent reconciliations. No empty or failing read
+means zero usage or passing CI.
+
+## View files
+
+Every file in `views/` is one `ViewFile` (`src/native/contract.ts`):
 
 ```ts
-{
-  version: 1,
-  kind: "panel" | "task" | "brief" | "pr",
-  revision: string,
-  model: Model
-}
+{ v: 1, kind: "index" | "task" | "brief" | "pr", epoch: string, seq: number, model: Model }
 ```
 
-The index has `kind:"panel"` and `model:NativeViews`. Detail kinds are `task`, `brief`, `pr`,
-with `model:TaskPageView`, `model:BriefView`, `model:PrPaneView` respectively. There are exactly
-four envelope fields; project ownership metadata stays in the in-process publication.
-These field names and string revision type match the host's `tern-plugin/view-file.luau` loader.
+The index has `kind:"index"` and `model:NativeViews`. Detail kinds are `task`, `brief`, `pr`,
+with `model:TaskPageView`, `model:BriefView`, `model:PrPaneView` respectively. `VIEW_MODELS` in
+the contract holds one zod schema per kind, covering what the screens draw; `publishViews` refuses
+a model that fails it before writing anything. Luau JSON reads `null` as absent, so optional
+fields accept either.
 
-`revision` is the lowercase SHA-256 digest of canonical JSON **model content only**. Object keys
-sort recursively; array order remains significant, omitted object properties remain omitted, and
-non-JSON/non-finite values are refused. Identical models retain the same bytes and revision across
-writer restarts and object construction order. A changed model gets a different revision. The
-writer compares the complete canonical envelope before replacing a file; unchanged files do not
-trigger loader repaints. The presentation revision never authorizes an action and is distinct from
-the numeric brief revision at `file.model.revision` and the reviewed HEAD in a PR model.
+`epoch` is a random id written when the project's `state.json` is created. `seq` is project-wide:
+each written file takes the next number, and `state.json` commits the numbers before any file
+carries them, so a crash only skips numbers. `rt.watch(cx, path, kind)` reads the whole file once a
+second and accepts it only when its `seq` is higher than the shown one; a different `epoch` is a
+new store and resets that baseline. `rt.draw` renders each block inside a `pcall`: a model that
+fails to draw is never shown, the watch keeps the last model that drew and reports `unavailable`,
+and the screen shows its existing unavailable state until a newer file arrives. The brief screen
+compares `seq` to notice a newer draft; `seq` never authorizes an action and is distinct from the
+numeric brief revision at `file.model.revision` and the reviewed HEAD in a PR model.
 
 The authoritative, readonly TypeScript model schema is `NativeViews` in
 `src/board/native-views.ts`, with the domain schemas linked below. Every field here is JSON,

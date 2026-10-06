@@ -6,7 +6,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
-import { NativeViewsPublisher } from "../board/native-publish.ts";
+import { NativeViewsPublisher } from "../board/native-read.ts";
 import { readBoard } from "../board/read.ts";
 import { type BoardSnapshot, writeBoardSnapshot } from "../board/snapshot.ts";
 import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts";

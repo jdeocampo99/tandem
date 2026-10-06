@@ -1,17 +1,16 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../src/adapters/commands.ts";
-import { nativeViewText } from "../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
-import { repositoryKey } from "../../src/config/repositories.ts";
 import type { CommandRequest } from "../../src/contracts.ts";
 import { openProject, openProjectCommand } from "../../src/coordinator/open-project.ts";
 import { listCoordinatorRecords, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
+import { readProjectState } from "../../src/native/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import { publishFixture } from "../native/view-files.ts";
 import { saveCoordinator } from "./fake-workspace-order.ts";
 
 const input = {
@@ -129,21 +128,7 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         },
       };
       await saveCoordinatorRecord(home, record);
-      const path = nativeViewsPath(home, repo);
-      await mkdir(join(path, ".."), { recursive: true });
-      await writeFile(
-        path,
-        nativeViewText("panel", {
-          version: 1,
-          project: repo,
-          writtenAt: new Date().toISOString(),
-          changeSignature: "after",
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          projects: [],
-        }),
-      );
+      await publishFixture(home, repo, { changeSignature: "after" });
       await visitNativeProject(
         {
           home,
@@ -153,8 +138,8 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         },
         async () => {},
       );
-      const visitPath = join(home, "native-visits", `${repositoryKey(repo)}.json`);
-      const previousVisit = await readFile(visitPath, "utf8");
+      const visit = async () => JSON.stringify((await readProjectState(home, repo))?.visit);
+      const previousVisit = await visit();
       const events: string[] = [];
       const run = async () => {
         events.push("launch --no-attach");
@@ -188,7 +173,7 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         focused ? ["launch --no-attach", "focus", "catchup"] : ["launch --no-attach", "focus"],
       );
       if (warning !== undefined) {
-        expect(await readFile(visitPath, "utf8")).toBe(previousVisit);
+        expect(await visit()).toBe(previousVisit);
       }
     } finally {
       await rm(root, { recursive: true, force: true });

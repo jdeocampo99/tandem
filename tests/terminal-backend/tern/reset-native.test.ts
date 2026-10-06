@@ -2,15 +2,15 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
 import { parseBlockArgs } from "../../../src/native/contract.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, Processes } from "../../../src/terminal-backend/tern/protocol.ts";
+import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 
 const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -210,10 +210,10 @@ exec /bin/sleep 30
       if (!record) throw new Error("coordinator record missing");
       const fixture = nativeScreensFixture();
       await mkdir(join(home, "native-views"), { recursive: true });
-      const path = nativeViewsPath(home, repo);
+      const path = viewIndexPath(home, repo);
       await writeFile(
         path,
-        nativeViewText("panel", { ...fixture, project: repo, writtenAt: new Date().toISOString() }),
+        viewFileText("index", { ...fixture, project: repo, writtenAt: new Date().toISOString() }),
       );
       for (const view of [
         { kind: "brief", requestId: "reset-brief" },

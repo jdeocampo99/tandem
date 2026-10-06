@@ -7,15 +7,15 @@ local taskModel = {
  overview={summary='Review the port',todos={},done=0,total=0,recent={}},
  progress={events={},unreadableEvents=0,checks={},findings={}},message={placeholder='Message the worker…'},
 }
-local taskPath='/custom home/native-views/project/task-review-1.json'
-local indexPath='/custom home/native-views/project.json'
-local prPath='/custom home/native-views/project/pr-review-1.json'
+local taskPath='/custom home/tern/0a1b/views/task-review-1.json'
+local indexPath='/custom home/tern/0a1b/views/index.json'
+local prPath='/custom home/tern/0a1b/views/pr-review-1.json'
 local decodeReceipt=tern.json.decode
 tern.fs.read=function(path) return path end
 tern.json.decode=function(raw)
- if raw==taskPath then return {version=1,kind='task',revision='task-revision',model=taskModel} end
- if raw==indexPath then return {version=1,kind='panel',revision='index-revision',model={briefs={},pullRequests={['acme/app#281']={header=model.header,detailFile='pr-review-1.json'}}}} end
- if raw==prPath then return {version=1,kind='pr',revision='pr-revision',model=model} end
+ if raw==taskPath then return {v=1,kind='task',epoch='store',seq=1,model=taskModel} end
+ if raw==indexPath then return {v=1,kind='index',epoch='store',seq=2,model={briefs={},pullRequests={['acme/app#281']={header=model.header,detailFile='pr-review-1.json'}}}} end
+ if raw==prPath then return {v=1,kind='pr',epoch='store',seq=3,model=model} end
  return decodeReceipt(raw)
 end
 local function hasText(node,label)

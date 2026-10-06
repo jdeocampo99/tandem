@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { nativeBriefFile } from "../../../src/board/native-views.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { blockArgs } from "../../../src/native/contract.ts";
+import { viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { openFiles } from "../../native/view-files.ts";
 
 for (const mode of [
   "closed",
@@ -33,11 +34,11 @@ for (const mode of [
       role: "coordinator",
       generation: 0,
     };
-    const args = blockArgs(nativeDetailPath(home, home, nativeBriefFile("req-1")), {
+    const args = blockArgs(viewDetailPath(home, home, nativeBriefFile("req-1")), {
       coordinator: "3",
       cwd: home,
       home,
-      index: nativeViewsPath(home, home),
+      index: viewIndexPath(home, home),
     });
     let removed = mode === "missing";
     let processReads = 0;
@@ -176,11 +177,11 @@ for (const kind of ["board"] as const) {
         role: "coordinator",
         generation: 0,
       };
-      const args = blockArgs(nativeViewsPath(home, home), {
+      const args = blockArgs(viewIndexPath(home, home), {
         coordinator: "3",
         cwd: home,
         home,
-        index: nativeViewsPath(home, home),
+        index: viewIndexPath(home, home),
       });
       let removed = mode === "missing";
       let processReads = 0;
@@ -263,7 +264,7 @@ for (const kind of ["board"] as const) {
           home,
           "panel",
           "return",
-          nativeViewsPath(home, home),
+          viewIndexPath(home, home),
         );
       try {
         if (mode === "closed" || mode === "coordinator") {
@@ -273,15 +274,15 @@ for (const kind of ["board"] as const) {
           await expect(close()).rejects.toThrow();
           expect(closeCalls).toBe(mode === "unknown" ? 1 : 0);
           if (mode === "unknown") {
-            expect(
-              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".ticket.json")),
-            ).toBe(true);
+            expect((await openFiles(home)).some((name) => name.endsWith(".ticket.json"))).toBe(
+              true,
+            );
             const returned = await close();
             expect(returned.warnings?.[0]).toContain("recovery record were kept");
             expect(closeCalls).toBe(1);
-            expect(
-              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".ticket.json")),
-            ).toBe(true);
+            expect((await openFiles(home)).some((name) => name.endsWith(".ticket.json"))).toBe(
+              true,
+            );
           }
         }
       } finally {

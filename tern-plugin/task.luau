@@ -1,6 +1,5 @@
 --!strict
 local ui = tern.ui
-local views = require('./view-file')
 local fields = require('./text-field')
 local components = require('./components')
 local rt = require('./rt')
@@ -25,88 +24,8 @@ type Model = {
    tokens: { actualInputTokens: number, actualOutputTokens: number, estimatedInputTokens: number, estimatedOutputTokens: number, unavailableSamples: number } } },
    byWorkKind: { { workKind: string, activeMs: number } }, malformedSamples: number, omittedSamples: number } }?,
 }
-type Index = prModels.Index & { briefs: { [string]: { detailFile: string } } }
-type Brief = { title: string, revision: number, lines: { { id: string, number: number, text: string, kind: string, isNew: boolean } } }
-type State = { origin: rt.Origin, index: views.View<Index>?, brief: views.View<Brief>?, pr: views.View<prModels.Model>?, prContent: prContent.State, stopBrief: (() -> ())?, stopPr: (() -> ())?, view: views.View<Model>, field: fields.Field, tab: string, prMatch: boolean, editing: boolean }
+type State = { origin: rt.Origin, index: rt.Watch?, brief: rt.Watch?, pr: rt.Watch?, prContent: prContent.State, view: rt.Watch, field: fields.Field, tab: string, prMatch: boolean, editing: boolean }
 
-local function optionalString(value: unknown): boolean return value == nil or type(value) == 'string' end
-local function events(value: unknown): boolean
- if type(value) ~= 'table' then return false end
- for _, event in value do
-  if type(event) ~= 'table' or type(event.seq) ~= 'number' or type(event.at) ~= 'string' or type(event.type) ~= 'string'
-   or not optionalString(event.cause) or not optionalString(event.from) or not optionalString(event.to) or not optionalString(event.stage)
-   or (event.round ~= nil and type(event.round) ~= 'number') then return false end
- end
- return true
-end
-local function numbers(value: unknown, keys: { string }): boolean
- if type(value) ~= 'table' then return false end
- for _, key in keys do if type(value[key]) ~= 'number' then return false end end
- return true
-end
-local function parse(value: unknown): Model?
- if type(value) ~= 'table' or type(value.header) ~= 'table' or type(value.header.id) ~= 'string'
-  or not string.match(value.header.id, '^[%w_-]+$') or type(value.header.title) ~= 'string'
-  or type(value.header.stage) ~= 'string' or type(value.header.returnLabel) ~= 'string' or type(value.header.elapsed) ~= 'string'
-  or not optionalString(value.header.model) or not optionalString(value.header.branch)
-  or type(value.rightNow) ~= 'table' or type(value.rightNow.text) ~= 'string' or not optionalString(value.rightNow.age)
-  or type(value.stageTrack) ~= 'table' or type(value.tabs) ~= 'table'
-  or type(value.overview) ~= 'table' or type(value.overview.summary) ~= 'string'
-  or not numbers(value.overview, { 'done', 'total' }) or type(value.overview.todos) ~= 'table' or not events(value.overview.recent)
-  or type(value.progress) ~= 'table' or not events(value.progress.events) or type(value.progress.unreadableEvents) ~= 'number'
-  or type(value.progress.checks) ~= 'table' or type(value.progress.findings) ~= 'table'
-  or type(value.message) ~= 'table' or type(value.message.placeholder) ~= 'string' or not optionalString(value.message.model)
-  or not optionalString(value.requestId) then return nil end
- for _, step in value.stageTrack do
-  if type(step) ~= 'table' or type(step.label) ~= 'string' or not table.find({ 'done', 'current', 'pending', 'skipped' }, step.state)
-   or (step.round ~= nil and not numbers(step.round, { 'used', 'max' })) then return nil end
- end
- for _, tab in value.tabs do if type(tab) ~= 'string' then return nil end end
- for _, todo in value.overview.todos do
-  if type(todo) ~= 'table' or type(todo.content) ~= 'string' or type(todo.status) ~= 'string' then return nil end
- end
- for _, check in value.progress.checks do
-  if type(check) ~= 'table' or type(check.name) ~= 'string' or type(check.passed) ~= 'boolean'
-   or type(check.head) ~= 'string' or type(check.contract) ~= 'string' then return nil end
- end
- for _, finding in value.progress.findings do
-  if type(finding) ~= 'table' or type(finding.id) ~= 'string' or type(finding.severity) ~= 'string'
-   or type(finding.description) ~= 'string' or type(finding.status) ~= 'string' or not optionalString(finding.file)
-   or (finding.line ~= nil and type(finding.line) ~= 'number') then return nil end
- end
- if value.stuck ~= nil and (type(value.stuck) ~= 'table' or type(value.stuck.reason) ~= 'string') then return nil end
- if value.pullRequest ~= nil and (type(value.pullRequest) ~= 'table' or type(value.pullRequest.number) ~= 'number') then return nil end
- local cost = value.cost
- if cost ~= nil then
-  if type(cost) ~= 'table' or type(cost.recorded) ~= 'boolean' or not numbers(cost.charges, { 'amountMicros', 'unavailableSamples' })
-   or not numbers(cost.tokens, { 'actualInputTokens', 'actualOutputTokens', 'estimatedInputTokens', 'estimatedOutputTokens', 'unavailableSamples' })
-   or type(cost.timing) ~= 'table' or type(cost.timing.activeMs) ~= 'number'
-   or (type(cost.timing.elapsedMs) ~= 'number' and cost.timing.elapsedMs ~= 'unavailable')
-   or (type(cost.timing.waitingMs) ~= 'number' and cost.timing.waitingMs ~= 'unavailable')
-   or type(cost.quota) ~= 'table' or type(cost.quota.entries) ~= 'table' or type(cost.quota.unavailableSamples) ~= 'number'
-   or not numbers(cost.breakdown, { 'malformedSamples', 'omittedSamples' }) or type(cost.breakdown.byProvider) ~= 'table'
-   or type(cost.breakdown.byWorkKind) ~= 'table' then return nil end
-  for _, row in cost.breakdown.byProvider do
-   if type(row) ~= 'table' or type(row.provider) ~= 'string' or type(row.model) ~= 'string'
-    or not numbers(row.charges, { 'amountMicros', 'unavailableSamples' })
-    or not numbers(row.tokens, { 'actualInputTokens', 'actualOutputTokens', 'estimatedInputTokens', 'estimatedOutputTokens', 'unavailableSamples' }) then return nil end
-  end
-  for _, row in cost.breakdown.byWorkKind do if type(row) ~= 'table' or type(row.workKind) ~= 'string' or type(row.activeMs) ~= 'number' then return nil end end
-  for _, row in cost.quota.entries do if type(row) ~= 'table' or type(row.plan) ~= 'string' or type(row.units) ~= 'number' or type(row.unit) ~= 'string' then return nil end end
- end
- return value :: Model
-end
-
-local function parseIndex(value: unknown): Index?
- if not prModels.parseIndex(value) or type(value) ~= 'table' or type(value.briefs) ~= 'table' then return nil end
- for _, brief in value.briefs do if type(brief) ~= 'table' or type(brief.detailFile) ~= 'string' then return nil end end
- return value :: Index
-end
-local function parseBrief(value: unknown): Brief?
- if type(value) ~= 'table' or type(value.title) ~= 'string' or type(value.revision) ~= 'number' or type(value.lines) ~= 'table' then return nil end
- for _, line in value.lines do if type(line) ~= 'table' or type(line.id) ~= 'string' or type(line.number) ~= 'number' or type(line.text) ~= 'string' or type(line.kind) ~= 'string' or type(line.isNew) ~= 'boolean' then return nil end end
- return value :: Brief
-end
 local function detailPath(state: State, file: string): string?
  if not string.match(file, '^[%w%%_.-]+%.json$') then return nil end
  local parent = string.match(state.view.path, '^(.*)/[^/]+$')
@@ -120,22 +39,25 @@ local function related(state: State, cx: BlockCx)
  local brief = if model.requestId then index.model.briefs[model.requestId] else nil
  local briefPath = if brief then detailPath(state, brief.detailFile) else nil
  if briefPath and (not state.brief or state.brief.path ~= briefPath) then
-  if state.stopBrief then state.stopBrief() end
-  state.brief = views.create(briefPath, 'brief', parseBrief); views.refresh(state.brief); state.stopBrief = views.watch(state.brief, cx)
+  if state.brief then rt.unwatch(cx, state.brief) end
+  state.brief = rt.watch(cx, briefPath, 'brief')
  end
  local path = prModels.taskDetailPath(state.view.path, model.header.id, index.model)
  state.prMatch = path ~= nil
- if not path and state.pr then if state.stopPr then state.stopPr() end; state.pr = nil; state.stopPr = nil end
- if not brief and state.brief then if state.stopBrief then state.stopBrief() end; state.brief = nil; state.stopBrief = nil end
+ if not path and state.pr then rt.unwatch(cx, state.pr); state.pr = nil end
+ if not brief and state.brief then rt.unwatch(cx, state.brief); state.brief = nil end
  if path and (not state.pr or state.pr.path ~= path) then
-  if state.stopPr then state.stopPr() end
-  state.stopPr = nil
-  state.pr = prModels.forTask(state.view.path, model.header.id, index.model)
-  if state.pr then state.stopPr = views.watch(state.pr, cx) end
+  if state.pr then rt.unwatch(cx, state.pr) end
+  state.pr = prModels.forTask(cx, state.view.path, model.header.id, index.model)
  end
 end
+-- A PR detail is this task's only when it names the task back.
+local function prModel(state: State): prModels.Model?
+ local pr, model = state.pr, state.view.model
+ return if pr and pr.model and model and pr.model.header.taskId == model.header.id then pr.model else nil
+end
 local function prReady(state: State): boolean
- return state.prMatch and state.view.status == 'ready' and state.index ~= nil and state.index.status == 'ready' and state.pr ~= nil and state.pr.status == 'ready' and state.pr.model ~= nil and state.view.model ~= nil and state.pr.model.header.taskId == state.view.model.header.id
+ return state.prMatch and state.view.status == 'ready' and state.index ~= nil and state.index.status == 'ready' and state.pr ~= nil and state.pr.status == 'ready' and prModel(state) ~= nil
 end
 
 local function text(value: string, tone: string?): Node return components.text(value, tone) end
@@ -220,8 +142,9 @@ local function body(state: State, model: Model): Node
   for _, line in brief.model.lines do table.insert(rows, ui.el('div', { key = line.id, class = 'tt-brief-line' }, { text(tostring(line.number), 'muted'), if line.kind == 'heading' then text(line.text, 'strong') else ui.md(line.text), text(if line.isNew then 'NEW' else '', 'accent') })) end
   return ui.col(rows)
  elseif state.tab == 'Diff' or state.tab == 'PR' then
-  if state.pr and state.pr.model then
-   local content = prContent.view(state.prContent, state.pr.model, prReady(state), 'main.content')
+  local pr = prModel(state)
+  if pr then
+   local content = prContent.view(state.prContent, pr, prReady(state), 'main.content')
    return ui.col({ content.main, content.dock })
   end
   return ui.col({ text(if model.pullRequest then 'Open the PR pane to read the description, diff and review threads.' else 'No pull request is available yet.', 'muted'),
@@ -244,7 +167,8 @@ local function invokePr(state: State, cx: BlockCx): prContent.Invoke
    state.prContent.diff.busy = false
    if action.verb == 'review-submit' and done then done(nil) end
   end
-  if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then refused(); return end
+  local pr = prModel(state)
+  if not pr or not prReady(state) or not prContent.ready(state.prContent, pr, true) then refused(); return end
   if action.verb == 'open' then run(state, cx, action); return end
   local sent = rt.act(cx, state.origin, action, function(outcome)
    state.prContent.diff.busy = false
@@ -261,10 +185,9 @@ local function send(state: State, cx: BlockCx)
 end
 local block: BlockDef<State> = {
  init = function(cx, args)
-  local state: State = { origin = rt.origin(args), prContent = prContent.create(), prMatch = false, view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', editing = false }
+  local state: State = { origin = rt.origin(args), prContent = prContent.create(), prMatch = false, view = rt.watch(cx, args[1] or '', 'task'), field = fields.create('', true), tab = 'Overview', editing = false }
   local root = args[3] or ''
-  views.refresh(state.view); views.watch(state.view, cx)
-  if root ~= '' then state.index = views.create(root, 'panel', parseIndex); views.refresh(state.index); views.watch(state.index, cx) end
+  if root ~= '' then state.index = rt.watch(cx, root, 'index') end
   return state
  end,
  title = function(state) return if state.view.model then state.view.model.header.title else 'Task' end,
@@ -307,7 +230,8 @@ local block: BlockDef<State> = {
   return { main = ui.el('div', { class = 'tt-page' }, children) }
  end,
  event = function(state, ev, cx)
-  if (state.tab == 'Diff' or state.tab == 'PR') and not state.editing and state.pr and state.pr.model and prContent.event(state.prContent, state.pr.model, prReady(state), ev, cx, invokePr(state, cx)) then cx:render(); return end
+  local pr = prModel(state)
+  if (state.tab == 'Diff' or state.tab == 'PR') and not state.editing and pr and prContent.event(state.prContent, pr, prReady(state), ev, cx, invokePr(state, cx)) then cx:render(); return end
   if ev.ev == 'focus' then state.editing = string.find(ev.id, 'worker%-message$') ~= nil; return end
   if ev.ev ~= 'action' then return end
   local action = ev.act .. (if ev.value and ev.value ~= '' then '=' .. ev.value else '')
@@ -325,7 +249,8 @@ local block: BlockDef<State> = {
  end,
  key = function(state, key, cx)
   if not state.editing then
-   if (state.tab == 'Diff' or state.tab == 'PR') and state.pr and state.pr.model then return prContent.key(state.prContent, state.pr.model, prReady(state), key, cx, invokePr(state, cx)) end
+   local pr = prModel(state)
+   if (state.tab == 'Diff' or state.tab == 'PR') and pr then return prContent.key(state.prContent, pr, prReady(state), key, cx, invokePr(state, cx)) end
    return false
   end
   local outcome = fields.key(state.field, key)

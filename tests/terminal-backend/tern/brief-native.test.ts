@@ -3,11 +3,11 @@ import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/p
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { nativeDetailPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ActionEnvelope } from "../../../src/native/contract.ts";
+import { viewDetailPath } from "../../../src/native/store.ts";
 import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { briefView } from "../../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
@@ -115,7 +115,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
     );
     // Production request briefs have no Lavish page; this fixture has no browser URL either.
     const model = briefView(second);
-    const path = nativeDetailPath(env.TANDEM_HOME, repo, "brief-req-tern.json");
+    const path = viewDetailPath(env.TANDEM_HOME, repo, "brief-req-tern.json");
     await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
     const publish = async (revision: string, value = model) =>
       writeFile(path, JSON.stringify({ version: 1, kind: "brief", revision, model: value }), {

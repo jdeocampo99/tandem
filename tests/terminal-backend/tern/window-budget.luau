@@ -42,7 +42,7 @@ local function loadModule(name)
  if not imports[name] then charge(35); imports[name]=true end
  if name=="./rt" then return loadRt() end
  assert(name=="./layout")
- return {open=function(req,_cx) charge(5); assert(req.path=="/home/native-host/ab12.cd34.ticket.json"); return {handled=true} end}
+ return {open=function(req,_cx) charge(5); assert(req.path=="/home/tern/0a1b/open/ab12.cd34.ticket.json"); return {handled=true} end}
 end
 -- ENTRY_POINT
 assert(next(imports)==nil and #timers==0)
@@ -102,11 +102,11 @@ end
 invoke("route.link:unrelated",function(context) assert(hooks.link({url="https://example.invalid"},context)==nil) end)
 invoke("route.open:unrelated",function(context) assert(hooks.open({path="/plain.txt"},context)==nil) end)
 moduleFailure="./layout"
-invoke("route.open:load-failure",function(context) assert(hooks.open({path="/home/native-host/ab12.cd34.ticket.json"},context).handled) end)
+invoke("route.open:load-failure",function(context) assert(hooks.open({path="/home/tern/0a1b/open/ab12.cd34.ticket.json"},context).handled) end)
 while tick() do end
 assert(string.find(toasts[#toasts].message,"module refused"))
 moduleFailure=nil
-invoke("route.open:ticket",function(context) assert(hooks.open({path="/home/native-host/ab12.cd34.ticket.json"},context).handled) end)
+invoke("route.open:ticket",function(context) assert(hooks.open({path="/home/tern/0a1b/open/ab12.cd34.ticket.json"},context).handled) end)
 assert(imports["./layout"]==nil,"route must defer cold hosting load")
 while tick() do end
 invoke("window_start",hooks.window_start); while tick() do end

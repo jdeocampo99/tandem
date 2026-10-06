@@ -1,9 +1,9 @@
 import { EndpointBusyError } from "../adapters/primitives.ts";
 import { nativeBriefFile } from "../board/native-views.ts";
-import { nativeDetailPath, publishNativeViews } from "../board/snapshot.ts";
 import type { RequestBriefRecord, RequestReviewPane } from "../contracts.ts";
 import { type CoordinatorRecord, canonicalPath } from "../coordinator/record.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
+import { publishViews, viewDetailPath } from "../native/store.ts";
 import { briefView } from "./native-view.ts";
 import type { RequestReviewPaneDependencies } from "./review-pane.ts";
 import { createRequestBriefStore } from "./store.ts";
@@ -44,8 +44,8 @@ export async function projectNativeBriefPane(
     };
   }
   const owner = await coordinatorForBrief(deps, record);
-  const renderedPath = nativeDetailPath(deps.home, owner.repoPath, nativeBriefFile(record.id));
-  const published = await publishNativeViews(deps.home, owner.repoPath, async () => {
+  const renderedPath = viewDetailPath(deps.home, owner.repoPath, nativeBriefFile(record.id));
+  const published = await publishViews(deps.home, owner.repoPath, async () => {
     const fresh = await createRequestBriefStore({
       home: deps.home,
       clock: deps.clock,

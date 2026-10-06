@@ -1,6 +1,5 @@
 import { runCommand } from "../adapters/commands.ts";
 import { markNativeAlertsRead, nativeAlertCounts } from "../board/native-alerts.ts";
-import { readNativeBundle } from "../board/native-file.ts";
 import {
   resolveTandemEnvironment,
   type TandemBoundaryEnvironment,
@@ -46,6 +45,7 @@ import {
   parseBlockContext,
   type ViewRef,
 } from "./contract.ts";
+import { type Published, readProjectState } from "./store.ts";
 
 /** Review submissions are the largest envelopes; brief feedback alone is capped at 64,000 bytes. */
 const MAX_ENVELOPE_BYTES = 1024 * 1024;
@@ -272,23 +272,24 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
   "catchup-dismiss": (act) => leaveCatchUp(act, false),
   "catchup-open-needs": (act) => leaveCatchUp(act, true),
   "board-link": async (act, action) => {
-    const model = await readNativeBundle(
-      act.environment.home,
-      (await ternOwner(act, "using native screens")).repoPath,
-    );
-    const url = model.board?.lanes
-      .flatMap((lane) => lane.cards)
-      .find((card) => card.key === action.cardKey)?.pullRequest?.url;
-    return showUrl(act, url);
+    const shown = await published(act, (await ternOwner(act, "using native screens")).repoPath);
+    return showUrl(act, shown.boardLinks[action.cardKey]);
   },
   "merged-link": async (act, action) => {
-    const model = await readNativeBundle(
-      act.environment.home,
-      (await ternOwner(act, "using native screens")).repoPath,
+    const shown = await published(act, (await ternOwner(act, "using native screens")).repoPath);
+    return showUrl(
+      act,
+      shown.merged.find((url) => url === action.url),
     );
-    return showUrl(act, model.catchup?.merged.find((pr) => pr.url === action.url)?.url);
   },
 };
+
+/** What the project's last publication showed, as the store recorded it when it wrote the views. */
+async function published(act: Act, repoPath: string): Promise<Published> {
+  const shown = (await readProjectState(act.environment.home, repoPath))?.published;
+  if (shown === undefined) throw new Error("This project's native views are not published yet");
+  return shown;
+}
 
 function viewOutcome(result: OpenViewResult): Outcome {
   if (!result.opened) throw new Error(result.warnings.join("; ") || "The view did not open");
@@ -378,11 +379,9 @@ async function open(act: Act, ref: ViewRef): Promise<Outcome> {
       );
     case "prs": {
       const owner = await ternOwner(act, "showing PRs");
-      const pr = Object.values(
-        (await readNativeBundle(act.environment.home, owner.repoPath)).pullRequests,
-      )[0];
+      const pr = (await published(act, owner.repoPath)).pullRequests[0];
       if (pr === undefined) throw new Error("This project has no cached open pull requests yet");
-      return openDetail(act, { kind: "pr", repo: pr.header.repo, number: pr.header.number });
+      return openDetail(act, { kind: "pr", repo: pr.repo, number: pr.number });
     }
     case "orchestrator":
     case "inbox": {
@@ -453,17 +452,15 @@ async function openDetail(
     } else {
       // Watched PRs without a task are known only to the project's cached PR index.
       const owned = await coordinator(act, act.environment.repo);
-      const bundle = await readNativeBundle(act.environment.home, owned.repoPath);
-      const matches = Object.values(bundle.pullRequests).filter(
+      const matches = (await published(act, owned.repoPath)).pullRequests.filter(
         (entry) =>
-          entry.header.number === ref.number &&
-          (ref.repo === undefined || entry.header.repo === ref.repo),
+          entry.number === ref.number && (ref.repo === undefined || entry.repo === ref.repo),
       );
       const entry = matches[0];
       if (matches.length !== 1 || entry === undefined)
         throw new Error("No unique cached pull request matches this project; open by repo#number");
       repoPath = owned.repoPath;
-      view = { kind: "pr", repo: entry.header.repo, number: entry.header.number };
+      view = { kind: "pr", repo: entry.repo, number: entry.number };
     }
   }
   const owned = await coordinator(act, repoPath);
@@ -511,9 +508,9 @@ async function newRequest(act: Act): Promise<Outcome> {
 
 async function switchProject(act: Act, action: Extract<Action, { verb: "project" }>) {
   const current = await ternOwner(act, "navigating");
-  const model = await readNativeBundle(act.environment.home, current.repoPath);
-  const age = Date.now() - Date.parse(model.writtenAt);
-  if (!Number.isFinite(age) || Math.abs(age) > 10_000)
+  const model = (await readProjectState(act.environment.home, current.repoPath))?.published;
+  const age = Date.now() - Date.parse(model?.summary.writtenAt ?? "");
+  if (model === undefined || !Number.isFinite(age) || Math.abs(age) > 10_000)
     throw new Error("Project switcher is stale; wait for the coordinator snapshot");
   const currentProjects = model.projects.filter((project) => project.current);
   if (currentProjects.length !== 1 || currentProjects[0]?.repoPath !== current.repoPath)
@@ -546,7 +543,7 @@ async function switchProject(act: Act, action: Extract<Action, { verb: "project"
       home: act.environment.home,
       project: current.repoPath,
       now: new Date().toISOString(),
-      ...(model.changeSignature === undefined ? {} : { signature: model.changeSignature }),
+      signature: model.changeSignature,
     }).catch(() => {});
   const { warning } = await tryShowCatchUp(act.terminal, {
     home: act.environment.home,
@@ -578,13 +575,13 @@ async function visit(act: Act, action: Extract<Action, { verb: "visit" }>): Prom
     cwd: current.worktree.path,
   });
   if (action.event !== "entry") {
-    const model = await readNativeBundle(act.environment.home, current.repoPath);
+    const shown = await published(act, current.repoPath);
     await recordNativeVisibility({
       home: act.environment.home,
       project: current.repoPath,
       now: new Date().toISOString(),
       heartbeat: action.event === "visible",
-      ...(model.changeSignature === undefined ? {} : { signature: model.changeSignature }),
+      signature: shown.changeSignature,
     });
     return DONE;
   }
@@ -619,14 +616,14 @@ async function visit(act: Act, action: Extract<Action, { verb: "visit" }>): Prom
 /** Leaving catch-up returns to the conversation even when a new publication is unreadable. */
 async function leaveCatchUp(act: Act, openNeeds: boolean): Promise<Outcome> {
   const owner = await ternOwner(act, "using native screens");
-  const read = readNativeBundle(act.environment.home, owner.repoPath);
+  const read = published(act, owner.repoPath);
   const model = openNeeds ? await read : await read.catch(() => undefined);
   const signature = model?.changeSignature;
   if (model === undefined || signature === undefined)
     return viewOutcome(await show(act, owner, { kind: "orchestrator" }));
   let view: TerminalView = { kind: "orchestrator" };
   if (openNeeds) {
-    const needs = model.catchup?.needsYou[0];
+    const needs = model.needsYou[0];
     // Nothing needs the user any more; the catch-up closes as it would have after opening it.
     if (needs === undefined) return DONE;
     if (needs.cause === "brief" && needs.key.startsWith("brief:"))

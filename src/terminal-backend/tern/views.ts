@@ -1,10 +1,14 @@
 import { z } from "zod";
 import { AdapterError, EndpointOwnershipError } from "../../adapters/primitives.ts";
-import { type NativeNavigationModel, readNativeBundle } from "../../board/native-file.ts";
-import { nativeBriefFile } from "../../board/native-views.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
+import { nativeBriefFile, nativePrFile, nativeTaskFile } from "../../board/native-views.ts";
 import type { Endpoint } from "../../contracts.ts";
 import { blockArgs, type Placement, type ViewKind } from "../../native/contract.ts";
+import {
+  type Published,
+  readProjectState,
+  viewDetailPath,
+  viewIndexPath,
+} from "../../native/store.ts";
 import type { TerminalBackend } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
@@ -37,17 +41,19 @@ export async function projectForView(home: string, coordinator: Endpoint): Promi
 }
 
 export function detailForView(
-  bundle: NativeNavigationModel,
+  shown: Published | undefined,
   view: ViewHostingInput["view"],
 ): string | undefined {
-  if (view.kind === "task") return bundle.tasks[view.taskId]?.detailFile;
-  if (view.kind === "brief") return bundle.briefs[view.requestId]?.detailFile;
-  if (view.kind === "pr")
-    return Object.values(bundle.pullRequests).find((pr) =>
+  if (view.kind === "task")
+    return shown?.tasks.includes(view.taskId) ? nativeTaskFile(view.taskId) : undefined;
+  if (view.kind === "pr") {
+    const pr = shown?.pullRequests.find((entry) =>
       "taskId" in view
-        ? pr.header.taskId === view.taskId
-        : pr.header.repo === view.repo && pr.header.number === view.number,
-    )?.detailFile;
+        ? entry.taskId === view.taskId
+        : entry.repo === view.repo && entry.number === view.number,
+    );
+    return pr === undefined ? undefined : nativePrFile(pr.repo, pr.number);
+  }
   return undefined;
 }
 
@@ -123,12 +129,12 @@ export function ternViewHost(commands: TernCli) {
       );
     const cmd = await scoped(input, true);
     const args = blockArgs(
-      nativeDetailPath(input.home, project, nativeBriefFile(input.view.requestId)),
+      viewDetailPath(input.home, project, nativeBriefFile(input.view.requestId)),
       {
         coordinator: input.coordinator.paneId,
         cwd: input.cwd,
         home: input.home,
-        index: nativeViewsPath(input.home, project),
+        index: viewIndexPath(input.home, project),
         ...(input.origin.windowId === undefined ? {} : { window: input.origin.windowId }),
       },
     );
@@ -155,7 +161,7 @@ export function ternViewHost(commands: TernCli) {
       (entry) => entry.block.id === (input.origin?.paneId ?? input.coordinator.paneId),
     );
     if (source?.block.program !== "tandem.board") return false;
-    await open(input, project, "panel", "return", nativeViewsPath(input.home, project));
+    await open(input, project, "panel", "return", viewIndexPath(input.home, project));
     return true;
   };
   return {
@@ -174,7 +180,8 @@ export function ternViewHost(commands: TernCli) {
         await withSettledOpens(
           cmd,
           input.coordinator,
-          { cwd: input.cwd, home: input.home, index: nativeViewsPath(input.home, project) },
+          project,
+          { cwd: input.cwd, home: input.home, index: viewIndexPath(input.home, project) },
           async () => {
             // Nothing can later prove or disprove a browser opening, and it is never
             // re-invoked, so an unconfirmed one is reported once and pauses nothing.
@@ -205,7 +212,7 @@ export function ternViewHost(commands: TernCli) {
           project,
           "panel",
           input.view.kind === "inbox" ? "inbox" : "return",
-          nativeViewsPath(input.home, project),
+          viewIndexPath(input.home, project),
         );
         return { opened: true, warnings: returned.warnings ?? [] };
       }
@@ -213,13 +220,13 @@ export function ternViewHost(commands: TernCli) {
       const detail =
         input.view.kind === "brief"
           ? nativeBriefFile(input.view.requestId)
-          : detailForView(await readNativeBundle(input.home, project), input.view);
+          : detailForView((await readProjectState(input.home, project))?.published, input.view);
       if (["task", "brief", "pr"].includes(input.view.kind) && detail === undefined)
         throw new Error(`Native ${input.view.kind} detail is not ready`);
       const path =
         detail === undefined
-          ? nativeViewsPath(input.home, project)
-          : nativeDetailPath(input.home, project, detail);
+          ? viewIndexPath(input.home, project)
+          : viewDetailPath(input.home, project, detail);
       const opened = await open(
         input,
         project,

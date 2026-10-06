@@ -2,12 +2,12 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeBriefFile, nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
+import { nativeBriefFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { parseBlockArgs, parseBlockContext } from "../../../src/native/contract.ts";
+import { viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
@@ -15,6 +15,7 @@ import {
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { recordedActions, recordingCli } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
@@ -137,11 +138,11 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await ctl("account", "signed-in");
       await Bun.sleep(500);
       await mkdir(join(home, "native-views"));
-      const path = nativeViewsPath(home, root);
+      const path = viewIndexPath(home, root);
       const panel = panelFixture(root);
       await writeFile(
         path,
-        nativeViewText("panel", {
+        viewFileText("index", {
           version: 1,
           project: root,
           writtenAt: new Date().toISOString(),
@@ -221,7 +222,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       };
       await writeFile(
         path,
-        nativeViewText("panel", {
+        viewFileText("index", {
           ...envelope.model,
           panel: { ...panel, footer: undefined },
         }),
@@ -263,7 +264,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         root,
         "brief",
         "split",
-        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+        viewDetailPath(home, root, nativeBriefFile("req-native")),
       );
       await ctl("key", "escape");
       await Bun.sleep(200);
@@ -292,7 +293,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         root,
         "brief",
         "split",
-        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+        viewDetailPath(home, root, nativeBriefFile("req-native")),
       );
       expect(
         await host.close(

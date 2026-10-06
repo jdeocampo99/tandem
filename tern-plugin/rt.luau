@@ -1,6 +1,7 @@
 --!strict
 -- The one way a click reaches Tandem: an `ActionEnvelope` (src/native/contract.ts) on the stdin of
--- `tandem native act`, answered by one `Outcome`. No durable state, no retries.
+-- `tandem native act`, answered by one `Outcome`. No durable state, no retries. `watch` and `draw`
+-- are the one way a block reads and shows a view file.
 local M = {}
 
 -- A block's origin echoes the context it was launched with; Luau never reads `ctx`.
@@ -26,6 +27,94 @@ local NOTICES: {[string]: {level: string, title: string}} = {
  ["review-posted"] = {level = "info", title = "Review posted"},
  ["review-unconfirmed"] = {level = "info", title = "Review wasn't confirmed as posted"},
 }
+
+-- One view file a block draws (src/native/contract.ts `ViewFile`). `model` is the newest file
+-- accepted, `status` whether the file on disk is still that one. A file is accepted only when its
+-- `seq` is higher than the shown one; a new `epoch` is a new store, so its first file is accepted.
+export type Watch = {
+ path: string, kind: string, status: "waiting" | "ready" | "unavailable", model: any, good: any,
+ seq: number, epoch: string?, raw: string?, rejected: number?, stopped: boolean, pending: TimerHandle?,
+}
+
+local watching: {[number]: {Watch}} = {}
+
+local function refresh(w: Watch): boolean
+ local before = w.status
+ local ok, raw = pcall(tern.fs.read, w.path, 8 * 1024 * 1024)
+ if not ok then
+  w.raw, w.status = nil, "unavailable"
+  return before ~= w.status
+ end
+ if raw == w.raw then return false end
+ w.raw = raw
+ local decoded, file = pcall(tern.json.decode, raw)
+ if not decoded or type(file) ~= "table" or file.v ~= 1 or file.kind ~= w.kind or type(file.epoch) ~= "string"
+  or type(file.seq) ~= "number" or type(file.model) ~= "table" then
+  w.status = "unavailable"
+  return before ~= w.status
+ end
+ if file.epoch == w.epoch and file.seq <= w.seq then
+  if file.seq == w.seq and w.rejected ~= file.seq then w.status = "ready" end
+  return before ~= w.status
+ end
+ w.epoch, w.seq, w.model, w.status = file.epoch, file.seq, file.model, "ready"
+ return true
+end
+
+local function forget(pane: number, w: Watch)
+ local list = watching[pane]
+ if not list then return end
+ local at = table.find(list, w)
+ if at then table.remove(list, at) end
+ if #list == 0 then watching[pane] = nil end
+end
+
+-- Reads `path` now, then once a second while the block's pane is live.
+function M.watch(cx: BlockCx, path: string, kind: string): Watch
+ local w: Watch = {path = path, kind = kind, status = "waiting", seq = 0, stopped = false}
+ refresh(w)
+ local list = watching[cx.pane] or {}
+ watching[cx.pane] = list
+ table.insert(list, w)
+ local pane = cx.pane
+ local function tick()
+  if w.stopped then return end
+  local live = false
+  for _, listed in tern.pane.list() do if listed.pane == pane then live = true; break end end
+  if not live then forget(pane, w); return end
+  if refresh(w) then cx:render() end
+  w.pending = tern.timer(1000, tick)
+ end
+ -- The pane is listed only after init returns, so polling starts in a timer.
+ w.pending = tern.timer(1, tick)
+ return w
+end
+
+function M.unwatch(cx: BlockCx, w: Watch)
+ w.stopped = true
+ if w.pending then w.pending:cancel() end
+ forget(cx.pane, w)
+end
+
+-- Draws a block. A model that fails to draw is never shown: its watch goes back to the last model
+-- that drew, marked unavailable, until a newer file arrives.
+function M.draw<S>(view: (S, BlockCx) -> View, state: S, cx: BlockCx): View
+ local ok, result = pcall(view, state, cx)
+ local list = watching[cx.pane] or {}
+ if ok then
+  for _, w in list do w.good = w.model end
+  return result
+ end
+ local reverted = false
+ for _, w in list do
+  if w.model ~= w.good then
+   w.model, w.status, w.rejected = w.good, "unavailable", w.seq
+   reverted = true
+  end
+ end
+ if not reverted then error(result, 0) end
+ return M.draw(view, state, cx)
+end
 
 function M.origin(args: {string}): Origin
  return {ctx = args[2] or "", busy = false}

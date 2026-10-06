@@ -19,7 +19,6 @@ local tern = {ui={
  span=function(value) return value end,
 }}
 local function loadModule(name)
- if name == './view-file' then return {} end
  if name == './rt' then return {
   origin=function(args) return {ctx=args[2] or '', busy=false} end,
   act=function(_cx, _origin, action) table.insert(calls, action); return true end,

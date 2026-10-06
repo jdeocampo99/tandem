@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { acquireDarwinFileLock } from "../../../src/tasks/store-lock.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
@@ -9,6 +9,7 @@ import {
 } from "../../../src/terminal-backend/tern/host.ts";
 import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { openFiles, openPath } from "../../native/view-files.ts";
 
 const coordinator: Endpoint = {
   terminal: "tern",
@@ -128,8 +129,7 @@ async function withTern(
       opens: () => opens,
       lateReceipt: (receipt) =>
         writeFile(lastReceipt, typeof receipt === "string" ? receipt : JSON.stringify(receipt)),
-      retained: async () =>
-        (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
+      retained: async () => (await openFiles(home)).filter((name) => !name.endsWith(".lock")),
       home,
       tick: () => recoverViewOpens(ternCli(run, { binary: "tern" }), home, now),
       advance: (ms) => {
@@ -224,7 +224,7 @@ test("a receipt that arrives after tandem fix abandoned its ticket is removed, n
   await withTern([{ status: "silent" }, { status: "done" }], async (tern) => {
     await expect(tern.open()).rejects.toThrow("tern open outcome is unknown");
     const [ticket] = (await tern.retained()).filter((name) => name.endsWith(".ticket.json"));
-    await rm(`${tern.home}/native-host/${ticket}`);
+    await rm(await openPath(tern.home, ticket ?? ""));
     await tern.lateReceipt({ status: "done", paneId: "5", tabId: "2", sessionId: "1" });
     await tern.tick();
     expect(await tern.retained()).toEqual([]);
@@ -241,10 +241,8 @@ test("the coordinator's tick skips an open in progress instead of waiting for it
       appliedEffects: 0,
       reason: "Exact originating panes disappeared",
     });
-    const [lock] = (await readdir(`${tern.home}/native-host`)).filter((name) =>
-      name.endsWith(".lock"),
-    );
-    const release = await acquireDarwinFileLock(`${tern.home}/native-host/${lock}`, 1000, 20);
+    const [lock] = (await openFiles(tern.home)).filter((name) => name.endsWith(".lock"));
+    const release = await acquireDarwinFileLock(await openPath(tern.home, lock ?? ""), 1000, 20);
     try {
       const started = performance.now();
       await tern.tick();

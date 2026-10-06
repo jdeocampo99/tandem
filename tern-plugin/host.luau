@@ -9,10 +9,12 @@ local function lazy(load: () -> BlockDef<unknown>): BlockDef<unknown>
  end
  return {
   init = function(cx, args, saved) return get().init(cx, args, saved) end,
-  view = function(state, cx) return get().view(state, cx) end,
+  view = function(state, cx) return require("./rt").draw(get().view, state, cx) end,
   title = function(state)
    local callback = get().title
-   return if callback then callback(state) else nil
+   if not callback then return nil end
+   local ok, title = pcall(callback, state)
+   return if ok then title else nil
   end,
   key = function(state, key, cx)
    local callback = get().key

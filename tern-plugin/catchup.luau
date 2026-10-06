@@ -1,22 +1,10 @@
 --!strict
-local views = require("./view-file")
 local components = require("./components")
 local rt = require("./rt")
 local screen = require("./screen")
 local ui = tern.ui
 
-type Model = {catchup: {merged: {{number: number, title: string, url: string}}, needsYou: {{key: string, name: string, text: string}}, blocked: {{key: string, name: string, reason: string}}, whereWeLeftOff: {{workstream: string, text: string}}}}
-type State = {view: views.View<Model>, args: {string}, origin: rt.Origin}
-local function parse(value: unknown): Model?
- if type(value) ~= "table" or type(value.catchup) ~= "table" then return nil end
- local c = value.catchup
- for _, key in {"merged", "needsYou", "blocked", "whereWeLeftOff"} do if type(c[key]) ~= "table" then return nil end end
- for _, pr in c.merged do if type(pr) ~= "table" or type(pr.number) ~= "number" or type(pr.title) ~= "string" or type(pr.url) ~= "string" then return nil end end
- for _, row in c.needsYou do if type(row) ~= "table" or type(row.key) ~= "string" or type(row.name) ~= "string" or type(row.text) ~= "string" then return nil end end
- for _, row in c.blocked do if type(row) ~= "table" or type(row.key) ~= "string" or type(row.name) ~= "string" or type(row.reason) ~= "string" then return nil end end
- for _, row in c.whereWeLeftOff do if type(row) ~= "table" or type(row.workstream) ~= "string" or type(row.text) ~= "string" then return nil end end
- return value :: Model
-end
+type State = {view: rt.Watch, args: {string}, origin: rt.Origin}
 local function section(title: string, rows: {Node}, tone: string?): Node
  if #rows == 0 then table.insert(rows, components.text("None", "muted")) end
  table.insert(rows, 1, ui.el("strong", {class="tdm-catchup-heading " .. (tone or ""), text=title}))
@@ -30,8 +18,8 @@ end
 local block: BlockDef<State> = {
  init = function(cx, args, saved)
   local restored = screen.args(args, saved)
-  local state: State = {args=restored, origin=rt.origin(restored), view=views.create(screen.path(args, saved), "panel", parse)}
-  views.refresh(state.view); views.watch(state.view, cx); return state
+  local state: State = {args=restored, origin=rt.origin(restored), view=rt.watch(cx, screen.path(args, saved), "index")}
+  return state
  end,
  title = function() return "Welcome back · Tandem" end,
  view = function(state)

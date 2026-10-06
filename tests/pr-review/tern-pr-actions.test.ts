@@ -13,7 +13,6 @@ test("PR and embedded task actions retain drafts on failure and require a posted
     let source =
       "local tern = {}\nlocal modules = {}\nlocal cache = {}\nlocal function loadModule(name)\nif cache[name] == nil then cache[name] = modules[name]() end\nreturn cache[name]\nend\n";
     for (const name of [
-      "view-file",
       "rt",
       "components",
       "text-field",

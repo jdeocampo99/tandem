@@ -1,6 +1,6 @@
 --!strict
 local fields = require('./text-field')
-local views = require('./view-file')
+local rt = require('./rt')
 local diff = require('./diff-row')
 local components = require('./components')
 local function key(name, text, shift, meta)
@@ -17,15 +17,20 @@ local multi=fields.create('',true);fields.key(multi,key('enter',nil,true));asser
 assert(fields.key(multi,key('escape'))=='cancel')
 local path='test.tandem-view.json'
 if tern.fs.exists(path) then tern.fs.remove(path) end
-local view=views.create(path,'panel',function(value) if type(value)=='table' and type(value.summary)=='string' then return value end return nil end)
-assert(views.refresh(view) and view.status=='unavailable')
-tern.fs.write(path,tern.json.encode({version=1,kind='panel',revision='one',model={summary='fresh'}}))
-assert(views.refresh(view) and view.status=='ready' and view.revision=='one')
-assert(not views.refresh(view))
+local cx={pane=0,render=function() end}
+local function watched()
+ local view=rt.watch(cx,path,'index')
+ rt.unwatch(cx,view)
+ return view
+end
+assert(watched().status=='unavailable')
+tern.fs.write(path,tern.json.encode({v=1,kind='index',epoch='one',seq=1,model={summary='fresh'}}))
+local view=watched()
+assert(view.status=='ready' and view.seq==1 and view.model.summary=='fresh')
 tern.fs.write(path,'invalid')
-assert(views.refresh(view) and view.status=='unavailable' and view.model.summary=='fresh')
-tern.fs.write(path,tern.json.encode({version=1,kind='panel',revision='two',model={summary='after'}}))
-assert(views.refresh(view) and view.status=='ready' and view.revision=='two')
+assert(watched().status=='unavailable')
+tern.fs.write(path,tern.json.encode({v=1,kind='task',epoch='one',seq=2,model={summary='after'}}))
+assert(watched().status=='unavailable')
 local row=diff.row({key='line-1',old=1,new=1,kind='ctx',code='text'},'comment=1',{diff.card('c1','you','hello',{components.button('Reply','reply')})})
 assert(#row.c==2 and row.c[1].c[4].p.actions.click=='comment=1')
 tern.fs.write('results.json',tern.json.encode({textField=true,loader=true,diff=true}))

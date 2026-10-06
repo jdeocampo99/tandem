@@ -1,11 +1,9 @@
 --!strict
 local ui = tern.ui
-local views = require("./view-file")
 local rt = require("./rt")
-local models = require("./pr-model")
 local content = require("./pr-content")
 local components = require("./components")
-type State = { view: views.View<models.Model>, index: views.View<models.Index>?, content: content.State, origin: rt.Origin, switcher: boolean }
+type State = { view: rt.Watch, index: rt.Watch?, content: content.State, origin: rt.Origin, switcher: boolean }
 local function invoke(s: State, cx: BlockCx): content.Invoke
  return function(action, done)
   local sent = rt.act(cx, s.origin, action, function(outcome)
@@ -23,10 +21,9 @@ end
 local block: BlockDef<State> = {
  init = function(cx, args, _saved)
   local path = args[1] or ""
-  local s: State = {view=views.create(path, "pr", models.parse), content=content.create(), origin=rt.origin(args), switcher=false}
-  views.watch(s.view, cx)
+  local s: State = {view=rt.watch(cx, path, "pr"), content=content.create(), origin=rt.origin(args), switcher=false}
   local indexPath = args[3] or ""
-  if indexPath ~= path then s.index = views.create(indexPath, "panel", models.parseIndex); views.watch(s.index, cx) end
+  if indexPath ~= path then s.index = rt.watch(cx, indexPath, "index") end
   return s
  end,
  title = function(s) return if s.view.model then "#" .. s.view.model.header.number .. " ▾" else "Pull requests" end,

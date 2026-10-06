@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { viewFileText } from "../../native/view-files.ts";
 
 const home = process.env.TANDEM_HOME;
 if (!home?.startsWith("/private/tmp/tdm-panel-spec-"))
@@ -65,7 +65,7 @@ const outcome = await runTerminal(process.argv.slice(2), {
   input: Readable.from([envelope]),
 });
 for (const record of records) {
-  const path = nativeViewsPath(home, record.repoPath);
+  const path = viewIndexPath(home, record.repoPath);
   const envelope = z
     .object({ model: z.record(z.unknown()) })
     .parse(JSON.parse(await readFile(path, "utf8")));
@@ -76,7 +76,7 @@ for (const record of records) {
   const count = await nativeAlertCounts(home, record.repoPath);
   await writeFile(
     path,
-    nativeViewText("panel", {
+    viewFileText("index", {
       ...envelope.model,
       writtenAt: new Date().toISOString(),
       panel: { ...panel, header: { ...panel.header, bellCount: count.unread } },

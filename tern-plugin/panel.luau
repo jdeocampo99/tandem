@@ -1,24 +1,7 @@
 --!strict
-local files=require("./view-file")
 local rt=require("./rt")
 type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,repo:string?,number:number?},pullRequest:{number:number,url:string}?}
-type Project={repoPath:string,name:string,status:string,current:boolean,needsYou:number,shortcut:string?,offline:boolean}
-type Panel={header:{title:string,otherProjectsNeedYou:number,bellCount:number,fiveHourLabel:string,fiveHour:{remainingPercent:number|string,resetInMs:number|string}?,projects:{Project}},sections:{{title:string,count:number,rows:{Row}}},footer:string?}
-type Bundle={panel:Panel}
-type State={file:files.View<Bundle>,origin:rt.Origin,dropdown:boolean,selected:number}
-local function parse(value:unknown): Bundle?
- if type(value)~="table" or type(value.panel)~="table" then return nil end
- local panel=value.panel
- if type(panel.header)~="table" or type(panel.header.title)~="string" or type(panel.header.projects)~="table" or type(panel.header.bellCount)~="number" or type(panel.header.fiveHourLabel)~="string" or type(panel.sections)~="table" then return nil end
- for _,section in panel.sections do
-  if type(section.title)~="string" or type(section.rows)~="table" or type(section.count)~="number" then return nil end
-  for _,row in section.rows do
-   if type(row.key)~="string" or type(row.title)~="string" or type(row.stage)~="string" or type(row.secondary)~="string" or type(row.target)~="table" then return nil end
-  end
- end
- for _,project in panel.header.projects do if type(project.repoPath)~="string" or type(project.name)~="string" or type(project.status)~="string" or type(project.needsYou)~="number" then return nil end end
- return value :: Bundle
-end
+type State={file:rt.Watch,origin:rt.Origin,dropdown:boolean,selected:number}
 local function el(class:string,children:{Node},action:string?,key:string?):Node
  return tern.ui.node("el",{class=class,key=key,actions=if action then {click=action} else nil},children)
 end
@@ -41,8 +24,7 @@ local function activate(state:State,cx:BlockCx,index:number)
 end
 local def:BlockDef<State> ={
  init=function(cx,args,_saved)
-  local state={file=files.create(args[1] or "","panel",parse),origin=rt.origin(args),dropdown=false,selected=1}
-  files.watch(state.file,cx)
+  local state={file=rt.watch(cx,args[1] or "","index"),origin=rt.origin(args),dropdown=false,selected=1}
   return state
  end,
  title=function() return "Tandem panel" end,

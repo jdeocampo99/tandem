@@ -1,13 +1,11 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import { nativeViewText } from "../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
+import type { NativeViews } from "../../src/board/native-views.ts";
 import { saveTerminalChoice } from "../../src/config/home-settings.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
-import { repositoryKey } from "../../src/config/repositories.ts";
 import type { CommandRequest, RequestBriefContent } from "../../src/contracts.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
@@ -15,6 +13,7 @@ import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
 import { Action, ActionEnvelope, blockArgs, Outcome } from "../../src/native/contract.ts";
+import { projectStoreDirectory, readProjectState } from "../../src/native/store.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
@@ -25,6 +24,7 @@ import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/c
 import { seedScenarioTask, seedTernProject } from "../evals/scenario.ts";
 import type { TernParityHost } from "../evals/tern-parity/harness.ts";
 import { seedReview, withParity } from "../evals/tern-parity/inventory.ts";
+import { prIndexEntry, projectRow, publishFixture } from "./view-files.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
 const content: RequestBriefContent = {
@@ -1241,31 +1241,18 @@ test("Show PRs opens the cached repository-qualified PR in the originating proje
   const f = await fixture("tern");
   try {
     const task = await createPrTask(f);
-    const path = nativeViewsPath(f.home, f.repo);
-    await mkdir(join(f.home, "native-views"), { recursive: true });
-    const model = {
-      version: 1,
-      project: f.repo,
+    await publishFixture(f.home, f.repo, {
       writtenAt: NOW,
-      tasks: {},
-      briefs: {},
-      projects: [],
-      pullRequests: {
-        "owner/repo#42": {
-          header: { taskId: task.id, repo: "owner/repo", number: 42 },
-          detailFile: "pr-owner%2Frepo-42.json",
-        },
-      },
-    };
-    await writeFile(path, nativeViewText("panel", model));
+      pullRequests: prIndexEntry("owner/repo", 42, task.id),
+    });
     const prs = { verb: "open", ref: { kind: "prs" } };
     expect((await f.act(prs)).status).toBe("done");
     expect(f.opened).toEqual([{ kind: "pr", repo: "owner/repo", number: 42 }]);
-    await writeFile(path, nativeViewText("panel", { ...model, pullRequests: {} }));
+    await publishFixture(f.home, f.repo, { writtenAt: NOW, pullRequests: {} });
     expect((await f.act(prs)).status).toBe("refused");
     expect(f.opened).toHaveLength(1);
     // Ownership is proved before reading the cache, even with a valid locating pane/cwd.
-    await writeFile(path, "{broken");
+    await writeFile(join(projectStoreDirectory(f.home, f.repo), "state.json"), "{broken");
     const refused = await f.act(prs, {
       deps: {
         terminal: {
@@ -1287,27 +1274,9 @@ test("Show PRs opens the cached repository-qualified PR in the originating proje
 test("project switching selects published projects, refusing stale or foreign targets", async () => {
   const f = await fixture("tern");
   try {
-    await mkdir(join(f.home, "native-views"), { recursive: true });
-    const path = nativeViewsPath(f.home, f.repo);
-    const model = {
-      version: 1,
-      project: f.repo,
-      writtenAt: new Date().toISOString(),
-      changeSignature: "changed-work",
-      tasks: {},
-      briefs: { [f.record.id]: { detailFile: "brief-native.json" } },
-      pullRequests: {},
-      projects: [
-        {
-          terminal: "tern",
-          repoPath: f.repo,
-          current: true,
-          offline: false,
-          sessionId: "isolated",
-        },
-      ],
-    };
-    const publish = (data: unknown) => writeFile(path, nativeViewText("panel", data));
+    const current = projectRow(f.repo, { current: true, sessionId: "isolated" });
+    const model = { changeSignature: "changed-work", projects: [current] };
+    const publish = (change: Partial<NativeViews>) => publishFixture(f.home, f.repo, change);
     await publish(model);
     await visitNativeProject(
       {
@@ -1323,13 +1292,10 @@ test("project switching selects published projects, refusing stale or foreign ta
     expect(f.focused).toEqual(["101"]);
     expect(f.opened).toEqual([{ kind: "catchup" }]);
     const tenth = [
-      ...Array.from({ length: 9 }, (_, index) => ({
-        terminal: "tern",
-        repoPath: `/fixture/${index}`,
-        current: false,
-        offline: true,
-      })),
-      ...model.projects,
+      ...Array.from({ length: 9 }, (_, index) =>
+        projectRow(`/fixture/${index}`, { offline: true }),
+      ),
+      current,
     ];
     await publish({ ...model, projects: tenth });
     expect((await project({ repoPath: f.repo })).status).toBe("done");
@@ -1342,9 +1308,9 @@ test("project switching selects published projects, refusing stale or foreign ta
     await publish({ ...model, writtenAt: "2000-01-01T00:00:00Z" });
     const stale = await project(1);
     expect(stale.notice?.text).toBe("Project switcher is stale; wait for the coordinator snapshot");
-    await publish({ ...model, projects: [{ ...model.projects[0], current: false }] });
+    await publish({ ...model, projects: [{ ...current, current: false }] });
     expect((await project("prev")).status).toBe("refused");
-    await publish({ ...model, projects: [{ ...model.projects[0], offline: true }] });
+    await publish({ ...model, projects: [{ ...current, offline: true }] });
     expect((await project(1)).status).toBe("refused");
     expect(f.focused).toHaveLength(3);
     expect(f.opened).toHaveLength(1);
@@ -1411,37 +1377,12 @@ for (const failure of [
       if (saved === undefined) throw new Error("Missing destination fixture coordinator");
       const record = { ...saved, endpoint: { ...saved.endpoint, paneId: "202" } };
       await saveCoordinatorRecord(source.home, record);
-      await mkdir(join(source.home, "native-views"), { recursive: true });
-      const model = {
-        version: 1,
-        project: source.repo,
-        writtenAt: new Date().toISOString(),
-        changeSignature: "before",
-        tasks: {},
-        briefs: {},
-        pullRequests: {},
-        projects: [
-          {
-            terminal: "tern",
-            repoPath: source.repo,
-            current: true,
-            offline: false,
-            sessionId: "isolated",
-          },
-          {
-            terminal: "tern",
-            repoPath: destination.repo,
-            current: false,
-            offline: false,
-            sessionId: "isolated",
-          },
-        ],
-      };
-      await writeFile(nativeViewsPath(source.home, source.repo), nativeViewText("panel", model));
-      await writeFile(
-        nativeViewsPath(source.home, destination.repo),
-        nativeViewText("panel", { ...model, project: destination.repo, changeSignature: "after" }),
-      );
+      const projects = [
+        projectRow(source.repo, { current: true, sessionId: "isolated" }),
+        projectRow(destination.repo, { sessionId: "isolated" }),
+      ];
+      await publishFixture(source.home, source.repo, { changeSignature: "before", projects });
+      await publishFixture(source.home, destination.repo, { changeSignature: "after", projects });
       await visitNativeProject(
         {
           home: source.home,
@@ -1451,12 +1392,9 @@ for (const failure of [
         },
         async () => {},
       );
-      const visitPath = join(
-        source.home,
-        "native-visits",
-        `${repositoryKey(destination.repo)}.json`,
-      );
-      const before = await readFile(visitPath, "utf8");
+      const visit = async () =>
+        JSON.stringify((await readProjectState(source.home, destination.repo))?.visit);
+      const before = await visit();
       const events: string[] = [];
       const outcome = await source.act(
         { verb: "project", target: "next" },
@@ -1486,7 +1424,7 @@ for (const failure of [
       );
       const catchUpFailure = failure.startsWith("catchup");
       expect(events).toEqual(catchUpFailure ? ["focus", "catchup"] : ["focus"]);
-      expect(await readFile(visitPath, "utf8")).toBe(before);
+      expect(await visit()).toBe(before);
       if (catchUpFailure)
         expect(outcome).toEqual({
           status: "done",
@@ -1617,24 +1555,10 @@ test("a refused native approval never closes the brief or prompts the coordinato
 test("cached taskless PRs open from palette, repo and number, number alone, without mutation", async () => {
   const f = await fixture("tern");
   try {
-    await mkdir(join(f.home, "native-views"), { recursive: true });
-    await writeFile(
-      nativeViewsPath(f.home, f.repo),
-      nativeViewText("panel", {
-        version: 1,
-        project: f.repo,
-        writtenAt: NOW,
-        tasks: {},
-        briefs: {},
-        projects: [],
-        pullRequests: {
-          "owner/repo#43": {
-            header: { repo: "owner/repo", number: 43 },
-            detailFile: "pr-owner%2Frepo-43.json",
-          },
-        },
-      }),
-    );
+    await publishFixture(f.home, f.repo, {
+      writtenAt: NOW,
+      pullRequests: prIndexEntry("owner/repo", 43),
+    });
     for (const ref of [
       { kind: "prs" },
       { kind: "pr", repo: "owner/repo", number: 43 },

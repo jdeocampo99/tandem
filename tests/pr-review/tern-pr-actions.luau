@@ -27,7 +27,7 @@ tern.json={
  array=function(value) return value end,
  encode=function(value) return value end,
  decode=function(raw)
-  if raw == 'detail' then return {version=1,kind='pr',revision='revision',model=model} end
+  if raw == 'detail' then return {v=1,kind='pr',epoch='store',seq=1,model=model} end
   if raw == 'posted' then return {status='done',notice={code='review-posted',text='Posted: https://github.com/acme/app/pull/281#pullrequestreview-1'}} end
   if raw == 'moved' then return {status='kept',notice={code='review-unconfirmed',text='PR head moved'}} end
   if raw == 'done' then return {status='done'} end
@@ -40,16 +40,15 @@ tern.process={run=function(argv,opts,callback)
  table.insert(pending,{argv=argv,opts=opts,callback=callback})
 end}
 local block = loadModule('./pr')
-local views = loadModule('./view-file')
 local content = loadModule('./pr-content')
 local cx={pane=123,render=function() end,exit=function(_,code) assert(code==0); exits+=1 end,
  toast=function(_,level,title,message) table.insert(toasts,{level=level,title=title,message=message}) end}
 -- Tandem's launch context, which the block echoes back verbatim and never reads.
-local ctx='{"coordinator":"42","cwd":"/original repo","home":"/custom home","index":"/custom home/native-views/project.json","window":"opaque-window"}'
-local args={'/custom home/native-views/project/pr-review-1.json',ctx,'/custom home/native-views/project.json'}
+local ctx='{"coordinator":"42","cwd":"/original repo","home":"/custom home","index":"/custom home/tern/0a1b/views/index.json","window":"opaque-window"}'
+local args={'/custom home/tern/0a1b/views/pr-review-1.json',ctx,'/custom home/tern/0a1b/views/index.json'}
 local function create()
  local state=block.init(cx,args,nil)
- assert(views.refresh(state.view) and state.view.status=='ready')
+ assert(state.view.status=='ready')
  block.view(state,cx)
  state.content.summary.text='My edited summary 日本語'
  state.content.diff.decisions.d1='post'
@@ -157,7 +156,6 @@ assert(not content.event(readonly,model,true,{ev='action',act='pr-line',value='1
 assert(not content.event(readonly,model,true,{ev='action',act='pr-reply',value='old-thread'},cx,function() error('Read-only mutation') end))
 assert(not content.event(readonly,model,true,{ev='action',act='pr-post'},cx,function() error('Read-only mutation') end))
 local switch=block.init(cx,args,nil)
-views.refresh(switch.view)
 switch.index.status='ready';switch.index.model={pullRequests={external={header={repo='acme/app',number=282,title='Watched external PR'},detailFile='pr-282.json'}}}
 block.event(switch,{ev='action',act='pr-select',value='acme/app#282'},cx)
 local selected=pending[#pending].opts.stdin.action

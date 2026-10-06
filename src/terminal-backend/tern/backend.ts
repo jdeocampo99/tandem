@@ -231,11 +231,11 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
   // Native screens load coordinator/model code only when requested. Ordinary worker startup
   // must not load the interactive harness through this terminal port.
   const native = async () => {
-    const [{ ternViewHost, projectForView }, { nativeViewsPath }] = await Promise.all([
+    const [{ ternViewHost, projectForView }, { viewIndexPath }] = await Promise.all([
       import("./views.ts"),
-      import("../../board/snapshot.ts"),
+      import("../../native/store.ts"),
     ]);
-    return { views: ternViewHost(cli), projectForView, nativeViewsPath };
+    return { views: ternViewHost(cli), projectForView, viewIndexPath };
   };
   return {
     name: "tern",
@@ -534,7 +534,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
     },
     openWelcome: async (target) => {
       if (options.home === undefined) throw new Error("Tern welcome requires a Tandem home");
-      const { views, projectForView, nativeViewsPath } = await native();
+      const { views, projectForView, viewIndexPath } = await native();
       const coordinator = await byId(target, target.paneId);
       const project = await projectForView(options.home, coordinator);
       await views.open(
@@ -542,7 +542,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
         project,
         "welcome",
         "split",
-        nativeViewsPath(options.home, project),
+        viewIndexPath(options.home, project),
       );
     },
     promptAgent: async (target) =>
@@ -554,7 +554,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       }),
     openPanel: async (input) => {
       if (options.home === undefined) throw new Error("Tern panel requires a Tandem home");
-      const { views, nativeViewsPath } = await native();
+      const { views, viewIndexPath } = await native();
       return (
         await views.open(
           {
@@ -566,7 +566,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
           input.project,
           "panel",
           "panel",
-          nativeViewsPath(options.home, input.project),
+          viewIndexPath(options.home, input.project),
         )
       ).paneId;
     },
@@ -592,7 +592,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       if (options.home === undefined)
         throw new EndpointOwnershipError(endpoint, "panel close requires its recorded home");
       const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
-      const { nativeViewsPath } = await import("../../board/snapshot.ts");
+      const { viewIndexPath } = await import("../../native/store.ts");
       const { exactView } = await import("./host.ts");
       const owners = (await listCoordinatorRecords(options.home, target.sessionId)).filter(
         (record) =>
@@ -607,7 +607,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       const owner = owners[0];
       if (owners.length !== 1 || owner === undefined)
         throw new EndpointOwnershipError(endpoint, "panel has no unique recorded coordinator");
-      const path = nativeViewsPath(options.home, owner.repoPath);
+      const path = viewIndexPath(options.home, owner.repoPath);
       const args = blockArgs(path, {
         coordinator: owner.endpoint.paneId,
         cwd: target.cwd,
