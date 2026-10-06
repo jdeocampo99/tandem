@@ -66,6 +66,14 @@ for (const [chosen, selection] of [
         () =>
           terminal.splitBeside({ anchor: endpoint, cwd: home, role: "reviewer", generation: 0 }),
         () => terminal.openPanel({ coordinator: endpoint, cwd: home, project: home }),
+        () =>
+          terminal.closeView({
+            coordinator: endpoint,
+            cwd: home,
+            home,
+            origin: { paneId: "4" },
+            view: { kind: "brief", requestId: "req-1" },
+          }),
         () => terminal.isPanelOpen({ coordinator: endpoint, cwd: home, panelPaneId: "same" }),
         () =>
           terminal.openView({
