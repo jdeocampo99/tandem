@@ -5,6 +5,7 @@ import { appendDiagnosticEvent } from "../../runtime/diagnostics.ts";
 import { runTandemTool, type TandemCallDependencies } from "../../session/actions.ts";
 import type { CoordinatorMessage } from "../../session/coordinator-reply.ts";
 import type { SessionDeps } from "../../session/events.ts";
+import { nativeReplyLinks } from "../../session/native-links.ts";
 import {
   type ChoiceConfirmation,
   promptRoutingConfig,
@@ -13,6 +14,7 @@ import {
 } from "../../session/prompt-routing.ts";
 import { coordinatorToolRefusal } from "../../session/tool-guard.ts";
 import { tandemRequestSchema } from "../../session/tools.ts";
+import { terminalContext } from "../../terminal-backend/compose.ts";
 import { bindCoordinator, type CoordinatorOptions } from "../coordinator-session.ts";
 import { type ClaudeCodePane, claudeCodeToolCall, claudeCodeUsage } from "./host.ts";
 import type {
@@ -62,7 +64,10 @@ export function claudeCodeCoordinator(
   options: CoordinatorOptions = {},
 ): SessionBinding {
   const { environment, session } = bindCoordinator(options, { ...harness, host: pane.host });
-  const routing = promptRoutingConfig(processEnvironmentSnapshot(options.processEnvironment));
+  const snapshot = processEnvironmentSnapshot(options.processEnvironment);
+  const nativeLinks =
+    snapshot.TERN_PANE !== undefined && terminalContext.inheritedPane(snapshot).status === "inside";
+  const routing = promptRoutingConfig(snapshot);
   const confirmation: ChoiceConfirmation = {};
   const calls: TandemCallDependencies = {
     service: () => session.service(),
@@ -144,6 +149,16 @@ export function claudeCodeCoordinator(
         return DONE;
       case "agentEnd":
         await session.agentEnd(false, () => turnMessages(event));
+        if (nativeLinks) {
+          try {
+            const service = session.service();
+            const [tasks, briefs] = await Promise.all([service.list(), service.requestBriefs()]);
+            const links = nativeReplyLinks(turnMessages(event), tasks, briefs, environment.repo);
+            pane.showNativeLinks(links);
+          } catch (error) {
+            harness.logError("Native reply links unavailable", error);
+          }
+        }
         return DONE;
       case "stopRequested":
         return { type: "stop" };

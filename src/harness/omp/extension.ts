@@ -2,7 +2,9 @@ import type { ExtensionAPI, ExtensionContext, ExtensionFactory } from "@oh-my-pi
 import { processEnvironmentSnapshot } from "../../config/environment.ts";
 import type { CoordinatorSession } from "../../session/coordinator.ts";
 import type { CoordinatorMessage } from "../../session/coordinator-reply.ts";
+import { nativeReplyLinks } from "../../session/native-links.ts";
 import { promptRoutingConfig } from "../../session/prompt-routing.ts";
+import { terminalContext } from "../../terminal-backend/compose.ts";
 import { replyUsage } from "../../workers/terminal.ts";
 import {
   type BoundCoordinator,
@@ -10,6 +12,7 @@ import {
   type CoordinatorOptions,
 } from "../coordinator-session.ts";
 import { ompSessionHost, ompToolCall } from "./host.ts";
+import { registerNativeLinks, showNativeLinks } from "./native-links.ts";
 import { registerTandemOmp } from "./registration.ts";
 
 function errorMessage(error: unknown): string {
@@ -58,6 +61,10 @@ function coordinatorMessage(message: unknown): CoordinatorMessage {
 export function createTandemExtension(options: CoordinatorOptions = {}): ExtensionFactory {
   return (pi: ExtensionAPI): void => {
     const environmentSnapshot = processEnvironmentSnapshot(options.processEnvironment);
+    const nativeLinks =
+      environmentSnapshot.TERN_PANE !== undefined &&
+      terminalContext.inheritedPane(environmentSnapshot).status === "inside";
+    if (nativeLinks) registerNativeLinks(pi);
     let latestContext: ExtensionContext;
     let bound: BoundCoordinator | undefined;
 
@@ -111,12 +118,29 @@ export function createTandemExtension(options: CoordinatorOptions = {}): Extensi
     pi.on("tool_execution_start", (event, ctx) => session(ctx).toolStart(statusToolCall(event)));
     pi.on("tool_execution_end", (event, ctx) => session(ctx).toolEnd(statusToolCall(event)));
     pi.on("turn_end", (event, ctx) => session(ctx).turnEnd(replyUsage(event.message)));
-    pi.on("agent_end", (event, ctx) =>
-      session(ctx).agentEnd(
+    pi.on("agent_end", async (event, ctx) => {
+      await session(ctx).agentEnd(
         event.willContinue === true,
         () => event.messages?.map((message) => coordinatorMessage(message)) ?? [],
-      ),
-    );
+      );
+      if (nativeLinks && ctx.hasUI && ctx.mode === "tui") {
+        const service = session(ctx).service();
+        try {
+          const [tasks, briefs] = await Promise.all([service.list(), service.requestBriefs()]);
+          showNativeLinks(
+            pi,
+            nativeReplyLinks(
+              event.messages?.map(coordinatorMessage) ?? [],
+              tasks,
+              briefs,
+              coordinator(ctx).environment.repo,
+            ),
+          );
+        } catch (error) {
+          pi.logger.error("Native reply links unavailable", { error: errorMessage(error) });
+        }
+      }
+    });
     pi.on("session.compacting", async (_event, ctx) => {
       const { context, preserve } = await session(ctx).compacting();
       return { context: [...context], preserveData: { ...preserve } };
