@@ -3,10 +3,21 @@ import type { CoordinatorMessage } from "./coordinator-reply.ts";
 
 export type NativeReplyLink = Readonly<{ label: string; url: string }>;
 const safeId = /^[a-zA-Z0-9_-]+$/u;
+function escapePattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
 function mentioned(text: string, value: string): boolean {
   if (!value) return false;
-  const escaped = value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const escaped = escapePattern(value);
   return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`, "iu").test(text);
+}
+
+/** A numeric id in a count, an issue reference, or a title is not a domain reference. */
+function explicitReference(text: string, kind: string, id: string): boolean {
+  return new RegExp(
+    `(?<![\\w-])${kind}(?:\\s+|\\s*[:#]\\s*)[\x60*]*#?${escapePattern(id)}(?![\\w-])`,
+    "iu",
+  ).test(text);
 }
 
 /** Resolve only mentioned durable identities in the coordinator's project. */
@@ -35,24 +46,28 @@ export function nativeReplyLinks(
   };
   const scoped = tasks.filter((t) => t.repoPath === repoPath);
   for (const task of scoped) {
-    if (mentioned(text, task.id) || (task.title && mentioned(text, task.title)))
+    if (explicitReference(text, "task", task.id) || mentioned(text, `tandem://task/${task.id}`))
       add("task", task.id, `Task ${task.id}`);
   }
   for (const brief of briefs.filter((b) => b.repoPath === repoPath)) {
     if (mentioned(text, brief.id)) add("brief", brief.id, `Brief ${brief.id}`);
   }
   // A number is clickable only when exactly one task in this project owns that PR.
-  const prs = new Map<number, number>();
+  const prs = new Map<number, { count: number; url: string }>();
   for (const task of scoped) {
-    const n = task.pullRequest?.number ?? task.prReview?.ref.number;
-    if (n !== undefined) prs.set(n, (prs.get(n) ?? 0) + 1);
+    const number = task.pullRequest?.number ?? task.prReview?.ref.number;
+    if (number === undefined) continue;
+    const url =
+      task.pullRequest?.url ??
+      (task.prReview ? `https://github.com/${task.prReview.ref.repo}/pull/${number}` : "");
+    prs.set(number, { count: (prs.get(number)?.count ?? 0) + 1, url });
   }
-  for (const [number, count] of prs) {
+  for (const [number, pr] of prs) {
     if (
-      count === 1 &&
-      (mentioned(text, `#${number}`) ||
-        mentioned(text, `PR ${number}`) ||
-        mentioned(text, `/pull/${number}`))
+      pr.count === 1 &&
+      (explicitReference(text, "(?:PR|pull request)", String(number)) ||
+        mentioned(text, `tandem://pr/${number}`) ||
+        mentioned(text, pr.url))
     )
       add("pr", String(number), `PR #${number}`);
   }

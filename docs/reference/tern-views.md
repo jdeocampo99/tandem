@@ -358,8 +358,9 @@ CLI action shows stderr without retrying or clearing the user's unsent direction
 Malformed detail files keep the last readable page and disable its actions until a
 valid file returns. Navigation back remains available.
 
-Coordinator adapters append a compact references row after a reply mentioning known
-task, brief or unambiguous PR identities in their project. The row prints OSC 8 routes
+Coordinator adapters append a compact references row after a reply mentioning explicit
+task or PR ids, a saved PR URL, or a known brief identity in their project. Task titles,
+plain counts, issue numbers and foreign PR URLs never imply a native identity. The row prints OSC 8 routes
 for `tandem://task/ID`, `tandem://brief/ID` and `tandem://pr/NUMBER`. It is enabled only
 inside an unambiguous inherited Tern pane context. Herdr output and model reply text
 remain unchanged. Unknown or foreign identities never become native links.

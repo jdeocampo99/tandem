@@ -19,7 +19,11 @@ const record = task({
 });
 test("coordinator reply references resolve only known tasks and unambiguous PRs in its project", () => {
   const messages = [
-    { role: "assistant", content: "Tern adapter (task 102) is ready. Review PR #281." },
+    {
+      role: "assistant",
+      content:
+        "Tern adapter (task 102) is ready. Review PR #281. Task 103 belongs to another project.",
+    },
   ];
   const links = nativeReplyLinks(
     messages,
@@ -36,16 +40,14 @@ test("coordinator reply references resolve only known tasks and unambiguous PRs 
     nativeReplyLinks([{ role: "assistant", content: "1020 and PR #2810" }], [record], [], "/repo"),
   ).toEqual([]);
   expect(nativeReplyLinks(messages, [record, task({ ...record, id: "104" })], [], "/repo")).toEqual(
-    [
-      { url: "tandem://task/102", label: "Task 102" },
-      { url: "tandem://task/104", label: "Task 104" },
-    ],
+    [{ url: "tandem://task/102", label: "Task 102" }],
   );
   expect(
     nativeReplyLinks(
       [
         { role: "user", content: "task 102" },
-        { role: "assistant", content: "102", superseded: true },
+        { role: "assistant", content: "Task 102", superseded: true },
+        { role: "assistant", content: "Task 102", synthetic: true },
       ],
       [record],
       [],
@@ -61,10 +63,46 @@ test("brief references use the mentioned revision identity and reject foreign br
   );
   expect(
     nativeReplyLinks(
-      [{ role: "assistant", content: "Review brief req-282." }],
+      [
+        {
+          role: "assistant",
+          content:
+            "Review brief req-282. Foreign brief req-other and task 103 stay outside this project.",
+        },
+      ],
       [],
       [brief, { ...brief, repoPath: "/foreign", id: "req-other" }],
       "/repo",
     ),
   ).toEqual([{ label: "Brief req-282", url: "tandem://brief/req-282" }]);
+});
+
+test("reply links do not infer identities from task titles, counts, issue numbers, or foreign PR URLs", () => {
+  for (const text of [
+    "Tern adapter is ready.",
+    "Changed 102 files and discussed issue #281.",
+    "Review https://github.com/foreign/repo/pull/281.",
+    "task 1020, PR #2810, task-102, task102 and PR281.",
+  ]) {
+    expect(nativeReplyLinks([{ role: "assistant", content: text }], [record], [], "/repo")).toEqual(
+      [],
+    );
+  }
+  for (const text of [
+    "Task #102; pull request #281.",
+    "Task `102`; PR **281**.",
+    "tandem://task/102; tandem://pr/281.",
+  ]) {
+    expect(
+      nativeReplyLinks([{ role: "assistant", content: text }], [record], [], "/repo"),
+    ).toHaveLength(2);
+  }
+  expect(
+    nativeReplyLinks(
+      [{ role: "assistant", content: record.pullRequest?.url ?? "" }],
+      [record],
+      [],
+      "/repo",
+    ),
+  ).toEqual([{ url: "tandem://pr/281", label: "PR #281" }]);
 });
