@@ -231,6 +231,7 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
   return {
     name: "tern",
     openView: async (input) => (await native()).views.openView(input),
+    closeView: async (input) => (await native()).views.closeView(input),
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>

@@ -345,6 +345,13 @@ Task/brief/PR `TerminalBackend.openView` calls retain their existing durable ide
 board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
 coordinator, home, cwd and origin context.
 
+`TerminalBackend.closeView({coordinator,cwd,home,origin,view:{kind:"brief",requestId}})`
+retires only the exact originating native brief split. The caller checks the durable revision
+and completes approval/feedback first; close errors become successful-action warnings, never retries.
+The host proves the block's program, all launch arguments, scoped session and idle state twice,
+then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
+are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
+
 Known owned renderer back buttons all restore the conversation. When the coordinator is floated,
 the host proves its exact task block by program, coordinator and index launch arguments before
 docking the coordinator and closing that task. Other native tabs remain open.

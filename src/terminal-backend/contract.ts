@@ -252,6 +252,20 @@ export type TerminalBackend = Readonly<{
     }>,
   ): Promise<OpenViewResult>;
 
+  /** Retires only the originating native brief split. The caller owns revision/action policy.
+   * Missing panes count as closed; foreign, busy and unknown outcomes retain the pane.
+   * This never retires a process-oriented Markdown reviewPane or the conversation.
+   */
+  closeView(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      origin: ViewOrigin & Readonly<{ paneId: string }>;
+      view: Extract<TerminalView, { kind: "brief" }>;
+    }>,
+  ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
+
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;
   /** The terminal's own description of the session, for `doctor`. */
