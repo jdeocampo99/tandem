@@ -6,6 +6,30 @@ local fields = require('./text-field')
 local model = models.parse(tern.json.decode(tern.fs.read('fixture.json')).model)
 assert(model ~= nil)
 assert(models.parse({header={}}) == nil)
+local taskPath = tern.fs.read('task-path.txt')
+local index = models.parseIndex({pullRequests={target={header=model.header,detailFile='pr-fixture.json'}}})
+assert(index ~= nil)
+assert(models.parseIndex({pullRequests={bad={header={taskId=42},detailFile='pr-fixture.json'}}}) == nil)
+local otherHeader = table.clone(model.header)
+otherHeader.taskId = 'another-task'; otherHeader.repo = 'another/app'
+index.pullRequests.other = {header=otherHeader,detailFile='pr-other.json'}
+assert(models.taskDetailPath(taskPath, 'another-missing-task', index) == nil)
+assert(models.taskDetailPath('task-task-98.json', 'task-98', index) == nil)
+assert(models.taskDetailPath(taskPath, 'task-98', index) == string.gsub(taskPath, 'task%-task%-98%.json$', 'pr-fixture.json'))
+local related = models.forTask(taskPath, 'task-98', index)
+assert(related ~= nil and related.status == 'ready' and related.model.header.taskId == 'task-98')
+local embedded = content.create(); embedded.tab = 'Diff'
+assert(content.view(embedded, related.model, true, 'main.task.pr').main ~= nil)
+index.pullRequests.duplicate = index.pullRequests.target
+assert(models.forTask(taskPath, 'task-98', index) == nil)
+index.pullRequests.duplicate = nil
+index.pullRequests.target.detailFile = '../pr-fixture.json'
+assert(models.forTask(taskPath, 'task-98', index) == nil)
+index.pullRequests.target.detailFile = 'pr-fixture.json'
+related.model.header.taskId = 'wrong-task'
+tern.fs.write('pr-fixture.json',tern.json.encode({version=1,kind='pr',revision='changed-task',model=related.model}))
+local mismatch = models.forTask(taskPath, 'task-98', index)
+assert(mismatch ~= nil and mismatch.status == 'unavailable' and mismatch.model == nil)
 local state = content.create()
 local view = content.view(state, model, true)
 assert(view.main ~= nil)
@@ -55,4 +79,4 @@ model.review.generation=2
 assert(not content.ready(state,model,true))
 content.event(state,model,true,{ev='action',act='pr-post'},cx,invoke)
 assert(#calls == 2)
-tern.fs.write('results.json',tern.json.encode({comment=true,review=true,stale=true}))
+tern.fs.write('results.json',tern.json.encode({comment=true,review=true,stale=true,reuse=true}))
