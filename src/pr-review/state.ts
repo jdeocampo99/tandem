@@ -18,6 +18,15 @@ export type PostedReview = Readonly<{
   confirmedByUser?: true;
 }>;
 
+/** One reply's network claim or settled result; its identity/body live in review.replies[index]. */
+export type ReplyPost = Readonly<{ index: number }> &
+  (
+    | Readonly<{ kind: "pending"; attemptedAt: string; attemptRevision: number }>
+    | Readonly<{ kind: "uncertain"; attemptedAt: string; attemptRevision: number; message: string }>
+    | Readonly<{ kind: "failed"; message: string }>
+    | Readonly<{ kind: "posted"; url: string; postedAt: string; confirmedByUser?: true }>
+  );
+
 /** One finished review of one PR head. */
 export type PrReviewRound = Readonly<{
   generation: number;
@@ -27,6 +36,7 @@ export type PrReviewRound = Readonly<{
   review: PrReview;
   notes: readonly string[];
   posted?: PostedReview;
+  replyPosts?: readonly ReplyPost[];
   /** Saved before GitHub is called; retained until its marker proves the review landed. */
   pendingPost?: Readonly<{ verdict: ReviewVerdict; attemptedAt: string }>;
 }>;
@@ -121,11 +131,17 @@ function parseRound(value: unknown, source: string): PrReviewRound {
   if (!Array.isArray(record.notes) || record.notes.some((note) => typeof note !== "string")) {
     throw new TypeError(`${source}.notes must be an array of strings`);
   }
+  const review = parsePrReview(record.review);
   return {
     generation,
+    ...(record.replyPosts === undefined
+      ? {}
+      : {
+          replyPosts: parseReplyPosts(record.replyPosts, source, review.replies?.length ?? 0),
+        }),
     head: textAt(record.head, `${source}.head`),
     from: textAt(record.from, `${source}.from`),
-    review: parsePrReview(record.review),
+    review,
     notes: record.notes as readonly string[],
     ...(record.posted === undefined
       ? {}
@@ -134,6 +150,57 @@ function parseRound(value: unknown, source: string): PrReviewRound {
       ? {}
       : { pendingPost: parsePendingPost(record.pendingPost, `${source}.pendingPost`) }),
   };
+}
+
+function parseReplyPosts(value: unknown, source: string, count: number): readonly ReplyPost[] {
+  if (!Array.isArray(value)) throw new TypeError(`${source}.replyPosts must be an array`);
+  const indices = new Set<number>();
+  return value.map((item) => {
+    const record = recordAt(item, `${source}.replyPosts`);
+    const index = record.index;
+    if (
+      typeof index !== "number" ||
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      index >= count ||
+      indices.has(index)
+    )
+      throw new TypeError(`${source}.replyPosts.index must name a unique saved reply`);
+    indices.add(index);
+    if (record.kind === "posted") {
+      if (record.confirmedByUser !== undefined && record.confirmedByUser !== true)
+        throw new TypeError(`${source}.replyPosts.confirmedByUser must be true when present`);
+      return {
+        index,
+        kind: "posted",
+        url: textAt(record.url, source),
+        postedAt: textAt(record.postedAt, source),
+        ...(record.confirmedByUser === true ? { confirmedByUser: true as const } : {}),
+      };
+    }
+    if (record.kind === "pending" || record.kind === "uncertain") {
+      const attemptedAt = textAt(record.attemptedAt, source);
+      const attemptRevision = record.attemptRevision;
+      if (
+        typeof attemptRevision !== "number" ||
+        !Number.isSafeInteger(attemptRevision) ||
+        attemptRevision < 0
+      )
+        throw new TypeError(`${source}.replyPosts.attemptRevision must be a non-negative integer`);
+      return record.kind === "pending"
+        ? { index, kind: "pending", attemptedAt, attemptRevision }
+        : {
+            index,
+            kind: "uncertain",
+            attemptedAt,
+            attemptRevision,
+            message: textAt(record.message, source),
+          };
+    }
+    if (record.kind === "failed")
+      return { index, kind: "failed", message: textAt(record.message, source) };
+    throw new TypeError(`${source}.replyPosts.kind is unknown`);
+  });
 }
 
 function parsePendingPost(

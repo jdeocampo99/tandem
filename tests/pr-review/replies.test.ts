@@ -85,7 +85,9 @@ test("a reply posts in_reply_to under the pinned head, never as a root comment",
     [HEAD]: ok("abc123"),
     [POST]: ok(receipt),
   });
-  expect(await postThreadReply(run, input)).toMatchObject({ kind: "posted" });
+  expect(await postThreadReply(run, input, async () => undefined)).toMatchObject({
+    kind: "posted",
+  });
   const sent = calls.find((c) => c.argv.join(" ").startsWith(POST));
   expect(JSON.parse(sent?.stdin ?? "{}")).toEqual({
     commit_id: "abc123",
@@ -100,7 +102,9 @@ for (const mode of ["moved", "unreadable-comments", "unreadable-head"]) {
       [COMMENTS]: mode === "unreadable-comments" ? failed("offline") : ok([[]]),
       [HEAD]: mode === "unreadable-head" ? failed("offline") : ok("new-head"),
     });
-    expect((await postThreadReply(run, input)).kind).toBe(mode === "moved" ? "moved" : "failed");
+    expect((await postThreadReply(run, input, async () => undefined)).kind).toBe(
+      mode === "moved" ? "moved" : "failed",
+    );
     expect(calls.filter((c) => c.argv.includes("POST"))).toHaveLength(0);
   });
 }
@@ -115,8 +119,8 @@ test("a lost reply receipt reconciles its marker and cannot double post", async 
       return failed("lost response");
     },
   });
-  expect((await postThreadReply(run, input)).kind).toBe("posted");
-  expect((await postThreadReply(run, input)).kind).toBe("already-posted");
+  expect((await postThreadReply(run, input, async () => undefined)).kind).toBe("posted");
+  expect((await postThreadReply(run, input, async () => undefined)).kind).toBe("already-posted");
   expect(calls.filter((c) => c.argv.includes("POST"))).toHaveLength(1);
 });
 
@@ -126,6 +130,6 @@ test("an uncertain reply returns uncertainty without retrying", async () => {
     [HEAD]: ok("abc123"),
     [POST]: failed("lost response"),
   });
-  expect((await postThreadReply(run, input)).kind).toBe("uncertain");
+  expect((await postThreadReply(run, input, async () => undefined)).kind).toBe("uncertain");
   expect(calls.filter((c) => c.argv.includes("POST"))).toHaveLength(1);
 });

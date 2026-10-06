@@ -330,10 +330,21 @@ export const tandemRequestSchema = z.strictObject({
             taskRevision: z.number().int().nonnegative(),
             url: z.string(),
           }),
+          z.strictObject({
+            kind: z.literal("post-reply-again"),
+            taskRevision: z.number().int().nonnegative(),
+            replyIndex: z.number().int().nonnegative(),
+          }),
+          z.strictObject({
+            kind: z.literal("mark-reply-posted"),
+            taskRevision: z.number().int().nonnegative(),
+            replyIndex: z.number().int().nonnegative(),
+            url: z.string(),
+          }),
         ])
         .optional()
         .describe(
-          "Only after the user checks the PR and explicitly chooses how to recover an uncertain post. Use the saved verdict and latest full task record revision. post-again warns that it may duplicate a received review; mark-posted requires its GitHub review link.",
+          "Only after the user checks the PR and explicitly chooses how to recover an uncertain post. Use the saved verdict and latest full task record revision. post-again warns that it may duplicate a received review; mark-posted requires its GitHub review link. For a saved reply, use post-reply-again or mark-reply-posted with its replyIndex and latest taskRevision; reposting may duplicate the reply and marking requires its checked GitHub discussion link.",
         ),
     }),
     z.strictObject({ action: z.literal("review-again"), taskId: z.string() }),
