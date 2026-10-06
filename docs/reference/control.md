@@ -145,9 +145,10 @@ different matching project. When no readable/live candidate matches, the command
 
 - The native boundary also registers `board`, `prs`, `usage`, `new-request`, `open-task`,
   `project 1..9|prev|next`, and `view-file PATH`. Each dispatches once through the typed
-  `nativeRendererHandlers` registration in `src/terminal/native-renderers.ts`. Until its renderer
-  is installed, it exits nonzero with `not implemented yet`, without opening a view or starting
-  a service. Renderer implementations receive the resolved project environment, required origin,
+  `nativeRendererHandlers` registration in `src/terminal/native-renderers.ts`; all these handlers
+  are implemented. `open-task` opens the project's searchable task picker. Board/Usage open
+  full-window views, `prs` selects a published PR pane, and `new-request` prompts the coordinator.
+  Renderer implementations receive the resolved project environment, required origin,
   normalized command input, lazy service, and existing capabilities. Relative view-file paths
   resolve against the explicit originating pane cwd, never the plugin's process cwd. Installing
   a renderer replaces its one registration entry; the native dispatcher stays unchanged.

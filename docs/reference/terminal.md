@@ -139,11 +139,43 @@ PRs, Board and usage buttons independently of shortcut consent.
 
 ### Registered screens
 
-The package registers Panel, Welcome, Brief, PR, Board, Usage and Catch-up. `native prs`
-selects a project's published PR and opens that PR pane; New request focuses and prompts the
-verified coordinator. Project switching and published-detail navigation are implemented.
-Task has a data model and hosting support, but its renderer registration is still pending;
-Open task currently returns an unavailable error. Its palette entry remains visible.
+The package registers Panel, Welcome, Task, Task picker, Brief, PR, Board, Usage and Catch-up.
+`native prs` selects a project's published PR and opens that PR pane; New request focuses and
+prompts the verified coordinator. Project switching and published-detail navigation are implemented.
+
+### Task page, picker and reply links
+
+`native open task ID` opens the task in the coordinator's same recorded tab. The live
+conversation is floated and hidden, preserving its endpoint and process. Opening another task
+replaces only the proven task block; Orchestrator restores the conversation before closing it.
+Unrelated pictures in picture refuse task replacement. The sidebar panel stays available.
+
+- The header shows the task's model, elapsed time, branch, current activity and stage track,
+  including skipped validation/review stages and the fix-round budget.
+- All six tabs remain visible. Overview has the objective, worker to-dos and five recent events;
+  Brief shows saved lines and opens the separate pane for approval/comments; Progress shows
+  the timeline, validation evidence and findings. Diff and PR embed the shared PR controls,
+  guarded by matching task/index/detail data and the displayed HEAD. Missing related data has
+  an empty state. Cost shows the recorded receipt, with unknown samples explicitly unavailable.
+- Blocked tasks offer Restart through central recovery and Steer into the worker-message
+  editor. Send invokes `native steer --task ID --text TEXT`; failed commands retain the unsent
+  message and show stderr, with no retry. Successful sends clear the editor. Orchestrator
+  return remains available when detail files are unreadable; data-bound actions are disabled.
+- **Tandem: Open task…** in the palette invokes `native open-task`, proving the running Tern
+  coordinator before opening a disposable split with the root index. Search matches title,
+  id or stage without case sensitivity; results sort by title. Arrows select, Enter or a click
+  opens the task, and success closes the picker. Cancel/Escape closes only the picker, retaining
+  an existing task page or returning focus to the conversation.
+
+OMP and Claude Code coordinator adapters append a compact OSC 8 reference row after assistant
+replies mention a known project task, brief or PR. Task references require an explicit task id;
+PR references require an explicit PR number, native route or saved PR URL with one owning task.
+Titles, bare counts, issue numbers, duplicate identities and foreign records do not resolve.
+Only an unambiguous inherited Tern pane context enables the row; OMP also requires interactive
+TUI mode. Routes `tandem://task/ID`, `tandem://brief/ID` and `tandem://pr/NUMBER` invoke the
+ordinary native open action with the current focused pane/cwd. The CLI rechecks project and
+ownership at click time. See [task hosting](tern-views.md#task-page-and-picker) and
+[task models](native-views.md#task-page).
 
 ### Board, Usage and Catch-up
 

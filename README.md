@@ -185,6 +185,10 @@ and switching projects. Decline and you can still use the panel buttons and comm
 Setup preserves custom keys; use the palette if a shortcut is already assigned elsewhere.
 Choosing Herdr again restores settings Tandem changed, keeping any edits you made afterward.
 
+- **Tasks:** click a task in the panel, follow a task link below Tandem's reply, or choose
+  **Tandem: Open task…** in the command palette and search by title, id or stage. The task page
+  shows its to-dos, brief, progress, diff, PR and cost. Send the worker guidance from the page,
+  or restart a stuck task. Click **← Orchestrator** to return to the conversation.
 - **Board:** use the panel's Board button, choose **Tandem: Toggle board** in Tern's command
   palette, or press `Cmd+Shift+B` if setup installed it. Working, Needs you, In review and
   Ready to merge lanes show each task's branch, model, cost and PR link.

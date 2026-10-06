@@ -339,7 +339,9 @@ fields and labels unknown samples as unavailable.
 `native open-task` proves the project's Tern coordinator and opens `tandem.task-picker`
 against the root index in a disposable split. It searches the saved project's tasks by
 title, id or stage; arrows choose a result and Enter or a click invokes `native open task`.
-Success closes only the picker. Cancel invokes the exact orchestrator return route.
+Success closes only the picker. Cancel/Escape uses the guarded return route to close only
+that picker and focus the existing task page when the coordinator is already floated;
+otherwise it focuses the conversation.
 Task Restart and worker messaging call `native restart` and `native steer`; a failed
 CLI action shows stderr without retrying or clearing the user's unsent direction.
 Malformed detail files keep the last readable page and disable its actions until a
