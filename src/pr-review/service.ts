@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { listenPresentation, openPresentation } from "../adapters/lavish.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
+import { readNativeThreads } from "../pr-watch/native-cache.ts";
 import { checkoutQuestion, findCheckout, type RepoLocation } from "../repos/locate.ts";
 import { commentableLines } from "./diff.ts";
 import { applyEdits, type PrReviewEdits, submissionEdits } from "./edits.ts";
@@ -12,6 +13,7 @@ import { readPageSources, reviewPageInput } from "./page-input.ts";
 import {
   findPostedReview,
   postReview,
+  postThreadReply,
   type ReviewVerdict,
   replyToComment,
   reviewMarker,
@@ -24,6 +26,7 @@ import {
   readPullRequest,
 } from "./pull-request.ts";
 import { renderReviewText, uncertainPostMessage, wantsPage } from "./render.ts";
+import { validateThreadReplies } from "./replies.ts";
 import type { ReviewLens } from "./review.ts";
 import {
   latestRound,
@@ -301,7 +304,10 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       return publish(task, state, round, round.pendingPost.verdict);
     }
     const review = applyEdits(
-      round.review,
+      {
+        ...round.review,
+        ...(submission.replies === undefined ? {} : { replies: submission.replies }),
+      },
       submissionEdits(round.review, submission),
       await commentable(task.id, round),
     );
@@ -366,6 +372,12 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     verdict: ReviewVerdict,
     recovering = false,
   ): Promise<PostPrReviewResult> {
+    if (round.pendingPost === undefined && round.review.replies?.length) {
+      validateThreadReplies(
+        round.review.replies,
+        await readNativeThreads(deps.run, state.ref, state.checkout, round.head),
+      );
+    }
     const input = {
       ref: state.ref,
       review: round.review,
@@ -461,18 +473,36 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     );
     if (confirmed?.posted === undefined) throw new Error("The review receipt was not saved.");
     // Only the caller that records the receipt owns the follow-up replies.
-    const replies = settled.changed ? await postReplies(confirmedState, confirmed) : 0;
+    const replies = settled.changed
+      ? await postReplies(task.id, confirmedState, confirmed)
+      : { posted: 0, unconfirmed: 0 };
     return {
       taskId: task.id,
       posted: true,
       url: confirmed.posted.url,
-      message: `Posted ${confirmed.review.comments.length} comment${confirmed.review.comments.length === 1 ? "" : "s"}${replies === 0 ? "" : ` and ${replies} ${replies === 1 ? "reply" : "replies"}`}: ${confirmed.posted.url}`,
+      message: `Posted ${confirmed.review.comments.length} comment${confirmed.review.comments.length === 1 ? "" : "s"}${replies.posted === 0 ? "" : ` and ${replies.posted} ${replies.posted === 1 ? "reply" : "replies"}`}: ${confirmed.posted.url}${replies.unconfirmed === 0 ? "" : `. ${replies.unconfirmed} thread replies were not confirmed. Check the PR; Tandem will not retry them.`}`,
     };
   }
 
   /** Short replies on earlier threads the author addressed; a failed reply never blocks the review. */
-  async function postReplies(state: PrReviewState, round: PrReviewRound): Promise<number> {
+  async function postReplies(
+    taskId: string,
+    state: PrReviewState,
+    round: PrReviewRound,
+  ): Promise<{ posted: number; unconfirmed: number }> {
     let posted = 0;
+    let unconfirmed = 0;
+    for (const [index, reply] of (round.review.replies ?? []).entries()) {
+      const outcome = await postThreadReply(deps.run, {
+        ref: state.ref,
+        cwd: state.checkout,
+        head: round.head,
+        reply,
+        marker: `<!-- tandem-reply:${taskId}:${round.generation}:${index} -->`,
+      });
+      if (outcome.kind === "posted" || outcome.kind === "already-posted") posted++;
+      else unconfirmed++;
+    }
     for (const prior of round.review.priorComments) {
       if (prior.status !== "addressed" || prior.reply === undefined) continue;
       const ok = await replyToComment(deps.run, {
@@ -483,7 +513,7 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       });
       if (ok) posted += 1;
     }
-    return posted;
+    return { posted, unconfirmed };
   }
 
   /** Reviews the author's new pushes, checking each of the user's earlier comments. */

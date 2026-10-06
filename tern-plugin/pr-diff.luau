@@ -5,14 +5,15 @@ local diff = require("./diff-row")
 local components = require("./components")
 local fields = require("./text-field")
 local M = {}
-export type Yours = { id: string, file: string, line: number, body: string, rowId: string, sent: boolean }
-export type State = { file: number, yours: { Yours }, editor: fields.Field?, target: { file: string, line: number, rowId: string }?, decisions: { [string]: string }, jump: string?, editorPath: string?, busy: boolean }
+export type Reply = {threadId: string, commentId: string, replyTo: number?}
+export type Yours = { id: string, file: string, line: number?, reply: Reply?, body: string, rowId: string, sent: boolean }
+export type State = { file: number, yours: { Yours }, editor: fields.Field?, target: { file: string, line: number?, rowId: string, reply: Reply? }?, decisions: { [string]: string }, jump: string?, editorPath: string?, busy: boolean }
 export type Send = (Yours, () -> ()) -> ()
 function M.create(): State
  return { file = 1, yours = {}, decisions = {}, busy = false }
 end
 local function editable(model: models.Model, ready: boolean): boolean
- return ready and (model.commentDestination == "worker" and model.header.taskId ~= nil or model.review ~= nil and not model.review.posted and model.review.head == model.review.currentHead)
+ return ready and (model.commentDestination == "worker" and model.header.taskId ~= nil or model.commentDestination == "review" and model.review ~= nil and not model.review.posted and model.review.head == model.review.currentHead)
 end
 local function thread(t: models.Thread, action: string?): Node
  local children = {}
@@ -38,7 +39,7 @@ function M.rows(s: State, model: models.Model, file: models.File, ready: boolean
   local can = editable(model, ready) and not s.busy
   local line = if r.kind == "del" then r.old else r.new
   local action = if can and line ~= nil and (model.commentDestination == "worker" or r.kind ~= "del") then "pr-line=" .. index else nil
-  for ti, t in entry.threads do table.insert(cards, thread(t, if action then "pr-reply=" .. index .. ":" .. ti else nil)) end
+  for ti, t in entry.threads do table.insert(cards, thread(t, if can and (model.commentDestination == "worker" or t.comments[1] and t.comments[1].databaseId) then "pr-reply=" .. t.id else nil)) end
   for _, draft in entry.drafts do
    local decision = s.decisions[draft.id] or "undecided"
    table.insert(cards, diff.card("draft-" .. draft.id, "Reviewer · " .. draft.severity, draft.body, if can then {
@@ -74,9 +75,17 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?):
  else table.insert(nodes, components.text("No text diff available", "muted")) end
  if #model.unanchoredThreads > 0 then
   table.insert(nodes, ui.rule("Other threads (outside this diff)"))
-  for i, t in model.unanchoredThreads do table.insert(nodes, components.keyed(thread(t, nil), "other" .. i)) end
+  for i, t in model.unanchoredThreads do
+   local cards = {thread(t, if editable(model, ready) and not s.busy and (model.commentDestination == "worker" or t.comments[1] and t.comments[1].databaseId) then "pr-reply=" .. t.id else nil)}
+   for _, mine in s.yours do if mine.rowId == t.id then table.insert(cards, diff.card(mine.id, "you · reply", mine.body)) end end
+   if s.target and s.target.rowId == t.id and s.editor then
+    s.editorPath = (prefix or "main.content") .. ".diff.other" .. i .. ".editor.field"
+    table.insert(cards, editor(s))
+   end
+   table.insert(nodes, components.keyed(ui.col(cards), "other" .. i))
+  end
  end
- table.insert(nodes, components.text(if model.commentDestination == "worker" then "Hover a line and click + to comment. Your comments go to the worker as fix requests." else "Keep or drop reviewer drafts. Your new comments are included when you Post.", "muted"))
+ table.insert(nodes, components.text(if model.commentDestination == "worker" then "Hover a line and click + to comment. Your comments go to the worker as fix requests." elseif model.commentDestination == "read-only" then "" else "Keep or drop reviewer drafts. Your new comments are included when you Post.", "muted"))
  return components.keyed(ui.col(nodes), "diff")
 end
 function M.jump(s: State, model: models.Model, cx: BlockCx, prefix: string)
@@ -105,23 +114,34 @@ function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx:
  if act == "pr-file" then s.file = tonumber(value) or 1; return true end
  if not editable(model, ready) or s.busy then return false end
  if act == "pr-line" or act == "pr-reply" then
-  local index = tonumber(string.match(value or "", "^%d+"))
-  local file = model.files[s.file]
-  local row = if file and index then file.rows[index] else nil
-  if not row then return false end
-  local line = if row.row.kind == "del" then row.row.old else row.row.new
-  if not line or (model.commentDestination == "review" and row.row.kind == "del") then return false end
-  s.target = { file = file.path, line = line, rowId = row.id }
+  if act == "pr-reply" then
+   local selected: models.Thread? = nil
+   local rowId = value or ""
+   for _, file in model.files do for _, row in file.rows do for _, t in row.threads do if t.id == value then selected = t; rowId = row.id end end end end
+   for _, t in model.unanchoredThreads do if t.id == value then selected = t end end
+   if not selected or not selected.comments[1] then return false end
+   local root = selected.comments[1]
+   if model.commentDestination == "review" and not root.databaseId then return false end
+   s.target = {file=selected.file,line=selected.line,rowId=rowId,reply={threadId=selected.id,commentId=root.id,replyTo=root.databaseId}}
+  else
+   local index = tonumber(value)
+   local file = model.files[s.file]
+   local row = if file and index then file.rows[index] else nil
+   if not row then return false end
+   local line = if row.row.kind == "del" then row.row.old else row.row.new
+   if not line or (model.commentDestination == "review" and row.row.kind == "del") then return false end
+   s.target = {file=file.path,line=line,rowId=row.id}
+  end
   s.editor = fields.create("", true)
   cx:render()
   tern.timer(1, function()
-   if s.editorPath then cx:frame({ {"reveal", s.editorPath, "nearest"}, {"focus", s.editorPath} }) end
+   if s.editorPath then cx:frame({ {"reveal", string.gsub(s.editorPath, "%.field$", ""), "nearest"}, {"focus", s.editorPath} }) end
   end)
   return true
  elseif act == "pr-cancel" then s.editor, s.target = nil, nil; return true
  elseif act == "pr-save" then
   if not s.editor or not s.target or not string.find(s.editor.text, "%S") then return false end
-  local mine: Yours = { id = "you-" .. (#s.yours + 1), file = s.target.file, line = s.target.line, rowId = s.target.rowId, body = s.editor.text, sent = false }
+  local mine: Yours = { id = "you-" .. (#s.yours + 1), file = s.target.file, line = s.target.line, reply = s.target.reply, rowId = s.target.rowId, body = s.editor.text, sent = false }
   if model.commentDestination == "review" then
    table.insert(s.yours, mine); s.editor, s.target = nil, nil
   else

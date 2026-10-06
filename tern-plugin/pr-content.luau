@@ -94,6 +94,7 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?, 
  end
  local main = {ui.el("div", {class="tdm-pr-header",key="header"}, header), ui.el("div", {class="tdm-pr-body",key="body"}, {body})}
  local footer = {}
+ if model.readOnlyReason then table.insert(footer, components.text(model.readOnlyReason, "muted")) end
  if model.review then
   local review = model.review
   local canPost = valid and not review.posted and review.head == review.currentHead and not s.posting and not s.submitted
@@ -113,7 +114,8 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?, 
 end
 local function sender(s: State, model: models.Model, invoke: Invoke): diff.Send
  return function(mine, done)
-  invoke("pr-comment", model.header.taskId :: string, { comments = tern.json.array({{file=mine.file,line=mine.line,text=mine.body}}) }, function() done() end)
+  local payload = if mine.reply then {reviewHead=model.header.head,replies=tern.json.array({{threadId=mine.reply.threadId,commentId=mine.reply.commentId,replyTo=mine.reply.replyTo,body=mine.body}})} else {comments=tern.json.array({{file=mine.file,line=mine.line,text=mine.body}})}
+  invoke("pr-comment", model.header.taskId :: string, payload, function() done() end)
  end
 end
 function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx: BlockCx, invoke: Invoke): boolean
@@ -130,14 +132,19 @@ function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx:
   elseif ev.act == "pr-post" and valid and model.review and not model.review.posted and model.review.head == model.review.currentHead and not s.posting and not s.submitted then
    local drafts = {}
    for _, d in model.review.drafts do table.insert(drafts, {id=d.id, decision=s.diff.decisions[d.id] or "undecided"}) end
-   local yours = {}
-   for _, mine in s.diff.yours do table.insert(yours, {file=mine.file,line=mine.line,body=mine.body}) end
+   local yours, replies = {}, {}
+   for _, mine in s.diff.yours do
+    if mine.reply then table.insert(replies, {threadId=mine.reply.threadId,commentId=mine.reply.commentId,replyTo=mine.reply.replyTo,body=mine.body})
+    else table.insert(yours, {file=mine.file,line=mine.line,body=mine.body}) end
+   end
    s.posting = true
-   invoke("review-submit", model.review.taskId, {tandemPrReview=1,reviewHead=s.head,reviewGeneration=s.generation,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours)}, function(result)
+   invoke("review-submit", model.review.taskId, {tandemPrReview=1,reviewHead=s.head,reviewGeneration=s.generation,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours),replies=tern.json.array(replies)}, function(result)
     s.posting = false
     if result == nil or result.status ~= 0 then return end
     local decoded, value = pcall(tern.json.decode, result.stdout)
-    if decoded and type(value) == "table" and value.posted == true then s.submitted = true
+    if decoded and type(value) == "table" and value.posted == true then
+     s.submitted = true
+     if type(value.message) == "string" then cx:toast("info", "Review posted", value.message) end
     else
      local message = if decoded and type(value) == "table" and type(value.message) == "string" then value.message else "No posted review receipt was returned. Check the PR before trying again."
      cx:toast("info", "Review wasn't confirmed as posted", message)
