@@ -2,9 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { nativeViewText } from "../../src/board/native-views.ts";
+import { nativeViewsPath } from "../../src/board/snapshot.ts";
 import { runCli } from "../../src/cli.ts";
 import { saveTerminalChoice } from "../../src/config/home-settings.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
+import { repositoryKey } from "../../src/config/repositories.ts";
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
@@ -36,7 +39,7 @@ const content: RequestBriefContent = {
   researchLinks: [],
 };
 
-async function fixture() {
+async function fixture(terminalName: "herdr" | "tern" = "herdr") {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-view-actions-")));
   const home = join(root, "home");
   const repo = join(root, "repo");
@@ -45,7 +48,7 @@ async function fixture() {
   await mkdir(repo);
   await mkdir(clean, { recursive: true });
   const endpoint = {
-    terminal: "herdr",
+    terminal: terminalName,
     sessionId: "isolated",
     workspaceId: "workspace",
     tabId: "tab",
@@ -73,12 +76,14 @@ async function fixture() {
   });
   const prompts: string[] = [];
   const opened: TerminalView[] = [];
+  const focused: string[] = [];
   let ownsCoordinator = true;
   const run = async (): Promise<never> => {
     throw new Error("No external commands expected");
   };
   const terminal: TerminalBackend = {
     ...terminalBackend(run),
+    name: terminalName,
     inspect: async (target) => ({
       endpoint: target.endpoint,
       pane: { ...endpoint, foregroundCwd: clean },
@@ -99,6 +104,10 @@ async function fixture() {
       },
     }),
     listPanes: async () => [{ ...endpoint, cwd: clean, foregroundCwd: clean }],
+    focusAgent: async (target) => {
+      focused.push(target.paneId ?? "");
+      return true;
+    },
     promptAgent: async (target) => {
       prompts.push(target.text);
     },
@@ -151,6 +160,7 @@ async function fixture() {
     deps,
     prompts,
     opened,
+    focused,
     setOwner: (owns: boolean) => {
       ownsCoordinator = owns;
     },
@@ -1193,18 +1203,7 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
   try {
     let starts = 0;
     const { service: _service, ...dependencies } = f.deps;
-    const commands = [
-      ["board"],
-      ["prs"],
-      ["usage"],
-      ["new-request"],
-      ["open-task"],
-      ...["1", "2", "3", "4", "5", "6", "7", "8", "9", "prev", "next"].map((target) => [
-        "project",
-        target,
-      ]),
-      ["view-file", join(f.root, "my view.tandem-view.json")],
-    ];
+    const commands = [["board"], ["prs"], ["usage"], ["new-request"], ["open-task"]];
     for (const command of commands) {
       const errors: string[] = [];
       const output: string[] = [];
@@ -1320,6 +1319,58 @@ test("renderer commands reject missing context and invalid project/file input be
       expect(result.error?.message).not.toContain("Unexpected renderer invocation");
     }
     expect(attempts).toBe(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("native navigation selects published projects and details, refusing stale or foreign inputs", async () => {
+  const f = await fixture("tern");
+  try {
+    const focused = f.focused;
+    await mkdir(join(f.home, "native-views"), { recursive: true });
+    const path = nativeViewsPath(f.home, f.repo);
+    const model = {
+      version: 1,
+      project: f.repo,
+      writtenAt: new Date().toISOString(),
+      tasks: {},
+      briefs: { [f.record.id]: { detailFile: "brief-native.json" } },
+      pullRequests: {},
+      projects: [
+        {
+          terminal: "tern",
+          repoPath: f.repo,
+          current: true,
+          offline: false,
+          sessionId: "isolated",
+        },
+      ],
+    };
+    const publish = (data: unknown) => writeFile(path, nativeViewText("panel", data));
+    await publish(model);
+    const action = (...args: string[]) =>
+      runTerminal(["native", ...args, "--pane", "101", "--cwd", f.clean], f.deps);
+    expect((await action("project", "next")).exitCode).toBe(0);
+    expect(focused).toEqual(["101"]);
+    expect(
+      (
+        await action(
+          "view-file",
+          join(f.home, "native-views", repositoryKey(f.repo), "brief-native.json"),
+        )
+      ).exitCode,
+    ).toBe(0);
+    expect(f.opened).toEqual([{ kind: "brief", requestId: f.record.id }]);
+    expect((await action("view-file", join(f.root, "foreign.json"))).exitCode).not.toBe(0);
+    await publish({ ...model, writtenAt: "2000-01-01T00:00:00Z" });
+    expect((await action("project", "1")).exitCode).not.toBe(0);
+    await publish({ ...model, projects: [{ ...model.projects[0], current: false }] });
+    expect((await action("project", "prev")).exitCode).not.toBe(0);
+    await publish({ ...model, projects: [{ ...model.projects[0], offline: true }] });
+    expect((await action("project", "1")).exitCode).not.toBe(0);
+    expect(focused).toHaveLength(1);
+    expect(f.opened).toHaveLength(1);
   } finally {
     await f.close();
   }

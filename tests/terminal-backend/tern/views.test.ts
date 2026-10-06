@@ -23,6 +23,7 @@ for (const mode of [
   "multiple-windows",
   "missing-origin",
   "unknown",
+  "foreign-return",
 ] as const)
   test(`native opening ${mode} retains exact identity and never falls back to a title`, async () => {
     const home = await mkdtemp("/tmp/tandem-host-test-");
@@ -56,15 +57,26 @@ for (const mode of [
                     name: null,
                     blocks: [
                       { id: 3, title: "Tandem panel", cwd: home, live: true, cols: 150 },
-                      ...(created
+                      ...(created || mode === "foreign-return"
                         ? [
                             {
                               id: 4,
                               title: "Tandem panel",
                               cwd: home,
                               live: true,
-                              program: mode === "wrong-kind" ? "unrelated.panel" : "tandem.panel",
-                              args: [home + "/index.json", "3", home, "", home],
+                              program:
+                                mode === "foreign-return"
+                                  ? "tandem.task"
+                                  : mode === "wrong-kind"
+                                    ? "unrelated.panel"
+                                    : "tandem.panel",
+                              args: [
+                                home + "/index.json",
+                                mode === "foreign-return" ? "999" : "3",
+                                home,
+                                "",
+                                home,
+                              ],
                             },
                           ]
                         : []),
@@ -117,11 +129,15 @@ for (const mode of [
           cwd: home,
           home,
           view: { kind: "board" },
-          ...(mode === "missing-origin" ? { origin: { paneId: "99" } } : {}),
+          ...(mode === "missing-origin"
+            ? { origin: { paneId: "99" } }
+            : mode === "foreign-return"
+              ? { origin: { paneId: "4" } }
+              : {}),
         },
         home,
         "panel",
-        "panel",
+        mode === "foreign-return" ? "return" : "panel",
         home + "/index.json",
       );
     try {
