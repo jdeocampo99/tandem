@@ -66,8 +66,11 @@ export function detailForView(
   if (view.kind === "task") return bundle.tasks[view.taskId]?.detailFile;
   if (view.kind === "brief") return bundle.briefs[view.requestId]?.detailFile;
   if (view.kind === "pr")
-    return Object.values(bundle.pullRequests).find((pr) => pr.header.taskId === view.taskId)
-      ?.detailFile;
+    return Object.values(bundle.pullRequests).find((pr) =>
+      "taskId" in view
+        ? pr.header.taskId === view.taskId
+        : pr.header.repo === view.repo && pr.header.number === view.number,
+    )?.detailFile;
   return undefined;
 }
 

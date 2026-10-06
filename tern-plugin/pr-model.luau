@@ -4,7 +4,7 @@ local M = {}
 local views = require("./view-file")
 export type TaskIndex = { pullRequests: { [string]: { header: { taskId: string? }, detailFile: string } } }
 export type Index = { pullRequests: { [string]: { header: { number: number, title: string, taskId: string?, repo: string }, detailFile: string } } }
-export type Comment = { id: string, author: string, at: string, body: string, url: string? }
+export type Comment = { id: string, databaseId: number?, author: string, at: string, body: string, url: string? }
 export type Thread = { id: string, file: string, line: number?, side: string, resolved: boolean, outdated: boolean, comments: { Comment } }
 export type Draft = { id: string, file: string, line: number, severity: string, body: string }
 export type Row = { id: string, row: { kind: string, text: string?, old: number?, new: number?, oldStart: number?, newStart: number?, label: string? }, threads: { Thread }, drafts: { Draft } }
@@ -14,7 +14,7 @@ export type Model = {
  readAt: string, tabs: { string }, checks: { { name: string, state: string, startedAtMs: number?, duration: string?, logUrl: string? } },
  description: { markdown: string, blocks: { string }, conversation: { Comment } },
  tour: { { title: string, why: string, stops: { { file: string, from: number, to: number, title: string, body: string, rowIds: { string } } } } },
- files: { File }, unanchoredThreads: { Thread }, commentDestination: string,
+ files: { File }, unanchoredThreads: { Thread }, commentDestination: string, readOnlyReason: string?,
  review: { taskId: string, generation: number, head: string, currentHead: string, posted: boolean, verdict: string?, intent: string, summary: string, drafts: { Draft }, concerns: { { title: string, detail: string, severity: string } }, notes: { string } }?,
 }
 local function comments(value: unknown): boolean
@@ -71,7 +71,7 @@ function M.parse(value: unknown): Model?
    elseif type(r.row.text) ~= "string" or (r.row.kind ~= "del" and (type(r.row.new) ~= "number" or r.row.new < 1)) or (r.row.kind ~= "add" and (type(r.row.old) ~= "number" or r.row.old < 1)) then return nil end
   end
  end
- if value.commentDestination ~= "worker" and value.commentDestination ~= "review" then return nil end
+ if value.commentDestination ~= "worker" and value.commentDestination ~= "review" and value.commentDestination ~= "read-only" then return nil end
  if value.commentDestination == "review" then
   local r = value.review
   if type(r) ~= "table" or type(r.taskId) ~= "string" or type(r.generation) ~= "number" or type(r.head) ~= "string" or type(r.currentHead) ~= "string" or type(r.posted) ~= "boolean" or type(r.summary) ~= "string" or type(r.intent) ~= "string" or not drafts(r.drafts) or type(r.concerns) ~= "table" or not strings(r.notes) or r.head ~= h.head then return nil end

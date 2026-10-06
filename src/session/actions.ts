@@ -481,6 +481,18 @@ async function approvalPrompt(
       };
     case "review-post": {
       if (action.recovery !== undefined) {
+        if (action.recovery.kind === "post-reply-again")
+          return {
+            title: `Post saved reply ${action.recovery.replyIndex} for ${name} again?`,
+            message:
+              "Check the PR first. GitHub may already have it; this can create a duplicate reply.",
+          };
+        if (action.recovery.kind === "mark-reply-posted")
+          return {
+            title: `Mark saved reply ${action.recovery.replyIndex} for ${name} as posted?`,
+            message:
+              "Use the reply link you checked on the PR. This records your confirmation without posting to GitHub.",
+          };
         return action.recovery.kind === "post-again"
           ? {
               title: `Post the saved review for ${name} again?`,

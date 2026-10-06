@@ -185,3 +185,39 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   Both resume the same conversation in the same worktree.
 - `review-close` marks the review closed, and cleanup removes the worktree and its refs. A
   cancelled review is cleaned the same way.
+
+
+## Native thread replies
+
+Native submissions may include `replies:[{threadId,commentId,replyTo,body}]`, separately from new
+root comments in `yours`. The exact thread node, root comment node and positive REST database id
+must match a fresh paginated thread read at the reviewed head, including outdated/out-of-diff
+threads. Every posting path checks these identities before saving the selected round. The saved
+round retains the replies before any GitHub effect. Only the caller that records the review receipt
+initiates the follow-up replies. Each reply claims its own durable `replyPosts` entry (index into
+`review.replies`, `kind:pending`, `attemptedAt`, `attemptRevision`) with a revision-checked update
+before its POST.
+GitHub runs outside the store lock. Its outcome is settled on the exact head/generation/reply under
+a short lock, preserving concurrent task changes: `posted` saves `url`/`postedAt`, `uncertain` keeps
+the attempt and failure detail, and a preflight refusal saves `failed` with its reason. Each reply
+uses `in_reply_to`, the pinned `commit_id`, and its own
+hidden task/generation/index marker; unreadable head or marker reads refuse posting. A lost
+response reconciles the marker without retrying. Unconfirmed replies are reported explicitly and
+are never automatically retried, including after restart. Review-show, HTML notes and native
+review notes retain each saved reply's text, thread/root identity, receipt or warning after reload.
+A crash between the review receipt and reply claim leaves the saved reply visible without a receipt;
+a crash after the claim leaves it pending. Ordinary review-post only reads reply markers to reconcile
+receipts, including for legacy saved replies without a `replyPosts` entry. An absent marker never
+permits an automatic POST. A review receipt does not certify every follow-up reply succeeded.
+
+The user can recover one saved reply through review-post with the saved review verdict and
+`recovery:{kind:"post-reply-again", taskRevision, replyIndex}`, after a confirmation warning that
+this can duplicate a reply. It preserves the exact body/root and rechecks thread identity, marker
+and pinned head before saving a fresh claim. Two callers or a stale task revision cannot claim it.
+Alternatively `recovery:{kind:"mark-reply-posted", taskRevision, replyIndex, url}` records the
+checked same-PR `#discussion_rN` URL with `confirmedByUser:true`, without any GitHub requests.
+Both use the same approval flow as review recovery, bind to the latest full task revision, and
+never retry or resend the parent review. A completed receipt cannot be recovered again.
+
+Replies on Tandem-owned PRs preserve thread context in worker fix
+requests and never post to GitHub. Taskless watched PR views are read-only.
