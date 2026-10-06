@@ -15,13 +15,13 @@ export type NativeCatchUpView = Readonly<{
 export function shouldAutoShowCatchUp(
   input: Readonly<{
     now: string;
-    lastOpenedAt?: string;
+    lastVisibleAt?: string;
     previousSignature?: string;
     currentSignature: string;
   }>,
 ): boolean {
-  if (input.lastOpenedAt === undefined || input.previousSignature === undefined) return false;
-  const away = Date.parse(input.now) - Date.parse(input.lastOpenedAt);
+  if (input.lastVisibleAt === undefined || input.previousSignature === undefined) return false;
+  const away = Date.parse(input.now) - Date.parse(input.lastVisibleAt);
   return (
     Number.isFinite(away) && away >= 3_600_000 && input.previousSignature !== input.currentSignature
   );

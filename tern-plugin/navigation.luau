@@ -2,6 +2,25 @@
 -- Common CLI calling convention for screen renderers. No durable state or retries.
 local M = {}
 export type Origin = {path:string, coordinator:string, cwd:string, window:string, indexPath:string, home:string}
+-- Only the known catch-up warning on a proven successful entry permits callback exit.
+-- Retention and unknown warnings keep the originating pane open.
+function M.warnings(stdout: string): ({string}, boolean)
+ local messages: {string} = {}
+ local decoded,value=pcall(function() return tern.json.decode(stdout) end)
+ if not decoded or type(value)~="table" then return messages,false end
+ local complete=true
+ if type(value.warnings)=="table" then
+  local entered=value.entered==true or value.focused==true
+  local catchUpPrefix="Project opened, but catch-up is unavailable: "
+  for _,message in value.warnings do
+   if type(message)=="string" then
+    table.insert(messages,message)
+    if not entered or string.sub(message,1,#catchUpPrefix)~=catchUpPrefix then complete=false end
+   else complete=false end
+  end
+ elseif value.warnings~=nil then complete=false end
+ return messages,complete
+end
 function M.origin(args: {string}): Origin
  local indexPath=args[5] or ""
  local home=string.match(indexPath,"^(.*)/native%-views/[^/]+%.json$") or ""
@@ -19,15 +38,9 @@ function M.run(origin: Origin, cx: BlockCx, args: {string}, onSuccess: (() -> ()
   tern.process.run(argv,{cwd="."},function(result)
    if result.status~=0 then cx:toast("error","Tandem couldn't run that action",result.stderr)
    else
-    local hasWarnings=false
-    local decoded,value=pcall(function() return tern.json.decode(result.stdout) end)
-    if decoded and type(value)=="table" and type(value.warnings)=="table" then
-     for _,message in value.warnings do
-      if type(message)=="string" then hasWarnings=true; cx:toast("warning","Tandem kept an uncertain view",message) end
-     end
-    end
-    -- A warning can mean the CLI preserved an uncertain pane. Do not exit it.
-    if not hasWarnings and onSuccess then onSuccess() end
+    local warnings,complete=M.warnings(result.stdout)
+    if #warnings>0 then cx:toast("warning",if complete then "Tandem action completed" else "Tandem kept an uncertain view",table.concat(warnings,"\n")) end
+    if complete and onSuccess then onSuccess() end
    end
   end)
  end)

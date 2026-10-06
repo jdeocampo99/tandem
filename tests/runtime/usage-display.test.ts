@@ -55,3 +55,18 @@ test("unpriced model samples never appear as fully priced totals and zero spend 
   expect(view.totals[0]?.value).toContain("unpriced usage");
   expect(view.warning).toContain("totals may be incomplete");
 });
+
+test("quota labels round floating percentages while meter values keep provider precision", () => {
+  const fixture = nativeScreensFixture();
+  const remainingPercent = (1 - 0.85) * 100;
+  const limit = fixture.usage.limits[0];
+  if (limit === undefined) throw new Error("Fixture needs a quota window");
+  const view = usageDisplay(
+    { ...fixture.usage, limits: [{ ...limit, remainingPercent }] },
+    { writtenAt: fixture.writtenAt, warnings: [] },
+  );
+  expect(view.accounts[0]?.meters[0]).toMatchObject({
+    remaining: "15% left",
+    percent: remainingPercent,
+  });
+});
