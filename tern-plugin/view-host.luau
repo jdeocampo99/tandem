@@ -46,6 +46,11 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
    if not cx.layout:dock(coordinator,previous,"right",{focus=false}) then return {handled=true} end
    cx.layout:close(previous)
   end
+  if ticket.closeOrigin then
+   if tonumber(ticket.closeOrigin)~=origin or
+    (source.block~="tandem.board" and source.block~="tandem.usage" and source.block~="tandem.catchup") then return {handled=true} end
+   cx.layout:close(origin)
+  end
   cx.layout:focus(if source.block=="tandem.task-picker" and owner.floating then tonumber(ticket.replaced) else coordinator)
   pane=coordinator
  else

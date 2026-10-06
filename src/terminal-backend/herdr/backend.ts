@@ -60,6 +60,10 @@ export function herdrBackend(
                 : `Herdr cannot display a native ${view.kind} view. Use the conversation or tandem status instead.`,
             ],
           },
+    closeView: async () => ({
+      closed: false,
+      warnings: ["Herdr has no native brief split; retire its owned request review pane instead."],
+    }),
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),
     sendKeys: (target) => sendKeys(run, target),
