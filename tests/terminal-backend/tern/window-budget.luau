@@ -107,8 +107,6 @@ moduleFailure=nil
 invoke("route.open:ticket",function(context) assert(hooks.open({path="/home/native-host/id.tandem-open.json"},context).handled) end)
 assert(imports["./view-host"]==nil,"route must defer cold hosting load")
 while tick() do end
-invoke("route.open:detail",function(context) assert(hooks.open({path="/published.tandem-view.json"},context).handled) end)
-while tick() do end; settle()
 invoke("window_start",hooks.window_start); while tick() do end
 -- Burst focus queues away/entry pairs. Completion cannot launch the next process inline,
 -- including failed results and known launch failures. Queue order stays intact.

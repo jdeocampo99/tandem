@@ -304,6 +304,13 @@ asks before setting global `tabs_autohide=true` and adding global shortcuts. Dec
 the settings byte-identical and remembers the decision. Palette commands and panel header
 buttons remain available. To reconsider, choose Herdr, then Tern again in setup.
 
+Link, consent, reload and restoration run under one machine-wide lock, `tandem-setup.lock`, in
+Tern's config directory next to `settings.json`. That directory holds the plugin links and the
+global settings every Tandem home shares, so separate homes serialize too. Inside the lock, setup
+re-reads the catalog and links only when the package is absent; a caller that waited sees the
+first caller's recorded decision and asks nothing. A waiting caller gives up after five minutes.
+Restoration with no record returns without taking the lock.
+
 The shortcuts cover Board (⌘⇧B), PRs (⌘⇧P), Usage (⌘⇧U), projects (⌘1–9) and previous/next
 project (⌘⇧[ / ⌘⇧]). Explicit custom bindings, modifier/physical-key aliases and sequences are
 preserved. Alternate keymap presets are preserved as a whole; setup reports skipped keys or

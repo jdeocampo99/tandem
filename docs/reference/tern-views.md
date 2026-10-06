@@ -61,9 +61,7 @@ and recovery of the helper pane belong to the terminal backend.
 
 ## Shared rendering foundation
 
-`src/tern-view/file.ts` writes private files by exclusive temp-file creation and atomic rename.
-There is one writer per destination. `nativeViewPath(home, kind, key)` returns
-`<home>/views/<kind>-<key>.tandem-view.json`; keys contain only letters, digits, `_` and `-`.
+Every native view file is one private JSON envelope:
 
 ```ts
 { version: 1, kind: "brief", revision: "opaque-view-revision", model: briefView }
@@ -148,8 +146,7 @@ decimal strings; cwd is that pane's absolute directory, passed as one argv eleme
 shows an error without spawning when either is unavailable. No context comes from
 `TANDEM_NATIVE_CWD` or a guessed first pane. Task/brief ids contain letters, digits, `_` and `-`;
 PR routes accept a durable task id, a decimal number, or a cached `owner/repo#number`.
-The repository-qualified form can open taskless watched PRs read-only. The native file route calls `native view-file PATH` with the same
-context, for renderer registration.
+The repository-qualified form can open taskless watched PRs read-only.
 
 The optional window key is an opaque Tern control-window key, never a pane, tab or session id.
 It is included only when `TERN_WINDOW_KEY` is known; WindowCx has no documented key accessor.
@@ -330,9 +327,8 @@ the uncertain operation nor retries its layout mutation.
 Task replacement and return additionally require a same-scope listing proving the replaced
 task pane is absent, with no detached ambiguity, before settling the opening intent. The intent
 keeps the replaced pane id for fresh CLI recovery; evidence for the new pane alone never settles
-retirement of its predecessor. Older task intents recover replacement metadata from the retained
-layout route, refusing missing or conflicting route evidence. Unconfirmed retirement keeps the
-intent, route, receipt and resources, without another opening mutation.
+retirement of its predecessor. Unconfirmed retirement keeps the intent, route, receipt and
+resources, without another opening mutation.
 
 The host accepts these layout kinds and five string launch arguments. A kind is available
 only after its block is registered in `host.luau` and `plugin.toml` and its CLI handler is
