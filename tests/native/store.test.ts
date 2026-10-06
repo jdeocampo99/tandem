@@ -13,6 +13,7 @@ import {
 } from "../../src/native/store.ts";
 import { SETUP_MODES, type SetupView } from "../../src/onboarding/setup-view.ts";
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
+import { taskScreenPublication } from "../tasks/task-screen-fixture.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
 function publication(project: string): NativeViewsPublication {
@@ -121,9 +122,10 @@ test("a setup model its block cannot draw is refused before anything is written"
     await expect(publishViews(home, project, async () => ({ setup: broken }))).rejects.toThrow(
       "Native setup model is invalid: roles",
     );
-    await expect(
-      stat(viewDetailPath(home, project, setupFile("setup"))),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    await expect(stat(viewDetailPath(home, project, setupFile("setup")))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
   } finally {
     await rm(home, { recursive: true, force: true });
   }

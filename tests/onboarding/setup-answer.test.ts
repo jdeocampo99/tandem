@@ -155,7 +155,11 @@ test("every repository needs a non-blank validation command, and the repository 
   });
   const value: SetupAnswer = {
     ...parsed(answer),
-    repositories: [blank("/code/api", []), blank("~/pasted", [" ", ""]), blank("/code/done", ["x"])],
+    repositories: [
+      blank("/code/api", []),
+      blank("~/pasted", [" ", ""]),
+      blank("/code/done", ["x"]),
+    ],
   };
   expect(
     checkSetupAnswer(value, {

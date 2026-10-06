@@ -1779,6 +1779,13 @@ test("T2: every click in every rendered view sends an envelope the contract acce
       host,
       opener(() => host.command("open-task"), "task-picker"),
     );
+    const settings = opener(() => host.command("settings"), "setup");
+    await fireEvery(host, settings);
+    const setup = host.screen(await settings());
+    await host.refresh();
+    await setup.click("Bug reports");
+    await setup.click("Fix it");
+    await setup.click("Save changes");
     // The project switcher's rows live in a dropdown layer only drawn while it is open.
     await host.refresh();
     const switcher = async () => {
@@ -1946,7 +1953,10 @@ test("setup opens beside the conversation and settings in a tab, each from its p
       throw new Error("nothing is saved by opening");
     });
     for (const mode of SETUP_MODES) {
-      const outcome = await f.act({ verb: "open", ref: { kind: "setup", mode } }, { deps: { service } });
+      const outcome = await f.act(
+        { verb: "open", ref: { kind: "setup", mode } },
+        { deps: { service } },
+      );
       expect(outcome).toEqual({ status: "done" });
       const file = await publishedSetup(f, mode);
       expect(file.kind).toBe("setup");
@@ -1978,17 +1988,24 @@ test("setup-save applies the answer, shows the saved model again and tells the c
       saved.push(text);
       return { message: "", complete: true, opened: ["api", "web", "docs"] };
     });
-    const answer = setupAnswer("setup", [{ path: "/code/api", validationCommands: ["make check"] }]);
+    const answer = setupAnswer("setup", [
+      { path: "/code/api", validationCommands: ["make check"] },
+    ]);
     expect(await f.act({ verb: "setup-save", answer }, { deps: { service } })).toEqual({
       status: "done",
     });
     expect(saved.map((text) => JSON.parse(text))).toEqual([answer]);
-    expect(f.prompts).toEqual(["Setup saved. Chats for api, web and docs are open in the sidebar."]);
+    expect(f.prompts).toEqual([
+      "Setup saved. Chats for api, web and docs are open in the sidebar.",
+    ]);
     expect((await publishedSetup(f, "setup")).model).toMatchObject({ mode: "setup" });
 
     const settings = setupService(f, () => ({ message: "", complete: true, opened: [] }));
     const edited = setupAnswer("settings", [{ path: "/code/api", validationCommands: ["make"] }]);
-    const outcome = await f.act({ verb: "setup-save", answer: edited }, { deps: { service: settings } });
+    const outcome = await f.act(
+      { verb: "setup-save", answer: edited },
+      { deps: { service: settings } },
+    );
     expect(outcome).toEqual({ status: "done" });
     expect(f.prompts.at(-1)).toBe("Settings saved. New tasks will use them.");
   } finally {
@@ -2004,7 +2021,9 @@ test("a partly failed setup-save is kept with what failed and tells the coordina
       complete: false,
       opened: [],
     }));
-    const answer = setupAnswer("setup", [{ path: "/code/api", validationCommands: ["make check"] }]);
+    const answer = setupAnswer("setup", [
+      { path: "/code/api", validationCommands: ["make check"] },
+    ]);
     expect(await f.act({ verb: "setup-save", answer }, { deps: { service } })).toEqual({
       status: "kept",
       notice: { code: "setup-incomplete", text: "Model choices were not saved: models broke" },

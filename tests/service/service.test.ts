@@ -1003,7 +1003,9 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         JSON.stringify({
           ...setupAnswer,
           mode: "settings",
-          repositories: [{ path: foreign, validationCommands: ["bun test", "bun run lint"], setupCommands: [] }],
+          repositories: [
+            { path: foreign, validationCommands: ["bun test", "bun run lint"], setupCommands: [] },
+          ],
         }),
       );
       expect(edited.complete).toBe(true);

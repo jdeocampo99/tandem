@@ -211,7 +211,10 @@ const flagship: ModelRecord = {
 
 const recommendedModels = (view: SetupView) =>
   Object.fromEntries(
-    view.roles.map((role) => [role.id, `${role.recommended?.model.model} ${role.recommended?.model.thinking}`]),
+    view.roles.map((role) => [
+      role.id,
+      `${role.recommended?.model.model} ${role.recommended?.model.thinking}`,
+    ]),
   );
 
 test("with Claude Code ready, Coding follows the Balanced profile and Review is Opus", () => {

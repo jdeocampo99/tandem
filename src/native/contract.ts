@@ -535,7 +535,10 @@ const WINDOW_KINDS: readonly ViewKind[] = ["board", "usage", "catchup"];
  * only as settings, which its detail file tells: setup opens beside the conversation.
  */
 export function isWindowView(kind: ViewKind, viewPath: string): boolean {
-  return WINDOW_KINDS.includes(kind) || (kind === "setup" && basename(viewPath) === setupFile("settings"));
+  return (
+    WINDOW_KINDS.includes(kind) ||
+    (kind === "setup" && basename(viewPath) === setupFile("settings"))
+  );
 }
 
 /**

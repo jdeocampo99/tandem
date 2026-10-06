@@ -662,12 +662,13 @@ async function closingOrigin(
     args: blockArgs(
       kind === "setup" ? viewDetailPath(input.home, project, setupFile("settings")) : index,
       {
-      coordinator: input.coordinator.paneId,
-      cwd: input.cwd,
-      home: input.home,
-      index,
-      ...(listed.ctx.window === undefined ? {} : { window: listed.ctx.window }),
-    }),
+        coordinator: input.coordinator.paneId,
+        cwd: input.cwd,
+        home: input.home,
+        index,
+        ...(listed.ctx.window === undefined ? {} : { window: listed.ctx.window }),
+      },
+    ),
   };
   await cmd.proveView(target);
   return target;

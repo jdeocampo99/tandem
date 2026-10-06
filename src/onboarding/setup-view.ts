@@ -202,7 +202,10 @@ const CLAUDE_CODE_PICKS = {
 } as const satisfies Readonly<Record<string, ModelSpec>>;
 
 /** The supported level closest to `wanted`; a lighter one wins a tie. */
-function nearestThinking(wanted: ThinkingLevel, supported: readonly ThinkingLevel[]): ThinkingLevel {
+function nearestThinking(
+  wanted: ThinkingLevel,
+  supported: readonly ThinkingLevel[],
+): ThinkingLevel {
   const position = (level: ThinkingLevel) => THINKING_LEVELS.indexOf(level);
   let best = wanted;
   let bestDistance = Number.POSITIVE_INFINITY;

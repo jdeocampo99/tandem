@@ -37,7 +37,7 @@ const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
 };
 
 const SETUP_BLOCK_GUIDANCE =
-  "The setup block is open beside this chat, where the user chooses models, repositories and what happens when Tandem finds a bug in itself. Their answers arrive by themselves as a \"Setup saved.\" message, so do not ask the setup questions here or call the setup tools for them. Help with their questions about any setting: what each job does, models and thinking levels, validation and setup commands, the bug-report options. To change a setting they ask about, tell them to change it in the block.";
+  'The setup block is open beside this chat, where the user chooses models, repositories and what happens when Tandem finds a bug in itself. Their answers arrive by themselves as a "Setup saved." message, so do not ask the setup questions here or call the setup tools for them. Help with their questions about any setting: what each job does, models and thinking levels, validation and setup commands, the bug-report options. To change a setting they ask about, tell them to change it in the block.';
 
 /**
  * What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done.

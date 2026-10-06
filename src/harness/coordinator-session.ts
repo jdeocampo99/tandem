@@ -143,9 +143,13 @@ export function bindCoordinator(
         throw new Error("the coordinator is not running in a Tandem Tern pane");
       }
       const setup = await coordinatorService().setupView(environment.repo, "setup");
-      await publishViews(environment.home, await canonicalPath(environment.repo, "repoPath"), async () => ({
-        setup,
-      }));
+      await publishViews(
+        environment.home,
+        await canonicalPath(environment.repo, "repoPath"),
+        async () => ({
+          setup,
+        }),
+      );
       return terminal.openSetup({
         sessionId: environment.sessionId,
         cwd: harness.cwd,

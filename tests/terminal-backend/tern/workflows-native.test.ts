@@ -891,26 +891,28 @@ workflow(
       const coordinator = await seedCoordinator(window, { name: "tandem", sessionId: SESSION });
       await onboardRepo({ repoPath: coordinator.repo, home: window.home, write: true });
       await saveProjectRoots(window.home, [window.root]);
-      const run = setupRunner(
-        isolatedRunner(window.run, join(window.root, "setup.log")),
-        join(window.root, "setup.log"),
-      );
-      const open = async (mode: "setup" | "settings") =>
-        nativeAct(
-          JSON.stringify({
-            v: 1,
-            origin: { pane: coordinator.endpoint.paneId, cwd: coordinator.checkout },
-            action: { verb: "open", ref: { kind: "setup", mode } },
-          }),
-          {
-            cwd: coordinator.repo,
-            processEnvironment: { TANDEM_HOME: window.home, TANDEM_SESSION: SESSION },
-            run,
-            terminal: window.terminal,
+      const open = async (mode: "setup" | "settings") => {
+        const envelope = JSON.stringify({
+          v: 1,
+          origin: { pane: coordinator.endpoint.paneId, cwd: coordinator.checkout },
+          action: { verb: "open", ref: { kind: "setup", mode } },
+        });
+        const child = Bun.spawn([process.execPath, driver, "native", "act"], {
+          cwd: coordinator.repo,
+          env: {
+            ...window.env,
+            TANDEM_SESSION: SESSION,
+            TANDEM_WORKFLOW_ROOT: window.root,
           },
-        );
+          stdin: new Blob([envelope]),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+        return { code, stdout };
+      };
 
-      expect((await open("setup")).status).toBe("done");
+      expect(await open("setup")).toMatchObject({ code: 0 });
       await window.until("setup summary", async () =>
         (await window.screen()).includes("Set up Tandem"),
       );
@@ -921,7 +923,9 @@ workflow(
         window,
         "models step",
         () => clickIfShown(window, "Customize"),
-        async () => (await window.screen()).includes("Use recommended") || (await window.screen()).includes("Recommended:"),
+        async () =>
+          (await window.screen()).includes("Use recommended") ||
+          (await window.screen()).includes("Recommended:"),
       );
       await window.shot("setup-models");
       const pick = (await window.nodes()).find((node) => node.text?.endsWith(" ▾") && node.rect);
@@ -941,7 +945,9 @@ workflow(
       await window.shot("setup-repositories");
 
       await window.click("4. Review");
-      await window.until("review", async () => (await window.screen()).includes("Validation: make check"));
+      await window.until("review", async () =>
+        (await window.screen()).includes("Validation: make check"),
+      );
       await window.shot("setup-review");
       await window.click("Start");
       await window.until("done", async () => (await window.screen()).includes("You're all set"));
@@ -953,8 +959,10 @@ workflow(
       );
 
       await window.click("Close");
-      expect((await open("settings")).status).toBe("done");
-      await window.until("settings", async () => (await window.screen()).includes("All changes saved"));
+      expect(await open("settings")).toMatchObject({ code: 0 });
+      await window.until("settings", async () =>
+        (await window.screen()).includes("All changes saved"),
+      );
       await window.shot("settings");
     });
   },

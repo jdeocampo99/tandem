@@ -302,7 +302,10 @@ test("saving commands replaces only the two command lists of a saved project", a
     expect(after).toBe(
       before
         .replace(/^# setupCommands = .*$/mu, 'setupCommands = ["make deps"]')
-        .replace(/^# validationCommands = .*$/mu, 'validationCommands = ["make check", "make lint"]'),
+        .replace(
+          /^# validationCommands = .*$/mu,
+          'validationCommands = ["make check", "make lint"]',
+        ),
     );
     const resolved = await resolveRepoPolicy({ repoPath: repo, home });
     expect(resolved.config.validationCommands.map((command) => command.name)).toEqual([
@@ -318,7 +321,10 @@ test("saving commands replaces only the two command lists of a saved project", a
     await writeFile(configPath, handWritten, "utf8");
     await saveRepositoryCommands({ repoPath: repo, home, validationCommands: ["make ci"] });
     expect(await readFile(configPath, "utf8")).toBe(
-      after.replace('validationCommands = ["make check", "make lint"]', 'validationCommands = ["make ci"]'),
+      after.replace(
+        'validationCommands = ["make check", "make lint"]',
+        'validationCommands = ["make ci"]',
+      ),
     );
   });
 });

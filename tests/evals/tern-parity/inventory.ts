@@ -311,7 +311,7 @@ function blockKinds(world: ScenarioWorld): readonly string[] {
 export const inventory: readonly InventoryEntry[] = [
   {
     view: "Panel",
-    item: "Header with tandem ▾, other-project count, 5h meter and label, bell count, PRs and Board icons",
+    item: "Header with tandem ▾, other-project count, 5h meter and label, bell count, PRs, Board and Settings icons",
     run: () =>
       withParity(async (parity) => {
         const { host, panel, world } = parity;
@@ -319,7 +319,7 @@ export const inventory: readonly InventoryEntry[] = [
         await host.publish();
         await host.refresh();
         const view = await panel.render();
-        expect(view.text.slice(0, 7)).toEqual([
+        expect(view.text.slice(0, 8)).toEqual([
           "tandem ▾",
           "1",
           "5h unavailable",
@@ -358,7 +358,7 @@ export const inventory: readonly InventoryEntry[] = [
     run: () =>
       withParity(async ({ host, panel }) => {
         const view = await panel.render();
-        expect(view.text.slice(5)).toEqual([
+        expect(view.text.slice(6)).toEqual([
           "Needs you · 2",
           "●",
           "Add dark mode",
@@ -569,7 +569,7 @@ export const inventory: readonly InventoryEntry[] = [
   },
   {
     view: "Keys and palette",
-    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘1–9, ⌘⇧[ ]; five palette commands; project commands hidden",
+    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; eight palette commands; project commands hidden",
     run: () =>
       withParity(async (parity) => {
         const { host, world } = parity;
@@ -585,6 +585,9 @@ export const inventory: readonly InventoryEntry[] = [
           "Tandem: Toggle board",
           "Tandem: Show PRs",
           "Tandem: Usage",
+          "Tandem: Settings",
+          "Tandem: Change models",
+          "Tandem: Add or edit repositories",
         ]);
         const registered = new Set(commands.map((command) => `plugin.tandem.${command.id}`));
         const bound = [...new Set(Object.values(TERN_KEYBINDS))];

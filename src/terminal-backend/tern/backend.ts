@@ -230,10 +230,9 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
   // Native screens load coordinator/model code only when requested. Ordinary worker startup
   // must not load the interactive harness through this terminal port.
   const native = async () => {
-    const [{ ternViewHost, projectForView }, { viewDetailPath, viewIndexPath }] = await Promise.all([
-      import("./views.ts"),
-      import("../../native/store.ts"),
-    ]);
+    const [{ ternViewHost, projectForView }, { viewDetailPath, viewIndexPath }] = await Promise.all(
+      [import("./views.ts"), import("../../native/store.ts")],
+    );
     return { views: ternViewHost(cli), projectForView, viewDetailPath, viewIndexPath };
   };
   return {

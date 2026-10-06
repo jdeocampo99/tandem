@@ -156,7 +156,8 @@ export async function withTernWindow(
   const plugin = join(root, "plugin");
   const control = join(root, "w.sock");
   const shots = join(root, "shots");
-  const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
+  // A window started through a PATH symlink to Tern.app never answers `ctl account`.
+  const binary = await realpath(Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern");
   const env = {
     HOME: root,
     USER: "tandem-test",

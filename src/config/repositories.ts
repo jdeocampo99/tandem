@@ -514,7 +514,8 @@ function mergingLines(choice: MergingChoice): string {
 
 /** The index just past the TOML array opening at `open`; brackets inside strings or comments don't count. */
 function listEnd(text: string, open: number): number {
-  if (text[open] !== "[") throw new TypeError("settings.toml has a command setting that is not a list");
+  if (text[open] !== "[")
+    throw new TypeError("settings.toml has a command setting that is not a list");
   let depth = 0;
   for (let index = open; index < text.length; index += 1) {
     const char = text[index];
@@ -547,11 +548,15 @@ function withCommandList(text: string, key: string, values: readonly string[]): 
   const tail = text.slice(head.length);
   const set = new RegExp(`^${key}[ \\t]*=[ \\t]*`, "mu").exec(head);
   if (set !== null) {
-    return head.slice(0, set.index) + line + head.slice(listEnd(head, set.index + set[0].length)) + tail;
+    return (
+      head.slice(0, set.index) + line + head.slice(listEnd(head, set.index + set[0].length)) + tail
+    );
   }
   const example = new RegExp(`^#[ \\t]*${key}[ \\t]*=.*$`, "mu").exec(head);
   if (example !== null) {
-    return head.slice(0, example.index) + line + head.slice(example.index + example[0].length) + tail;
+    return (
+      head.slice(0, example.index) + line + head.slice(example.index + example[0].length) + tail
+    );
   }
   return `${head.replace(/\n*$/u, "\n")}\n${line}\n${tail === "" ? "" : `\n${tail}`}`;
 }

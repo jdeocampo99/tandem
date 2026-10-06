@@ -190,9 +190,7 @@ test("a Claude Code role is refused when Claude Code isn't installed", async () 
   const { workflow, saved } = await machine({ claudeCode: "not-installed" });
   await expect(
     workflow.apply("/tandem", answerOf([], "settings", "claude-code/sonnet")),
-  ).rejects.toThrow(
-    "Research: claude-code/sonnet isn't available on this computer.",
-  );
+  ).rejects.toThrow("Research: claude-code/sonnet isn't available on this computer.");
   expect(saved).toEqual([]);
 });
 
