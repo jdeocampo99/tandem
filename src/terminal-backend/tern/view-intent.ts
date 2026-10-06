@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
@@ -289,6 +289,130 @@ export async function withNativeOpenIntent<T>(
     if (recovering && cause instanceof TernOutcomeUnknownError && onUnresolved !== undefined)
       return await onUnresolved(cause);
     throw cause;
+  } finally {
+    await release();
+  }
+}
+
+const Owner = z.tuple([
+  z.enum(["herdr", "tern"]),
+  z.string(),
+  z.string().nullable(),
+  z.string(),
+  z.string(),
+  z.string(),
+  z.number().int(),
+  z.string(),
+  z.string(),
+]);
+
+/** A native open whose outcome is unproven, so it pauses new opens for its coordinator. */
+export type RetainedNativeOpen = Readonly<{
+  path: string;
+  /** The intent exactly as listed, so an abandon never removes a record that changed since. */
+  text: string;
+  coordinator: Endpoint;
+  cwd: string;
+  kind: string;
+  route: string;
+  receipt: string;
+  /** Why the open is still unproven, in the user's terms. */
+  reason: string;
+}>;
+
+export type UnreadableNativeOpen = Readonly<{ path: string; reason: string }>;
+
+function retainedReason(receipt: Receipt | "unreadable" | undefined): string {
+  if (receipt === undefined) return "Tern never confirmed the view opened";
+  if (receipt === "unreadable") return "the view's receipt cannot be read";
+  if (receipt.status === "done")
+    return "Tern reported the view opened, but the exact view could not be proved";
+  return receipt.appliedEffects === 0
+    ? `Tern failed before changing anything (${receipt.reason}); the next open settles it`
+    : `Tern failed at ${receipt.stage} after ${receipt.appliedEffects} layout changes: ${receipt.reason}`;
+}
+
+/** Every retained open under `<home>/native-host/`, read without changing anything. */
+export async function listRetainedNativeOpens(home: string): Promise<
+  Readonly<{
+    opens: readonly RetainedNativeOpen[];
+    unreadable: readonly UnreadableNativeOpen[];
+  }>
+> {
+  const directory = join(home, "native-host");
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if (missing(error)) return { opens: [], unreadable: [] };
+    throw error;
+  }
+  const opens: RetainedNativeOpen[] = [];
+  const unreadable: UnreadableNativeOpen[] = [];
+  for (const name of names.filter((each) => each.endsWith(".intent.json")).toSorted()) {
+    const path = join(directory, name);
+    try {
+      const text = JSON.stringify(await readPrivateJson(path));
+      const intent = Intent.parse(JSON.parse(text));
+      const [terminal, sessionId, terminalSessionId, tabId, workspaceId, paneId, generation, cwd] =
+        Owner.parse(JSON.parse(intent.owner));
+      // The token files sit beside the intent; the recorded home spelling may differ.
+      const route = join(directory, basename(intent.route));
+      const receiptPath = join(directory, basename(intent.ticket.receipt));
+      const receipt = await readReceipt(receiptPath).catch(() => "unreadable" as const);
+      opens.push({
+        path,
+        text,
+        coordinator: {
+          terminal,
+          sessionId,
+          ...(terminalSessionId === null ? {} : { terminalSessionId }),
+          workspaceId,
+          tabId,
+          paneId,
+          role: "coordinator",
+          generation,
+        },
+        cwd,
+        kind: intent.ticket.kind,
+        route,
+        receipt: receiptPath,
+        reason: retainedReason(receipt),
+      });
+    } catch (error) {
+      unreadable.push({ path, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+  return { opens, unreadable };
+}
+
+/**
+ * Removes one retained open's records under its coordinator's open lock, only while the intent
+ * is unchanged and `conclusive` re-proves the coordinator's state. Panes are never touched.
+ */
+export async function abandonRetainedNativeOpen(
+  open: RetainedNativeOpen,
+  conclusive: () => Promise<boolean>,
+): Promise<"abandoned" | "settled" | "changed" | "unproven"> {
+  const release = await acquireDarwinFileLock(
+    open.path.replace(/\.intent\.json$/u, ".lock"),
+    10000,
+    20,
+  );
+  try {
+    let text: string;
+    try {
+      text = JSON.stringify(await readPrivateJson(open.path));
+    } catch (error) {
+      if (missing(error)) return "settled";
+      throw error;
+    }
+    if (text !== open.text) return "changed";
+    if (!(await conclusive())) return "unproven";
+    await rm(open.route, { force: true });
+    await rm(open.receipt, { force: true });
+    await rm(open.path, { force: true });
+    return "abandoned";
   } finally {
     await release();
   }

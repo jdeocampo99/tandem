@@ -75,7 +75,7 @@ const note: ReconcileReportEntry = {
 
 function report(overrides: Partial<ReconcileReport>): ReconcileReport {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     mode: "dry-run",
     home: HOME,
     cleaned: [],
@@ -112,6 +112,39 @@ test("a task and the worktree it holds share one line, and other things get one 
     ].join("\n"),
   );
   expect(fixCleanupCount(dryRun, details)).toBe(3);
+});
+
+test("a paused Tern view open gets one line, with its reason while it is kept", () => {
+  const open = {
+    kind: "native-open" as const,
+    id: "/home/native-host/a.intent.json",
+    path: "/home/native-host/a.intent.json",
+    sessionId: "s1",
+  };
+  const shown = report({
+    cleaned: [{ ...open, reason: "task view: Tern never confirmed the view opened; ..." }],
+    retained: [
+      {
+        ...open,
+        id: "/home/native-host/b.intent.json",
+        reason: "kept because its coordinator cannot be proved",
+      },
+    ],
+  });
+  expect(renderFixReport(shown, details)).toBe(
+    [
+      "Tandem fix · nothing changed yet",
+      "",
+      "Clean up (1)",
+      "  Paused Tern view   unproven open record · panes kept",
+      "",
+      "Keep (1)",
+      "  Paused Tern view   kept because its coordinator cannot be proved",
+      "",
+      "tandem fix --verbose shows paths and reasons",
+      "",
+    ].join("\n"),
+  );
 });
 
 test("worktrees whose work is elsewhere get their own section, and kept ones say why", () => {

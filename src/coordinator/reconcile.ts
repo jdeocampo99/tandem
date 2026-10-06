@@ -26,6 +26,11 @@ import {
 
 import { createTaskStore } from "../tasks/store.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
+import {
+  abandonRetainedNativeOpen,
+  listRetainedNativeOpens,
+  type RetainedNativeOpen,
+} from "../terminal-backend/tern/view-intent.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import {
@@ -59,7 +64,7 @@ import {
 import { retireCoordinatorWorkspace } from "./workspace.ts";
 
 /** Version of the machine-readable reconciliation report; bumped when its shape changes. */
-export const RECONCILE_REPORT_SCHEMA_VERSION = 2 as const;
+export const RECONCILE_REPORT_SCHEMA_VERSION = 3 as const;
 
 /** The kinds of resource reconciliation knows how to classify. */
 export type ReconcileResourceKind =
@@ -68,7 +73,8 @@ export type ReconcileResourceKind =
   | "scout-task"
   | "implementation-task"
   | "unreadable-record"
-  | "quarantine-note";
+  | "quarantine-note"
+  | "native-open";
 
 /**
  * What the plan says should happen to one resource: release it through its owner, keep it and say
@@ -131,6 +137,17 @@ export type ReconcileScanFailure = Readonly<{
   readonly reason: string;
 }>;
 
+/** Whether a retained native open's coordinator is exactly present, exactly gone, or unclear. */
+export type NativeOpenOwner =
+  | Readonly<{ readonly status: "present" }>
+  | Readonly<{ readonly status: "gone" }>
+  | Readonly<{ readonly status: "ambiguous"; readonly detail: string }>;
+
+/** One native view open whose outcome was never proved, which pauses new opens for its owner. */
+export type ObservedNativeOpen =
+  | Readonly<{ readonly open: RetainedNativeOpen; readonly owner: NativeOpenOwner }>
+  | Readonly<{ readonly unreadable: Readonly<{ path: string; reason: string }> }>;
+
 /** Everything the plan is allowed to look at, gathered without changing a single resource. */
 export type ReconcileObservation = Readonly<{
   readonly home: string;
@@ -143,6 +160,7 @@ export type ReconcileObservation = Readonly<{
   /** Notes whose lease Treehouse no longer holds, so nothing is left for them to protect. */
   readonly settledQuarantineIds: readonly string[];
   readonly failures: readonly ReconcileScanFailure[];
+  readonly nativeOpens: readonly ObservedNativeOpen[];
 }>;
 
 /** One planned resource, carrying exactly what its owner needs to act on it. */
@@ -204,6 +222,15 @@ export type ReconcilePlanItem =
       readonly repoPath: string;
       readonly sessionId: string;
       readonly record: CoordinatorQuarantineRecord;
+    }>
+  | Readonly<{
+      readonly kind: "native-open";
+      readonly action: "clean" | "retain" | "quarantine";
+      readonly reason: string;
+      readonly path: string;
+      readonly sessionId: string | undefined;
+      /** Present only when the record parsed; an unreadable one is only ever reported. */
+      readonly open: RetainedNativeOpen | undefined;
     }>;
 
 export type ReconcilePlan = Readonly<{
@@ -556,6 +583,7 @@ export async function scanTandemResources(
     quarantines,
     settledQuarantineIds: await observeSettledQuarantines(input.run, quarantines, coordinators),
     failures,
+    nativeOpens: await observeNativeOpens(input.terminal, home),
   };
 }
 
@@ -761,6 +789,92 @@ function planUnreadableRecord(entry: UnreadableCoordinatorRecord): ReconcilePlan
   };
 }
 
+/**
+ * Whether a retained open's coordinator is exactly present or exactly gone. Anything the terminal
+ * cannot answer exactly, including a detached listing, leaves the open retained.
+ */
+async function nativeOpenOwner(
+  terminal: TerminalBackend,
+  open: RetainedNativeOpen,
+): Promise<NativeOpenOwner> {
+  if (open.coordinator.terminal !== terminal.name)
+    return {
+      status: "ambiguous",
+      detail: `its coordinator ran in ${open.coordinator.terminal}, but Tandem now uses ${terminal.name}`,
+    };
+  try {
+    await terminal.inspect({ endpoint: open.coordinator, cwd: open.cwd });
+    return { status: "present" };
+  } catch (error) {
+    return terminal.isEndpointGone(error)
+      ? { status: "gone" }
+      : { status: "ambiguous", detail: describeFailure(error) };
+  }
+}
+
+async function observeNativeOpens(
+  terminal: TerminalBackend,
+  home: string,
+): Promise<readonly ObservedNativeOpen[]> {
+  const { opens, unreadable } = await listRetainedNativeOpens(home);
+  const observed: ObservedNativeOpen[] = unreadable.map((entry) => ({ unreadable: entry }));
+  for (const open of opens) observed.push({ open, owner: await nativeOpenOwner(terminal, open) });
+  return observed;
+}
+
+function planNativeOpen(observed: ObservedNativeOpen): ReconcilePlanItem {
+  if ("unreadable" in observed)
+    return {
+      kind: "native-open",
+      action: "quarantine",
+      reason: `the paused Tern view record could not be read and is left in place: ${observed.unreadable.reason}`,
+      path: observed.unreadable.path,
+      sessionId: undefined,
+      open: undefined,
+    };
+  const { open, owner } = observed;
+  const item = (action: "clean" | "retain", why: string): ReconcilePlanItem => ({
+    kind: "native-open",
+    action,
+    reason: `${open.kind} view: ${open.reason}; ${why}`,
+    path: open.path,
+    sessionId: open.coordinator.sessionId,
+    open,
+  });
+  if (owner.status === "present")
+    return item(
+      "clean",
+      "new Tandem views stay paused for its running coordinator until the record is abandoned; every pane is kept",
+    );
+  if (owner.status === "gone")
+    return item("clean", "its coordinator is gone, so the record can be removed");
+  return item("retain", `kept because its coordinator cannot be proved: ${owner.detail}`);
+}
+
+async function applyNativeOpenItem(
+  terminal: TerminalBackend,
+  item: NativeOpenItem,
+): Promise<ReconcileResult> {
+  if (item.open === undefined) return { item, outcome: "quarantined", reason: item.reason };
+  const { open } = item;
+  let detail = "";
+  const outcome = await abandonRetainedNativeOpen(open, async () => {
+    const owner = await nativeOpenOwner(terminal, open);
+    if (owner.status === "ambiguous") detail = owner.detail;
+    return owner.status !== "ambiguous";
+  });
+  if (outcome === "abandoned" || outcome === "settled")
+    return { item, outcome: "cleaned", reason: item.reason };
+  return {
+    item,
+    outcome: "retained",
+    reason:
+      outcome === "changed"
+        ? "the paused view record changed while fix ran, so it was kept"
+        : `kept because its coordinator cannot be proved: ${detail}`,
+  };
+}
+
 function planQuarantineNote(
   record: CoordinatorQuarantineRecord,
   observation: ReconcileObservation,
@@ -801,6 +915,7 @@ export function planTandemReconciliation(
     ),
     ...observation.unreadable.map(planUnreadableRecord),
     ...observation.quarantines.map((record) => planQuarantineNote(record, observation)),
+    ...observation.nativeOpens.map(planNativeOpen),
   ];
   return { schemaVersion: RECONCILE_REPORT_SCHEMA_VERSION, items };
 }
@@ -997,10 +1112,13 @@ function applyRepositoryItem(
   return applyLeaseItem(input, item);
 }
 
+type NativeOpenItem = Extract<ReconcilePlanItem, Readonly<{ readonly kind: "native-open" }>>;
+
 type ReconcileWork = Readonly<{
   readonly repositories: ReadonlyMap<string, readonly RepositoryItem[]>;
   readonly scouts: readonly ScoutItem[];
   readonly implementationTasks: readonly ImplementationTaskItem[];
+  readonly nativeOpens: readonly NativeOpenItem[];
   readonly reported: readonly ReconcilePlanItem[];
 }>;
 
@@ -1009,6 +1127,7 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
   const repositories = new Map<string, RepositoryItem[]>();
   const scouts: ScoutItem[] = [];
   const implementationTasks: ImplementationTaskItem[] = [];
+  const nativeOpens: NativeOpenItem[] = [];
   const reported: ReconcilePlanItem[] = [];
   for (const item of plan.items) {
     if (item.kind === "scout-task") {
@@ -1017,6 +1136,10 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
     }
     if (item.kind === "implementation-task") {
       implementationTasks.push(item);
+      continue;
+    }
+    if (item.kind === "native-open" && item.action === "clean") {
+      nativeOpens.push(item);
       continue;
     }
     if (
@@ -1032,7 +1155,7 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
     if (group === undefined) repositories.set(repoPath, [item]);
     else group.push(item);
   }
-  return { repositories, scouts, implementationTasks, reported };
+  return { repositories, scouts, implementationTasks, nativeOpens, reported };
 }
 
 /**
@@ -1042,7 +1165,8 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
  * lock, so a launch in another session cannot allocate underneath the reconcile. Task cleanup runs
  * through its durable owner, which revalidates state and lease identity before every release.
  * Unreadable records are only ever reported. A quarantine note is deleted only after its lease is
- * re-read under the repository lock and found returned.
+ * re-read under the repository lock and found returned. A retained native open is abandoned only
+ * under its own open lock, after its coordinator is proved exactly present or exactly gone again.
  */
 export async function applyTandemReconciliation(
   input: ReconcileApplyInput,
@@ -1050,8 +1174,14 @@ export async function applyTandemReconciliation(
   const results = new Map<ReconcilePlanItem, ReconcileResult>();
   const work = reconcileWork(input.plan);
   for (const item of work.reported) {
-    const outcome = item.kind === "superseded-task" ? "freeable" : "quarantined";
-    results.set(item, { item, outcome, reason: item.reason });
+    results.set(item, { item, outcome: plannedOutcome(item.action), reason: item.reason });
+  }
+  for (const item of work.nativeOpens) {
+    try {
+      results.set(item, await applyNativeOpenItem(input.terminal, item));
+    } catch (error) {
+      results.set(item, { item, outcome: "failed", reason: describeFailure(error) });
+    }
   }
   for (const [repoPath, items] of work.repositories) {
     await withCoordinatorRepositoryLock(input.home, repoPath, async () => {
@@ -1115,6 +1245,15 @@ function entryFor(item: ReconcilePlanItem, reason: string): ReconcileReportEntry
   }
   if (item.kind === "scout-task") {
     return { kind: item.kind, id: item.taskId, reason, repoPath: item.repoPath };
+  }
+  if (item.kind === "native-open") {
+    return {
+      kind: item.kind,
+      id: item.path,
+      reason,
+      path: item.path,
+      ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+    };
   }
   if (item.kind === "unreadable-record") {
     return { kind: item.kind, id: item.path, reason, path: item.path };
