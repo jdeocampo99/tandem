@@ -46,7 +46,10 @@ for (const signedIn of [true, false, undefined]) {
       };
     };
     let time = 0;
+    // A resolved PATH-only installation must be used for every owned command, including cleanup.
+    const binary = "/usr/local/bin/tern";
     const result = await probeTern(run, {
+      binary,
       now: () => time,
       sleep: async (milliseconds) => {
         time += milliseconds;
@@ -55,6 +58,7 @@ for (const signedIn of [true, false, undefined]) {
     expect(result.status).toBe(
       signedIn === undefined ? "unknown" : signedIn ? "ready" : "signedOut",
     );
+    expect(calls.every((call) => call.argv[0] === binary)).toBe(true);
     const operations = calls.filter((call) => !call.argv.includes("--version"));
     const root = operations[0]?.cwd;
     expect(root).toBeDefined();
