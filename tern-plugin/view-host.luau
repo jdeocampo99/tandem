@@ -124,7 +124,37 @@ local function host(path: string)
   if not pane then error("Native block could not open") end
   if ticket.placement=="panel" then
    if not effect(function(cx) return cx.layout:move(pane,coordinator,"left",{focus=false}) end) then error("Panel could not move") end
-   effect(function(cx) cx.layout:resize(pane,"right",45-math.floor((ticket.columns or 90)/2)) end)
+   -- PaneInfo has no geometry, and daemon columns can remain 80 for hidden/native
+   -- blocks. Calibrate against this window's usable layout after placement instead.
+   local function panelRatio(cx: WindowCx): number
+    local layout=cx.session:layout(owner.tab)
+    local function find(tree: TabTree): number?
+     if tree.split=="right" and tree[1] and tree[1].pane==pane then return tree.ratio end
+     for _,child in tree do
+      if type(child)=="table" then
+       local ratio=find(child)
+       if ratio then return ratio end
+      end
+     end
+     return nil
+    end
+    local ratio=if layout then find(layout.root) else nil
+    if not ratio or ratio<=0 or ratio>=1 then error("Panel divider unavailable") end
+    return ratio
+   end
+   local before=effect(function(cx) return panelRatio(cx) end)
+   if not effect(function(cx) return cx.layout:resize(pane,"right",1) end) then error("Panel divider could not move") end
+   local after=effect(function(cx) return panelRatio(cx) end)
+   local step=after-before
+   if math.abs(step)<0.000001 then error("Panel geometry did not update") end
+   local target=45*math.abs(step)
+   local cells=math.round((target-after)/step)
+   if cells~=0 and not effect(function(cx)
+    if math.abs(panelRatio(cx)-after)>0.000001 then error("Panel layout changed during sizing") end
+    return cx.layout:resize(pane,"right",cells)
+   end) then error("Panel could not resize") end
+   local actual=effect(function(cx) return panelRatio(cx) end)
+   if math.abs(actual-target)>math.abs(step)*1.1 then error("Panel width could not be confirmed") end
    effect(function(cx) cx.layout:focus(coordinator) end)
   elseif ticket.placement=="task" then
    if not effect(function(cx)

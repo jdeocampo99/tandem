@@ -101,7 +101,8 @@ The renderer also adds a matching `[[blocks]]` entry with `id = "panel"` and its
 `host.luau` finishes. Screen-specific registrations stay at the bottom of `host.luau`.
 The renderer and its helpers load on the first block initialization, so module failures surface
 when that block opens. Later panes reuse the cached definition. The window entry point likewise
-registers commands and routes without requiring the hosting module; a matching open route loads it.
+registers commands and routes without requiring the hosting module; a matching open route
+consumes the ticket and stages that cold load before invoking the host in a fresh timer.
 
 The loader checks the envelope and runs the renderer's shape parser before replacing its model.
 Reads are bounded to 8 MiB, regular files only, and refuse symlinks. Missing, malformed, wrong-kind
@@ -165,6 +166,19 @@ window callbacks a 50 ms budget and disables a hook that exceeds it; doing the w
 focus and block creation together so navigation between stages cannot change the destination.
 Recheck exact originating panes before layout effects. Never retry a failed stage or write a
 receipt for it: the TypeScript backend retains uncertain tickets and their durable opening intent.
+Process completion hooks only schedule a continuation. Cold result-helper loading, result
+handling and the next queued process launch run in separate one-shot timers. Commands capture
+the originating pane/cwd at the gesture, then launch in a fresh timer. Focus entries and away
+transitions remain FIFO; each continuation advances at most one job. Heartbeats use that queue.
+Window contexts never survive their callbacks. Module or launch failures settle the job without
+retrying an action.
+
+Panel sizing measures the live divider after placement: a one-cell move calibrates the current
+usable layout, then a separate stage targets 45 cells (about 360 pixels at the default font).
+It ignores daemon/pre-split column counts, including hidden project tabs. The host checks the
+result within one cell before writing its receipt. An unavailable, changed or clamped divider
+fails without a retry or receipt, preserving the opening intent and panes for recovery.
+
 Back also rereads the previous task in the same callback before closing a task picker or docking
 the coordinator. A disappeared task, changed kind or tab, or newly floating task refuses the
 effect and preserves the originating view and recovery evidence.

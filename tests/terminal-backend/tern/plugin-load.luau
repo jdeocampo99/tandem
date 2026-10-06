@@ -1,10 +1,11 @@
 -- Execute the real entry points with a loader that refuses any LOAD-time require/effect.
-local definitions, commands = {}, {}
+local definitions, commands, timers = {}, {}, {}
 local openRoute, linkRoute
 local loading = true
 local imports = {}
 local function forbidden() error('LOAD performed file, process or layout work') end
 local tern = {
+ timer = function(_, callback) assert(not loading); table.insert(timers, callback) end,
  block = {define = function(id, def) assert(definitions[id] == nil); definitions[id] = def end},
  on = function(_event, callback) assert(type(callback)=="function") end,
  command = function(def) commands[def.id] = def end,
@@ -53,5 +54,7 @@ end
 for _,name in {'view','title','key','event','resize','save'} do assert(callbackCount[name]==9) end
 assert(callbackCount.init==18)
 assert(openRoute({path='/tmp/native-host/id.tandem-open.json'},{}).handled)
+assert(imports['./view-host']==nil)
+while #timers>0 do table.remove(timers,1)({}) end
 assert(imports['./view-host']==1)
 print('Plugin LOAD is registration-only; lazy callbacks and cached definitions pass')

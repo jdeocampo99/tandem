@@ -4,6 +4,7 @@ local timers, writes, effects, toasts, panes = {}, {}, {}, {}, {}
 local active, calls, maximum, focused = false, 0, 0, 10
 local ticket
 local failMove=false
+local width,ratio,failResize,ignoreResize=198,0.5,false,false
 local function charge(alive,cost)
  assert(active and alive(), "expired window context")
  calls += cost or 10
@@ -19,7 +20,7 @@ local function context()
  local cx={session={},layout={}}
  function cx.session:pane(id) charge(alive,5); return if panes[id] then table.clone(panes[id]) else nil end
  function cx.session:tabs() charge(alive,5); return {{id=11,session=1},{id=21,session=2},{id=22,session=2}} end
- function cx.session:layout(_tab) charge(alive,5); return {floats=if panes[20].floating then {{pane=20}} else {}} end
+ function cx.session:layout(_tab) charge(alive,5); return {root={split="right",ratio=ratio,{pane=30},{pane=20}},floats=if panes[20].floating then {{pane=20}} else {}} end
  function cx.session:tab_of(id) charge(alive,5); return if panes[id] then panes[id].tab else nil end
  function cx:new_block(kind,args,how,options)
   charge(alive)
@@ -31,7 +32,12 @@ local function context()
  end
  function cx.layout:focus(id) charge(alive); assert(panes[id]); focused=id; table.insert(effects,{name="focus",id=id}) end
  function cx.layout:move(id,_owner,_direction,_options) charge(alive); assert(panes[id]); table.insert(effects,{name="move"}); return not failMove end
- function cx.layout:resize(id,_direction,_amount) charge(alive); assert(panes[id]); table.insert(effects,{name="resize"}) end
+ function cx.layout:resize(id,direction,amount)
+  charge(alive); assert(panes[id] and direction=="right"); table.insert(effects,{name="resize",cells=amount})
+  if failResize then return false end
+  if not ignoreResize then ratio=math.clamp(ratio-amount/width,0.1,0.9) end
+  return true
+ end
  function cx.layout:close(id) charge(alive); assert(panes[id]); panes[id]=nil; table.insert(effects,{name="close",id=id}) end
  function cx.layout:float(id,_over,_corner,_options) charge(alive); panes[id].floating=true; table.insert(effects,{name="float"}); return true end
  function cx.layout:dock(id,_over,_direction,_options) charge(alive); panes[id].floating=false; table.insert(effects,{name="dock"}); return true end
@@ -46,6 +52,7 @@ end
 local function reset(kind,placement)
  timers,writes,effects,toasts={}, {}, {}, {}
  failMove=false
+ width,ratio,failResize,ignoreResize=198,0.5,false,false
  panes={[10]={tab=11,block="shell",floating=false},[20]={tab=21,block="shell",floating=false}}
  ticket={version=1,kind=kind,placement=placement,args={"/b/index", "20", "/b", "", "/b/index"},coordinator="20",origin="20",session="2",receipt="/b/native-host/open.receipt.json"}
 end
@@ -71,8 +78,22 @@ end
 
 reset("panel","panel"); open(); drain()
 assert(#toasts==0 and writes[ticket.receipt].paneId=="30")
-assert(#effects==5 and effects[2].kind=="tandem.panel")
+assert(#effects==6 and effects[2].kind=="tandem.panel")
+assert(math.abs(ratio*width-45)<=1,"panel must measure 45 live cells")
 assert(panes[10] and panes[20],"opening B must preserve both coordinators")
+-- Native/hidden blocks report stale daemon columns. Calibrate with the current
+-- window size after placement, including another project selected between stages.
+for _,liveWidth in {120,198,320} do
+ reset("panel","panel"); width=liveWidth; ticket.columns=80; open(); drain()
+ assert(#toasts==0 and writes[ticket.receipt] and math.abs(ratio*width-45)<=1)
+end
+for _,failure in {"no-divider","no-update","clamped"} do
+ reset("panel","panel")
+ if failure=="no-divider" then failResize=true elseif failure=="no-update" then ignoreResize=true else width=600 end
+ open(); drain()
+ assert(#toasts==1 and writes[ticket.receipt]==nil,"unconfirmed panel width must not write a receipt")
+ assert(panes[30] and panes[20] and #timers==0,"failed placement preserves ownership without retry")
+end
 reset("catchup","window"); open(); drain()
 assert(#toasts==0 and writes[ticket.receipt].tabId=="22")
 assert(effects[2].kind=="tandem.catchup" and effects[2].how=="tab")

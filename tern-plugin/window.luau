@@ -16,21 +16,37 @@ local function run(cx: WindowCx, args: { string }, origin:Origin?, quiet:boolean
  table.insert(argv, "--cwd"); table.insert(argv, cwd)
  local window = tern.getenv("TERN_WINDOW_KEY")
  if window and window ~= "" then table.insert(argv, "--window"); table.insert(argv, window) end
- local ok, problem = pcall(function()
-  tern.process.run(argv, { cwd = "." }, function(result, callbackCx)
-   if result.status ~= 0 and not quiet then
-    (callbackCx or cx):toast("error", "Tandem couldn't run that action", result.stderr)
-   elseif result.status == 0 then
-    local warnings=require("./navigation").warnings(result.stdout)
-    if #warnings>0 then (callbackCx or cx):toast("warning","Tandem action completed",table.concat(warnings,"\n")) end
-   end
-   if done then done(callbackCx or cx) end
+ -- Capture the gesture's origin now; launch in its own timer with a fresh context.
+ tern.timer(1,function(launchCx)
+  if not launchCx then return end
+  local ok, problem = pcall(function()
+   tern.process.run(argv, { cwd = "." }, function(result)
+    -- Process hooks only enqueue. Cold helpers, result handling and the next launch
+    -- each get their own timer stage rather than sharing the process hook budget.
+    tern.timer(1,function(resultCx)
+     if not resultCx then return end
+     if result.status ~= 0 then
+      if not quiet then resultCx:toast("error", "Tandem couldn't run that action", result.stderr) end
+      if done then done(resultCx) end
+     else
+      local loaded,navigation=pcall(function() return require("./navigation") end)
+      tern.timer(1,function(warningCx)
+       if not warningCx then return end
+       if loaded then
+        local warnings=navigation.warnings(result.stdout)
+        if #warnings>0 then warningCx:toast("warning","Tandem action completed",table.concat(warnings,"\n")) end
+       elseif not quiet then warningCx:toast("error","Tandem action result unavailable",tostring(navigation)) end
+       if done then done(warningCx) end
+      end)
+     end
+    end)
+   end)
   end)
+  if not ok then
+   if not quiet then launchCx:toast("error", "Tandem couldn't start that action", tostring(problem)) end
+   if done then done(launchCx) end
+  end
  end)
- if not ok then
-  if not quiet then cx:toast("error", "Tandem couldn't start that action", tostring(problem)) end
-  if done then done(cx) end
- end
 end
 
 local function command(id: string, title: string, args: { string }, palette: boolean?)
@@ -62,10 +78,19 @@ tern.route.link(function(link, cx)
 end)
 
 tern.route.open(function(req, cx)
- -- Skip unrelated files without loading the hosting module or doing file/layout work.
- if not string.match(req.path, "%.tandem%-open%.json$") and not string.match(req.path, "%.tandem%-view%.json$") then return nil end
- local hosted = require("./view-host").open(req, cx)
- if hosted then return hosted end
+ if string.match(req.path, "/native%-host/[%w%-]+%.tandem%-open%.json$") then
+  local path=req.path
+  tern.timer(1,function(loadCx)
+   if not loadCx then return end
+   local loaded,host=pcall(function() return require("./view-host") end)
+   tern.timer(1,function(openCx)
+    if not openCx then return end
+    if loaded then host.open({path=path},openCx)
+    else openCx:toast("error","Tandem view did not open",tostring(host)) end
+   end)
+  end)
+  return {handled=true}
+ end
  if string.match(req.path, "%.tandem%-view%.json$") then
   run(cx, { "view-file", req.path })
   return { handled = true }
@@ -78,10 +103,16 @@ end)
 local previous:Origin?=nil
 local queue:{{origin:Origin,action:string}}={}
 local busy=false
+local head,tail=1,0
+local function enqueue(origin:Origin,action:string)
+ tail+=1; queue[tail]={origin=origin,action=action}
+end
 local function drain(cx:WindowCx)
- if busy or #queue==0 then return end
+ if busy or head>tail then return end
  busy=true
- local job=table.remove(queue,1)
+ local job=queue[head]
+ queue[head]=nil; head+=1
+ if head>tail then head,tail=1,0 end
  run(cx,{"project",job.action},job.origin,true,function(callbackCx)
   busy=false
   drain(callbackCx)
@@ -96,9 +127,9 @@ end
 local function enter(cx:WindowCx)
  local next=focused(cx)
  if previous and next and previous.pane==next.pane then return end
- if previous then table.insert(queue,{origin=previous,action="away"}) end
+ if previous then enqueue(previous,"away") end
  previous=next
- if next then table.insert(queue,{origin=next,action="entry"}) end
+ if next then enqueue(next,"entry") end
  drain(cx)
 end
 tern.on("focus",function(_ev:FocusEvent,cx:WindowCx) enter(cx) end)
@@ -106,7 +137,7 @@ local function pulse()
  tern.timer(60000,function(cx)
   if cx then
    local origin=focused(cx)
-   if origin then table.insert(queue,{origin=origin,action="visible"}); drain(cx) end
+   if origin then enqueue(origin,"visible"); drain(cx) end
   end
   pulse()
  end)
