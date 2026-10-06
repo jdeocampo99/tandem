@@ -10,6 +10,7 @@ import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
+import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
@@ -222,32 +223,65 @@ for (const changed of ["revision", "content", "agreement", "missing-agreement"])
   });
 }
 
-test("brief comments reach the verified coordinator as user feedback on their original revision", async () => {
-  const f = await fixture();
-  try {
-    await f.service.draftRequestBrief({
-      repoPath: f.repo,
-      requestId: f.record.id,
-      content: { ...content, goal: "The revised goal" },
-      reviewPane: false,
-    });
-    await f.write({
-      ...f.seen,
-      text: "Keep the original goal",
-      comments: [{ line: 1, text: "Use this title" }],
-    });
-    const result = await runCli(["brief-comment", f.record.id, "--input", f.input], f.deps);
-    expect(result.exitCode).toBe(0);
-    expect(f.prompts[0]).toContain("From the open review page:");
-    expect(f.prompts[0]).toContain(`Brief ${f.record.id}, revision 1: Comment`);
-    expect(f.prompts[0]).toContain("Line 1 (");
-    expect(f.prompts[0]).toContain("Use this title");
-    expect((await f.store.read(f.record.id))?.draft.content.goal).toBe("The revised goal");
-    expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
-  } finally {
-    await f.close();
-  }
-});
+for (const action of ["brief-comment", "brief-request-changes"]) {
+  test(`${action} resolves stable line ids through the original historical view`, async () => {
+    const f = await fixture();
+    try {
+      const originalLine = briefView(f.record).lines.find((line) => line.text === content.goal);
+      if (originalLine === undefined) throw new Error("Missing displayed goal line");
+      await f.service.draftRequestBrief({
+        repoPath: f.repo,
+        requestId: f.record.id,
+        content: {
+          ...content,
+          goal: "The revised goal",
+          openQuestions: ["A newly added question"],
+        },
+        reviewPane: false,
+      });
+      await f.write({
+        ...f.seen,
+        text: "Keep the original goal",
+        comments: [{ lineId: originalLine.id, text: "Keep this goal" }],
+      });
+      const result = await runTerminal(
+        ["native", action, f.record.id, "--input", f.input, "--pane", "101", "--cwd", f.clean],
+        f.deps,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(f.prompts[0]).toContain("From the open review page:");
+      expect(f.prompts[0]).toContain(
+        `Brief ${f.record.id}, revision 1: ${action === "brief-comment" ? "Comment" : "Request changes"}`,
+      );
+      expect(f.prompts[0]).toContain(
+        `Line ${originalLine.number} [${originalLine.id}] (${content.goal}):`,
+      );
+      expect(f.prompts[0]).toContain("Keep this goal");
+      expect(f.prompts[0]).not.toContain("The revised goal");
+      expect((await f.store.read(f.record.id))?.draft.content.goal).toBe("The revised goal");
+      expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
+      const latest = await f.store.read(f.record.id);
+      if (latest === undefined) throw new Error("Missing revised brief");
+      const latestOnlyLine = briefView(latest).lines.find(
+        (line) => line.text === "A newly added question",
+      );
+      if (latestOnlyLine === undefined) throw new Error("Missing new line");
+      await f.write({
+        ...f.seen,
+        comments: [{ lineId: latestOnlyLine.id, text: "Not in old view" }],
+      });
+      const refused = await runTerminal(
+        ["native", action, f.record.id, "--input", f.input, "--pane", "101", "--cwd", f.clean],
+        f.deps,
+      );
+      expect(refused.exitCode).not.toBe(0);
+      expect(refused.error?.message).toContain("Unknown brief line id");
+      expect(f.prompts).toHaveLength(1);
+    } finally {
+      await f.close();
+    }
+  });
+}
 
 test("request changes forwards feedback and retires only the matching brief projection", async () => {
   const f = await fixture();
@@ -274,10 +308,66 @@ test("request changes forwards feedback and retires only the matching brief proj
   }
 });
 
+for (const action of ["brief-comment", "brief-request-changes"]) {
+  test(`${action} refuses invalid line ids, numeric anchors and stale view bindings before delivery`, async () => {
+    const f = await fixture();
+    try {
+      const line = briefView(f.record).lines.find((line) => line.text === content.goal);
+      if (line === undefined) throw new Error("Missing displayed goal line");
+      const cases = [
+        {
+          comments: [{ lineId: "unknown:0:0", text: "Unknown id" }],
+          error: "Unknown brief line id",
+        },
+        {
+          comments: [{ lineId: ` ${line.id} `, text: "Changed id" }],
+          error: "Unknown brief line id",
+        },
+        { comments: [{ line: line.number, text: "Numeric anchor" }], error: "unknown field line" },
+        {
+          comments: [{ lineId: line.number, text: "Numeric id" }],
+          error: "lineId must be a nonempty string",
+        },
+        {
+          comments: [{ lineId: "", text: "Missing id" }],
+          error: "lineId must be a nonempty string",
+        },
+        { briefRevision: 100, error: "stale or unknown brief revision" },
+        { contentDigest: "stale", error: "different content digest" },
+        { agreementDigest: "stale", error: "different agreement digest" },
+      ];
+      const retired: string[] = [];
+      for (const { error, ...input } of cases) {
+        await f.write({ ...f.seen, comments: [{ lineId: line.id, text: "Feedback" }], ...input });
+        const result = await runTerminal(
+          ["native", action, f.record.id, "--input", f.input, "--pane", "101", "--cwd", f.clean],
+          {
+            ...f.deps,
+            service: {
+              ...f.service,
+              closeRequestBriefReview: async (id, revision) => {
+                retired.push(id);
+                return f.service.closeRequestBriefReview(id, revision);
+              },
+            },
+          },
+        );
+        expect(result.exitCode).not.toBe(0);
+        expect(result.error?.message).toContain(error);
+      }
+      expect(f.prompts).toEqual([]);
+      expect(retired).toEqual([]);
+      expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
+    } finally {
+      await f.close();
+    }
+  });
+}
+
 test("brief feedback refuses invalid anchors and a coordinator pane occupied by another process", async () => {
   const f = await fixture();
   try {
-    await f.write({ ...f.seen, comments: [{ line: 100_000, text: "bad anchor" }] });
+    await f.write({ ...f.seen, comments: [{ lineId: "missing:0:0", text: "bad anchor" }] });
     expect(
       (await runCli(["brief-comment", f.record.id, "--input", f.input], f.deps)).exitCode,
     ).not.toBe(0);

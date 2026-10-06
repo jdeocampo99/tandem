@@ -246,7 +246,12 @@ the action handler must still recheck the authoritative revision and both digest
 `tandem native brief-approve REQUEST_ID --input FILE`. Write those three values to the input
 file untouched; use `file.model.requestId` as the positional request id. All three values come
 from the same draft used to produce the visible lines, including its agreement digest.
-The `brief-approve` CLI handler lands with #284.
+Native brief comments and request changes take the same three identity fields plus optional
+`text` and `comments:[{lineId:string,text:string}]`. Copy `lineId` unchanged from the displayed
+`lines[].id`; `number` is presentation only and never an action anchor. The CLI checks the
+revision/digests and resolves ids through `briefView` for the exact preserved historical draft,
+never the latest draft. Unknown ids, missing historical revisions and mismatched digests refuse
+delivery. Numeric `line` anchors are refused. See [native brief feedback](request-briefs.md#native-brief-feedback).
 The builder accepts comments and a browser URL; their collection and CLI actions belong to the
 annotation/action integration, which can supply them when opening the pane.
 
