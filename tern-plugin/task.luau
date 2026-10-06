@@ -25,7 +25,7 @@ type Model = {
    tokens: { actualInputTokens: number, actualOutputTokens: number, estimatedInputTokens: number, estimatedOutputTokens: number, unavailableSamples: number } } },
    byWorkKind: { { workKind: string, activeMs: number } }, malformedSamples: number, omittedSamples: number } }?,
 }
-type Index = { briefs: { [string]: { detailFile: string } }, pullRequests: { [string]: { header: { number: number, taskId: string? }, detailFile: string } } }
+type Index = prModels.Index & { briefs: { [string]: { detailFile: string } } }
 type Brief = { title: string, revision: number, lines: { { id: string, number: number, text: string, kind: string, isNew: boolean } } }
 type State = { origin: navigation.Origin, index: views.View<Index>?, brief: views.View<Brief>?, pr: views.View<prModels.Model>?, prContent: prContent.State, stopBrief: (() -> ())?, stopPr: (() -> ())?, view: views.View<Model>, field: fields.Field, tab: string, cwd: string, prMatch: boolean, busy: boolean, editing: boolean }
 
@@ -98,9 +98,8 @@ local function parse(value: unknown): Model?
 end
 
 local function parseIndex(value: unknown): Index?
- if type(value) ~= 'table' or type(value.briefs) ~= 'table' or type(value.pullRequests) ~= 'table' then return nil end
+ if not prModels.parseIndex(value) or type(value) ~= 'table' or type(value.briefs) ~= 'table' then return nil end
  for _, brief in value.briefs do if type(brief) ~= 'table' or type(brief.detailFile) ~= 'string' then return nil end end
- for _, pr in value.pullRequests do if type(pr) ~= 'table' or type(pr.detailFile) ~= 'string' or type(pr.header) ~= 'table' or type(pr.header.number) ~= 'number' then return nil end end
  return value :: Index
 end
 local function parseBrief(value: unknown): Brief?
@@ -124,20 +123,15 @@ local function related(state: State, cx: BlockCx)
   if state.stopBrief then state.stopBrief() end
   state.brief = views.create(briefPath, 'brief', parseBrief); views.refresh(state.brief); state.stopBrief = views.watch(state.brief, cx)
  end
- local path: string? = nil
- for _, pr in index.model.pullRequests do
-  if pr.header.taskId == model.header.id then
-   local candidate = detailPath(state, pr.detailFile)
-   if path and path ~= candidate then path = nil; break end
-   path = candidate
-  end
- end
+ local path = prModels.taskDetailPath(state.origin.path, model.header.id, index.model)
  state.prMatch = path ~= nil
  if not path and state.pr then if state.stopPr then state.stopPr() end; state.pr = nil; state.stopPr = nil end
  if not brief and state.brief then if state.stopBrief then state.stopBrief() end; state.brief = nil; state.stopBrief = nil end
  if path and (not state.pr or state.pr.path ~= path) then
   if state.stopPr then state.stopPr() end
-  state.pr = views.create(path, 'pr', prModels.parse); views.refresh(state.pr); state.stopPr = views.watch(state.pr, cx)
+  state.stopPr = nil
+  state.pr = prModels.forTask(state.origin.path, model.header.id, index.model)
+  if state.pr then state.stopPr = views.watch(state.pr, cx) end
  end
 end
 local function prReady(state: State): boolean
