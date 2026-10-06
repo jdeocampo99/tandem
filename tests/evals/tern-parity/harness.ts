@@ -14,8 +14,8 @@ import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
 import { recordNativePublication } from "../../../src/memory/native-visits.ts";
 import { createTandemService } from "../../../src/service/controller.ts";
-import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { withNativeInput } from "../../../src/terminal/native-input.ts";
+import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { luauBinary } from "../../luau.ts";
 import type { ScenarioTernProject, ScenarioWorld } from "../scenario.ts";
 
@@ -418,7 +418,7 @@ export class TernParityHost {
    * in-process against the scenario home, exactly as `tandem.sh` and `native-input.sh` do.
    */
   async runCli(
-    process: Readonly<{ argv: readonly string[]; stdin?: string }>,
+    process: Readonly<{ argv: readonly string[]; stdin?: string | undefined }>,
   ): Promise<Readonly<{ exitCode: number; stdout: string; stderr: string }>> {
     const [shell, script, ...rest] = process.argv;
     if (shell !== "/bin/sh") throw new Error(`Tern plugin spawned ${shell}`);

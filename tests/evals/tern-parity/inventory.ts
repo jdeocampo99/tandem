@@ -5,8 +5,8 @@ import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
 import { readNativeBundle } from "../../../src/board/native-file.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { withPrWatches } from "../../../src/pr-watch/store.ts";
 import { type PrReviewRound, prReviewRunDiffPath } from "../../../src/pr-review/state.ts";
+import { withPrWatches } from "../../../src/pr-watch/store.ts";
 import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import { nativeReplyLinks } from "../../../src/session/native-links.ts";
@@ -16,11 +16,11 @@ import {
 } from "../../../src/terminal-backend/tern/plugin.ts";
 import { content } from "../../board/fixtures.ts";
 import {
+  SCENARIO_POLICY,
   type ScenarioPullRequest,
   type ScenarioTernProject,
   type ScenarioWorld,
   seedScenarioTask,
-  SCENARIO_POLICY,
   seedTernProject,
   withScenario,
 } from "../scenario.ts";

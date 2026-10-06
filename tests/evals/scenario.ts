@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node
 import { basename, join } from "node:path";
 import { z } from "zod";
 import { JEV_MODEL, type JevFetch } from "../../src/adapters/typesafe.ts";
+import { repositoryKey } from "../../src/config/repositories.ts";
 import type {
   Clock,
   CommandRequest,
@@ -17,7 +18,6 @@ import type {
   WorktreeLease,
 } from "../../src/contracts.ts";
 import { COORDINATOR_QUARANTINE_DIRECTORY } from "../../src/coordinator/quarantine.ts";
-import { repositoryKey } from "../../src/config/repositories.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
@@ -285,6 +285,8 @@ export type ScenarioWorld = Readonly<{
   readonly routeTernOpen: (routes: ScenarioTernRoutes) => void;
   /** Text written to each pane's tty, such as a helper pane's OSC alerts. */
   readonly ttyWrites: () => readonly Readonly<{ paneId: string; text: string }>[];
+  /** Directories `tern plugin link` installed, in order. */
+  readonly ternPluginLinks: () => readonly string[];
   /** Text typed into a pane with `tern send`, such as a prompt to a coordinator's agent. */
   readonly sentKeys: () => readonly Readonly<{ paneId: string; text: string }>[];
   readonly titlePane: (paneId: string, title: string) => void;
@@ -532,6 +534,7 @@ export async function createScenarioWorld(
   let ternRoutes: ScenarioTernRoutes | undefined;
   const sentKeys: { paneId: string; text: string }[] = [];
   const ttyWrites: { paneId: string; text: string }[] = [];
+  const ternPluginLinks: string[] = [];
 
   const checkoutFor = (path: string): CheckoutState => {
     const existing = checkouts.get(path);
@@ -788,6 +791,17 @@ export async function createScenarioWorld(
     const present = () => [...panes.entries()].filter(([, pane]) => pane.present);
     const ok = (value: unknown) => commandResult(JSON.stringify(value));
     if (verb === "inspect") return ok({ clients: [{ kind: "window" }] });
+    if (verb === "plugin") {
+      if (argv[2] === "link") ternPluginLinks.push(argv[3] ?? "");
+      else if (argv[2] !== "list") throw new Error(`unexpected tern command ${JSON.stringify(argv)}`);
+      return ok({
+        plugins:
+          ternPluginLinks.length === 0
+            ? []
+            : [{ id: "tandem", status: "ready", host: true, window: true }],
+        problems: [],
+      });
+    }
     if (verb === "open") {
       if (ternRoutes === undefined) return commandResult("", 1, "no plugin handles that route");
       return ternRoutes(argv[2] ?? "");
@@ -1445,6 +1459,7 @@ export async function createScenarioWorld(
       ternRoutes = routes;
     },
     ttyWrites: () => [...ttyWrites],
+    ternPluginLinks: () => [...ternPluginLinks],
     sentKeys: () => [...sentKeys],
     paneIsPresent: (paneId) => panes.get(paneId)?.present === true,
     replaceForeground: (paneId, argv) => {
