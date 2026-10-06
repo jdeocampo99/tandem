@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Endpoint } from "../../contracts.ts";
@@ -191,21 +191,6 @@ export async function withNativeOpenIntent<T>(
     } catch (error) {
       if (!missing(error)) throw new TernOutcomeUnknownError("tern open intent", error);
     }
-    // Older hosts retained route tickets without an intent. They fence this owner too.
-    for (const name of await readdir(directory)) {
-      if (!/^[\da-f-]+\.tandem-open\.json$/u.test(name)) continue;
-      const route = join(directory, name);
-      if (pending.some((attempt) => attempt.route === route)) continue;
-      const ticket = Ticket.parse(await readPrivateJson(route));
-      if (
-        ticket.coordinator === input.coordinator.paneId &&
-        ticket.session === input.coordinator.terminalSessionId &&
-        ticket.args[1] === input.coordinator.paneId &&
-        ticket.args[2] === input.cwd &&
-        ticket.args[4] === input.indexPath
-      )
-        pending.push({ route, ticket });
-    }
     for (const attempt of pending) {
       try {
         if (
@@ -230,19 +215,7 @@ export async function withNativeOpenIntent<T>(
         );
         if (exact === undefined)
           throw new Error("Earlier opening has no exact native block evidence");
-        let replaced = attempt.ticket.replaced;
-        if (replaced === undefined && attempt.ticket.placement === "task") {
-          // Older durable intents omitted replacement metadata, but their retained
-          // layout routes included it. Missing/conflicting routes cannot prove retirement.
-          const retained = Ticket.parse(await readPrivateJson(attempt.route));
-          if (
-            JSON.stringify({ ...retained, replaced: undefined }) !==
-            JSON.stringify({ ...attempt.ticket, replaced: undefined })
-          )
-            throw new Error("Retained task route conflicts with its opening intent");
-          replaced = retained.replaced;
-        }
-        await proveTaskReplacement(commands, input.cwd, replaced);
+        await proveTaskReplacement(commands, input.cwd, attempt.ticket.replaced);
         try {
           const receipt = Receipt.parse(await readPrivateJson(attempt.ticket.receipt));
           if (

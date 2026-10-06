@@ -17,8 +17,6 @@ for (const placement of ["task", "return"] as const) {
     "failed-listing",
     "malformed-listing",
     "closed",
-    "legacy-intent",
-    "legacy-route",
   ] as const) {
     test(`${placement} replacement ${mode} settles only after exact predecessor absence`, async () => {
       const home = await mkdtemp("/tmp/tandem-retained-task-");
@@ -161,10 +159,6 @@ for (const placement of ["task", "return"] as const) {
           const path = `${home}/native-host/${intent}`;
           const saved = JSON.parse(await readFile(path, "utf8"));
           expect(saved.ticket.replaced).toBe("4");
-          if (mode === "legacy-intent") {
-            delete saved.ticket.replaced;
-            await writeFile(path, JSON.stringify(saved));
-          } else if (mode === "legacy-route") await rm(path);
           const before = opens,
             focused = focuses;
           // Recovery must fence the complete outcome, even when the new task's
@@ -181,7 +175,7 @@ for (const placement of ["task", "return"] as const) {
           expect(opens).toBe(before);
           expect(await Bun.file(route).exists()).toBe(true);
           expect(await Bun.file(receipt).exists()).toBe(true);
-          if (mode !== "legacy-route") expect(await Bun.file(path).exists()).toBe(true);
+          expect(await Bun.file(path).exists()).toBe(true);
         }
         expect(opens).toBe(1);
       } finally {

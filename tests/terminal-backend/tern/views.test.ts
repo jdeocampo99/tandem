@@ -40,7 +40,6 @@ for (const mode of [
   "focus-unknown",
   "relaunch-missing-receipt",
   "relaunch-no-exact-pane",
-  "relaunch-legacy-ticket",
   "duplicate-panels",
   "wrong-placement",
   "wrong-kind",
@@ -248,7 +247,6 @@ for (const mode of [
             "pr-unknown",
             "relaunch-missing-receipt",
             "relaunch-no-exact-pane",
-            "relaunch-legacy-ticket",
           ].includes(mode)
         )
           await writeFile(
@@ -321,11 +319,6 @@ for (const mode of [
             (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
           ).toBe(true);
           if (mode === "relaunch-no-exact-pane") created = false;
-          if (mode === "relaunch-legacy-ticket") {
-            const names = await readdir(`${home}/native-host`);
-            for (const name of names.filter((name) => name.endsWith(".intent.json")))
-              await rm(`${home}/native-host/${name}`);
-          }
         }
         const before = effects;
         if (mode === "relaunch-detached" || mode.startsWith("relaunch-other-")) {
