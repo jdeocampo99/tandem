@@ -255,7 +255,9 @@ export class OperationRecords {
           if (!holdsClaim(current.operation, claim)) return current;
           return {
             ...current,
-            endpoints: current.endpoints.some((entry) => entry.paneId === value.paneId)
+            endpoints: current.endpoints.some(
+              (entry) => entry.terminal === value.terminal && entry.paneId === value.paneId,
+            )
               ? current.endpoints
               : [...current.endpoints, value as unknown as Endpoint],
           };

@@ -123,6 +123,7 @@ function leaseFor(home: string): WorktreeLease {
 
 function endpointFor(): Endpoint {
   return {
+    terminal: "herdr" as const,
     sessionId: "session-1",
     workspaceId: "workspace-1",
     tabId: "tab-1",

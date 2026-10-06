@@ -51,6 +51,7 @@ const CWD = "/work/repo";
 const SOCKET = "/tmp/herdr-pin.sock";
 
 const ENDPOINT: Endpoint = {
+  terminal: "herdr" as const,
   sessionId: SESSION,
   workspaceId: "w1",
   tabId: "t1",
@@ -141,6 +142,7 @@ async function coordinatorRecord(root: string): Promise<CoordinatorRecord> {
     repoPath,
     harness: DEFAULT_HARNESS,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: SESSION,
       workspaceId: "cw",
       tabId: "ct",
@@ -592,6 +594,7 @@ export const PIN_CASES: readonly PinCase[] = [
           ),
         ),
         {
+          terminal: "herdr" as const,
           schemaVersion: 1,
           reservationId: "reservation-1",
           sessionId: SESSION,
@@ -852,6 +855,7 @@ async function restartWith(world: CoordinatorWorld, run: CommandRunner): Promise
 }
 
 const LAUNCH_INTENT = (cwd: string) => ({
+  terminal: "herdr" as const,
   schemaVersion: 1 as const,
   reservationId: "reservation-1",
   sessionId: SESSION,

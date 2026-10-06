@@ -126,6 +126,7 @@ test("round-trips durable launch, stop, consumption, and pool housekeeping metad
           sourceCheckpoint: checkpoint,
           taskName: "tandem-task-1",
           endpointLaunch: {
+            terminal: "herdr" as const,
             schemaVersion: 1,
             reservationId: "reservation-1",
             sessionId: "session-1",

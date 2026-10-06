@@ -25,6 +25,7 @@ async function fixture(): Promise<{ root: string; home: string; record: Coordina
     schemaVersion: 1,
     repoPath,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: "tandem",
       workspaceId: "w1",
       tabId: "w1:t1",
