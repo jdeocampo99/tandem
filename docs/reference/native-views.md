@@ -256,11 +256,10 @@ the larger of added/removed line counts, so deletions count too; first drafts ha
 changes. Comments must match request, revision, content digest and line id. Old comments never
 reattach to a different revision. The approval payload identifies exactly the visible draft;
 the action handler must still recheck the authoritative revision and both digests.
-`file.model.approval` is exactly the JSON input for
-the `brief-approve` action of `tandem native act`. Write those three values to the input
-file untouched; use `file.model.requestId` as the positional request id. All three values come
-from the same draft used to produce the visible lines, including its agreement digest.
-Native brief comments and request changes take the same three identity fields plus optional
+`file.model.approval` supplies the three identity fields of the `brief-approve` action sent
+to `tandem native act`. Copy them untouched beside `requestId` from `file.model.requestId`. All
+three values come from the same draft used to produce the visible lines, including its agreement
+digest. The `brief-request-changes` action takes the same identity fields plus optional
 `text` and `comments:[{lineId:string,text:string}]`. Copy `lineId` unchanged from the displayed
 `lines[].id`; `number` is presentation only and never an action anchor. The CLI checks the
 revision/digests and resolves ids through `briefView` for the exact preserved historical draft,

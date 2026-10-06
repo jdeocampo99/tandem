@@ -207,7 +207,6 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("restart"), taskId: Id }).strict(),
   z.object({ verb: z.literal("steer"), taskId: Id, text: Text }).strict(),
   z.object({ verb: z.literal("brief-approve"), ...ViewedBrief }).strict(),
-  BriefFeedback.extend({ verb: z.literal("brief-feedback") }),
   BriefFeedback.extend({ verb: z.literal("brief-request-changes") }),
   z
     .object({

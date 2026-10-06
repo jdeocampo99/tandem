@@ -129,7 +129,8 @@ test("a ready PR whose fix cannot start reports the saved feedback and blocker",
     });
     try {
       const result = await comment(world, service, "Fix this");
-      expect(result.status).toBe("refused");
+      // The direction is saved; a refusal would invite sending it again.
+      expect(result.status).toBe("kept");
       expect(result.notice?.text).toContain(
         "PR feedback was saved, but the worker could not start fixing",
       );

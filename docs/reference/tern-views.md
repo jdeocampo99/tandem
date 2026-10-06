@@ -201,7 +201,7 @@ Every brief action carries the exact identity of the displayed draft:
 }
 ```
 
-`brief-approve` sends only those three fields. `brief-comment` and `brief-request-changes` may
+`brief-approve` sends only those three fields and `requestId`. `brief-request-changes` may
 also include `text` and `comments`, where each comment is
 `{ "lineId": "TL;DR:0:0", "text": "Feedback" }`.
 The renderer copies the stable string id from `briefView.lines[].id` and copies revision and
@@ -240,12 +240,12 @@ mutations and `open`; renderers only collect input and call `rt.act`.
 
 ### Completion and installation
 
-Exit 0 means the action completed or the user cancelled a picker. Refusal, missing context,
-unavailable commands and effect failures exit nonzero with a useful diagnostic on stderr.
-The plugin shows nonzero stderr in an error toast and also reports synchronous spawn failure.
-Renderers may add `--json` to consume the CLI's structured result on stdout, including warnings;
-that output does not authorize subsequent mutations. A handled link stays handled on failure;
-the plugin never retries an action, including an operation whose outcome is uncertain.
+`tandem native act` exits 0 whenever it printed an outcome, including a refusal; only a
+malformed invocation exits nonzero. `rt.act` turns a nonzero exit, an unreadable outcome or a
+synchronous spawn failure into the screen's error toast. A `refused` outcome toasts its notice
+under the screen's title; other notices toast under their code's title. The outcome never
+authorizes a later mutation. A handled link stays handled on failure; the plugin never retries an
+action, including an operation whose outcome is uncertain.
 
 The terminal port's `openView` returns `{ opened: boolean, warnings: readonly string[],
 endpoint?: Endpoint, fallback?: "brief-review" }`. A confirmed native brief returns its exact
@@ -466,14 +466,13 @@ The optional strip is rendered inside the PR header. `pr-diff.luau` exports `cre
 For the task's Diff tab set the content state's `tab="Diff"`; for its PR tab set
 `tab="Description"`. Pass readiness from both the task/index and PR detail views to
 `view` and `event`. Retain the same content state while navigating to preserve local drafts.
-The shared `Invoke` completion receives the process result `{status,stdout,stderr}`. For
-`review-submit`, callers invoke it after every settled outcome, including a nonzero exit,
-missing origin or spawn failure. Other action completions remain success-only. Content clears
-`posting` on completion, retains drafts on failure/refusal, and marks `submitted` only for
-exit zero with decoded CLI stdout containing `posted: true`. A `posted: false` result displays
-its service message verbatim, preserving distinct definite-refusal and uncertain-post guidance,
-including the confirmation required to recover an uncertain post. An unreadable receipt asks
-the user to check the PR. No outcome retries an action.
+The shared `Invoke` takes an action table and a completion that receives the `Outcome`, or nil
+when none arrived. For `review-submit`, callers invoke the completion after every settled
+outcome, including a refusal, a busy origin or a spawn failure. Content clears `posting` on
+completion, retains drafts unless the outcome is `done`, and marks `submitted` only then. The
+`review-unconfirmed` notice shows the service message verbatim, preserving distinct
+definite-refusal and uncertain-post guidance, including the confirmation required to recover an
+uncertain post. No outcome retries an action.
 The standalone PR block calls `cx:exit(0)` only after that confirmed posted receipt, as it does
 for its close control. Embedded content records success locally; its task host owns navigation.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
@@ -498,14 +497,10 @@ this coordinator's exact block program, root/detail path and launch arguments, r
 preserved coordinator, and retires only the exact idle full-window view in the guarded
 return route, then confirms scoped absence. A window-command Board toggle uses the same return.
 The active window scope is independent of the view's immutable launch window argument.
-Hosting passes `keep_open=false`. Screen success callbacks invoke captured `cx:exit(0)`; nonzero
-results toast stderr and never invoke callback exit. Shared `navigation.run/back` accept an optional
-success callback. Uncertain opening or closure is quarantined without retries.
-Warnings suppress callback exit unless the result proves successful project entry (`entered: true`
-or `focused: true`) and every warning has the catch-up boundary's fixed
-`Project opened, but catch-up is unavailable: ` prefix. These informational warnings still toast
-and complete entry. Retention, mixed, unknown and malformed warnings preserve the originating pane;
-warning text alone cannot authorize callback exit without the successful-entry result.
+Hosting passes `keep_open=false`. Screens invoke captured `cx:exit(0)` only for a `done`
+outcome; a `refused` or `kept` outcome keeps the originating pane. A `catch-up-unavailable`
+notice still toasts but the entry is `done`, since catch-up is optional. Uncertain opening or
+closure is quarantined without retries.
 
 `tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger
 with the single non-fatal boundary shared by every entry path. Visible

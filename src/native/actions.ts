@@ -266,8 +266,7 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
     return DONE;
   },
   "brief-approve": approveBrief,
-  "brief-feedback": briefFeedback,
-  "brief-request-changes": briefFeedback,
+  "brief-request-changes": requestChanges,
   "pr-comment": commentOnPr,
   "review-submit": submitReview,
   "catchup-dismiss": (act) => leaveCatchUp(act, false),
@@ -733,21 +732,19 @@ async function closeNativeBrief(
   }
 }
 
-async function briefFeedback(
+async function requestChanges(
   act: Act,
-  { verb, text, ...seen }: Extract<Action, { verb: "brief-feedback" | "brief-request-changes" }>,
+  { verb: _, text, ...seen }: Extract<Action, { verb: "brief-request-changes" }>,
 ): Promise<Outcome> {
   const feedback: BriefFeedback = { ...seen, ...(text === undefined ? {} : { text }) };
   if (Buffer.byteLength(JSON.stringify(feedback), "utf8") > 64_000)
     throw new Error("Brief feedback may not exceed 64000 bytes");
-  const requestChanges = verb === "brief-request-changes";
   const service = act.service();
   const brief = await service.requestBrief(feedback.requestId);
   await requireBriefProject(act, brief.record.repoPath);
-  const prompt = briefFeedbackPrompt(brief.record, feedback, requestChanges);
+  const prompt = briefFeedbackPrompt(brief.record, feedback, true);
   const owned = await coordinator(act, brief.record.repoPath);
   await promptCoordinator(act, owned, prompt);
-  if (!requestChanges) return DONE;
   if (owned.endpoint.terminal === "tern") {
     const kept = await closeNativeBrief(act, owned, feedback);
     return kept === undefined ? DONE : notice("kept", kept.code, kept.text);
@@ -846,8 +843,11 @@ async function commentOnPr(
     direction.stage === "blocked" ||
     (before.stage === "ready" && direction.stage !== "implementing")
   ) {
+    // The direction is saved, so this is not a refusal: resending would duplicate it.
     const current = await service.get(action.taskId);
-    throw new Error(
+    return notice(
+      "kept",
+      "failed",
       `PR feedback was saved, but the worker could not start fixing: ${current.blockReason ?? current.blockCause?.summary ?? `task is ${current.stage}`}`,
     );
   }

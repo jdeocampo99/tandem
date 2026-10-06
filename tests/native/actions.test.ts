@@ -285,7 +285,7 @@ for (const changed of ["revision", "content", "agreement", "missing-agreement"])
   });
 }
 
-for (const verb of ["brief-feedback", "brief-request-changes"] as const) {
+for (const verb of ["brief-request-changes"] as const) {
   test(`${verb} resolves stable line ids through the original historical view`, async () => {
     const f = await fixture();
     try {
@@ -310,9 +310,7 @@ for (const verb of ["brief-feedback", "brief-request-changes"] as const) {
       });
       expect(outcome.status).toBe("done");
       expect(f.prompts[0]).toContain("From the open review page:");
-      expect(f.prompts[0]).toContain(
-        `Brief ${f.record.id}, revision 1: ${verb === "brief-feedback" ? "Comment" : "Request changes"}`,
-      );
+      expect(f.prompts[0]).toContain(`Brief ${f.record.id}, revision 1: Request changes`);
       expect(f.prompts[0]).toContain(
         `Line ${originalLine.number} [${originalLine.id}] (${content.goal}):`,
       );
@@ -433,7 +431,7 @@ test("brief feedback refuses a coordinator pane occupied by another process", as
   try {
     f.setOwner(false);
     const outcome = await f.act({
-      verb: "brief-feedback",
+      verb: "brief-request-changes",
       requestId: f.record.id,
       ...f.seen,
       text: "Valid feedback",
@@ -465,7 +463,6 @@ test("native brief actions refuse another project's request before ownership or 
     };
     let inspections = 0;
     for (const action of [
-      { verb: "brief-feedback", ...seen, text: "Foreign feedback", comments: [] },
       { verb: "brief-request-changes", ...seen, text: "Foreign feedback", comments: [] },
       { verb: "brief-approve", ...seen },
       { verb: "open", ref: { kind: "brief", requestId: foreign.id } },
@@ -500,7 +497,7 @@ test("a corrupt unrelated record cannot disable a native action in the same sess
   try {
     await writeFile(recordPath(f.home, "isolated", join(f.root, "corrupt-project")), "{broken");
     const outcome = await f.act({
-      verb: "brief-feedback",
+      verb: "brief-request-changes",
       requestId: f.record.id,
       ...f.seen,
       text: "Feedback still reaches this project",
@@ -1863,12 +1860,88 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     await host.screen(await catchup()).click("Dismiss");
     for (const { action } of envelopes(host)) verbs.add(action.verb);
   });
-  // Feedback without requesting changes and merged-PR links have no control in these seeds;
-  // the act tests and native-screens eval send them directly.
+  // Merged-PR links have no control in these seeds; the native-screens eval sends them directly.
   expect([...verbs].toSorted()).toEqual(
     Action.options
       .map((option) => option.shape.verb.value)
-      .filter((verb) => verb !== "brief-feedback" && verb !== "merged-link")
+      .filter((verb) => verb !== "merged-link")
       .toSorted(),
   );
 }, 240_000);
+
+test("project lookup uses the terminal saved in the block's home, not the process's", async () => {
+  const f = await fixture();
+  try {
+    const record = await readCoordinatorRecord(recordPath(f.home, "isolated", f.repo));
+    if (record === undefined) throw new Error("Missing fixture coordinator");
+    await saveCoordinatorRecord(f.home, {
+      ...record,
+      endpoint: {
+        ...record.endpoint,
+        terminal: "tern",
+        terminalSessionId: "201",
+        workspaceId: "301",
+        tabId: "301",
+      },
+    });
+    await saveTerminalChoice(f.home, "tern");
+    const [, ctx] = blockArgs(join(f.home, "view.json"), {
+      coordinator: "101",
+      cwd: f.clean,
+      home: f.home,
+      index: join(f.home, "index.json"),
+    });
+    const calls: string[][] = [];
+    const output: string[] = [];
+    const { terminal: _terminal, service: _service, ...dependencies } = f.deps;
+    await runTerminal(["native", "act"], {
+      ...dependencies,
+      processEnvironment: { TANDEM_HOME: join(f.root, "different-home") },
+      run: async (request) => {
+        calls.push([...request.argv]);
+        if (request.argv[1] !== "ls") throw new Error("Only a Tern pane listing expected");
+        return {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            sessions: [
+              {
+                id: "201",
+                name: "isolated",
+                tabs: [
+                  {
+                    id: "301",
+                    name: "project",
+                    blocks: [{ id: "101", title: "coordinator", cwd: f.clean, live: true }],
+                  },
+                ],
+              },
+            ],
+            detached: [],
+          }),
+        };
+      },
+      createService: () => {
+        throw new Error("Opening the board must not start a service");
+      },
+      input: Readable.from([
+        JSON.stringify({
+          v: 1,
+          origin: { pane: "101", ctx },
+          action: { verb: "open", ref: { kind: "board" } },
+        }),
+      ]),
+      stdout: (text) => output.push(text),
+    });
+    // The pane was found through Tern's listing, so the click got past origin proof; the
+    // fixture then stops at the first non-listing command.
+    expect(Outcome.parse(JSON.parse(output.join("")))).toEqual({
+      status: "refused",
+      notice: { code: "failed", text: "Only a Tern pane listing expected" },
+    });
+    expect(calls[0]?.slice(1)).toEqual(["ls", "--json"]);
+    expect(calls.every((argv) => argv[0] !== "herdr")).toBe(true);
+  } finally {
+    await f.close();
+  }
+});

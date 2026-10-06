@@ -147,19 +147,19 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   Draft choices and new comments remain local until Post. The Post click is the user's approval;
   no second dialog or `--yes` is needed. The same pinned-head, revision-checked pending-post claim
   and receipt workflow applies as for the page. The user still chooses the verdict.
-- Native actions include `--pane ID --ctx CTX`, echoing the context the block was launched with; the shared
-  [private JSON transport](terminal.md#native-views-and-actions) owns input-file cleanup.
-  Nonzero stderr becomes a toast, local drafts remain available, and no outcome is retried.
-  Exit zero alone does not prove a review posted: the renderer requires the CLI's
-  `posted:true` receipt before marking it submitted and closing a standalone PR pane.
-  `posted:false` keeps the pane with its diagnostic; unreadable receipts ask the user to check
-  the PR. An embedded task PR view records success locally and leaves navigation to its host.
-- On Tandem's own implementation PRs, `native pr-comment TASK_ID --text TEXT` or
-  `--input FILE` with `{text?,comments:[{file,line,text}]}` sends a `PR fix request:` through
-  normal worker steering. It never posts to GitHub. The task must have an open/draft PR; a
-  finished worker is refused with a request to arrange follow-up in the coordinator. Feedback
-  can be saved even if the worker cannot start fixing, so a nonzero result never permits a
-  blind repeat. For someone else's reviewed PR, new comments instead stay local until Post.
+- Native actions go through `tandem native act` with the block's echoed context as their origin
+  (see [control.md](control.md#native-view-actions)). A refused outcome becomes an error toast,
+  local drafts remain available, and no outcome is retried. Only a `done` outcome marks the review
+  submitted and closes a standalone PR pane; its `review-posted` notice names where it landed.
+  A `kept` outcome with `review-unconfirmed` keeps the pane and shows the service's message, so a
+  definite refusal and an uncertain post read differently. No outcome at all toasts that Tandem
+  returned none. An embedded task PR view records success locally and leaves navigation to its host.
+- On Tandem's own implementation PRs, the `pr-comment` action with `{taskId, text?,
+  comments: [{file, line, text}]}` sends a `PR fix request:` through normal worker steering. It
+  never posts to GitHub. The task must have an open/draft PR; a finished worker is refused with a
+  request to arrange follow-up in the coordinator. Feedback can be saved even if the worker cannot
+  start fixing; that outcome is `kept`, not `refused`, so it never invites a blind repeat.
+  For someone else's reviewed PR, new comments instead stay local until Post.
 
 ### Recovering an uncertain post
 
