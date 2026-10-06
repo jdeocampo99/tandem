@@ -157,7 +157,7 @@ export function ternViewHost(
       ];
       return withNativeOpenIntent({ ...input, indexPath }, cmd, async (intent) => {
         const reused =
-          placement === "panel" || intent.recovered
+          placement === "panel" || (kind === "brief" && placement === "split") || intent.recovered
             ? await exactNativeView(cmd, input.cwd, input.coordinator, kind, placement, args)
             : undefined;
         if (reused !== undefined) return { paneId: reused.block.id, project };
@@ -495,15 +495,19 @@ export function ternViewHost(
         );
         return { opened: true, warnings: [] };
       }
-      const bundle = await readNativeBundle(input.home, project);
-      const detail = detailForView(bundle, input.view);
+      const { nativeBriefFile } = await import("../../board/native-views.ts");
+      // A new draft can open before the coordinator's background index publication.
+      const detail =
+        input.view.kind === "brief"
+          ? nativeBriefFile(input.view.requestId)
+          : detailForView(await readNativeBundle(input.home, project), input.view);
       if (["task", "brief", "pr"].includes(input.view.kind) && detail === undefined)
         throw new Error(`Native ${input.view.kind} detail is not ready`);
       const path =
         detail === undefined
           ? nativeViewsPath(input.home, project)
           : nativeDetailPath(input.home, project, detail);
-      await open(
+      const opened = await open(
         input,
         project,
         input.view.kind,
@@ -517,7 +521,13 @@ export function ternViewHost(
             : "window",
         path,
       );
-      return { opened: true, warnings: [] };
+      return {
+        opened: true,
+        warnings: [],
+        ...(input.view.kind === "brief"
+          ? { endpoint: { ...input.coordinator, paneId: opened.paneId } }
+          : {}),
+      };
     },
   };
 }

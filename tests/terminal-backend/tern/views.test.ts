@@ -22,6 +22,8 @@ const endpoint: Endpoint = {
 };
 for (const mode of [
   "success",
+  "brief-success",
+  "brief-unknown",
   "verification-failed",
   "verification-malformed",
   "relaunch-success",
@@ -122,7 +124,9 @@ for (const mode of [
                                   ? "tandem.task"
                                   : mode === "wrong-kind"
                                     ? "unrelated.panel"
-                                    : "tandem.panel",
+                                    : mode.startsWith("brief-")
+                                      ? "tandem.brief"
+                                      : "tandem.panel",
                               args: [
                                 modelPath,
                                 mode === "foreign-return" ? "999" : "3",
@@ -227,6 +231,7 @@ for (const mode of [
         if (
           ![
             "unknown",
+            "brief-unknown",
             "relaunch-missing-receipt",
             "relaunch-no-exact-pane",
             "relaunch-legacy-ticket",
@@ -271,8 +276,8 @@ for (const mode of [
               : {}),
         },
         home,
-        "panel",
-        mode === "foreign-return" ? "return" : "panel",
+        mode.startsWith("brief-") ? "brief" : "panel",
+        mode.startsWith("brief-") ? "split" : mode === "foreign-return" ? "return" : "panel",
         modelPath,
       );
     try {
@@ -360,7 +365,7 @@ for (const mode of [
           expect(await first.openPanel(input)).toBe("4");
           expect(effects).toBe(before);
         }
-      } else if (mode === "success") {
+      } else if (mode === "success" || mode === "brief-success") {
         expect(await open()).toEqual({ paneId: "4", project: home });
         const before = effects;
         expect(await open()).toEqual({ paneId: "4", project: home });
@@ -370,6 +375,7 @@ for (const mode of [
         if (
           [
             "unknown",
+            "brief-unknown",
             "wrong-kind",
             "verification-failed",
             "verification-malformed",

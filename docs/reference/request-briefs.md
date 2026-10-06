@@ -56,6 +56,13 @@ src/requests/plain-language.ts
 
 ## Review pane
 
+- In Tern, `reviewPane: true` publishes the native brief detail and calls `terminal.openView`
+  beside the recorded coordinator. Exact block evidence reuses the split across revisions;
+  the existing `reviewPane` receipt holds its native endpoint, detail path and shown revision.
+  Approval, abandonment and current-revision request changes retire it through scoped `closeView`.
+  Unknown opening outcomes keep the host's durable intent and resources quarantined; no legacy
+  shell pane or automatic retry follows. Unknown closure leaves approval or feedback standing
+  and quarantines the receipt. Tiny in-chat fixes still open no pane.
 - `reviewPane: true` renders read-only Markdown at `<home>/request-briefs/<requestId>.md` in one
   owned temporary pane, an unfocused split right of the coordinator's pane. Without an active Herdr
   context (`HERDR_ENV`, `HERDR_PANE_ID`) in the Tandem session, it opens a separate

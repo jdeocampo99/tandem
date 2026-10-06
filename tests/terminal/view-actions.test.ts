@@ -14,6 +14,7 @@ import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordina
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
+import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
@@ -1598,6 +1599,49 @@ test("native navigation selects published projects and details, refusing stale o
     await f.close();
   }
 });
+
+for (const status of ["closed", "retained", "quarantined"] as const) {
+  test(`native approval never retries workflow retirement when its receipt is ${status}`, async () => {
+    const f = await fixture("tern");
+    try {
+      await f.write(f.seen);
+      const result = await runCli(
+        ["brief-approve", f.record.id, "--input", f.input, "--pane", "102", "--cwd", f.clean],
+        {
+          ...f.deps,
+          service: {
+            ...f.service,
+            approveRequestBrief: async (intent) => {
+              const approved = await f.service.approveRequestBrief(intent);
+              await f.store.update(approved.record.id, approved.record.revision, (current) =>
+                withRequestReviewPane(
+                  current,
+                  {
+                    status,
+                    endpoint: { ...f.endpoint, paneId: "102" },
+                    renderedRevision: 1,
+                    renderedPath: join(f.home, "native-views", "brief.json"),
+                    observedAt: NOW,
+                    ...(status === "closed" ? {} : { reason: "retirement not confirmed" }),
+                  },
+                  NOW,
+                ),
+              );
+              return f.service.requestBrief(approved.record.id);
+            },
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(f.closed).toHaveLength(0);
+      expect(result.result?.value).toMatchObject({
+        warnings: status === "closed" ? [] : [expect.stringContaining("Do not resubmit")],
+      });
+    } finally {
+      await f.close();
+    }
+  });
+}
 
 for (const action of ["brief-approve", "brief-request-changes"] as const) {
   test(`${action} closes only its native brief origin after recording or delivering the action`, async () => {

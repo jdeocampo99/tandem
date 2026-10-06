@@ -5,9 +5,12 @@ import { join } from "node:path";
 import { z } from "zod";
 import { repositoryKey } from "../config/repositories.ts";
 import type { IsoTimestamp, TerminalName } from "../contracts.ts";
+import { ensurePrivateDirectoryTree } from "../coordinator/lock.ts";
+import type { BriefView } from "../requests/native-view.ts";
 import {
   type NativeProjectSummary,
   type NativeViewsPublication,
+  nativeBriefFile,
   nativeViewText,
 } from "./native-views.ts";
 import { type BoardView, isBoardView } from "./view.ts";
@@ -104,6 +107,18 @@ export function nativeDetailPath(home: string, repoPath: string, file: string): 
   if (!/^(task-|brief-|pr-)[^/\\\0]+\.json$/.test(file))
     throw new TypeError("Native detail must be a task, brief or PR filename");
   return join(home, "native-views", repositoryKey(repoPath), file);
+}
+
+/** Publish a just-drafted brief before opening it, without waiting for a board tick. */
+export async function writeNativeBriefDetail(
+  home: string,
+  project: string,
+  view: BriefView,
+): Promise<string> {
+  const path = nativeDetailPath(home, project, nativeBriefFile(view.requestId));
+  await ensurePrivateDirectoryTree(join(path, ".."), "native brief directory");
+  await writeNativeFile(path, nativeViewText("brief", view));
+  return path;
 }
 
 /** The coordinator writes its own details first, then its small pollable index. Other files are read-only. */

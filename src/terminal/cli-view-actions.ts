@@ -130,6 +130,18 @@ async function closeNativeBrief(
         "The brief changed after this action; the current brief was left open. Do not resubmit this action.",
       ];
     }
+    const projected = latest.record.reviewPane;
+    if (
+      projected?.endpoint.terminal === "tern" &&
+      projected.endpoint.paneId === origin.paneId &&
+      projected.status !== "open"
+    ) {
+      return projected.status === "closed"
+        ? []
+        : [
+            `The action completed, but the native brief remains ${projected.status}: ${projected.reason ?? "retirement was not confirmed"}. Do not resubmit this action.`,
+          ];
+    }
     const result = await context.capabilities.terminal.closeView({
       coordinator: owned.endpoint,
       cwd: owned.worktree.path,

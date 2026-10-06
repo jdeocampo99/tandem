@@ -19,6 +19,7 @@ import {
   withRequestReviewPane,
 } from "./brief.ts";
 import { renderRequestBriefMarkdown } from "./markdown.ts";
+import { closeNativeBriefPane, projectNativeBriefPane } from "./native-pane.ts";
 import type { BriefLanguageChecker } from "./plain-language.ts";
 import {
   closeRequestBriefPane,
@@ -31,7 +32,7 @@ export type RequestBriefWorkflowDependencies = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly parentWorkspaceId: string | undefined;
-  /** The Herdr pane the coordinator runs in; the review pane splits beside it when known. */
+  /** The coordinator pane; the review pane splits beside it when known. */
   readonly coordinatorPaneId: string | undefined;
   readonly terminal: TerminalBackend;
   readonly clock: Clock;
@@ -121,7 +122,7 @@ export class RequestBriefWorkflow {
     const approved = await this.#deps.store.update(current.id, current.revision, (record) =>
       approveRequestBriefRecord(record, { ...intent, requestId }, this.#deps.clock()),
     );
-    const pane = await closeRequestBriefPane(this.#paneDependencies(), approved);
+    const pane = await this.#closePane(approved);
     if (pane === undefined) return this.#view(approved, []);
     const settled = await this.#deps.store.update(approved.id, approved.revision, (record) =>
       withRequestReviewPane(record, pane, this.#deps.clock()),
@@ -140,7 +141,7 @@ export class RequestBriefWorkflow {
     const abandoned = await this.#deps.store.update(current.id, current.revision, (record) =>
       abandonRequestBriefRecord(record, tasks, this.#deps.clock()),
     );
-    const pane = await closeRequestBriefPane(this.#paneDependencies(), abandoned);
+    const pane = await this.#closePane(abandoned);
     if (pane === undefined) return this.#view(abandoned, []);
     const settled = await this.#deps.store.update(abandoned.id, abandoned.revision, (record) =>
       withRequestReviewPane(record, pane, this.#deps.clock()),
@@ -152,7 +153,7 @@ export class RequestBriefWorkflow {
   async closeReview(requestId: string, briefRevision: number): Promise<RequestBriefView> {
     const current = await this.#require(requestId);
     if (current.draft.revision !== briefRevision) return this.#view(current, []);
-    const pane = await closeRequestBriefPane(this.#paneDependencies(), current);
+    const pane = await this.#closePane(current);
     if (pane === undefined) return this.#view(current, []);
     const settled = await this.#deps.store.update(current.id, current.revision, (record) =>
       withRequestReviewPane(record, pane, this.#deps.clock()),
@@ -233,10 +234,18 @@ export class RequestBriefWorkflow {
   }
 
   async #project(record: RequestBriefRecord): Promise<RequestBriefRecord> {
-    const pane = await projectRequestBriefPane(this.#paneDependencies(), record);
+    const pane = await (this.#deps.terminal.name === "tern"
+      ? projectNativeBriefPane(this.#paneDependencies(), record)
+      : projectRequestBriefPane(this.#paneDependencies(), record));
     return this.#deps.store.update(record.id, record.revision, (stored) =>
       withRequestReviewPane(stored, pane, this.#deps.clock()),
     );
+  }
+
+  #closePane(record: RequestBriefRecord) {
+    return this.#deps.terminal.name === "tern"
+      ? closeNativeBriefPane(this.#paneDependencies(), record)
+      : closeRequestBriefPane(this.#paneDependencies(), record);
   }
 
   async #require(requestId: string): Promise<RequestBriefRecord> {
