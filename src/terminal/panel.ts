@@ -233,7 +233,7 @@ export function navigationSteps(
       kind: "workspace",
       workspaceId,
       ...(terminal === undefined ? {} : { terminal }),
-      failure: "⚠ Herdr couldn't focus it",
+      failure: "⚠ couldn't focus it",
     },
     ...(paneId === undefined
       ? []

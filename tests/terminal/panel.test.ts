@@ -271,7 +271,7 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
   expect(
     navigationSteps({ kind: "go", target: { kind: "chat", repoPath: APP } }, COORDINATORS),
   ).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
   expect(
@@ -280,14 +280,14 @@ test("going focuses the workspace, then the agent pane when Herdr knows it; PRs 
       COORDINATORS,
     ),
   ).toEqual([
-    { kind: "workspace", workspaceId: "w3", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w3", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w3:p2" },
   ]);
   expect(navigationSteps({ kind: "go", target: { kind: "url", url: "https://x/1" } }, [])).toEqual([
     { kind: "url", url: "https://x/1", failure: "⚠ couldn't open the link" },
   ]);
   expect(navigationSteps({ kind: "switch", repoPath: TANDEM }, COORDINATORS)).toEqual([
-    { kind: "workspace", workspaceId: "w1", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w1", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w1:p1" },
   ]);
   expect(navigationSteps({ kind: "switch", repoPath: "/offline" }, COORDINATORS)).toEqual([]);
@@ -303,20 +303,20 @@ test("Herdr's focus names the project: its coordinator's or worker's workspace, 
 test("the home key goes to the focused project's chat; prev and next wrap around open projects", () => {
   const inWorker = { workspaceId: "w3", cwd: "/pool/wt-2" };
   expect(panelActionSteps("home", SNAPSHOT, inWorker)).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
   expect(panelActionSteps("next", SNAPSHOT, inWorker)).toEqual([
-    { kind: "workspace", workspaceId: "w1", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w1", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w1:p1" },
   ]);
   expect(panelActionSteps("prev", SNAPSHOT, { workspaceId: "w1", cwd: "/" })).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
   const alone = { ...SNAPSHOT, coordinators: COORDINATORS.slice(0, 1) };
   expect(panelActionSteps("next", alone, inWorker)).toEqual([
-    { kind: "workspace", workspaceId: "w2", failure: "⚠ Herdr couldn't focus it" },
+    { kind: "workspace", workspaceId: "w2", failure: "⚠ couldn't focus it" },
     { kind: "agent", paneId: "w2:p1" },
   ]);
 });
