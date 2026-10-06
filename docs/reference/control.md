@@ -154,8 +154,9 @@ different matching project. When no readable/live candidate matches, the command
 
 - `open task|brief|pr ID` validates the durable task or request, proves its running coordinator,
   and asks `TerminalBackend.openView` to replace the main area (task) or open a split (brief/PR).
-  For `pr`, ID is the linked task id (including a `pr-review` task) or a PR number. A number
-  resolves only within the selected project and is refused when ambiguous. Herdr opens briefs through the
+  For `pr`, ID is the linked task id (including a `pr-review` task), a PR number or `repo#number`.
+  A number resolves one owning task first, then one cached PR in the selected project's bundle;
+  ambiguous matches refuse. Taskless watched PRs open read-only. Herdr opens briefs through the
   existing review workflow and returns explicit warnings for unsupported native task/PR views.
   Native open requires `--pane PANE_ID` (the exact decimal integer pane id) and `--cwd PATH`
   (the absolute originating pane cwd). `--window WINDOW_KEY` is optional and carries an opaque
@@ -176,6 +177,8 @@ different matching project. When no readable/live candidate matches, the command
   worker through `steer`. Only a task with an open or draft Tandem PR accepts it. It never posts a
   GitHub comment, changes scope approval, publishes, or merges. `--input FILE` instead of `--text`
   accepts optional `text` and `comments: [{file, line, text}]`; anchors stay in the worker message.
+  Thread replies also carry `replies:[{threadId,commentId,replyTo,body}]` and the displayed
+  `reviewHead`. Fresh thread/head checks preserve the exact context in the worker fix request.
   Comments are joined into one direction under the existing steering bounds. For a ready task
   whose worker finished, steer uses evidence invalidation and the existing redirect/reconcile
   path to start a new implementation generation in the same retained worktree. A completed task

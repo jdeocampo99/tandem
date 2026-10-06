@@ -133,9 +133,11 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
 
 ### Native PR pane and submission
 
-- `tandem native open pr TASK_ID` opens the task's PR beside the conversation; a numeric PR id
-  resolves only when exactly one task in the selected project owns that number. `native prs`
-  opens the project selector. PRs show Description, optional Tour, Diff, cached CI and threads.
+- `tandem native open pr TASK_ID` opens the task's PR beside the conversation. A numeric PR id
+  resolves one owning task first, then one cached PR in the selected project's bundle; ambiguous
+  matches refuse. `repo#number` selects the exact cached PR, including a taskless watched PR.
+  `native prs` opens a cached PR pane with a selector strip. Taskless PRs are read-only.
+  PRs show Description, optional Tour, Diff, cached CI and threads.
   Read-only GitHub refreshes belong to TypeScript; the renderer makes no network reads.
 - For `pr-review`, the summary, explicit verdict and Post controls stay visible below the diff.
   `tandem native review-submit TASK_ID --input FILE` takes the normal `ReviewSubmission`
@@ -185,8 +187,6 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   Both resume the same conversation in the same worktree.
 - `review-close` marks the review closed, and cleanup removes the worktree and its refs. A
   cancelled review is cleaned the same way.
-
-
 ## Native thread replies
 
 Native submissions may include `replies:[{threadId,commentId,replyTo,body}]`, separately from new
