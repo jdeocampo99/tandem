@@ -21,6 +21,13 @@ queue. Snapshot ticks enqueue the newest input without waiting for those reads; 
 runs, later ticks replace a single pending input. Finished-task history stays available in details.
 Shutdown drains the last queued publication and cache reads.
 
+Immediate brief projection uses the same `publishNativeViews` writer as background publication.
+A private per-project O_EXLOCK serializes both paths across coordinator and CLI processes. The
+writer acquires it before building models from fresh durable state and holds it through detail
+writes, index replacement and cleanup. An older tick therefore finishes before a new brief detail
+can publish, and a later tick reads the current revision even with an older board input. Cleanup
+cannot delete a detail published after the snapshot it used. Brief opening waits for this writer.
+
 Task timelines, brief lines and PR patches/threads/tours live in separate detail files:
 
 - `<home>/native-views/<key>/task-<encodedTaskId>.json`

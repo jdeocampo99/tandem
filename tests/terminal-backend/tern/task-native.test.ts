@@ -6,7 +6,7 @@ import { nativeTaskFile, nativeViewText } from "../../../src/board/native-views.
 import {
   nativeDetailPath,
   nativeViewsPath,
-  writeNativeViews,
+  publishNativeViews,
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import {
@@ -52,7 +52,7 @@ type ControlNode = {
       `#!/bin/sh\nfor arg do printf '%s\\0' "$arg"; done >> '${join(root, "actions.log")}'\nprintf '\\n' >> '${join(root, "actions.log")}'\nfor arg do if [ "$arg" = 'Reject this direction' ]; then printf 'Direction refused by saved task policy' >&2; exit 7; fi; done\n`,
     );
     const publication = taskScreenPublication(root);
-    await writeNativeViews(env.TANDEM_HOME, publication);
+    await publishNativeViews(env.TANDEM_HOME, publication.bundle.project, async () => publication);
     const file = nativeDetailPath(env.TANDEM_HOME, root, nativeTaskFile("102"));
     const index = nativeViewsPath(env.TANDEM_HOME, root);
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
@@ -182,7 +182,9 @@ type ControlNode = {
       await click("PR");
       await until(async () => JSON.stringify(await tree()).includes("exact pane ownership"));
       await ctl("shot", "03-task-pr");
-      await writeNativeViews(env.TANDEM_HOME, taskScreenPublication(root, true));
+      await publishNativeViews(env.TANDEM_HOME, root, async () =>
+        taskScreenPublication(root, true),
+      );
       await until(async () => JSON.stringify(await tree()).includes("Reopen this PR"));
       expect(JSON.stringify(await tree())).toContain("PR changed or view unavailable");
       opened = await host.open(
@@ -331,7 +333,7 @@ type ControlNode = {
       );
 
       const empty = taskScreenFixture(false, false);
-      await writeNativeViews(env.TANDEM_HOME, {
+      await publishNativeViews(env.TANDEM_HOME, root, async () => ({
         ...publication,
         bundle: { ...publication.bundle, briefs: {}, pullRequests: {} },
         details: [
@@ -340,7 +342,7 @@ type ControlNode = {
             view: { version: 1, project: root, kind: "task", data: empty },
           },
         ],
-      });
+      }));
       await host.open(input, root, "task", "task", file);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       const beforeEmpty = await readFile(join(root, "actions.log"), "utf8");

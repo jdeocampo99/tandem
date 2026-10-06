@@ -1,10 +1,12 @@
 import { EndpointBusyError } from "../adapters/primitives.ts";
-import { writeNativeBriefDetail } from "../board/snapshot.ts";
+import { nativeBriefFile } from "../board/native-views.ts";
+import { nativeDetailPath, publishNativeViews } from "../board/snapshot.ts";
 import type { RequestBriefRecord, RequestReviewPane } from "../contracts.ts";
 import { type CoordinatorRecord, canonicalPath } from "../coordinator/record.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
 import { briefView } from "./native-view.ts";
 import type { RequestReviewPaneDependencies } from "./review-pane.ts";
+import { createRequestBriefStore } from "./store.ts";
 
 async function coordinatorForBrief(
   deps: RequestReviewPaneDependencies,
@@ -42,7 +44,17 @@ export async function projectNativeBriefPane(
     };
   }
   const owner = await coordinatorForBrief(deps, record);
-  const renderedPath = await writeNativeBriefDetail(deps.home, owner.repoPath, briefView(record));
+  const renderedPath = nativeDetailPath(deps.home, owner.repoPath, nativeBriefFile(record.id));
+  const published = await publishNativeViews(deps.home, owner.repoPath, async () => {
+    const fresh = await createRequestBriefStore({
+      home: deps.home,
+      clock: deps.clock,
+      idFactory: () => record.id,
+    }).read(record.id);
+    if (fresh === undefined || fresh.repoPath !== record.repoPath)
+      throw new Error("Native brief no longer belongs to this repository");
+    return { brief: briefView(fresh) };
+  });
   const opened = await deps.terminal.openView({
     coordinator: owner.endpoint,
     cwd: owner.worktree.path,
@@ -55,7 +67,7 @@ export async function projectNativeBriefPane(
   return {
     status: "open",
     endpoint: opened.endpoint,
-    renderedRevision: record.draft.revision,
+    renderedRevision: published.brief.revision,
     renderedPath,
     observedAt: deps.clock(),
   };

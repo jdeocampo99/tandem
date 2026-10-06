@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { NativeViewsReader } from "../../src/board/native-read.ts";
+import { nativeDetailPath, nativeViewsPath, publishNativeViews } from "../../src/board/snapshot.ts";
+import { boardView } from "../../src/board/view.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
@@ -11,7 +14,7 @@ import { createTandemService } from "../../src/service/controller.ts";
 import { executeTandemAction } from "../../src/session/actions.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
-import { content } from "../board/fixtures.ts";
+import { content, state } from "../board/fixtures.ts";
 import { type ScenarioWorld, withScenario } from "../evals/scenario.ts";
 
 async function fixture(world: ScenarioWorld, terminal: TerminalBackend) {
@@ -49,6 +52,93 @@ async function fixture(world: ScenarioWorld, terminal: TerminalBackend) {
     checkLanguage: async () => [],
   });
   return { workflow, coordinator, worktree, store };
+}
+
+for (const existing of [false, true]) {
+  test(`interleaved brief publication survives an older tick with ${existing ? "revision 1" : "no brief"}`, async () => {
+    await withScenario({ terminal: "tern" }, async (world) => {
+      const terminal: TerminalBackend = {
+        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+        openView: async (input) => ({
+          opened: true,
+          warnings: [],
+          endpoint: { ...input.coordinator, paneId: "3001" },
+        }),
+      };
+      const { workflow } = await fixture(world, terminal);
+      const reader = new NativeViewsReader({
+        home: world.home,
+        clock: world.clock,
+        run: world.run,
+        terminal,
+      });
+      const snapshot = {
+        version: 1 as const,
+        writtenAt: world.clock(),
+        board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+        coordinators: [],
+      };
+      if (existing)
+        await workflow.draft({
+          repoPath: world.repoPath,
+          content: content("Old scope"),
+          reviewPane: true,
+        });
+      const read = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const oldTick = publishNativeViews(world.home, world.repoPath, async () => {
+        const publication = await reader.read(snapshot, world.repoPath);
+        read.resolve();
+        await resume.promise;
+        return publication;
+      });
+      try {
+        await read.promise;
+        const revised = await workflow.draft({
+          repoPath: world.repoPath,
+          ...(existing ? { requestId: "req-native" } : {}),
+          content: content("Latest scope"),
+          reviewPane: false,
+        });
+        // Immediate projection queues behind the paused tick, even from a separate caller.
+        const projection = workflow.review(revised.record.id);
+        resume.resolve();
+        await oldTick;
+        const projected = await projection;
+        const detailPath = nativeDetailPath(world.home, world.repoPath, "brief-req-native.json");
+        const expected = {
+          kind: "brief",
+          model: {
+            revision: revised.record.draft.revision,
+            approval: {
+              briefRevision: revised.record.draft.revision,
+              contentDigest: revised.record.draft.contentDigest,
+              agreementDigest: revised.record.draft.agreementDigest,
+            },
+          },
+        };
+        expect(JSON.parse(await readFile(detailPath, "utf8"))).toMatchObject(expected);
+        expect(projected.record.reviewPane?.renderedPath).toBe(detailPath);
+        // A delayed tick still carries the old board input, but builds details from fresh SQLite.
+        await publishNativeViews(world.home, world.repoPath, () =>
+          reader.read(snapshot, world.repoPath),
+        );
+        expect(JSON.parse(await readFile(detailPath, "utf8"))).toMatchObject(expected);
+        expect(
+          JSON.parse(await readFile(nativeViewsPath(world.home, world.repoPath), "utf8")),
+        ).toMatchObject({
+          model: { briefs: { "req-native": { revision: revised.record.draft.revision } } },
+        });
+        expect((await workflow.read(revised.record.id)).record.draft.content.goal).toBe(
+          "Latest scope",
+        );
+      } finally {
+        resume.resolve();
+        await oldTick;
+        await reader.settle();
+      }
+    });
+  });
 }
 
 for (const action of ["approve", "abandon", "closeReview"] as const) {
@@ -121,6 +211,12 @@ test("every direct brief projector caller uses native hosting in Tern", async ()
       content: content("Review the brief after native feedback"),
       reviewPane: false,
     });
+    const latest = await workflow.draft({
+      repoPath: world.repoPath,
+      requestId: draft.record.id,
+      content: content("Review the latest durable brief"),
+      reviewPane: false,
+    });
     const pane = await projectRequestBriefPane(
       {
         terminal,
@@ -133,6 +229,10 @@ test("every direct brief projector caller uses native hosting in Tern", async ()
       draft.record,
     );
     expect(pane.endpoint.paneId).toBe("3001");
+    expect(pane.renderedRevision).toBe(2);
+    expect(JSON.parse(await readFile(pane.renderedPath, "utf8"))).toMatchObject({
+      model: { revision: 2, approval: { contentDigest: latest.record.draft.contentDigest } },
+    });
     expect(opens).toHaveLength(1);
     expect(opens[0]?.view).toEqual({ kind: "brief", requestId: draft.record.id });
     expect(
