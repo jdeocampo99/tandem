@@ -51,8 +51,8 @@ local block: BlockDef<State> = {
   local model = s.view.model
   local strip = ui.el("div", {class="tdm-pr-strip",key="strip"}, {ui.row({components.button(if model then "#" .. model.header.number .. " ▾" else "PRs ▾", "pr-switcher"), ui.node("text", {grow=1}), components.button("×", "pr-close")})})
   if not model then return {dock=strip, main=components.text("PR data unavailable. Wait for the coordinator to refresh its view.", "warn")} end
-  local result = content.view(s.content, model, s.view.status == "ready")
-  local top = {strip}
+  local result = content.view(s.content, model, s.view.status == "ready", nil, strip)
+  local top = {}
   if s.switcher and s.index and s.index.status == "ready" and s.index.model then
    local entries = {}
    for _, pr in s.index.model.pullRequests do table.insert(entries, pr) end
@@ -82,7 +82,7 @@ local block: BlockDef<State> = {
   if key.name == "escape" then if s.switcher then s.switcher = false else cx:exit(0) end; return true end
   if key.name == "pageup" or key.name == "pagedown" or key.name == "home" or key.name == "end" then
    local action = if key.name == "home" then "start" elseif key.name == "end" then "end" elseif key.name == "pageup" then "page-up" else "page-down"
-   cx:frame({{"scroll", s.content.prefix .. ".body", action}}); return true
+   cx:frame({{"scroll", "main", action}}); return true
   end
   return false
  end,

@@ -132,3 +132,13 @@ test("PR Markdown blocks preserve blank lines inside a fence and separate headin
     "- first\n- second",
   ]);
 });
+
+test("completed CI does not rewrite the PR view for clock ticks alone", () => {
+  const complete = {
+    ...cached,
+    checks: cached.checks.filter((check) => check.state !== "running"),
+  };
+  expect(prPaneView({ cached: complete, now: "2030-01-01T13:00:00Z" })).toEqual(
+    prPaneView({ cached: complete, now }),
+  );
+});

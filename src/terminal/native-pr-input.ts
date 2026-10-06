@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /** The process calling native owns its immutable input until that one invocation has settled. */
 export async function withNativePrInput<T>(
@@ -32,7 +33,7 @@ if (import.meta.main) {
       const child = Bun.spawn(
         [
           process.execPath,
-          new URL("../main.ts", import.meta.url).pathname,
+          fileURLToPath(new URL("../main.ts", import.meta.url)),
           "native",
           verb,
           id,

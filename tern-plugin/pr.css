@@ -1,7 +1,6 @@
 .tdm-pr-pane {
   display: flex;
   flex-direction: column;
-  height: 100%;
 }
 .tdm-pr-strip {
   flex-shrink: 0;
@@ -10,9 +9,6 @@
 .tdm-pr-content {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  height: 100%;
 }
 .tdm-pr-header {
   display: flex;
@@ -23,11 +19,6 @@
 }
 .tdm-pr-header .sf-text {
   font-family: system-ui;
-}
-.tdm-pr-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
 }
 .tdm-pr-rows {
   display: flex;

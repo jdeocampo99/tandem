@@ -329,3 +329,19 @@ rows, re-proves the destination coordinator, and uses an exact-block `tern focus
 switch. Supplied window keys are independently scoped and must contain the originating pane.
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
+
+### Reusing the native PR components
+
+`tern-plugin/pr-content.luau` exports `create`, `view`, `event`, `key`, and `ready`.
+`view(state, model, ready, prefix?, strip?)` returns `{main,dock}`. Mount `dock` for the review
+summary, explicit verdict and Post controls. Set `prefix` to the actual embedded content root
+(default `main.content`); the shared diff uses it for comment focus and thread reveal.
+The optional strip is rendered inside the PR header. `pr-diff.luau` exports `create`,
+`view`, `rows`, `jump`, `event`, and `key`; both modules use `pr-model.luau` wire types.
+Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
+for wheel and keyboard input; the review dock remains visible while the content scrolls.
+
+The PR caller transports UTF-8 JSON on stdin through `pr-input.sh`. Its Bun helper writes one
+exclusive 0600 file in a private unique directory, invokes the native action once, and removes
+the directory after that invocation settles. Draft decisions and new review comments remain
+local until Post; displayed HEAD/generation are included in the submission for authority checks.

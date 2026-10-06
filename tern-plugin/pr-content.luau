@@ -21,7 +21,7 @@ local function bind(s: State, model: models.Model)
  end
  if s.readAt ~= model.clockAt then s.clock = tern.now(); s.readAt = model.clockAt end
 end
-function M.view(s: State, model: models.Model, ready: boolean, prefix: string?): { dock: Node, main: Node }
+function M.view(s: State, model: models.Model, ready: boolean, prefix: string?, strip: Node?): { dock: Node, main: Node }
  s.prefix = prefix or "main.content"
  bind(s, model)
  local valid = M.ready(s, model, ready)
@@ -51,6 +51,7 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?):
   ui.row({components.text("#" .. h.number .. " " .. h.title, "strong"), ui.node("badge", {text=if h.draft then "draft" else "open", tone="muted"}), components.button("Open PR ↗", "pr-url")}),
   components.text(h.next), ui.row(checks), ui.row(metadata), ui.row(tabs),
  }
+ if strip then table.insert(header, 1, strip) end
  if not valid then table.insert(header, components.text("View changed or unavailable. Reopen this PR before sending comments or posting.", "warn")) end
  local body: Node
  if s.tab == "Diff" then body = diff.view(s.diff, model, valid, s.prefix .. ".body")
