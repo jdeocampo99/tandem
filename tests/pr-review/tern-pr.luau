@@ -15,6 +15,9 @@ local cx = {pane=1,render=function() end,frame=function(_,ops) table.insert(fram
 local invoke = function(verb,id,payload,done) table.insert(calls,{verb=verb,id=id,payload=payload}); if done then done() end end
 assert(content.event(state,model,true,{ev='action',act='pr-tab',value='Diff'},cx,invoke))
 assert(state.tab == 'Diff')
+local beforeFocus = #frames
+assert(content.event(state,model,true,{ev='focus',id='main.content.body.diff.rows.r2.editor.field'},cx,invoke))
+assert(#frames == beforeFocus)
 assert(not content.event(state,model,false,{ev='action',act='pr-line',value='2'},cx,invoke))
 assert(content.event(state,model,true,{ev='action',act='pr-line',value='2'},cx,invoke))
 fields.key(state.diff.editor,{name='paste',text='Typed error? 日本語 😀',ctrl=false,meta=false,alt=false,shift=false})
@@ -23,6 +26,10 @@ assert(calls[1].verb == 'pr-comment' and calls[1].id == model.header.taskId)
 assert(calls[1].payload.comments[1].file == model.files[1].path and calls[1].payload.comments[1].line == 1)
 assert(calls[1].payload.comments[1].text == 'Typed error? 日本語 😀')
 assert(state.diff.yours[1].sent)
+model.header.taskId = 'another-task'
+assert(not content.ready(state,model,true))
+assert(not content.event(state,model,true,{ev='action',act='pr-line',value='2'},cx,invoke))
+model.header.taskId = 'task-98'
 model.header.head = 'moved'
 assert(not content.ready(state,model,true))
 assert(not content.event(state,model,true,{ev='action',act='pr-line',value='2'},cx,invoke))

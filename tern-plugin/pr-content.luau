@@ -5,15 +5,19 @@ local components = require("./components")
 local fields = require("./text-field")
 local diff = require("./pr-diff")
 local M = {}
-export type State = { tab: string, chapter: number, stop: number, diff: diff.State, summary: fields.Field?, verdict: string, head: string?, generation: number?, clock: number, readAt: string?, posting: boolean, submitted: boolean, focus: string, prefix: string }
+export type State = { tab: string, chapter: number, stop: number, diff: diff.State, summary: fields.Field?, verdict: string, head: string?, generation: number?, clock: number, readAt: string?, posting: boolean, submitted: boolean, focus: string, prefix: string, identity: string? }
 export type Invoke = (string, string, unknown?, (() -> ())?) -> ()
 function M.create(): State
  return { tab = "Description", chapter = 1, stop = 1, diff = diff.create(), verdict = "comment", clock = tern.now(), posting = false, submitted = false, focus = "comment", prefix = "main.content" }
 end
+local function identity(model: models.Model): string
+ return model.header.repo .. "#" .. model.header.number .. ":" .. (model.header.taskId or "") .. ":" .. model.commentDestination
+end
 function M.ready(s: State, model: models.Model, ready: boolean): boolean
- return ready and (s.head == nil or s.head == model.header.head) and (model.review == nil or s.generation == nil or s.generation == model.review.generation)
+ return ready and (s.identity == nil or s.identity == identity(model)) and (s.head == nil or s.head == model.header.head) and (model.review == nil or s.generation == nil or s.generation == model.review.generation)
 end
 local function bind(s: State, model: models.Model)
+ if s.identity == nil then s.identity = identity(model) end
  if s.head == nil then s.head = model.header.head end
  if model.review and s.generation == nil then
   s.generation = model.review.generation
