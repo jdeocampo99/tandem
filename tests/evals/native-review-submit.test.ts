@@ -274,12 +274,16 @@ test("overlapping marker reconciliation saves one receipt and sends thread repli
         };
       if (request.argv.includes("headRefOid"))
         return { code: 0, stdout: SCENARIO_HEAD, stderr: "" };
-      if (request.argv.some((arg) => arg.endsWith("/replies"))) {
+      if (request.argv.includes("POST") && request.argv.some((arg) => arg.endsWith("/comments"))) {
         replies += 1;
-        expect(
-          (await world.store.read(SCENARIO_TASK_ID))?.prReview?.rounds[0]?.posted,
-        ).toBeDefined();
-        return { code: 0, stdout: "{}", stderr: "" };
+        const saved = (await world.store.read(SCENARIO_TASK_ID))?.prReview?.rounds[0];
+        expect(saved?.posted).toBeDefined();
+        expect(saved?.replyPosts).toMatchObject([{ index: 0, kind: "pending" }]);
+        return {
+          code: 0,
+          stdout: JSON.stringify({ in_reply_to_id: 42, html_url: `${state.url}#discussion_r43` }),
+          stderr: "",
+        };
       }
       if (request.argv.includes("POST")) {
         posts += 1;
@@ -699,7 +703,7 @@ const replySubmission: ReviewSubmission = {
   replies: [threadReply],
 };
 
-type ReplyCrash = "review-receipt" | "claim" | "reply-receipt";
+type ReplyCrash = "review-receipt" | "claim" | "reply-receipt" | "first-reply-receipt";
 
 function replyBoundary(world: ScenarioWorld, lost = false) {
   const replies: unknown[] = [];
@@ -874,6 +878,11 @@ function crashReplyWorkflow(world: ScenarioWorld, run: CommandRunner, crash: Rep
       });
       if (crash === "review-receipt" && result.task.prReview?.rounds[0]?.posted)
         throw new Error("crash after review receipt save");
+      if (
+        crash === "first-reply-receipt" &&
+        result.task.prReview?.rounds[0]?.replyPosts?.some((post) => post.kind === "posted")
+      )
+        throw new Error("crash after the first reply receipt");
       return result;
     },
     runAgain: async () => undefined,
@@ -882,7 +891,7 @@ function crashReplyWorkflow(world: ScenarioWorld, run: CommandRunner, crash: Rep
 }
 
 for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"] as const) {
-  test(`reply warning and saved text survive reload after ${crash}, without automatic retry`, async () => {
+  test(`saved reply text survives reload after ${crash}; an unclaimed reply is sent once and a claimed one is never retried`, async () => {
     await withScenario({}, async (world) => {
       await seedReview(world);
       const boundary = replyBoundary(world, crash === "lost-response");
@@ -942,13 +951,20 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
           "no confirmed receipt",
         );
         await nativeReader.settle();
+        // Only a reply that never claimed its attempt is sent on re-entry; a claim is never retried.
+        const unclaimed = crash === "review-receipt";
+        const sent = before + (unclaimed ? 1 : 0);
         expect(
           await restarted.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true }),
-        ).toMatchObject({ posted: true, message: expect.stringContaining("no confirmed receipt") });
-        expect(boundary.replies.length).toBe(before);
+        ).toMatchObject(
+          unclaimed
+            ? { posted: true, message: expect.stringContaining(replyUrl) }
+            : { posted: true, message: expect.stringContaining("no confirmed receipt") },
+        );
+        expect(boundary.replies.length).toBe(sent);
         expect(boundary.reviewPosts()).toBe(1);
-        if (before > 0) {
-          boundary.showMarker();
+        if (sent > 0) {
+          if (!unclaimed) boundary.showMarker();
           expect(
             await restarted.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true }),
           ).toMatchObject({ message: expect.stringContaining(replyUrl) });
@@ -958,7 +974,7 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
           expect(
             (await restarted.reviewShow(SCENARIO_TASK_ID, { page: false })).text,
           ).not.toContain("no confirmed receipt");
-          expect(boundary.replies.length).toBe(before);
+          expect(boundary.replies.length).toBe(sent);
         }
       } finally {
         await restarted.shutdown();
@@ -966,6 +982,111 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
     });
   }, 20_000);
 }
+
+/** A small GitHub that remembers every reply it accepted and serves it back with its marker. */
+function priorReplyGitHub(world: ScenarioWorld, prUrl: string) {
+  const replies: Record<string, unknown>[] = [];
+  let reviewPosts = 0;
+  const run: CommandRunner = async (request) => {
+    if (request.argv[0] !== "gh") return world.run(request);
+    const endpoint = request.argv.find((arg) => arg.startsWith("repos/")) ?? "";
+    if (request.argv.includes("--slurp"))
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify([
+          endpoint.endsWith("/comments")
+            ? replies
+            : reviewPosts === 0
+              ? []
+              : [{ body: reviewMarker(SCENARIO_TASK_ID, 0), html_url: `${prUrl}#review-1` }],
+        ]),
+      };
+    if (request.argv.includes("headRefOid")) return { code: 0, stdout: SCENARIO_HEAD, stderr: "" };
+    if (request.argv.includes("POST") && endpoint.endsWith("/reviews")) {
+      reviewPosts += 1;
+      return { code: 0, stdout: JSON.stringify({ html_url: `${prUrl}#review-1` }), stderr: "" };
+    }
+    if (request.argv.includes("POST") && endpoint.endsWith("/comments")) {
+      const payload = JSON.parse(request.stdin ?? "{}") as Record<string, unknown>;
+      const receipt = {
+        in_reply_to_id: payload.in_reply_to,
+        body: payload.body,
+        html_url: `${prUrl}#discussion_r${100 + replies.length}`,
+      };
+      replies.push(receipt);
+      return { code: 0, stdout: JSON.stringify(receipt), stderr: "" };
+    }
+    throw new Error(`Unexpected GitHub request ${JSON.stringify(request.argv)}`);
+  };
+  return { run, replies, reviewPosts: () => reviewPosts };
+}
+
+test("replies to addressed earlier comments survive a crash mid-loop and each posts exactly once", async () => {
+  await withScenario({}, async (world) => {
+    const { round, state } = await seedReview(world);
+    const initial = await world.store.read(SCENARIO_TASK_ID);
+    if (initial === undefined) throw new Error("Missing scenario task");
+    await world.store.update(initial.id, initial.revision, (task) => ({
+      ...task,
+      revision: task.revision + 1,
+      prReview: {
+        ...state,
+        rounds: [
+          {
+            ...round,
+            review: {
+              ...round.review,
+              priorComments: [
+                { commentId: 42, status: "addressed", reply: "Thanks, this is capped now." },
+                { commentId: 43, status: "not-addressed" },
+                { commentId: 44, status: "addressed", reply: "Logged per attempt, thanks." },
+              ],
+            },
+          },
+        ],
+      },
+    }));
+    const github = priorReplyGitHub(world, state.url);
+    await expect(
+      crashReplyWorkflow(world, github.run, "first-reply-receipt").submit(SCENARIO_TASK_ID, {
+        tandemPrReview: 1,
+        verdict: "comment",
+        summary: "Saved review",
+        drafts: [],
+        yours: [],
+      }),
+    ).rejects.toThrow("crash after the first reply receipt");
+    expect(github.replies.map((reply) => reply.in_reply_to_id)).toEqual([42]);
+    const restarted = reviewService(world, github.run);
+    try {
+      const crashed = (await restarted.get(SCENARIO_TASK_ID)).prReview?.rounds[0];
+      expect(crashed?.posted).toBeDefined();
+      expect(crashed?.replyPosts).toMatchObject([{ index: 0, kind: "posted" }]);
+      expect(
+        await restarted.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true }),
+      ).toMatchObject({ posted: true });
+      expect(github.replies.map((reply) => reply.in_reply_to_id)).toEqual([42, 44]);
+      expect(github.replies.map((reply) => reply.body)).toEqual([
+        expect.stringContaining("Thanks, this is capped now."),
+        expect.stringContaining("Logged per attempt, thanks."),
+      ]);
+      expect((await restarted.get(SCENARIO_TASK_ID)).prReview?.rounds[0]?.replyPosts).toMatchObject(
+        [
+          { index: 0, kind: "posted", url: `${state.url}#discussion_r100` },
+          { index: 1, kind: "posted", url: `${state.url}#discussion_r101` },
+        ],
+      );
+      expect(
+        await restarted.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true }),
+      ).toMatchObject({ posted: true });
+      expect(github.replies).toHaveLength(2);
+      expect(github.reviewPosts()).toBe(1);
+    } finally {
+      await restarted.shutdown();
+    }
+  });
+}, 20_000);
 
 test("reply recovery requires exact revision and explicit duplicate warning or a checked same-PR receipt", async () => {
   await withScenario({}, async (world) => {

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { isRecord } from "../adapters/primitives.ts";
 import type { ReviewVerdict } from "./post.ts";
 import type { PullRequestRef } from "./pull-request.ts";
+import { roundReplies } from "./replies.ts";
 import { type PrReview, parsePrReview, type ReviewLens } from "./review.ts";
 
 /**
@@ -18,7 +19,7 @@ export type PostedReview = Readonly<{
   confirmedByUser?: true;
 }>;
 
-/** One reply's network claim or settled result; its identity/body live in review.replies[index]. */
+/** One reply's network claim or settled result; its target and body live in roundReplies(review)[index]. */
 export type ReplyPost = Readonly<{ index: number }> &
   (
     | Readonly<{ kind: "pending"; attemptedAt: string; attemptRevision: number }>
@@ -137,7 +138,7 @@ function parseRound(value: unknown, source: string): PrReviewRound {
     ...(record.replyPosts === undefined
       ? {}
       : {
-          replyPosts: parseReplyPosts(record.replyPosts, source, review.replies?.length ?? 0),
+          replyPosts: parseReplyPosts(record.replyPosts, source, roundReplies(review).length),
         }),
     head: textAt(record.head, `${source}.head`),
     from: textAt(record.from, `${source}.from`),

@@ -197,7 +197,8 @@ different matching project. When no readable/live candidate matches, the command
   POSTs. Preflight, marker reads, the network POST and thread replies run outside the global
   store lock. A short receipt transaction matches the PR and exact reviewed head/generation,
   preserves concurrent task changes and newer rounds, and leaves an existing receipt intact.
-  Only the caller that saves a new receipt sends addressed-thread replies. Later submissions
+  Any caller that finds the receipt saved sends the round's unclaimed replies under per-reply
+  claims and reconciles the rest. Later submissions
   with a pending attempt only reconcile its marker, without changing choices or blindly posting.
   The click is confirmation; pinned-head refusal and
   duplicate-post prevention remain in that service. Plain comments never become submissions.

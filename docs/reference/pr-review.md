@@ -110,8 +110,9 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   settled under a short lock on the exact posted head/generation, preserving other changes and
   newer review rounds. A competing caller cannot send another POST; it only reconciles a saved
   pending attempt. Submission refuses a head/round generation mismatch or an advanced re-review
-  task generation before applying draft choices. Only the caller that saves a new receipt sends
-  replies to addressed threads; another reconciliation retains the saved receipt/verdict/choices.
+  task generation before applying draft choices. Once a receipt is saved, every caller that reaches
+  the posted round sends its unclaimed replies and reconciles the rest (see Replies below); another
+  reconciliation retains the saved receipt/verdict/choices.
   Question follow-ups retain the same finished review round, so its unchanged binding remains valid.
   A stale pane must reopen before submitting. The HTML submission shape remains unchanged.
 - `review-edit` rewrites, re-labels, or drops comments by id, adds the user's own comments
@@ -129,7 +130,7 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   when found. Even a currently absent marker cannot prove an uncertain POST will never appear, so
   it does not permit an automatic POST. This also
   means a crash after saving the attempt but before sending it needs reconciliation rather than a
-  blind repost. The receipt is saved before replies for addressed earlier comments are sent.
+  blind repost. The receipt is saved before any reply is sent.
 
 ### Native PR pane and submission
 
@@ -187,28 +188,34 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   Both resume the same conversation in the same worktree.
 - `review-close` marks the review closed, and cleanup removes the worktree and its refs. A
   cancelled review is cleaned the same way.
-## Native thread replies
+## Replies
 
-Native submissions may include `replies:[{threadId,commentId,replyTo,body}]`, separately from new
-root comments in `yours`. The exact thread node, root comment node and positive REST database id
-must match a fresh paginated thread read at the reviewed head, including outdated/out-of-diff
-threads. Every posting path checks these identities before saving the selected round. The saved
-round retains the replies before any GitHub effect. Only the caller that records the review receipt
-initiates the follow-up replies. Each reply claims its own durable `replyPosts` entry (index into
-`review.replies`, `kind:pending`, `attemptedAt`, `attemptRevision`) with a revision-checked update
-before its POST.
-GitHub runs outside the store lock. Its outcome is settled on the exact head/generation/reply under
-a short lock, preserving concurrent task changes: `posted` saves `url`/`postedAt`, `uncertain` keeps
-the attempt and failure detail, and a preflight refusal saves `failed` with its reason. Each reply
-uses `in_reply_to`, the pinned `commit_id`, and its own
-hidden task/generation/index marker; unreadable head or marker reads refuse posting. A lost
-response reconciles the marker without retrying. Unconfirmed replies are reported explicitly and
-are never automatically retried, including after restart. Review-show, HTML notes and native
-review notes retain each saved reply's text, thread/root identity, receipt or warning after reload.
-A crash between the review receipt and reply claim leaves the saved reply visible without a receipt;
-a crash after the claim leaves it pending. Ordinary review-post only reads reply markers to reconcile
-receipts, including for legacy saved replies without a `replyPosts` entry. An absent marker never
-permits an automatic POST. A review receipt does not certify every follow-up reply succeeded.
+A posted round sends two kinds of replies through one claim mechanism. Native submissions may
+include `replies:[{threadId,commentId,replyTo,body}]`, separately from new root comments in
+`yours`. The exact thread node, root comment node and positive REST database id must match a fresh
+paginated thread read at the reviewed head, including outdated/out-of-diff threads. Every posting
+path checks these identities before saving the selected round. A re-review's `priorComments`
+entries marked `addressed` with a `reply` send that short reply on the user's earlier comment.
+`roundReplies(review)` lists both in a fixed order, thread replies first, and `replyPosts.index`
+indexes that list. The saved round retains every reply before any GitHub effect.
+
+Each reply claims its own durable `replyPosts` entry (`kind:pending`, `attemptedAt`,
+`attemptRevision`) with a revision-checked update before its POST, so a reply with no entry has
+never been sent. GitHub runs outside the store lock. Its outcome is settled on the exact
+head/generation/reply under a short lock, preserving concurrent task changes: `posted` saves
+`url`/`postedAt`, `uncertain` keeps the attempt and failure detail, and a preflight refusal saves
+`failed` with its reason. Each reply uses `in_reply_to`, the pinned `commit_id`, and its own hidden
+task/generation/index marker; unreadable head or marker reads refuse posting. A lost response
+reconciles the marker without retrying. Unconfirmed replies are reported explicitly and are never
+automatically retried, including after restart. Review-show, HTML notes and native review notes
+retain each saved thread reply's text, thread/root identity, receipt or warning after reload.
+
+Every review-post or submission that finds the receipt saved sends the round's unclaimed replies
+and reconciles the claimed ones, so a crash mid-loop loses no reply: on re-entry the sent ones are
+skipped by their receipt, a pending or uncertain one only has its marker read, and the rest are
+claimed and sent. The claim's revision check means two callers cannot send the same reply. An
+absent marker never permits an automatic POST of a claimed reply. A failed or uncertain reply never
+blocks or undoes the review receipt, and a review receipt does not certify every reply succeeded.
 
 The user can recover one saved reply through review-post with the saved review verdict and
 `recovery:{kind:"post-reply-again", taskRevision, replyIndex}`, after a confirmation warning that
