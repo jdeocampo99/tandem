@@ -170,6 +170,11 @@ async function proveOwnedPane(
   repoPath: string,
 ): Promise<PaneOwnership> {
   const { terminal } = deps;
+  if (endpoint.terminal !== terminal.name)
+    return {
+      kind: "unowned",
+      reason: `Brief pane belongs to ${endpoint.terminal}; kept open because the active terminal is ${terminal.name}`,
+    };
   if (endpoint.paneId === deps.coordinatorPaneId) {
     return {
       kind: "unowned",

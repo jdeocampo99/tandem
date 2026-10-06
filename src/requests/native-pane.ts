@@ -75,6 +75,11 @@ export async function closeNativeBriefPane(
     observedAt: deps.clock(),
     ...(reason === undefined ? {} : { reason }),
   });
+  if (pane.endpoint.terminal !== deps.terminal.name)
+    return settled(
+      "quarantined",
+      `Brief pane belongs to ${pane.endpoint.terminal}; kept open because the active terminal is ${deps.terminal.name}`,
+    );
   try {
     const owner = await coordinatorForBrief(deps, record);
     const closed = await deps.terminal.closeView({

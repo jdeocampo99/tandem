@@ -3,6 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { projectRequestBriefPane } from "../../src/requests/review-pane.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { RequestBriefWorkflow } from "../../src/requests/workflow.ts";
@@ -28,6 +29,11 @@ async function fixture(world: ScenarioWorld, terminal: TerminalBackend) {
     harness: DEFAULT_HARNESS,
     command: ["omp"],
   });
+  const store = createRequestBriefStore({
+    home: world.home,
+    clock: world.clock,
+    idFactory: () => "req-native",
+  });
   const workflow = new RequestBriefWorkflow({
     home: world.home,
     sessionId: world.sessionId,
@@ -35,18 +41,68 @@ async function fixture(world: ScenarioWorld, terminal: TerminalBackend) {
     coordinatorPaneId: coordinator.paneId,
     terminal,
     clock: world.clock,
-    store: createRequestBriefStore({
-      home: world.home,
-      clock: world.clock,
-      idFactory: () => "req-native",
-    }),
+    store,
     listTasks: async () => [],
     pauseTask: async () => {
       throw new Error("No task to pause");
     },
     checkLanguage: async () => [],
   });
-  return { workflow, coordinator, worktree };
+  return { workflow, coordinator, worktree, store };
+}
+
+for (const action of ["approve", "abandon", "closeReview"] as const) {
+  test(`${action} under Tern quarantines a foreign Herdr receipt without closing any pane`, async () => {
+    await withScenario({ terminal: "tern" }, async (world) => {
+      let closes = 0;
+      const { workflow, coordinator, store } = await fixture(world, {
+        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+        closeView: async () => {
+          closes++;
+          return { closed: true, warnings: [] };
+        },
+      });
+      const drafted = await workflow.draft({
+        repoPath: world.repoPath,
+        content: content("Review the brief after switching terminals"),
+        reviewPane: false,
+      });
+      const receipt = {
+        status: "open" as const,
+        endpoint: { ...coordinator, terminal: "herdr" as const, paneId: "3001" },
+        renderedRevision: 1,
+        renderedPath: join(world.home, "request-briefs", "req-native.md"),
+        observedAt: world.clock(),
+      };
+      await store.update(drafted.record.id, drafted.record.revision, (record) =>
+        withRequestReviewPane(record, receipt, world.clock()),
+      );
+      const finished =
+        action === "approve"
+          ? await workflow.approve({
+              requestId: drafted.record.id,
+              briefRevision: 1,
+              contentDigest: drafted.record.draft.contentDigest,
+              agreementDigest: drafted.record.draft.agreementDigest,
+            })
+          : action === "abandon"
+            ? await workflow.abandon(drafted.record.id)
+            : await workflow.closeReview(drafted.record.id, 1);
+      expect(finished.record.reviewPane).toEqual({
+        ...receipt,
+        status: "quarantined",
+        reason: "Brief pane belongs to herdr; kept open because the active terminal is tern",
+      });
+      expect((await store.read(drafted.record.id))?.reviewPane).toEqual(finished.record.reviewPane);
+      if (action === "approve") expect(finished.approvalState).toBe("current");
+      if (action === "abandon") expect(finished.record.abandonedAt).toBe(world.clock());
+      await workflow.closeReview(drafted.record.id, 1);
+      expect(closes).toBe(0);
+      expect(
+        world.trace().filter((each) => each.boundary === "tern" || each.boundary === "herdr"),
+      ).toEqual([]);
+    });
+  });
 }
 
 test("every direct brief projector caller uses native hosting in Tern", async () => {
