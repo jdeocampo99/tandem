@@ -10,6 +10,7 @@ import { ViewFile } from "../../src/native/contract.ts";
 import {
   projectStoreDirectory,
   publishViews,
+  readProjectState,
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
@@ -342,7 +343,7 @@ test("project switcher reads only other owners' published summaries without rewr
     const initial = await reader.read(
       snapshot,
       world.repoPath,
-      new Map([[world.repoPath, { terminal: "tern", sessionId: "own-session" }]]),
+      new Map([[world.repoPath, "own-session"]]),
     );
     const other = {
       bundle: {
@@ -367,7 +368,6 @@ test("project switcher reads only other owners' published summaries without rewr
     expect(
       publication.bundle.projects.find((project) => project.repoPath === "/another/app"),
     ).toMatchObject({
-      terminal: "tern",
       name: "Other app",
       running: 4,
       needsYou: 9,
@@ -377,13 +377,7 @@ test("project switcher reads only other owners' published summaries without rewr
     });
     expect(publication.bundle.panel.header.otherProjectsNeedYou).toBe(9);
     expect(publication.bundle.summary.repoPath).toBe(world.repoPath);
-    expect(initial.bundle.summary).toMatchObject({ terminal: "tern", sessionId: "own-session" });
-    const foreignSession = await reader.read(
-      snapshot,
-      world.repoPath,
-      new Map([[world.repoPath, { terminal: "herdr", sessionId: "own-session" }]]),
-    );
-    expect(foreignSession.bundle.summary).not.toHaveProperty("sessionId");
+    expect(initial.bundle.summary).toMatchObject({ sessionId: "own-session" });
     await publishViews(world.home, publication.bundle.project, async () => publication);
     expect(await readFile(path, "utf8")).toBe(before);
     expect((await stat(path)).ino).toBe(inode);
@@ -559,6 +553,54 @@ test("panel bell reads successful native deliveries and ignores coordinator ackn
     expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(1);
     await markNativeAlertsRead(world.home, world.repoPath, 1);
     expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(0);
+    await reader.settle();
+  });
+});
+
+test("a state written before the summary lost its terminal tag publishes again and keeps its cursors", async () => {
+  await withScenario({}, async (world) => {
+    const reader = new NativeViewsReader({
+      home: world.home,
+      clock: world.clock,
+      run: world.run,
+      terminal: terminalBackend(world.run),
+    });
+    const snapshot = {
+      version: 1 as const,
+      writtenAt: world.clock(),
+      board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+      coordinators: [],
+    };
+    const publish = () =>
+      publishViews(world.home, world.repoPath, () => reader.read(snapshot, world.repoPath));
+    await publish();
+    const path = join(projectStoreDirectory(world.home, world.repoPath), "state.json");
+    const saved = JSON.parse(await readFile(path, "utf8"));
+    const alerts = { cursors: {}, drafts: {}, rows: [], routing: [], delivered: 3, read: 1 };
+    const visit = { lastOpenedAt: world.clock() };
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...saved,
+        alerts,
+        visit,
+        published: {
+          ...saved.published,
+          summary: { terminal: "tern", ...saved.published.summary },
+        },
+      }),
+    );
+    expect((await readProjectState(world.home, world.repoPath))?.published).toBeUndefined();
+    await publish();
+    const republished = await readProjectState(world.home, world.repoPath);
+    if (republished === undefined) throw new Error("Republication left no project state");
+    expect(republished).toMatchObject({ epoch: saved.epoch, alerts, visit });
+    expect(republished.seq).toBeGreaterThan(saved.seq);
+    expect(republished.published?.summary).toEqual(saved.published.summary);
+    const index = ViewFile.parse(
+      JSON.parse(await readFile(viewIndexPath(world.home, world.repoPath), "utf8")),
+    );
+    expect(index.seq).toBe(republished.seq);
     await reader.settle();
   });
 });

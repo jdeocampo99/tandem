@@ -11,6 +11,7 @@ import { readProjectState } from "../../src/native/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { saveCoordinator } from "./fake-workspace-order.ts";
 
 const input = {
@@ -145,8 +146,9 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         events.push("launch --no-attach");
         return { code: 0, stdout: "", stderr: "" };
       };
+      const base = terminalBackend(run);
       const terminal = {
-        ...terminalBackend(run),
+        ...base,
         name: "tern" as const,
         focusWorkspace: async () => {
           events.push("focus");
@@ -154,14 +156,16 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
             ? { focused: true as const }
             : { focused: false as const, code: 1, detail: "offline" };
         },
-        openView: async (view: Parameters<ReturnType<typeof terminalBackend>["openView"]>[0]) => {
-          events.push(view.view.kind);
-          expect(view.coordinator).toEqual(record.endpoint);
-          expect(view.origin).toEqual({ paneId: "101", cwd: record.worktree.path });
-          if (outcome === "ambiguous-window") throw new Error(warning);
-          if (outcome === "unavailable") return { opened: false, warnings: [] };
-          return { opened: true, warnings: [] };
-        },
+        views: viewsWith(base, {
+          open: async (view) => {
+            events.push(view.view.kind);
+            expect(view.coordinator).toEqual(record.endpoint);
+            expect(view.origin).toEqual({ paneId: "101", cwd: record.worktree.path });
+            if (outcome === "ambiguous-window") throw new Error(warning);
+            if (outcome === "unavailable") return { opened: false, warnings: [] };
+            return { opened: true, warnings: [] };
+          },
+        }),
       };
       expect(await openProject(run, terminal, { ...input, home, repoPath: repo })).toEqual({
         focused,

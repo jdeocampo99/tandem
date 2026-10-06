@@ -17,6 +17,7 @@ import { blocks, TernOutcomeUnknownError } from "../../../src/terminal-backend/t
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { viewsOf } from "../views.ts";
 import { recordedActions, recordingCli } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
@@ -556,14 +557,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         view: { kind: "browser", url: "https://example.invalid/pull/281" } as const,
       };
       await expect(
-        ternBackend(browserRunner, { home, environment: env }).openView(browserInput),
+        viewsOf(ternBackend(browserRunner, { home, environment: env })).open(browserInput),
       ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
       await expect(
-        ternBackend(browserRunner, { home, environment: env }).openView(browserInput),
+        viewsOf(ternBackend(browserRunner, { home, environment: env })).open(browserInput),
       ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
       expect(browserOpens).toBe(1);
       await ctl("shot", "10-browser-quarantined");
-      const safeReturn = await fresh.openView({
+      const safeReturn = await viewsOf(fresh).open({
         coordinator,
         cwd: root,
         home,

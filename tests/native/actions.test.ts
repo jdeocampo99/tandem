@@ -20,10 +20,15 @@ import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
-import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
+import type {
+  TerminalBackend,
+  TerminalView,
+  ViewsCapability,
+} from "../../src/terminal-backend/contract.ts";
 import { seedScenarioTask, seedTernProject } from "../evals/scenario.ts";
 import type { TernParityHost } from "../evals/tern-parity/harness.ts";
 import { seedReview, withParity } from "../evals/tern-parity/inventory.ts";
+import { viewsOf, viewsWith } from "../terminal-backend/views.ts";
 import { prIndexEntry, projectRow, publishFixture } from "./view-files.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
@@ -83,13 +88,14 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
   const prompts: string[] = [];
   const opened: TerminalView[] = [];
   const focused: string[] = [];
-  const closed: Parameters<TerminalBackend["closeView"]>[0][] = [];
+  const closed: Parameters<ViewsCapability["close"]>[0][] = [];
   let ownsCoordinator = true;
   const run = async (): Promise<never> => {
     throw new Error("No external commands expected");
   };
+  const base = terminalBackend(run, { terminal: terminalName });
   const terminal: TerminalBackend = {
-    ...terminalBackend(run, { terminal: terminalName }),
+    ...base,
     inspect: async (target) => ({
       endpoint: target.endpoint,
       pane: { ...endpoint, foregroundCwd: clean },
@@ -122,14 +128,16 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     promptAgent: async (target) => {
       prompts.push(target.text);
     },
-    openView: async (target) => {
-      opened.push(target.view);
-      return { opened: true, warnings: [] };
-    },
-    closeView: async (target) => {
-      closed.push(target);
-      return { closed: true, warnings: [] };
-    },
+    views: viewsWith(base, {
+      open: async (target) => {
+        opened.push(target.view);
+        return { opened: true, warnings: [] };
+      },
+      close: async (target) => {
+        closed.push(target);
+        return { closed: true, warnings: [] };
+      },
+    }),
   };
   let nextId = 0;
   const service = createTandemService({
@@ -301,13 +309,18 @@ for (const verb of ["brief-request-changes"] as const) {
         },
         reviewPane: false,
       });
-      const outcome = await f.act({
-        verb,
-        requestId: f.record.id,
-        ...f.seen,
-        text: "Keep the original goal",
-        comments: [{ lineId: originalLine.id, text: "Keep this goal" }],
-      });
+      // Without native views, feedback retires the request's own review pane.
+      const deps = { terminal: { ...f.deps.terminal, views: undefined } };
+      const outcome = await f.act(
+        {
+          verb,
+          requestId: f.record.id,
+          ...f.seen,
+          text: "Keep the original goal",
+          comments: [{ lineId: originalLine.id, text: "Keep this goal" }],
+        },
+        { deps },
+      );
       expect(outcome.status).toBe("done");
       expect(f.prompts[0]).toContain("From the open review page:");
       expect(f.prompts[0]).toContain(`Brief ${f.record.id}, revision 1: Request changes`);
@@ -324,12 +337,15 @@ for (const verb of ["brief-request-changes"] as const) {
         (line) => line.text === "A newly added question",
       );
       if (latestOnlyLine === undefined) throw new Error("Missing new line");
-      const refused = await f.act({
-        verb,
-        requestId: f.record.id,
-        ...f.seen,
-        comments: [{ lineId: latestOnlyLine.id, text: "Not in old view" }],
-      });
+      const refused = await f.act(
+        {
+          verb,
+          requestId: f.record.id,
+          ...f.seen,
+          comments: [{ lineId: latestOnlyLine.id, text: "Not in old view" }],
+        },
+        { deps },
+      );
       expect(refused.status).toBe("refused");
       expect(refused.notice?.text).toContain("Unknown brief line id");
       expect(f.prompts).toHaveLength(1);
@@ -407,6 +423,7 @@ test("request changes forwards feedback and retires only the matching brief proj
       },
       {
         deps: {
+          terminal: { ...f.deps.terminal, views: undefined },
           service: {
             ...f.service,
             closeRequestBriefReview: async (id: string, revision: number) => {
@@ -594,6 +611,7 @@ test("request changes reports delivered feedback, not success, when retiring the
       },
       {
         deps: {
+          terminal: { ...f.deps.terminal, views: undefined },
           service: {
             ...f.service,
             closeRequestBriefReview: async () => {
@@ -664,8 +682,7 @@ for (const kind of ["task", "brief", "pr"] as const) {
 test("Herdr reports unsupported native views and uses its existing review pane for briefs", async () => {
   const f = await fixture();
   try {
-    const herdr = terminalBackend(f.deps.run);
-    const terminal = { ...f.deps.terminal, openView: herdr.openView };
+    const terminal = { ...f.deps.terminal, views: undefined };
     const task = await createPrTask(f);
     const unsupported = await f.act(
       { verb: "open", ref: { kind: "task", taskId: task.id } },
@@ -928,10 +945,12 @@ for (const windowKey of [undefined, "opaque-control-window"] as const) {
             ...dependencies,
             terminal: {
               ...f.deps.terminal,
-              openView: async (input) => {
-                origins.push(input.origin);
-                return f.deps.terminal.openView(input);
-              },
+              views: viewsWith(f.deps.terminal, {
+                open: async (input) => {
+                  origins.push(input.origin);
+                  return viewsOf(f.deps.terminal).open(input);
+                },
+              }),
             },
             createService: (options) => {
               scopes.push(options.sourceWorkspace);
@@ -978,10 +997,12 @@ test("a block's echoed context names the Tandem home and cwd; anything else is r
       processEnvironment: { TANDEM_HOME: join(f.root, "different-home") },
       terminal: {
         ...f.deps.terminal,
-        openView: async (input: Parameters<TerminalBackend["openView"]>[0]) => {
-          origins.push(input.origin);
-          return f.deps.terminal.openView(input);
-        },
+        views: viewsWith(f.deps.terminal, {
+          open: async (input) => {
+            origins.push(input.origin);
+            return viewsOf(f.deps.terminal).open(input);
+          },
+        }),
       },
     };
     const open = { verb: "open", ref: { kind: "brief", requestId: f.record.id } };
@@ -1094,11 +1115,13 @@ for (const outcome of ["refusal", "failure"] as const) {
           deps: {
             terminal: {
               ...f.deps.terminal,
-              openView: async () => {
-                attempts += 1;
-                if (outcome === "failure") throw new Error(reason);
-                return { opened: false, warnings: [reason] };
-              },
+              views: viewsWith(f.deps.terminal, {
+                open: async () => {
+                  attempts += 1;
+                  if (outcome === "failure") throw new Error(reason);
+                  return { opened: false, warnings: [reason] };
+                },
+              }),
             },
           },
         },
@@ -1129,7 +1152,7 @@ test("native open refuses a pane no recorded coordinator session lists", async (
 for (const result of ["opened", "refused"] as const)
   test(`native task picker ${result} preserves exact origin and never retries`, async () => {
     const f = await fixture("tern");
-    const calls: Parameters<TerminalBackend["openView"]>[0][] = [];
+    const calls: Parameters<ViewsCapability["open"]>[0][] = [];
     try {
       const outcome = await f.act(
         { verb: "open", ref: { kind: "task-picker" } },
@@ -1138,13 +1161,15 @@ for (const result of ["opened", "refused"] as const)
           deps: {
             terminal: {
               ...f.deps.terminal,
-              openView: async (input) => {
-                calls.push(input);
-                return {
-                  opened: result === "opened",
-                  warnings: result === "opened" ? [] : ["Picker unavailable"],
-                };
-              },
+              views: viewsWith(f.deps.terminal, {
+                open: async (input) => {
+                  calls.push(input);
+                  return {
+                    opened: result === "opened",
+                    warnings: result === "opened" ? [] : ["Picker unavailable"],
+                  };
+                },
+              }),
             },
           },
         },
@@ -1172,7 +1197,9 @@ test("an open that returns warnings keeps its origin and says the view is uncert
         deps: {
           terminal: {
             ...f.deps.terminal,
-            openView: async () => ({ opened: true, warnings: [warning] }),
+            views: viewsWith(f.deps.terminal, {
+              open: async () => ({ opened: true, warnings: [warning] }),
+            }),
           },
         },
       },
@@ -1412,12 +1439,14 @@ for (const failure of [
                 if (failure === "focus-thrown") throw new Error("fixture focus failure");
                 return failure !== "focus-refused";
               },
-              openView: async (input) => {
-                events.push("catchup");
-                expect(input.coordinator).toEqual(record.endpoint);
-                if (failure === "catchup-thrown") throw new Error("fixture catch-up failure");
-                return { opened: false, warnings: ["fixture catch-up failure"] };
-              },
+              views: viewsWith(source.deps.terminal, {
+                open: async (input) => {
+                  events.push("catchup");
+                  expect(input.coordinator).toEqual(record.endpoint);
+                  if (failure === "catchup-thrown") throw new Error("fixture catch-up failure");
+                  return { opened: false, warnings: ["fixture catch-up failure"] };
+                },
+              }),
             },
           },
         },
@@ -1517,10 +1546,12 @@ for (const verb of ["brief-approve", "brief-request-changes"] as const) {
         deps: {
           terminal: {
             ...f.deps.terminal,
-            closeView: async () => {
-              attempts++;
-              throw new Error("native close acknowledgement was lost");
-            },
+            views: viewsWith(f.deps.terminal, {
+              close: async () => {
+                attempts++;
+                throw new Error("native close acknowledgement was lost");
+              },
+            }),
           },
         },
       });

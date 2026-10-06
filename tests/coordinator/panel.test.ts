@@ -14,6 +14,7 @@ import {
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalView } from "../../src/terminal-backend/contract.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 
 async function fixture(): Promise<{ root: string; home: string; record: CoordinatorRecord }> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-coordinator-panel-")));
@@ -161,18 +162,21 @@ test("reopening a retained Tern panel leaves project navigation to the caller", 
   try {
     const calls: TerminalView[] = [];
     let panels = 0;
+    const base = terminalBackend(async () => ok({}));
     const terminal = {
-      ...terminalBackend(async () => ok({})),
+      ...base,
       name: "tern" as const,
       openPanel: async () => {
         panels += 1;
         return "202";
       },
       isPanelOpen: async () => true,
-      openView: async (input: { view: TerminalView }) => {
-        calls.push(input.view);
-        return { opened: false, warnings: [] };
-      },
+      views: viewsWith(base, {
+        open: async (input) => {
+          calls.push(input.view);
+          return { opened: false, warnings: [] };
+        },
+      }),
     };
     expect(await openPanelBeside(terminal, home, record)).toBeUndefined();
     expect(await openPanelBeside(terminal, home, record)).toBeUndefined();

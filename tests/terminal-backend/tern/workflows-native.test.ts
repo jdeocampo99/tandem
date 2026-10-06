@@ -79,10 +79,7 @@ async function seedProject(window: TernWindow, name: string): Promise<Project> {
       })),
     };
     const sessions = new Map(
-      records.map((record) => [
-        record.repoPath,
-        { terminal: "tern", sessionId: record.endpoint.sessionId },
-      ]),
+      records.map((record) => [record.repoPath, record.endpoint.sessionId] as const),
     );
     return { snapshot, project: coordinator.repo, sessions };
   };

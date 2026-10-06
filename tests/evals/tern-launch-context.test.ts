@@ -8,6 +8,7 @@ import { readProjectState } from "../../src/native/store.ts";
 import { catchUpWarningNotice } from "../../src/terminal/launch.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { withScenario } from "./scenario.ts";
 
 test("a coordinator launched into Tern carries its new workspace and namespace through bootstrap", async () => {
@@ -62,14 +63,17 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
     world.advanceClock(60);
     let opened = 0;
     let catchUpFails = true;
+    const base = terminalBackend(world.run, { home: world.home });
     const terminal = {
-      ...terminalBackend(world.run, { home: world.home }),
-      openView: async () => {
-        opened++;
-        return catchUpFails
-          ? { opened: false, warnings: ["fixture optional catch-up failure"] }
-          : { opened: true, warnings: [] };
-      },
+      ...base,
+      views: viewsWith(base, {
+        open: async () => {
+          opened++;
+          return catchUpFails
+            ? { opened: false, warnings: ["fixture optional catch-up failure"] }
+            : { opened: true, warnings: [] };
+        },
+      }),
     };
     const reconnect = (background: boolean) =>
       launchCoordinator(
@@ -132,12 +136,15 @@ test("a fresh Tern launch preserves its coordinator and visit when optional catc
     const previous = await visit();
     world.advanceClock(60);
     let opens = 0;
+    const base = terminalBackend(world.run, { home: world.home });
     const terminal = {
-      ...terminalBackend(world.run, { home: world.home }),
-      openView: async () => {
-        opens++;
-        throw new Error("fixture catch-up exception");
-      },
+      ...base,
+      views: viewsWith(base, {
+        open: async () => {
+          opens++;
+          throw new Error("fixture catch-up exception");
+        },
+      }),
     };
     const launched = await launchCoordinator(
       {

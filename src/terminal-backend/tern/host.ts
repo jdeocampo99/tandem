@@ -16,7 +16,7 @@ import {
 import { openDirectories, openDirectory, viewIndexPath } from "../../native/store.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
-import type { RetainedViewOpen, TerminalBackend, ViewOrigin } from "../contract.ts";
+import type { RetainedViewOpen, ViewOrigin, ViewsCapability } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli, ViewTarget } from "./cli.ts";
 import {
@@ -717,10 +717,7 @@ export async function listRetainedNativeOpens(home: string): Promise<RetainedVie
   return opens;
 }
 
-export const abandonRetainedNativeOpen: TerminalBackend["abandonViewOpen"] = async (
-  open,
-  conclusive,
-) => {
+export const abandonRetainedNativeOpen: ViewsCapability["abandon"] = async (open, conclusive) => {
   const name = basename(open.path);
   const key = name.slice(0, name.indexOf("."));
   const directory = open.path.slice(0, open.path.length - name.length - 1);

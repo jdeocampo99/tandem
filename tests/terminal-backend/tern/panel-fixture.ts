@@ -7,7 +7,6 @@ import type {
 export function panelFixture(project: string): NativePanelView {
   const projects: NativeProjectRow[] = [
     {
-      terminal: "tern",
       repoPath: project,
       name: "tandem",
       current: true,
@@ -19,7 +18,6 @@ export function panelFixture(project: string): NativePanelView {
       sessionId: "fixture",
     },
     {
-      terminal: "tern",
       repoPath: `${project}/tagalog-learning-app`,
       name: "tagalog-learning-app",
       current: false,
@@ -31,7 +29,6 @@ export function panelFixture(project: string): NativePanelView {
       sessionId: "fixture-other",
     },
     {
-      terminal: "tern",
       repoPath: `${project}/music-app`,
       name: "music-app",
       current: false,

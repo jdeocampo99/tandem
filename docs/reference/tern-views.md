@@ -251,14 +251,14 @@ under the screen's title; other notices toast under their code's title. The outc
 authorizes a later mutation. A handled link stays handled on failure; the plugin never retries an
 action, including an operation whose outcome is uncertain.
 
-The terminal port's `openView` returns `{ opened: boolean, warnings: readonly string[],
-endpoint?: Endpoint, fallback?: "brief-review" }`. A confirmed native brief returns its exact
+The terminal port's `views.open` returns `{ opened: boolean, warnings: readonly string[],
+endpoint?: Endpoint }`. A confirmed native brief returns its exact
 split endpoint for the automatic request workflow's retirement receipt. Its explicit `terminal:"tern"`
 tag, terminal session, tab, workspace and pane ids come from exact native block evidence,
 including reuse, rather than a title. The action handler carries warnings in its result and fails
-when no view opened. The `brief-review` fallback tells the action handler to use the existing
-request-brief review workflow and verify that its pane opened. Callers do not create a second
-view or retry an open merely because warnings or a fallback are present.
+when no view opened. A terminal without `views` opens a brief through the existing request-brief
+review workflow and verifies that its pane opened. Callers do not create a second view or retry an
+open merely because warnings are present.
 
 Installation, sidebar/shortcut consent, custom-key preservation and preference restoration
 are defined in [terminal.md](terminal.md#plugin-consent-and-restoration). Choosing Tern links
@@ -301,7 +301,7 @@ listing, now)` gives every ticket one answer:
 
 `tern.fs` has no rename, so a receipt that does not parse whole counts as no receipt. Settling
 removes the receipt, then the ticket. Nothing is retried automatically; a new click is a new
-ticket. The click, the coordinator's view publication tick (`recoverViewOpens`) and `tandem fix`
+ticket. The click, the coordinator's view publication tick (`views.recover`) and `tandem fix`
 all decide retained tickets, so a late receipt settles without another click. The tick skips a
 coordinator whose open is in progress instead of waiting for its lock, so a click never stalls
 publication. Recovery also
@@ -365,11 +365,11 @@ and `tandem native act` parses it with `parseBlockContext`. `tern-plugin/rt.luau
 also watch the project index read `args[3]`, `indexPath` (equal to the context's `index`), so
 Luau never derives a path from another.
 Root inputs come from `viewIndexPath`; detail inputs come from `viewDetailPath`.
-Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
+Task/brief/PR `views.open` calls retain their existing durable identifiers;
 board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
 coordinator, home, cwd and origin context.
 
-`TerminalBackend.closeView({coordinator,cwd,home,origin,view:{kind:"brief",requestId}})`
+`views.close({coordinator,cwd,home,origin,view:{kind:"brief",requestId}})`
 retires only the exact originating native brief split. The caller checks the durable revision
 and completes approval/feedback first; close errors become successful-action warnings, never retries.
 The host proves the block's program, all launch arguments, scoped session and idle state twice,
@@ -394,7 +394,7 @@ Successful hosting already removed its private ticket and receipt, so no host cl
 Task pages use the Orchestrator return action instead, which restores the hidden conversation
 before removing its replacement block.
 
-`openView` with kind `board` toggles back when its exact originating block is this project's
+`views.open` with kind `board` toggles back when its exact originating block is this project's
 board, using the same guarded return and closure. Other origins open the board normally;
 renderers never parse Tern program metadata or guess pane ownership.
 
@@ -540,7 +540,7 @@ The changed-signature rule still excludes repaints/timer changes and unchanged w
 after confirmed navigation.
 
 `native board pr-link CARD_KEY` and `merged-link URL` resolve only PR identities present in the
-originating project's current root model. `openView({view:{kind:"browser",url}})` requires HTTPS
+originating project's current root model. `views.open({view:{kind:"browser",url}})` requires HTTPS
 and uses Tern's browser API with the exact coordinator as owner. The new browser block must be
 confirmed in that coordinator's recorded session. Uncertain mutations are never repeated.
 All callbacks carry the screen's own decimal pane, absolute coordinator cwd and optional window key.

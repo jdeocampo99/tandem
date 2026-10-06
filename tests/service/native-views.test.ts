@@ -16,7 +16,7 @@ const published = z.object({
   seq: z.number().int().positive(),
   model: z.object({
     writtenAt: z.string(),
-    summary: z.object({ terminal: z.literal("tern"), sessionId: z.string() }),
+    summary: z.object({ sessionId: z.string() }),
     tasks: z.record(z.string(), z.object({ stage: z.string() })),
   }),
 });
@@ -56,7 +56,7 @@ for (const [terminal, homeTerminal, publishes] of [
       const path = viewIndexPath(world.home, world.repoPath);
       if (publishes) {
         const view = published.parse(JSON.parse(await readFile(path, "utf8")));
-        expect(view.model.summary).toEqual({ terminal: "tern", sessionId: endpoint.sessionId });
+        expect(view.model.summary).toEqual({ sessionId: endpoint.sessionId });
         expect((await stat(path)).mode & 0o777).toBe(0o600);
         await expect(stat(join(world.home, "native-visits"))).rejects.toHaveProperty(
           "code",

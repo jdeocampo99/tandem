@@ -289,6 +289,8 @@ export type ScenarioWorld = Readonly<{
   readonly ternPluginLinks: () => readonly string[];
   /** Text typed into a pane with `tern send`, such as a prompt to a coordinator's agent. */
   readonly sentKeys: () => readonly Readonly<{ paneId: string; text: string }>[];
+  /** Shell lines typed into a pane with `tern run`, in order, as its shell would execute them. */
+  readonly ranLines: (paneId: string) => readonly string[];
   readonly titlePane: (paneId: string, title: string) => void;
   readonly paneIsPresent: (paneId: string) => boolean;
   /** Replaces a pane's foreground, as when its agent exits and someone starts another by hand. */
@@ -533,6 +535,7 @@ export async function createScenarioWorld(
   let identifier = 0;
   let ternRoutes: ScenarioTernRoutes | undefined;
   const sentKeys: { paneId: string; text: string }[] = [];
+  const ranLines: { paneId: string; text: string }[] = [];
   const ttyWrites: { paneId: string; text: string }[] = [];
   const ternPluginLinks: string[] = [];
 
@@ -898,6 +901,7 @@ export async function createScenarioWorld(
       if (argv[3] === "text") sentKeys.push({ paneId, text: argv[4] ?? "" });
       else pane.processes = [{ pid: pane.shellPid, name: "sh", argv: ["sh"] }];
     } else if (verb === "run") {
+      ranLines.push({ paneId, text: argv[3] ?? "" });
       const command = await bootstrapProcessArgv(argv[3] ?? "");
       let start = command[0] === "env" ? 1 : 0;
       while (start > 0 && command[start]?.includes("=")) start += 1;
@@ -1464,6 +1468,8 @@ export async function createScenarioWorld(
     ttyWrites: () => [...ttyWrites],
     ternPluginLinks: () => [...ternPluginLinks],
     sentKeys: () => [...sentKeys],
+    ranLines: (paneId) =>
+      ranLines.filter((line) => line.paneId === paneId).map((line) => line.text),
     paneIsPresent: (paneId) => panes.get(paneId)?.present === true,
     replaceForeground: (paneId, argv) => {
       const pane = panes.get(paneId);

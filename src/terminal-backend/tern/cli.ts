@@ -790,7 +790,8 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
       if (!blocks(listing).some((entry) => entry.block.id === op.endpoint.paneId)) {
         if (listing.detached.length > 0)
           throw new EndpointOwnershipError(op.endpoint, "detached panes make closure ambiguous");
-        await forgetQuarantine(core.home, op.endpoint);
+        // A window-scoped listing cannot see other windows, so it never proves the pane is gone.
+        if (core.windowKey === undefined) await forgetQuarantine(core.home, op.endpoint);
         return { absent: true };
       }
       before = await proveView(core, { ...op.view, endpoint: op.endpoint, cwd: op.cwd });
@@ -805,7 +806,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
           error.reason === "missing"
         ) {
           // exactPane reports missing only from an exact scoped listing with no detached blocks.
-          await forgetQuarantine(core.home, op.endpoint);
+          if (core.windowKey === undefined) await forgetQuarantine(core.home, op.endpoint);
           return { absent: true };
         }
         throw error;

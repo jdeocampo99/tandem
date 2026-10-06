@@ -22,6 +22,8 @@ with the same basename have different directories. The directory holds:
   so each filename is one path segment; PR filenames include the repository.
 - `state.json`: the store's `epoch` and `seq`, the alert cursors (`board/native-alerts.ts`), the
   visit record (`memory/native-visits.ts`) and `published`, what the last full publication showed.
+  `published` is a cache: a value in an older shape reads as absent, and the next publication
+  rebuilds it while keeping `epoch`, `seq`, alerts and visit.
 - `open/<coordinatorKey>.<token>.{ticket,receipt}.json`, staged open tickets and their receipts
   (`terminal-backend/tern/host.ts`).
 
@@ -131,7 +133,7 @@ Schemas: `src/board/native-views.ts`, `NativeProjectSummary`, `NativeTaskIndex`,
 
 ```ts
 NativeProjectSummary = {
-  terminal:"tern", repoPath:string, name:string, writtenAt:string,
+  repoPath:string, name:string, writtenAt:string,
   running:number, needsYou:number, ready:number, done:number, sessionId?:string
 }
 NativeTaskIndex = NativeTaskSummary & {detailFile:string}
@@ -165,13 +167,11 @@ shows offline, retains its last known counts and omits its stale focus session. 
 foreign summaries never become invented zero counts; malformed summaries add a warning. Reading
 and publishing this project's index never rewrites another project's bundle or details.
 
-Every emitted terminal identifier is tagged. `model.summary.sessionId` is paired with required
-`model.summary.terminal:"tern"`; `model.projects[].sessionId` and
-`model.panel.header.projects[].sessionId` are paired with their row's required `terminal:"tern"`.
-Session-map inputs retain `{terminal,sessionId}` together. The native controller admits only
-coordinator records whose stored endpoint explicitly names `terminal:"tern"`; foreign and
-untagged identifiers never enter a native model. Foreign summaries with absent/non-Tern tags are
-refused. Stale rows keep their terminal tag but omit their session id. Task, brief, PR, board and
+Only coordinators that host native views publish a session id. The controller passes the native
+publisher a map from repository to session id built only from coordinator records whose stored
+endpoint names the active terminal, and publishes only when that terminal has `views`; foreign
+and untagged identifiers never enter a native model. A summary whose fields do not match the
+strict schema is refused. Stale rows omit their session id. Task, brief, PR, board and
 catch-up models emit no pane or workspace ids. Task/request/thread ids are their domain identities,
 not terminal identifiers. Shared `WorkerPane`, `PanelCoordinator` and legacy panel navigation
 changes belong to the terminal-setting parent; this slice does not alter their definitions.
@@ -196,7 +196,7 @@ NativePanelView = {
   footer?: string
 }
 NativeProjectRow = {
-  terminal:"tern", repoPath: string, name: string, current: boolean, offline: boolean,
+  repoPath: string, name: string, current: boolean, offline: boolean,
   running: number, needsYou: number, status: string,
   shortcut?: string, sessionId?: string
 }

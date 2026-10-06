@@ -20,6 +20,7 @@ import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/hos
 import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
+import { viewsOf } from "../views.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -323,8 +324,8 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       });
       // A brief opened during the window's startup tick either opens or fails cleanly with
       // nothing changed; it never pauses the opens below.
-      await terminal
-        .openView({
+      await viewsOf(terminal)
+        .open({
           coordinator,
           cwd: root,
           home: env.TANDEM_HOME,
@@ -337,7 +338,7 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       // test opening, not startup.
       await Bun.sleep(500);
       // A pane may be hosted before either its index or detail is published.
-      const waiting = await terminal.openView({
+      const waiting = await viewsOf(terminal).open({
         coordinator,
         cwd: root,
         home: env.TANDEM_HOME,

@@ -31,6 +31,7 @@ export function ternEndpoint(endpoint: Endpoint): TernEndpoint {
 /** Apply terminal ownership before every port operation that accepts a durable endpoint. */
 export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend {
   const check = (endpoint: Endpoint) => assertTerminalEndpoint(backend.name, endpoint);
+  const views = backend.views;
   return {
     ...backend,
     inspect: async (target) => {
@@ -73,13 +74,20 @@ export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend
       check(input.coordinator);
       return backend.isPanelOpen(input);
     },
-    closeView: async (input) => {
-      check(input.coordinator);
-      return backend.closeView(input);
-    },
-    openView: async (input) => {
-      check(input.coordinator);
-      return backend.openView(input);
-    },
+    ...(views === undefined
+      ? {}
+      : {
+          views: {
+            ...views,
+            open: async (input) => {
+              check(input.coordinator);
+              return views.open(input);
+            },
+            close: async (input) => {
+              check(input.coordinator);
+              return views.close(input);
+            },
+          },
+        }),
   };
 }

@@ -64,8 +64,8 @@ export function requestBriefWorkspaceLabel(repoPath: string): string {
 }
 
 /**
- * Dispatches every caller to native hosting in Tern. Herdr brings the owned review pane up to
- * date with the current draft: refreshes the pane this request
+ * Hosts the brief natively when the terminal has views. Otherwise brings the owned review pane up
+ * to date with the current draft: refreshes the pane this request
  * already owns, and opens a new one whenever the recorded pane is gone. A pane whose exact Herdr
  * identity no longer proves ownership is never written to; it is reported instead, and a fresh
  * owned pane takes over the projection so the user still sees the current revision.
@@ -74,7 +74,8 @@ export async function projectRequestBriefPane(
   deps: RequestReviewPaneDependencies,
   record: RequestBriefRecord,
 ): Promise<RequestReviewPane> {
-  if (deps.terminal.name === "tern") return projectNativeBriefPane(deps, record);
+  if (deps.terminal.views !== undefined)
+    return projectNativeBriefPane(deps, deps.terminal.views, record);
   const renderedPath = await writeRenderedBrief(deps.home, record);
   const existing = record.reviewPane;
   if (existing !== undefined && existing.status !== "closed") {
@@ -106,7 +107,8 @@ export async function closeRequestBriefPane(
   deps: RequestReviewPaneDependencies,
   record: RequestBriefRecord,
 ): Promise<RequestReviewPane | undefined> {
-  if (deps.terminal.name === "tern") return closeNativeBriefPane(deps, record);
+  if (deps.terminal.views !== undefined)
+    return closeNativeBriefPane(deps, deps.terminal.views, record);
   const pane = record.reviewPane;
   if (pane === undefined || pane.status === "closed") return undefined;
   const settled = (status: RequestReviewPane["status"], reason?: string): RequestReviewPane => ({

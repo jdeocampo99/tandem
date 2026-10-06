@@ -1,7 +1,6 @@
 import { expect, test } from "bun:test";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { CommandRequest, CommandRunner } from "../../src/contracts.ts";
 import { openProject } from "../../src/coordinator/open-project.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
@@ -14,22 +13,10 @@ import {
 } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "../evals/scenario.ts";
 
-test("explicit Tern selection overrides saved Herdr and alerts require the recorded helper", async () => {
+test("explicit Tern selection overrides saved Herdr and alerts reach only the recorded helper", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "herdr"\n');
-    const writes: CommandRequest[] = [];
-    const calls: CommandRequest[] = [];
-    const run: CommandRunner = async (request) => {
-      calls.push(request);
-      if (request.argv[0] === "ps" && request.argv[2] === "tty=")
-        return { code: 0, stdout: "ttys99999\n", stderr: "" };
-      if (request.argv[0] === process.execPath && request.argv[3] === "/dev/ttys99999") {
-        writes.push(request);
-        return { code: 0, stdout: "", stderr: "" };
-      }
-      return world.run(request);
-    };
-    const terminal = terminalBackend(run, { terminal: "tern", home: world.home });
+    const terminal = terminalBackend(world.run, { terminal: "tern", home: world.home });
     const alert = () =>
       terminal.notify({
         sessionId: world.sessionId,
@@ -38,7 +25,6 @@ test("explicit Tern selection overrides saved Herdr and alerts require the recor
         body: "Review ready",
       });
     await expect(alert()).rejects.toThrow("requires a recorded Tandem-owned pane");
-    expect(calls).toHaveLength(0);
     const { endpoint } = await terminal.createWorkspace({
       sessionId: world.sessionId,
       cwd: world.repoPath,
@@ -56,32 +42,21 @@ test("explicit Tern selection overrides saved Herdr and alerts require the recor
       harness: DEFAULT_HARNESS,
     };
     const { notificationPane, ...coordinator } = endpoint;
-    expect(notificationPane).toBeDefined();
-    await saveCoordinatorRecord(world.home, {
-      ...record,
-      endpoint: coordinator,
-    });
-    const beforeCoordinatorAlert = calls.length;
+    if (notificationPane === undefined) throw new Error("Tern coordinator has no helper pane");
+    await saveCoordinatorRecord(world.home, { ...record, endpoint: coordinator });
     await expect(alert()).rejects.toThrow("requires a recorded Tandem-owned pane");
-    expect(calls).toHaveLength(beforeCoordinatorAlert);
-    expect(writes).toHaveLength(0);
+    expect(world.ttyWrites()).toEqual([]);
     await saveCoordinatorRecord(world.home, record);
-    const beforeHelperAlert = calls.length;
     await alert();
-    expect(writes).toHaveLength(1);
-    expect(writes[0]?.argv[4]).toBe("\x1b]777;notify;Needs you;Review ready\x07");
-    const alertCalls = calls.slice(beforeHelperAlert);
-    expect(
-      alertCalls.some((call) => call.argv.includes(notificationPane?.paneId ?? "missing")),
-    ).toBe(true);
-    expect(alertCalls.some((call) => call.argv.includes(endpoint.paneId))).toBe(false);
+    expect(world.ttyWrites()).toEqual([
+      { paneId: notificationPane.paneId, text: "\x1b]777;notify;Needs you;Review ready\x07" },
+    ]);
     await saveCoordinatorRecord(world.home, {
       ...record,
       endpoint: { ...endpoint, terminal: "herdr" },
     });
-    const before = calls.length;
     await expect(alert()).rejects.toThrow("quarantined herdr endpoint under tern");
-    const foreignHelper = terminalBackend(run, {
+    const foreignHelper = terminalBackend(world.run, {
       terminal: "tern",
       home: world.home,
       tern: {
@@ -104,14 +79,29 @@ test("explicit Tern selection overrides saved Herdr and alerts require the recor
         poolRoot: world.poolRoot,
       }),
     ).rejects.toThrow("quarantined herdr endpoint under tern");
-    expect(calls).toHaveLength(before);
-    expect(writes).toHaveLength(1);
+    expect(world.ttyWrites()).toHaveLength(1);
     const path = recordPath(world.home, world.sessionId, world.repoPath);
     await writeFile(
       path,
       JSON.stringify({ ...record, endpoint: { ...endpoint, terminal: undefined } }),
     );
     expect((await readCoordinatorRecord(path))?.endpoint.terminal).toBe("herdr");
+  });
+});
+
+test("only Tern hosts native views, and the saved choice decides which terminal answers", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const settings = join(world.home, "settings.toml");
+    await writeFile(settings, 'terminal = "herdr"\n');
+    const saved = terminalBackend(world.run, { home: world.home });
+    expect(saved.name).toBe("herdr");
+    expect(saved.views).toBeUndefined();
+    await writeFile(settings, 'terminal = "tern"\n');
+    expect(saved.name).toBe("tern");
+    expect(await saved.views?.retained(world.home)).toEqual([]);
+    expect(
+      terminalBackend(world.run, { terminal: "herdr", home: world.home }).views,
+    ).toBeUndefined();
   });
 });
 
@@ -142,17 +132,10 @@ test("Tern launch context needs its injected workspace and namespace, and mixed 
   expect(env.PATH).toBe("/bin");
 });
 
-test("a worker launch gets its own Tern workspace even when the parent context is supplied", async () => {
+test("a worker launch runs in its own Tern workspace even when the parent context is supplied", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-    const commands: string[] = [];
-    const terminal = terminalBackend(
-      async (request) => {
-        if (request.argv[1] === "run") commands.push(request.argv[3] ?? "");
-        return world.run(request);
-      },
-      { home: world.home },
-    );
+    const terminal = terminalBackend(world.run, { home: world.home });
     const session = { sessionId: world.sessionId, cwd: world.repoPath };
     const parent = await terminal.createWorkspace({
       ...session,
@@ -170,17 +153,28 @@ test("a worker launch gets its own Tern workspace even when the parent context i
     await terminal.runCommand({
       endpoint: worker.endpoint,
       cwd: world.repoPath,
-      command: ["bun", "worker.ts", "job.json"],
+      command: ["env"],
       env: { TANDEM_SESSION: "foreign", TANDEM_TERN_WORKSPACE_ID: parent.endpoint.workspaceId },
     });
-    const launch = commands.find((command) => command.includes("'worker.ts'"));
-    expect(launch).toBeDefined();
-    expect(launch).toContain(`'TANDEM_SESSION=${world.sessionId}'`);
-    expect(launch).toContain(`'TANDEM_TERN_WORKSPACE_ID=${worker.endpoint.workspaceId}'`);
-    expect(launch).not.toContain(`'TANDEM_TERN_WORKSPACE_ID=${parent.endpoint.workspaceId}'`);
-    expect(commands).toContain(
-      `'export' 'TANDEM_SESSION=${world.sessionId}' 'TANDEM_TERN_WORKSPACE_ID=${worker.endpoint.workspaceId}' 'TERN_PANE=${worker.endpoint.paneId}'`,
+    const shell = Bun.spawnSync(
+      ["/bin/sh", "-c", world.ranLines(worker.endpoint.paneId).join("\n")],
+      {
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      },
     );
+    const seen = Object.fromEntries(
+      shell.stdout
+        .toString()
+        .split("\n")
+        .filter((line) => line.includes("="))
+        .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+    );
+    expect(terminalContext.inheritedPane(seen)).toEqual({
+      status: "inside",
+      sessionId: world.sessionId,
+      workspaceId: worker.endpoint.workspaceId,
+      paneId: worker.endpoint.paneId,
+    });
   });
 });
 

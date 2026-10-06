@@ -78,7 +78,8 @@ export class NativeViewsReader {
   async read(
     snapshot: BoardSnapshot,
     project: string,
-    sessions: ReadonlyMap<string, Readonly<{ terminal: string; sessionId: string }>> = new Map(),
+    /** Session id by repository, for coordinators that host native views. */
+    sessions: ReadonlyMap<string, string> = new Map(),
   ): Promise<NativeViewsPublication> {
     const deps = this.#deps;
     const now = deps.clock();
@@ -304,9 +305,8 @@ export class NativeViewsReader {
     const ownPanel = nativePanelView({ snapshot, project, now, tasks: summaries, bellCount: 0 });
     const count = (title: string) =>
       ownPanel.sections.find((section) => section.title === title)?.count ?? 0;
-    const session = sessions.get(project);
+    const sessionId = sessions.get(project);
     const summary: NativeProjectSummary = {
-      terminal: "tern",
       repoPath: project,
       name: basename(project),
       writtenAt: now,
@@ -314,7 +314,7 @@ export class NativeViewsReader {
       needsYou: count("Needs you"),
       ready: count("Ready"),
       done: count("Recently done"),
-      ...(session?.terminal === "tern" ? { sessionId: session.sessionId } : {}),
+      ...(sessionId === undefined ? {} : { sessionId }),
     };
     const other = await readProjectSummaries(deps.home, project);
     warnings.push(...other.warnings);
@@ -521,7 +521,7 @@ function taskSummary(
 type PublicationInput = Readonly<{
   snapshot: BoardSnapshot;
   project: string;
-  sessions: ReadonlyMap<string, Readonly<{ terminal: string; sessionId: string }>>;
+  sessions: ReadonlyMap<string, string>;
 }>;
 
 /** One background writer per coordinator. Slow reads coalesce ticks to the newest snapshot. */
@@ -551,10 +551,10 @@ export class NativeViewsPublisher {
           const next = this.#pending;
           this.#pending = undefined;
           try {
-            const session = next.sessions.get(next.project);
-            if (session?.terminal === "tern") {
+            const sessionId = next.sessions.get(next.project);
+            if (sessionId !== undefined) {
               await this.#recoverOpens();
-              await this.#alerts.observe(next.snapshot, next.project, session.sessionId);
+              await this.#alerts.observe(next.snapshot, next.project, sessionId);
             }
             const view = await publishViews(this.#deps.home, next.project, () =>
               this.#reader.read(next.snapshot, next.project, next.sessions),
@@ -584,7 +584,7 @@ export class NativeViewsPublisher {
   /** A late receipt settles its paused open here, without waiting for the user's next click. */
   async #recoverOpens(): Promise<void> {
     try {
-      await this.#deps.terminal.recoverViewOpens(this.#deps.home);
+      await this.#deps.terminal.views?.recover(this.#deps.home);
     } catch (error) {
       await appendDiagnosticEvent(
         this.#deps.home,

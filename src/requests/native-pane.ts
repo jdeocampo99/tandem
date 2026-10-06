@@ -4,6 +4,7 @@ import type { RequestBriefRecord, RequestReviewPane } from "../contracts.ts";
 import { type CoordinatorRecord, canonicalPath } from "../coordinator/record.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
 import { publishViews, viewDetailPath } from "../native/store.ts";
+import type { ViewsCapability } from "../terminal-backend/contract.ts";
 import { briefView } from "./native-view.ts";
 import type { RequestReviewPaneDependencies } from "./review-pane.ts";
 import { createRequestBriefStore } from "./store.ts";
@@ -15,7 +16,7 @@ async function coordinatorForBrief(
   const repo = await canonicalPath(record.repoPath, "brief repository");
   const matches = (await listCoordinatorRecords(deps.home, deps.sessionId)).filter(
     (owner) =>
-      owner.endpoint.terminal === "tern" &&
+      owner.endpoint.terminal === deps.terminal.name &&
       (owner.repoPath === repo || owner.worktree.path === repo) &&
       (deps.coordinatorPaneId === undefined || owner.endpoint.paneId === deps.coordinatorPaneId),
   );
@@ -28,13 +29,14 @@ async function coordinatorForBrief(
 /** Native hosting owns exact-id proof, idempotent reuse and its durable unknown-outcome fence. */
 export async function projectNativeBriefPane(
   deps: RequestReviewPaneDependencies,
+  views: ViewsCapability,
   record: RequestBriefRecord,
 ): Promise<RequestReviewPane> {
   if (record.reviewPane?.status === "quarantined") return record.reviewPane;
   if (
     record.reviewPane !== undefined &&
     record.reviewPane.status !== "closed" &&
-    record.reviewPane.endpoint.terminal !== "tern"
+    record.reviewPane.endpoint.terminal !== deps.terminal.name
   ) {
     return {
       ...record.reviewPane,
@@ -55,7 +57,7 @@ export async function projectNativeBriefPane(
       throw new Error("Native brief no longer belongs to this repository");
     return { brief: briefView(fresh) };
   });
-  const opened = await deps.terminal.openView({
+  const opened = await views.open({
     coordinator: owner.endpoint,
     cwd: owner.worktree.path,
     home: deps.home,
@@ -76,6 +78,7 @@ export async function projectNativeBriefPane(
 /** Keep the approval or delivered feedback standing even when retirement is uncertain. */
 export async function closeNativeBriefPane(
   deps: RequestReviewPaneDependencies,
+  views: ViewsCapability,
   record: RequestBriefRecord,
 ): Promise<RequestReviewPane | undefined> {
   const pane = record.reviewPane;
@@ -94,7 +97,7 @@ export async function closeNativeBriefPane(
     );
   try {
     const owner = await coordinatorForBrief(deps, record);
-    const closed = await deps.terminal.closeView({
+    const closed = await views.close({
       coordinator: owner.endpoint,
       cwd: owner.worktree.path,
       home: deps.home,

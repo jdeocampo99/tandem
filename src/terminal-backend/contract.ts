@@ -114,7 +114,55 @@ export type OpenViewResult = Readonly<{
   warnings: readonly string[];
   /** Exact native brief split identity, for its request workflow's scoped retirement. */
   endpoint?: Endpoint;
-  fallback?: "brief-review";
+}>;
+
+/**
+ * Native views hosted beside a coordinator. A terminal that cannot host them omits the capability,
+ * so callers branch on its presence rather than on the terminal's name.
+ */
+export type ViewsCapability = Readonly<{
+  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
+   * Supplied origin window/pane context must be honored or refused; never target another window.
+   * A windowId is an opaque control window key. Without it, derive the unique owning control
+   * window from the exact origin pane or refuse ambiguous mutation; never select the first window.
+   */
+  open(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      view: TerminalView;
+      origin?: ViewOrigin;
+    }>,
+  ): Promise<OpenViewResult>;
+  /** Retires only the originating native brief split. The caller owns revision/action policy.
+   * Missing panes count as closed; foreign, busy and unknown outcomes retain the pane.
+   * This never retires a process-oriented Markdown reviewPane or the conversation.
+   */
+  close(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      origin: ViewOrigin & Readonly<{ paneId: string }>;
+      view: Extract<TerminalView, { kind: "brief" }>;
+    }>,
+  ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
+  /** Settles every retained native view open under `home` whose outcome is now proved. */
+  recover(home: string): Promise<void>;
+  /**
+   * Native view opens under `home` whose outcome was never proved, read without changing them.
+   * Throws when the opens themselves cannot be listed.
+   */
+  retained(home: string): Promise<readonly RetainedViewOpen[]>;
+  /**
+   * Removes one retained open's records, never a pane, under that open's lock: only while the
+   * record is unchanged and `conclusive` re-proves its coordinator's state.
+   */
+  abandon(
+    open: Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>,
+    conclusive: () => Promise<boolean>,
+  ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
 }>;
 
 /** Installation and account readiness proved before offering a terminal in setup. */
@@ -272,50 +320,8 @@ export type TerminalBackend = Readonly<{
       }>,
   ): Promise<boolean>;
 
-  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
-   * Supplied origin window/pane context must be honored or refused; never target another window.
-   * A windowId is an opaque control window key. Without it, derive the unique owning control
-   * window from the exact origin pane or refuse ambiguous mutation; never select the first window.
-   * Unsupported presentations return an explicit warning and never type into the conversation.
-   */
-  openView(
-    input: Readonly<{
-      coordinator: Endpoint;
-      cwd: string;
-      home: string;
-      view: TerminalView;
-      origin?: ViewOrigin;
-    }>,
-  ): Promise<OpenViewResult>;
-
-  /** Retires only the originating native brief split. The caller owns revision/action policy.
-   * Missing panes count as closed; foreign, busy and unknown outcomes retain the pane.
-   * This never retires a process-oriented Markdown reviewPane or the conversation.
-   */
-  closeView(
-    input: Readonly<{
-      coordinator: Endpoint;
-      cwd: string;
-      home: string;
-      origin: ViewOrigin & Readonly<{ paneId: string }>;
-      view: Extract<TerminalView, { kind: "brief" }>;
-    }>,
-  ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
-  /**
-   * Native view opens under `home` whose outcome was never proved, read without changing them.
-   * Throws when the opens themselves cannot be listed.
-   */
-  retainedViewOpens(home: string): Promise<readonly RetainedViewOpen[]>;
-  /** Settles every retained native view open under `home` whose outcome is now proved. */
-  recoverViewOpens(home: string): Promise<void>;
-  /**
-   * Removes one retained open's records, never a pane, under that open's lock: only while the
-   * record is unchanged and `conclusive` re-proves its coordinator's state.
-   */
-  abandonViewOpen(
-    open: Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>,
-    conclusive: () => Promise<boolean>,
-  ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
+  /** Native view hosting; absent when the terminal has none. */
+  views?: ViewsCapability | undefined;
   /**
    * Panes Tandem refuses to touch because an effect there ended with an unknown outcome, read
    * without changing them. Throws when the records themselves cannot be listed.

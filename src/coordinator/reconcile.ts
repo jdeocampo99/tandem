@@ -390,7 +390,7 @@ type CoordinatorScan = Readonly<{
 }>;
 
 /**
- * Reads every stored coordinator record across sessions and asks Herdr whether each one still
+ * Reads every stored coordinator record across sessions and asks the terminal whether each one still
  * answers. A record placed under a session directory it does not name is never probed: Tandem
  * cannot say whose coordinator that is, and probing would only aim commands at a stranger.
  */
@@ -679,7 +679,7 @@ function planCoordinator(
   if (found.placement === "foreign-directory") {
     return item(
       "quarantine",
-      `the record sits under a session directory it does not belong to; it names Herdr session ${JSON.stringify(found.sessionId)}`,
+      `the record sits under a session directory it does not belong to; it names terminal session ${JSON.stringify(found.sessionId)}`,
     );
   }
   if (liveness.status === "ambiguous") {
@@ -691,7 +691,7 @@ function planCoordinator(
   if (liveness.status === "live") {
     return item(
       "retain",
-      `a coordinator is running in Herdr session ${JSON.stringify(found.sessionId)} (pane ${JSON.stringify(found.record.endpoint.paneId)})`,
+      `a coordinator is running in terminal session ${JSON.stringify(found.sessionId)} (pane ${JSON.stringify(found.record.endpoint.paneId)})`,
     );
   }
   const settlement = judgeCoordinatorCheckout(found.record, observed.checkout);
@@ -701,7 +701,7 @@ function planCoordinator(
   const checkout = observed.checkout;
   return item(
     "clean",
-    `the coordinator recorded in Herdr session ${JSON.stringify(found.sessionId)} is stopped and its checkout ${
+    `the coordinator recorded in terminal session ${JSON.stringify(found.sessionId)} is stopped and its checkout ${
       checkout?.status === "observed" ? `is clean at ${checkout.head}` : "is no longer present"
     }; its pane can be closed and its lease released`,
   );
@@ -850,7 +850,7 @@ async function observeNativeOpens(
 ): Promise<Readonly<{ opens: readonly ObservedNativeOpen[]; failures: ReconcileScanFailure[] }>> {
   let retained: readonly RetainedViewOpen[];
   try {
-    retained = await terminal.retainedViewOpens(home);
+    retained = (await terminal.views?.retained(home)) ?? [];
   } catch (error) {
     return {
       opens: [],
@@ -906,10 +906,12 @@ async function applyNativeOpenItem(
   terminal: TerminalBackend,
   item: NativeOpenItem,
 ): Promise<ReconcileResult> {
-  if (item.open === undefined) return { item, outcome: "quarantined", reason: item.reason };
+  const views = terminal.views;
+  if (item.open === undefined || views === undefined)
+    return { item, outcome: "quarantined", reason: item.reason };
   const { open } = item;
   let detail = "";
-  const outcome = await terminal.abandonViewOpen(open, async () => {
+  const outcome = await views.abandon(open, async () => {
     const owner = await nativeOpenOwner(terminal, open);
     if (owner.status === "ambiguous") detail = owner.detail;
     return owner.status !== "ambiguous";

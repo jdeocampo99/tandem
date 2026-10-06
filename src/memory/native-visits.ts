@@ -22,7 +22,8 @@ export async function maybeShowCatchUp(
     now?: string;
   }>,
 ): Promise<boolean> {
-  if (terminal.name !== "tern" || input.record.endpoint.terminal !== "tern") return false;
+  const views = terminal.views;
+  if (views === undefined || input.record.endpoint.terminal !== terminal.name) return false;
   // Keep the native store out of unrelated terminal and worker startup paths.
   const { readProjectState } = await import("../native/store.ts");
   const { record, home } = input;
@@ -35,7 +36,7 @@ export async function maybeShowCatchUp(
       now: input.now ?? new Date().toISOString(),
     },
     async () => {
-      const result = await terminal.openView({
+      const result = await views.open({
         coordinator: record.endpoint,
         cwd: record.worktree.path,
         home,

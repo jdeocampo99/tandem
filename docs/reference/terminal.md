@@ -138,8 +138,9 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   its owning coordinator has a coordinator quarantine note. A focus is idempotent and records
   nothing. Opens record their own outcome as a ticket, and creations as their launch
   reservation. A record goes away in two ways. A close that finds its pane absent from an exact
-  scoped listing with no detached blocks returns absent and drops the record, so replacing a
-  coordinator or helper still succeeds. `tandem fix` lists every record and, with `--yes`,
+  scoped listing with no detached blocks returns absent and, when the listing covers every window,
+  drops the record, so replacing a coordinator or helper still succeeds. A window-scoped listing
+  cannot see other windows, so it keeps the record. `tandem fix` lists every record and, with `--yes`,
   clears one only after proving its pane gone or idle at the exact id, through
   `quarantinedPanes`/`clearPaneQuarantine` (Herdr has none; see
   [reconciliation](reconciliation.md#tandem-fix)). Never infer non-commit from a nonzero exit.
@@ -154,10 +155,16 @@ key must contain the exact origin and coordinator; without one, exactly one atta
 required. Task replacement also proves the previous task pane absent. Browser opens keep no
 durable record: nothing can prove an uncertain one later and it is never re-invoked, so it never
 pauses other opens. Native and panel closes prove the full arguments and idle state again
-immediately before closing; failed verification quarantines the pane durably. The port's
-`recoverViewOpens` settles decided tickets on each coordinator view publication. `tandem fix`
-lists retained opens and, with `--yes`, abandons one only after proving its coordinator exactly
-present or gone, through `retainedViewOpens`/`abandonViewOpen` (Herdr has none).
+immediately before closing; failed verification quarantines the pane durably.
+
+Native view hosting is the port's optional `views` capability (`ViewsCapability` in
+`src/terminal-backend/contract.ts`): `open`, `close`, `recover`, `retained` and `abandon`. Tern
+provides it; Herdr omits it, and callers branch on `terminal.views` rather than on the terminal's
+name. `views.recover` settles decided tickets on each coordinator view publication. `tandem fix`
+lists retained opens through `views.retained` and, with `--yes`, abandons one through
+`views.abandon` only after proving its coordinator exactly present or gone. Without `views`, a
+native open is refused with Herdr's unsupported-view reason, a brief opens in its request review
+pane, and arrival notifications go through `notify` instead of native alerts.
 
 Panels and root Board, Usage and Catch-up views reuse one exact existing block under the opening
 lock, checking the block arguments and intended placement. Duplicate, detached or foreign-window
