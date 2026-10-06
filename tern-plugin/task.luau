@@ -3,6 +3,8 @@ local ui = tern.ui
 local views = require('./view-file')
 local fields = require('./text-field')
 local components = require('./components')
+local prModels = require('./pr-model')
+local prContent = require('./pr-content')
 
 type Event = { seq: number, at: string, type: string, cause: string?, from: string?, to: string?, stage: string?, round: number? }
 type Model = {
@@ -22,7 +24,9 @@ type Model = {
    tokens: { actualInputTokens: number, actualOutputTokens: number, estimatedInputTokens: number, estimatedOutputTokens: number, unavailableSamples: number } } },
    byWorkKind: { { workKind: string, activeMs: number } }, malformedSamples: number, omittedSamples: number } }?,
 }
-type State = { view: views.View<Model>, field: fields.Field, tab: string, cwd: string, orchestrator: string?, busy: boolean, editing: boolean }
+type Index = { briefs: { [string]: { detailFile: string } }, pullRequests: { [string]: { header: { number: number, taskId: string? }, detailFile: string } } }
+type Brief = { title: string, revision: number, lines: { { id: string, number: number, text: string, kind: string, isNew: boolean } } }
+type State = { index: views.View<Index>?, brief: views.View<Brief>?, pr: views.View<prModels.Model>?, prContent: prContent.State, stopBrief: (() -> ())?, stopPr: (() -> ())?, view: views.View<Model>, field: fields.Field, tab: string, cwd: string, orchestrator: string?, root: string?, prMatch: boolean, busy: boolean, editing: boolean }
 
 local function optionalString(value: unknown): boolean return value == nil or type(value) == 'string' end
 local function events(value: unknown): boolean
@@ -90,6 +94,46 @@ local function parse(value: unknown): Model?
   for _, row in cost.quota.entries do if type(row) ~= 'table' or type(row.plan) ~= 'string' or type(row.units) ~= 'number' or type(row.unit) ~= 'string' then return nil end end
  end
  return value :: Model
+end
+
+local function parseIndex(value: unknown): Index?
+ if type(value) ~= 'table' or type(value.briefs) ~= 'table' or type(value.pullRequests) ~= 'table' then return nil end
+ for _, brief in value.briefs do if type(brief) ~= 'table' or type(brief.detailFile) ~= 'string' then return nil end end
+ for _, pr in value.pullRequests do if type(pr) ~= 'table' or type(pr.detailFile) ~= 'string' or type(pr.header) ~= 'table' or type(pr.header.number) ~= 'number' then return nil end end
+ return value :: Index
+end
+local function parseBrief(value: unknown): Brief?
+ if type(value) ~= 'table' or type(value.title) ~= 'string' or type(value.revision) ~= 'number' or type(value.lines) ~= 'table' then return nil end
+ for _, line in value.lines do if type(line) ~= 'table' or type(line.id) ~= 'string' or type(line.number) ~= 'number' or type(line.text) ~= 'string' or type(line.kind) ~= 'string' or type(line.isNew) ~= 'boolean' then return nil end end
+ return value :: Brief
+end
+local function related(state: State, cx: BlockCx)
+ state.prMatch = false
+ local model = state.view.model
+ local index = state.index
+ if not model or not index or index.status ~= 'ready' or not index.model then return end
+ local brief = if model.requestId then index.model.briefs[model.requestId] else nil
+ if brief and (not state.brief or state.brief.path ~= brief.detailFile) then
+  if state.stopBrief then state.stopBrief() end
+  state.brief = views.create(brief.detailFile, 'brief', parseBrief); views.refresh(state.brief); state.stopBrief = views.watch(state.brief, cx)
+ end
+ local path: string? = nil
+ for _, pr in index.model.pullRequests do
+  if pr.header.taskId == model.header.id or (model.pullRequest and pr.header.number == model.pullRequest.number) then
+   if path and path ~= pr.detailFile then path = nil; break end
+   path = pr.detailFile
+  end
+ end
+ state.prMatch = path ~= nil
+ if not path and state.pr then if state.stopPr then state.stopPr() end; state.pr = nil; state.stopPr = nil end
+ if not brief and state.brief then if state.stopBrief then state.stopBrief() end; state.brief = nil; state.stopBrief = nil end
+ if path and (not state.pr or state.pr.path ~= path) then
+  if state.stopPr then state.stopPr() end
+  state.pr = views.create(path, 'pr', prModels.parse); views.refresh(state.pr); state.stopPr = views.watch(state.pr, cx)
+ end
+end
+local function prReady(state: State): boolean
+ return state.prMatch and state.view.status == 'ready' and state.index ~= nil and state.index.status == 'ready' and state.pr ~= nil and state.pr.status == 'ready'
 end
 
 local function text(value: string, tone: string?): Node return components.text(value, tone) end
@@ -162,8 +206,14 @@ local function body(state: State, model: Model): Node
   return ui.col({ section('Timeline', events), section('Validation checks', if #checks > 0 then checks else { text('No validation evidence yet.', 'muted') }),
    section('Review findings', if #findings > 0 then findings else { text('No saved findings.', 'muted') }) })
  elseif state.tab == 'Brief' then
-  return ui.col({ text('The request brief is available beside the conversation.'), button('Open brief', 'open-brief') })
+  local brief = state.brief
+  if not brief or not brief.model then return ui.col({ text('Brief detail unavailable. Wait for its saved view.', 'muted'), button('Open brief', 'open-brief') }) end
+  local rows = { text(brief.model.title .. ' · revision ' .. brief.model.revision, 'strong'), button('Open brief to review or comment', 'open-brief') }
+  if brief.status ~= 'ready' then table.insert(rows, text('Brief detail unavailable. Showing the last saved draft.', 'warn')) end
+  for _, line in brief.model.lines do table.insert(rows, ui.el('div', { key = line.id, class = 'tt-brief-line' }, { text(tostring(line.number), 'muted'), ui.md(line.text), text(if line.isNew then 'NEW' else '', 'accent') })) end
+  return ui.col(rows)
  elseif state.tab == 'Diff' or state.tab == 'PR' then
+  if state.pr and state.pr.model then return prContent.view(state.prContent, state.pr.model, prReady(state), 'main.content').main end
   return ui.col({ text(if model.pullRequest then 'Open the PR pane to read the description, diff and review threads.' else 'No pull request is available yet.', 'muted'),
    if model.pullRequest then button('Open PR #' .. model.pullRequest.number, 'open-pr') else text('The branch is ' .. (model.header.branch or 'unavailable'), 'muted') })
  elseif state.tab == 'Cost' then return costNode(model) end
@@ -192,18 +242,40 @@ local function run(state: State, cx: BlockCx, args: { string }, clear: boolean?)
  end)
  if not ok then state.busy = false; cx:toast('error', 'Tandem action could not start', tostring(problem)); cx:render() end
 end
+local function invokePr(state: State, cx: BlockCx): prContent.Invoke
+ return function(verb, id, payload, done)
+  if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then return end
+  if verb == 'open' and type(payload) == 'string' then run(state, cx, { 'open', id, payload }); return end
+  if state.busy or string.sub(state.cwd, 1, 1) ~= '/' then return end
+  local argv = { '/bin/sh', 'pr-input.sh', verb, id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
+  local window = tern.getenv('TERN_WINDOW_KEY')
+  if window and window ~= '' then table.insert(argv, '--window'); table.insert(argv, window) end
+  state.busy = true
+  local ok, problem = pcall(function()
+   tern.process.run(argv, { cwd = '.', stdin = tern.json.encode(payload) }, function(result)
+    state.busy = false; state.prContent.diff.busy = false
+    if result.status ~= 0 then cx:toast('error', 'PR action failed', result.stderr) elseif done then done() end
+    cx:render()
+   end)
+  end)
+  if not ok then state.busy = false; state.prContent.diff.busy = false; cx:toast('error', 'PR action could not start', tostring(problem)) end
+ end
+end
+
 local function send(state: State, cx: BlockCx)
  local model = state.view.model
  if model and string.match(state.field.text, '%S') then run(state, cx, { 'steer', '--task', model.header.id, '--text', state.field.text }, true) end
 end
 local block: BlockDef<State> = {
  init = function(cx, args)
-  local state = { view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', cwd = args[2] or '', orchestrator = args[3], busy = false, editing = false }
+  local state: State = { prContent = prContent.create(), prMatch = false, root = args[2], view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', cwd = args[4] or cx.cwd or '', orchestrator = args[3], busy = false, editing = false }
   views.refresh(state.view); views.watch(state.view, cx)
+  if args[2] and args[2] ~= '' then state.index = views.create(args[2], 'panel', parseIndex); views.refresh(state.index); views.watch(state.index, cx) end
   return state
  end,
  title = function(state) return if state.view.model then state.view.model.header.title else 'Task' end,
- view = function(state)
+ view = function(state, cx)
+  related(state, cx)
   local model = state.view.model
   if not model then return { main = text('Task view unavailable. Waiting for its saved detail file.', 'warn') } end
   if not table.find(model.tabs, state.tab) then state.tab = 'Overview' end
@@ -238,11 +310,12 @@ local block: BlockDef<State> = {
   return { main = ui.el('div', { class = 'tt-page' }, children) }
  end,
  event = function(state, ev, cx)
+  if (state.tab == 'Diff' or state.tab == 'PR') and not state.editing and state.pr and state.pr.model and prContent.event(state.prContent, state.pr.model, prReady(state), ev, cx, invokePr(state, cx)) then cx:render(); return end
   if ev.ev == 'focus' then state.editing = string.find(ev.id, 'worker%-message$') ~= nil; cx:frame({ { 'focus', ev.id } }); return end
   if ev.ev ~= 'action' then return end
   local action = ev.act .. (if ev.value and ev.value ~= '' then '=' .. ev.value else '')
   local tab = string.match(action, '^tab=(.+)$')
-  if tab and state.view.model and table.find(state.view.model.tabs, tab) then state.tab = tab; state.editing = false; cx:render(); return end
+  if tab and state.view.model and table.find(state.view.model.tabs, tab) then state.tab = tab; state.editing = false; if tab == 'Diff' then state.prContent.tab = 'Diff' elseif tab == 'PR' then state.prContent.tab = 'Description' end; cx:render(); return end
   if action == 'focus-message' or action == 'steer' then state.editing = true; cx:frame({ { 'focus', 'main.worker-message' } }); cx:render(); return end
   if action == 'send' then send(state, cx); return end
   local model = state.view.model
@@ -253,7 +326,10 @@ local block: BlockDef<State> = {
   end
  end,
  key = function(state, key, cx)
-  if not state.editing then return false end
+  if not state.editing then
+   if (state.tab == 'Diff' or state.tab == 'PR') and state.pr and state.pr.model then return prContent.key(state.prContent, state.pr.model, prReady(state), key, cx, invokePr(state, cx)) end
+   return false
+  end
   local outcome = fields.key(state.field, key)
   if outcome == 'submit' then send(state, cx)
   elseif outcome == 'cancel' or outcome == 'next' then state.editing = false; cx:render()

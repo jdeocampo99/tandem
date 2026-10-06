@@ -46,7 +46,7 @@ type ControlNode = {
     });
     await writeFile(
       join(plugin, "window.luau"),
-      `tern.on("window_start", function(cx) cx:new_block("tandem.task", {${JSON.stringify(file)}, ${JSON.stringify(root)}}, "tab") end)\n`,
+      `tern.on("window_start", function(cx) cx:new_block("tandem.task", {${JSON.stringify(file)}, "", "", ${JSON.stringify(root)}}, "tab") end)\n`,
     );
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
     const run = async (...args: string[]) => {

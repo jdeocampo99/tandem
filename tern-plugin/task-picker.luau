@@ -45,7 +45,7 @@ local function open(state: State, cx: BlockCx, id: string)
 end
 local block: BlockDef<State> = {
  init = function(cx, args)
-  local state = { view = views.create(args[1] or '', 'panel', parse), field = fields.create(), cwd = args[2] or '', busy = false, selected = 1 }
+  local state = { view = views.create(args[1] or '', 'panel', parse), field = fields.create(), cwd = args[4] or cx.cwd or '', busy = false, selected = 1 }
   views.refresh(state.view); views.watch(state.view, cx)
   return state
  end,

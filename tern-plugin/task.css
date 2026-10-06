@@ -121,3 +121,9 @@
   border-color: #8957e5;
   background: rgba(137, 87, 229, 0.13);
 }
+.tt-brief-line {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 6px 0;
+}
