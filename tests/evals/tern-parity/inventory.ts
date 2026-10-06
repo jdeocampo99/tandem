@@ -1,0 +1,728 @@
+import { expect } from "bun:test";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
+import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
+import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { withPrWatches } from "../../../src/pr-watch/store.ts";
+import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
+import { createRequestBriefStore } from "../../../src/requests/store.ts";
+import { nativeReplyLinks } from "../../../src/session/native-links.ts";
+import { TERN_PLUGIN_KEYS } from "../../../src/terminal-backend/tern/plugin-keys.ts";
+import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin-settings.ts";
+import { content } from "../../board/fixtures.ts";
+import {
+  type ScenarioTernProject,
+  type ScenarioWorld,
+  seedScenarioTask,
+  seedTernProject,
+  withScenario,
+} from "../scenario.ts";
+import { type Rendered, type Screen, TernParityHost } from "./harness.ts";
+
+export type Parity = Readonly<{
+  world: ScenarioWorld;
+  host: TernParityHost;
+  project: ScenarioTernProject;
+  panel: Screen;
+  briefId: string;
+}>;
+
+export type InventoryEntry = Readonly<{ view: string; item: string; run: () => Promise<void> }>;
+
+const PR_URL = "https://github.com/acme/app/pull/281";
+const PATCH = [
+  "diff --git a/src/port.ts b/src/port.ts",
+  "--- a/src/port.ts",
+  "+++ b/src/port.ts",
+  "@@ -1,2 +1,3 @@",
+  " export function port() {",
+  "+  guard();",
+  " }",
+  "",
+].join("\n");
+
+export function briefs(world: ScenarioWorld) {
+  return createRequestBriefStore({ home: world.home, clock: world.clock, idFactory: world.idFactory });
+}
+
+/** A project mid-flight: one task in each panel section, a brief to approve and a watched PR. */
+async function seedWork(world: ScenarioWorld): Promise<string> {
+  await seedScenarioTask(world, {
+    id: "port",
+    title: "Port the terminal",
+    kind: "implementation",
+    stage: "implementing",
+  });
+  const stuck = await seedScenarioTask(world, {
+    id: "login",
+    title: "Fix login",
+    kind: "implementation",
+    stage: "blocked",
+    previousStage: "implementing",
+  });
+  await world.store.update(stuck.id, stuck.revision, (task) => ({
+    ...task,
+    revision: task.revision + 1,
+    blockReason: "worker stopped twice",
+  }));
+  await seedScenarioTask(world, {
+    id: "docs",
+    title: "Write docs",
+    kind: "implementation",
+    stage: "completed",
+  });
+  world.github.openPullRequest({
+    repo: "acme/app",
+    number: 281,
+    title: "Ship the port",
+    body: "Ports the terminal backend.",
+    patch: PATCH,
+    checks: [
+      { name: "lint", state: "pass" },
+      { name: "e2e", state: "pending", startedAt: new Date(Date.parse(world.clock()) - 90_000).toISOString() },
+      { name: "unit", state: "fail" },
+    ],
+    comments: [
+      { id: "c1", author: "sam", createdAt: world.clock(), body: "Looks close." },
+    ],
+    threads: [
+      {
+        id: "thread-1",
+        path: "src/port.ts",
+        line: 2,
+        side: "RIGHT",
+        resolved: false,
+        outdated: false,
+        comments: [
+          { id: "n1", databaseId: 11, author: "jules", createdAt: world.clock(), body: "Why guard here?" },
+        ],
+      },
+    ],
+  });
+  await seedScenarioTask(world, {
+    id: "ship",
+    title: "Ship the port",
+    kind: "implementation",
+    stage: "ready",
+    pullRequest: {
+      repository: "acme/app",
+      number: 281,
+      url: PR_URL,
+      state: "open",
+      head: "feature-281",
+      base: "main",
+    },
+  });
+  world.github.openPullRequest({ repo: "acme/app", number: 282, title: "Bump deps", patch: PATCH });
+  await withPrWatches(world.home, ({ put }) => {
+    put({
+      ref: { repo: "acme/app", number: 281 },
+      origin: "task",
+      taskId: "ship",
+      repoPath: world.repoPath,
+      startedAt: world.clock(),
+      log: [],
+    });
+    put({
+      ref: { repo: "acme/app", number: 282 },
+      origin: "user",
+      repoPath: world.repoPath,
+      startedAt: world.clock(),
+      log: [],
+      row: { color: "yellow", status: "⏳ checks running", note: "2 checks pending" },
+      summary: {
+        title: "Bump deps",
+        branch: "feature-282",
+        url: "https://github.com/acme/app/pull/282",
+        checks: { passed: 1, failed: 0, pending: 2 },
+      },
+    });
+  });
+  const brief = await briefs(world).create({
+    repoPath: world.repoPath,
+    content: content("Add dark mode"),
+  });
+  return brief.id;
+}
+
+/** Runs `body` against a seeded project whose panel is open in the Tern window. */
+export async function withParity(
+  body: (parity: Parity) => Promise<void>,
+  options: Readonly<{ seed?: boolean; publish?: boolean }> = {},
+): Promise<void> {
+  await withScenario({ terminal: "tern", now: new Date().toISOString() }, async (world) => {
+    const project = await seedTernProject(world, { coordinatorPaneId: "101", helperPaneId: "102" });
+    const briefId = options.seed === false ? "" : await seedWork(world);
+    const host = await TernParityHost.start(world, project);
+    try {
+      if (options.publish !== false) await host.publish();
+      const panel = host.screen(await host.openPanel());
+      await body({ world, host, project, panel, briefId });
+    } finally {
+      await host.close();
+    }
+  });
+}
+
+async function otherProject(parity: Parity, name = "api"): Promise<ScenarioTernProject> {
+  const { world, host } = parity;
+  const other = await seedTernProject(world, {
+    coordinatorPaneId: name === "api" ? "111" : "121",
+    helperPaneId: name === "api" ? "112" : "122",
+    repoPath: join(dirname(world.repoPath), name),
+  });
+  await seedScenarioTask(world, {
+    id: `${name}-stuck`,
+    title: `Unblock ${name}`,
+    kind: "implementation",
+    stage: "blocked",
+    previousStage: "implementing",
+    repoPath: other.repoPath,
+  });
+  await host.publish(other);
+  return other;
+}
+
+function labels(view: Rendered): readonly string[] {
+  return view.actions.map((action) => action.label);
+}
+
+function expectDrawn(view: Rendered, ...texts: readonly string[]): void {
+  for (const text of texts) expect(view.text).toContain(text);
+}
+
+function styleOf(view: Rendered, text: string): string {
+  const span = view.spans.find((entry) => entry.text === text);
+  if (span === undefined) throw new Error(`"${text}" is not drawn`);
+  return span.style;
+}
+
+function traceSince(world: ScenarioWorld, mark: number): readonly string[] {
+  return world.trace().slice(mark).map((event) => `${event.action} ${event.outcome}`);
+}
+
+function blockKinds(world: ScenarioWorld): readonly string[] {
+  return world
+    .ternBlocks()
+    .flatMap((block) => (block.program === undefined ? [] : [block.program]))
+    .toSorted();
+}
+
+/** Every row of the experience inventory in final.md. Assertions are what the user sees. */
+export const inventory: readonly InventoryEntry[] = [
+  {
+    view: "Panel",
+    item: "Header with tandem ▾, other-project count, 5h meter and label, bell count, PRs and Board icons",
+    run: () =>
+      withParity(async (parity) => {
+        const { host, panel, world } = parity;
+        await otherProject(parity);
+        await host.publish();
+        await host.refresh();
+        const view = await panel.render();
+        expect(view.text.slice(0, 7)).toEqual(["tandem ▾", "1", "5h unavailable", "🔔︎ 0", "⎇", "▦", "Needs you · 2"]);
+        expect(labels(view).slice(0, 5)).toEqual(["tandem ▾ 1", "5h unavailable", "🔔︎ 0", "⎇", "▦"]);
+        await panel.click("▦");
+        expect(host.screen(host.pane("board")).pane).toBeGreaterThan(0);
+        await panel.click("5h unavailable");
+        expect((await host.screen(host.pane("usage")).render()).text).toContain("Usage · tandem");
+        await panel.click("⎇");
+        const prs = await host.screen(host.pane("pr")).render();
+        expect(prs.title).toBe("#281 ▾");
+        expect(blockKinds(world)).toEqual(["tandem.board", "tandem.panel", "tandem.pr", "tandem.usage"]);
+      }),
+  },
+  {
+    view: "Panel",
+    item: "Sections and two-line rows, state colors, PR link in the dim line",
+    run: () =>
+      withParity(async ({ host, panel }) => {
+        const view = await panel.render();
+        expect(view.text.slice(5)).toEqual([
+          "Needs you · 2",
+          "●", "Add dark mode", "brief to approve", "brief waiting for approval",
+          "●", "Fix login", "stuck", "0s", "worker stopped twice",
+          "Running · 1",
+          "●", "Port the terminal", "implementing", "0s", "for 0s",
+          "Ready · 2",
+          "●", "Ship the port", "ready", "0s", " · waiting for PR watch", "#281 ↗",
+          "●", "#282 feature-282", "checks running", "2 checks pending",
+          "Recently done · 1",
+          "●", "Write docs", "done", "0s", "done",
+        ]);
+        expect(styleOf(view, "Needs you · 2")).toContain("tdp-needs");
+        const dots = view.spans
+          .filter((span) => span.text === "●")
+          .map((span) => span.style.split(" ").at(-1));
+        expect(dots).toEqual(["tdp-yellow", "tdp-red", "tdp-blue", "tdp-green", "tdp-yellow", "tdp-green"]);
+        const mark = host.events.length;
+        await panel.click("#281 ↗");
+        expect(host.since(mark).flatMap((event) => (event.open ? [event.open.url] : []))).toEqual([PR_URL]);
+      }),
+  },
+  {
+    view: "Panel",
+    item: "Enter, click, j/k, arrows, Esc; task, brief and PR targets",
+    run: () =>
+      withParity(async ({ host, panel, world, briefId }) => {
+        const row = async () =>
+          (await panel.render()).spans.find(
+            (span) => span.style.includes("tdp-selected") && span.style.includes("tdp-name"),
+          )?.text;
+        expect(await row()).toBe("Add dark mode");
+        expect(await panel.press({ name: "j" })).toBe(true);
+        expect(await row()).toBe("Fix login");
+        await panel.press({ name: "down" });
+        expect(await row()).toBe("Port the terminal");
+        await panel.press({ name: "k" });
+        await panel.press({ name: "up" });
+        await panel.press({ name: "up" });
+        expect(await row()).toBe("Add dark mode");
+        await panel.press({ name: "enter" });
+        expect((await host.screen(host.pane("brief")).render()).title).toBe("Brief · Request brief");
+        await panel.click(/^● Port the terminal/);
+        expect((await host.screen(host.pane("task")).render()).title).toBe("Port the terminal");
+        await panel.click(/^● #282 feature-282/);
+        expect((await host.screen(host.pane("pr")).render()).title).toBe("#282 ▾");
+        await panel.click("tandem ▾");
+        expect((await panel.render()).text).toContain("+ Open another project…");
+        expect(await panel.press({ name: "escape" })).toBe(true);
+        expect((await panel.render()).text).not.toContain("+ Open another project…");
+      }),
+  },
+  {
+    view: "Panel",
+    item: "Bell opens the inbox and marks alerts read",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        const task = await world.store.read("port");
+        if (task === undefined) throw new Error("missing seeded task");
+        await world.store.update(task.id, task.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          stage: "blocked",
+          previousStage: "implementing",
+          blockReason: "tests keep failing",
+        }));
+        await host.publish();
+        await host.refresh();
+        expect((await panel.render()).text).toContain("🔔︎ 1");
+        const mark = host.events.length;
+        await panel.click("🔔︎ 1");
+        expect(host.since(mark).flatMap((event) => (event.command ? [event.command] : []))).toEqual(["inbox"]);
+        expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(0);
+        await host.publish();
+        await host.refresh();
+        expect((await panel.render()).text).toContain("🔔︎ 0");
+      }),
+  },
+  {
+    view: "Panel",
+    item: "Loading, unavailable, stale footer; empty sections",
+    run: () =>
+      withParity(
+        async ({ host, panel, world }) => {
+          expect((await panel.render()).text).toEqual(["Waiting for Tandem's project snapshot…"]);
+          await host.publish();
+          await host.refresh();
+          expect((await panel.render()).text).toEqual([
+            "tandem ▾", "5h unavailable", "🔔︎ 0", "⎇", "▦",
+            "Needs you · 0", "Running · 0", "Ready · 0", "Recently done · 0",
+          ]);
+          await writeFile(nativeViewsPath(world.home, world.repoPath), "{broken");
+          await host.refresh();
+          const unavailable = await panel.render();
+          expect(unavailable.text).toContain("View unavailable · actions paused");
+          const mark = host.cli.length;
+          await panel.click("⎇");
+          expect(host.cli.length).toBe(mark);
+          await host.publish(host.project, { snapshotAgeMs: 60_000 });
+          await host.refresh();
+          expect((await panel.render()).text.at(-1)).toBe("⚠ updated 1m ago · no coordinator running");
+        },
+        { seed: false, publish: false },
+      ),
+  },
+  {
+    view: "Project switcher",
+    item: "Rows with status, needs-you badge, check, ⌘ hint; offline rows inert; Open another project; prev/next hint",
+    run: () =>
+      withParity(async (parity) => {
+        const { host, panel, world } = parity;
+        world.advanceClock(-0.25);
+        await otherProject(parity, "web");
+        world.advanceClock(0.25);
+        await otherProject(parity);
+        await host.publish();
+        await host.refresh();
+        await panel.click("tandem ▾ 1");
+        const open = await panel.render();
+        expect(open.text.slice(0, open.text.indexOf("tandem ▾"))).toEqual([
+          " ", "api", "0 running · 1 needs you", "1", "⌘1",
+          "✓", "repo", "1 running · 2 needs you", "2", "⌘2",
+          " ", "web", "offline", "1", "⌘3",
+          "+ Open another project…",
+          "⌘⇧[ / ⌘⇧] previous / next project",
+        ]);
+        expect(labels(open).slice(0, 3)).toEqual([
+          "  api 0 running · 1 needs you 1 ⌘1",
+          "✓ repo 1 running · 2 needs you 2 ⌘2",
+          "+ Open another project…",
+        ]);
+        world.advanceClock(-0.5);
+        await host.publish();
+        let mark = host.events.length;
+        await panel.click(/ api /);
+        expect(host.toasts(mark).map((toast) => toast.message)).toEqual([
+          "tandem: Project switcher is stale; wait for the coordinator snapshot\n",
+        ]);
+        world.advanceClock(0.5);
+        await host.publish();
+        await host.refresh();
+        await panel.click("tandem ▾ 1");
+        mark = world.trace().length;
+        await panel.click(/ api /);
+        expect(traceSince(world, mark)).toContain("tern focus ok");
+        expect((await panel.render()).text).not.toContain("+ Open another project…");
+        await panel.click("tandem ▾ 1");
+        await panel.click("+ Open another project…");
+        expect(world.sentKeys()).toEqual([
+          { paneId: "101", text: "Help me open another project in Tandem.\r" },
+        ]);
+      }),
+  },
+  {
+    view: "Keys and palette",
+    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘1–9, ⌘⇧[ ]; five palette commands; project commands hidden",
+    run: () =>
+      withParity(async (parity) => {
+        const { host, world } = parity;
+        await otherProject(parity);
+        await host.publish();
+        await host.refresh();
+        const commands = await host.commands();
+        expect(commands.filter((command) => command.visible).map((command) => command.title)).toEqual([
+          "Tandem: New request…",
+          "Tandem: Open task…",
+          "Tandem: Toggle board",
+          "Tandem: Show PRs",
+          "Tandem: Usage",
+        ]);
+        const registered = new Set(commands.map((command) => `plugin.tandem.${command.id}`));
+        const bound = [...new Set(Object.values(TERN_PLUGIN_KEYS))];
+        expect(bound.filter((id) => !registered.has(id))).toEqual([]);
+        expect(
+          commands.filter((command) => !command.visible).map((command) => command.title),
+        ).toEqual([
+          ...Array.from({ length: 9 }, (_, index) => `Tandem: Project ${index + 1}`),
+          "Tandem: Previous project",
+          "Tandem: Next project",
+        ]);
+        await host.focus(101);
+        await host.command("board");
+        expect(blockKinds(world)).toContain("tandem.board");
+        await host.command("board");
+        expect(blockKinds(world)).not.toContain("tandem.board");
+        await host.command("prs");
+        expect((await host.screen(host.pane("pr")).render()).title).toBe("#281 ▾");
+        await host.command("usage");
+        expect(blockKinds(world)).toContain("tandem.usage");
+        await host.focus(101);
+        const mark = world.trace().length;
+        await host.command("project-1");
+        expect(traceSince(world, mark)).toContain("tern focus ok");
+        await host.command("open-task");
+        const picker = host.screen(host.pane("task-picker"));
+        expect((await picker.render()).text).toContain("Search tasks by title, id or stage");
+      }),
+  },
+  {
+    view: "Links",
+    item: "tandem://task|brief|pr in coordinator replies",
+    run: () =>
+      withParity(async ({ host, world, briefId }) => {
+        const links = nativeReplyLinks(
+          [
+            {
+              role: "assistant",
+              content: `Task port is implementing, ${briefId} needs approval and PR #281 is ready.`,
+            },
+          ],
+          await world.store.list(),
+          await briefs(world).list(),
+          world.repoPath,
+        );
+        expect(links.map((link) => link.label)).toEqual([
+          "Task port",
+          `Brief ${briefId}`,
+          "PR #281",
+        ]);
+        for (const link of links) expect(await host.link(link.url)).toBe(true);
+        expect((await host.screen(host.pane("task")).render()).title).toBe("Port the terminal");
+        expect((await host.screen(host.pane("brief")).render()).title).toBe("Brief · Request brief");
+        expect((await host.screen(host.pane("pr")).render()).title).toBe("#281 ▾");
+        expect(await host.link("https://example.com/not-tandem")).toBe(false);
+        expect(await host.link("tandem://pr/not-a-number")).toBe(false);
+      }),
+  },
+  {
+    view: "Inbox alerts",
+    item: "Needs you, Done, Stuck through OSC 777 from the helper pane",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        const port = await world.store.read("port");
+        if (port === undefined) throw new Error("missing seeded task");
+        await world.store.update(port.id, port.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          stage: "blocked",
+          previousStage: "implementing",
+          blockReason: "tests keep failing",
+        }));
+        const docs = await world.store.read("docs");
+        if (docs === undefined) throw new Error("missing seeded task");
+        await world.store.update(docs.id, docs.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          pullRequest: {
+            repository: "acme/app",
+            number: 283,
+            state: "draft",
+            head: "feature-283",
+            base: "main",
+          },
+        }));
+        await briefs(world).create({ repoPath: world.repoPath, content: content("Add search") });
+        await host.publish();
+        expect(world.ttyWrites().map((write) => `${write.paneId} ${write.text}`)).toEqual([
+          "102 \x1b]777;notify;Tandem: Stuck;Port the terminal\x07",
+          "102 \x1b]777;notify;Tandem: Done;Write docs\x07",
+          "102 \x1b]777;notify;Tandem: Needs you;Request brief\x07",
+        ]);
+        await host.refresh();
+        expect((await panel.render()).text).toContain("🔔︎ 3");
+      }),
+  },
+  {
+    view: "Task page",
+    item: "Header (title, id, model, elapsed, branch); Right now; Agent progress track",
+    run: () =>
+      withParity(async ({ host, panel }) => {
+        await panel.click(/^● Ship the port/);
+        const view = await host.screen(host.pane("task")).render();
+        expect(view.title).toBe("Ship the port");
+        expect(view.text.slice(0, 18)).toEqual([
+          "Ship the port", "task #ship", "← Orchestrator",
+          "Model unavailable", "0s elapsed", "Branch unavailable",
+          "Right now", "▸ ready to publish",
+          "Agent progress", "✓ Implement", "→", "✓ Validate", "→", "✓ Review", "→",
+          "Fix · round 0 of 1", "→", "Ready",
+        ]);
+        expect(styleOf(view, "✓ Implement")).toContain("success");
+      }),
+  },
+  {
+    view: "Task page",
+    item: "Tabs Overview, Brief, Progress, Diff, PR, Cost",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        await panel.click(/^● Ship the port/);
+        const task = host.screen(host.pane("task"));
+        const body = async () => {
+          const view = await task.render();
+          return view.text.slice(view.text.indexOf("Cost") + 1, view.text.indexOf("Message the worker…"));
+        };
+        expect(labels(await task.render()).slice(1, 7)).toEqual([
+          "Overview", "Brief", "Progress", "Diff", "PR", "Cost",
+        ]);
+        const at = world.clock().slice(11, 16);
+        expect(await body()).toEqual([
+          "Summary", "Ship the port", "To-dos · 0 of 0", "No worker to-dos yet.", "Recent events",
+          at, "implementing → ready", at, "queued → implementing", at, "awaiting-approval → queued",
+          at, "Started · awaiting-approval",
+        ]);
+        await task.click("Brief");
+        expect(await body()).toEqual(["No brief is linked to this task yet."]);
+        await task.click("Progress");
+        expect(await body()).toEqual([
+          "Timeline", at, "Started · awaiting-approval", at, "awaiting-approval → queued",
+          at, "queued → implementing", at, "implementing → ready",
+          "Validation checks", "No validation evidence yet.", "Review findings", "No saved findings.",
+        ]);
+        await task.click("Diff");
+        const diff = await body();
+        expect(diff).toContain("src/port.ts ●1");
+        expect(diff).toContain("Why guard here?");
+        await task.click("PR");
+        const pr = await body();
+        expect(pr).toContain("Ports the terminal backend.");
+        expect(pr).toContain("Conversation");
+        await task.click("Cost");
+        expect(await body()).toEqual(["Usage receipt unavailable. No recorded task usage yet."]);
+      }),
+  },
+  {
+    view: "Task page",
+    item: "Stuck banner with Restart and Steer…; message box with model",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        await panel.click(/^● Fix login/);
+        const task = host.screen(host.pane("task"));
+        const view = await task.render();
+        const banner = view.text.indexOf("Stuck");
+        expect(view.text.slice(banner, banner + 4)).toEqual(["Stuck", "worker stopped twice", "Restart", "Steer…"]);
+        expect(view.text.slice(-4)).toEqual([
+          "Message the worker…", "Model unavailable",
+          "Steers the worker; it reads this at its next safe step", "Send ↑",
+        ]);
+        let mark = host.events.length;
+        await task.click("Restart");
+        expect(host.toasts(mark).map((toast) => toast.message)).toEqual([
+          "tandem: runtime task login is missing\n",
+        ]);
+        mark = host.events.length;
+        await task.click("Steer…");
+        expect(host.since(mark).flatMap((event) => (event.frame ? [event.frame] : []))).toEqual([
+          { pane: task.pane, operations: [["focus", "main.worker-message"]] },
+        ]);
+        await task.type("try the other port");
+        expect((await task.render()).text).toContain("try the other port");
+        mark = host.events.length;
+        await task.press({ name: "enter" });
+        expect(host.toasts(mark)).toEqual([]);
+        const steered = await world.store.read("login");
+        expect(JSON.stringify(steered?.communication)).toContain("try the other port");
+        expect((await task.render()).text).not.toContain("try the other port");
+      }),
+  },
+  {
+    view: "Task page",
+    item: "Unavailable; busy flag during an action; failure toasts; ← Orchestrator",
+    run: () =>
+      withParity(async ({ host, panel, world }) => {
+        await rm(nativeDetailPath(world.home, world.repoPath, "task-docs.json"));
+        await panel.click(/^● Write docs/);
+        expect((await host.screen(host.pane("task")).render()).text).toEqual([
+          "Task unavailable", "← Orchestrator", "Task view unavailable. Waiting for its saved detail file.",
+        ]);
+        await host.publish();
+        await panel.click(/^● Port the terminal/);
+        const task = host.screen(host.pane("task"));
+        await task.click(/^Message the worker…/);
+        await task.type("use the new API");
+        await task.click("Send ↑", { hold: true });
+        expect((await task.render()).text).toContain("Sending…");
+        await host.settle();
+        expect((await task.render()).text).toContain("Send ↑");
+        await writeFile(nativeDetailPath(world.home, world.repoPath, "task-port.json"), "{broken");
+        await host.refresh();
+        const stale = await task.render();
+        expect(stale.text).toContain("Saved view unavailable. Actions are disabled until fresh data arrives.");
+        expect(stale.title).toBe("Port the terminal");
+        await host.publish();
+        await host.refresh();
+        world.replaceForeground("101", ["unrelated"]);
+        const mark = host.events.length;
+        await task.click(/^Message the worker…/);
+        await task.type("again");
+        await task.click("Send ↑");
+        expect(host.toasts(mark).map((toast) => toast.title)).toEqual(["Tandem action failed"]);
+        expect((await task.render()).text).toContain("again");
+        world.replaceForeground("101", ["omp", "--cwd", host.project.worktree.path, "--session-dir", join(world.home, "conversations", "repo")]);
+        await task.click("← Orchestrator");
+        expect(blockKinds(world)).toEqual(["tandem.panel"]);
+      }),
+  },
+  {
+    view: "Brief pane",
+    item: "Loading text; NEW markers; hover + and comment card; Approve; Request changes (N); Edit in browser ↗",
+    run: () =>
+      withParity(async ({ host, panel, world, briefId }) => {
+        const fresh = await briefs(world).create({ repoPath: world.repoPath, content: content("Add search") });
+        await rm(nativeDetailPath(world.home, world.repoPath, `brief-${fresh.id}.json`), { force: true });
+        expect(await host.link(`tandem://brief/${fresh.id}`)).toBe(true);
+        const loading = host.screen(host.pane("brief"));
+        expect((await loading.render()).text).toEqual(["Brief", "×", "Loading brief… Waiting for a published revision."]);
+        await loading.click("×");
+        const store = briefs(world);
+        const saved = await store.read(briefId);
+        if (saved === undefined) throw new Error("missing seeded brief");
+        await store.update(briefId, saved.revision, (current) =>
+          reviseRequestBriefRecord(current, content("Add dark mode with a toggle"), world.clock()),
+        );
+        await host.publish();
+        await host.refresh();
+        await panel.click(/^● Add dark mode/);
+        const brief = host.screen(host.pane("brief"));
+        const view = await brief.render();
+        expect(view.text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
+        expect(view.text.slice(view.text.indexOf("Add dark mode with a toggle"), view.text.indexOf("Add dark mode with a toggle") + 3)).toEqual([
+          "Add dark mode with a toggle", "NEW", "+",
+        ]);
+        expect(labels(view)).not.toContain("Edit in browser ↗");
+        await brief.click("+", { nth: 2 });
+        await brief.focusField("main.comment");
+        await brief.type("Default to the system theme");
+        let editing = await brief.render();
+        expect(editing.text).toContain("Comment on this line…");
+        await brief.click("Comment");
+        editing = await brief.render();
+        expect(editing.text).toContain("you · pending");
+        expect(labels(editing)).toContain("Request changes (1)");
+        await brief.click("Request changes (1)");
+        expect(blockKinds(world)).not.toContain("tandem.brief");
+        expect(world.sentKeys().map((sent) => sent.text)).toEqual([
+          expect.stringContaining("Default to the system theme"),
+        ]);
+        const approved = await briefs(world).create({ repoPath: world.repoPath, content: content("Add export") });
+        await host.publish();
+        await host.refresh();
+        expect(await host.link(`tandem://brief/${approved.id}`)).toBe(true);
+        await host.screen(host.pane("brief")).click("Approve");
+        expect(blockKinds(world)).not.toContain("tandem.brief");
+        expect((await briefs(world).read(approved.id))?.approval).toBeDefined();
+      }),
+  },
+  {
+    view: "Brief pane",
+    item: "Guard toasts (unfinished comment, empty request, missing context); stale revision refused",
+    run: () =>
+      withParity(async ({ host, panel, world, briefId }) => {
+        await panel.click(/^● Add dark mode/);
+        const brief = host.screen(host.pane("brief"));
+        let mark = host.events.length;
+        await brief.click("Request changes (0)");
+        expect(host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`)).toEqual([
+          "Add a comment: Explain what should change before requesting changes.",
+        ]);
+        await brief.click("+", { nth: 2 });
+        mark = host.events.length;
+        await brief.click("Approve");
+        expect(host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`)).toEqual([
+          "Finish your line comment: Choose Comment or Cancel before submitting the brief.",
+        ]);
+        await brief.focusField("main.comment");
+        await brief.type("Keep the old palette");
+        await brief.click("Comment");
+        const store = briefs(world);
+        const saved = await store.read(briefId);
+        if (saved === undefined) throw new Error("missing seeded brief");
+        await store.update(briefId, saved.revision, (current) =>
+          reviseRequestBriefRecord(current, content("Add dark mode later"), world.clock()),
+        );
+        await host.publish();
+        await host.refresh();
+        const stale = await brief.render();
+        expect(stale.text).toContain("A newer revision is available. Your comments still describe this revision.");
+        expect(labels(stale)).toContain("Discard comments and refresh");
+        mark = host.events.length;
+        await brief.click("Request changes (1)");
+        const refused = host.toasts(mark);
+        expect(refused.map((toast) => toast.title)).toEqual(["Tandem couldn't send the brief"]);
+        expect(blockKinds(world)).toContain("tandem.brief");
+        await brief.click("Discard comments and refresh");
+        expect((await brief.render()).text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
+      }),
+  },
+];

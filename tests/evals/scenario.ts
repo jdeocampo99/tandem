@@ -1,5 +1,6 @@
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { z } from "zod";
 import { JEV_MODEL, type JevFetch } from "../../src/adapters/typesafe.ts";
 import type {
   Clock,
@@ -16,6 +17,9 @@ import type {
   WorktreeLease,
 } from "../../src/contracts.ts";
 import { COORDINATOR_QUARANTINE_DIRECTORY } from "../../src/coordinator/quarantine.ts";
+import { repositoryKey } from "../../src/config/repositories.ts";
+import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
+import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type {
   DurableJob,
@@ -105,7 +109,32 @@ export type ScenarioPullRequest = {
   events: ScenarioIssueEvent[];
   /** Files both this pull request and its base changed, which the compare API reports. */
   conflictFiles: string[];
+  /** What a reader of the pull request sees: its description, diff, comments and threads. */
+  body: string;
+  patch: string;
+  comments: ScenarioPrComment[];
+  threads: ScenarioPrThread[];
+  /** Reviews posted through `POST pulls/N/reviews`, oldest first. */
+  postedReviews: Readonly<{ body: string; url: string }>[];
 };
+
+export type ScenarioPrComment = Readonly<{
+  readonly id: string;
+  readonly databaseId?: number;
+  readonly author: string;
+  readonly createdAt: IsoTimestamp;
+  readonly body: string;
+}>;
+
+export type ScenarioPrThread = Readonly<{
+  readonly id: string;
+  readonly path: string;
+  readonly line: number | null;
+  readonly side: "LEFT" | "RIGHT";
+  readonly resolved: boolean;
+  readonly outdated: boolean;
+  readonly comments: readonly ScenarioPrComment[];
+}>;
 
 export type ScenarioIssueEvent = Readonly<{
   readonly event: "labeled" | "unlabeled" | "auto_merge_disabled";
@@ -188,10 +217,25 @@ type PaneState = {
   workspaceId: string;
   tabId: string;
   blockArgs?: readonly string[];
+  browserUrl?: string;
   foregroundCwd: string;
   shellPid: number;
   processes: readonly Readonly<{ pid: number; name: string; argv: readonly string[] }>[];
 };
+
+/** A live Tern block as `tern ls` reports it, read without adding a trace entry. */
+export type ScenarioTernBlock = Readonly<{
+  readonly paneId: string;
+  readonly sessionId: string;
+  readonly tabId: string;
+  readonly cwd: string;
+  readonly program?: string;
+  readonly args?: readonly string[];
+  readonly browserUrl?: string;
+}>;
+
+/** Tern's plugin route host: it receives `tern open PATH` and answers as Tern's CLI would. */
+export type ScenarioTernRoutes = (path: string) => Promise<CommandResult>;
 
 type LeaseState = {
   readonly name: string;
@@ -235,6 +279,14 @@ export type ScenarioWorld = Readonly<{
     }>,
   ) => Endpoint;
   readonly removePane: (paneId: string) => void;
+  /** Live Tern blocks, in `tern ls` order. */
+  readonly ternBlocks: () => readonly ScenarioTernBlock[];
+  /** Installs the plugin route host that `tern open` delivers to. */
+  readonly routeTernOpen: (routes: ScenarioTernRoutes) => void;
+  /** Text written to each pane's tty, such as a helper pane's OSC alerts. */
+  readonly ttyWrites: () => readonly Readonly<{ paneId: string; text: string }>[];
+  /** Text typed into a pane with `tern send`, such as a prompt to a coordinator's agent. */
+  readonly sentKeys: () => readonly Readonly<{ paneId: string; text: string }>[];
   readonly titlePane: (paneId: string, title: string) => void;
   readonly paneIsPresent: (paneId: string) => boolean;
   /** Replaces a pane's foreground, as when its agent exits and someone starts another by hand. */
@@ -288,6 +340,8 @@ function describeCommand(argv: readonly string[]): Readonly<{
   if (program === "omp") return { boundary: "omp", action: `omp ${argv[1] ?? ""}`.trim() };
   if (argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts"))
     return { boundary: "ps", action: "Tern foreground process proof" };
+  if (argv[1] === "-e" && /^\/dev\/ttys\d+$/u.test(argv[3] ?? ""))
+    return { boundary: "tern", action: "tern tty write" };
   if (program === "ps") return { boundary: "ps", action: "ps" };
   if (program === "kill") return { boundary: "ps", action: "kill" };
   if (program === "gh") return { boundary: "github", action: githubAction(argv) };
@@ -295,7 +349,7 @@ function describeCommand(argv: readonly string[]): Readonly<{
 }
 
 /** Flags of `gh api` that take a value, so the endpoint is the first word that is neither. */
-const GH_API_VALUE_FLAGS = new Set(["-X", "-f", "-F", "--jq", "-H"]);
+const GH_API_VALUE_FLAGS = new Set(["-X", "--method", "--input", "-f", "-F", "--jq", "-H"]);
 
 function githubEndpoint(argv: readonly string[]): string {
   for (let index = 2; index < argv.length; index += 1) {
@@ -320,7 +374,8 @@ function githubField(argv: readonly string[], name: string): string | undefined 
 /** Names a `gh` call by what it does, like `gh pr view` or `gh api PATCH git/refs`. */
 function githubAction(argv: readonly string[]): string {
   if (argv[1] !== "api") return `gh ${argv[1] ?? ""} ${argv[2] ?? ""}`.trim();
-  const method = argv[argv.indexOf("-X") + 1] ?? "GET";
+  const methodFlag = argv.includes("-X") ? "-X" : "--method";
+  const method = argv.includes(methodFlag) ? (argv[argv.indexOf(methodFlag) + 1] ?? "GET") : "GET";
   const endpoint = githubEndpoint(argv);
   const kinds: readonly (readonly [RegExp, string])[] = [
     [/^graphql$/u, "graphql"],
@@ -337,7 +392,7 @@ function githubAction(argv: readonly string[]): string {
     [/^repos\/[^/]+\/[^/]+$/u, "repository"],
   ];
   const kind = kinds.find(([pattern]) => pattern.test(endpoint))?.[1] ?? endpoint;
-  return `gh api ${argv.includes("-X") ? method : "GET"} ${kind}`;
+  return `gh api ${method} ${kind}`;
 }
 
 function scenarioCheckRun(check: ScenarioCheck): Readonly<Record<string, unknown>> {
@@ -348,6 +403,16 @@ function scenarioCheckRun(check: ScenarioCheck): Readonly<Record<string, unknown
     conclusion: check.state === "pass" ? "SUCCESS" : check.state === "fail" ? "FAILURE" : "",
     detailsUrl: `https://ci.example/${check.name}`,
     ...(check.startedAt === undefined ? {} : { startedAt: check.startedAt }),
+  };
+}
+
+function githubComment(comment: ScenarioPrComment): Readonly<Record<string, unknown>> {
+  return {
+    id: comment.id,
+    ...(comment.databaseId === undefined ? {} : { databaseId: comment.databaseId }),
+    author: { login: comment.author },
+    createdAt: comment.createdAt,
+    body: comment.body,
   };
 }
 
@@ -432,6 +497,11 @@ export type ScenarioWorldOptions = Readonly<{
   /** What `git remote get-url origin` prints in every checkout; empty when unset. */
   readonly origin?: string;
   readonly ompModels?: readonly unknown[];
+  /**
+   * Where the scenario clock starts; defaults to SCENARIO_NOW. Native CLI paths that read the
+   * wall clock, like the project switcher's staleness check, need it near the real time.
+   */
+  readonly now?: IsoTimestamp;
 }>;
 
 export async function createScenarioWorld(
@@ -459,6 +529,9 @@ export async function createScenarioWorld(
   let nextLeaseNumber = 0;
   let nextPid = 900;
   let identifier = 0;
+  let ternRoutes: ScenarioTernRoutes | undefined;
+  const sentKeys: { paneId: string; text: string }[] = [];
+  const ttyWrites: { paneId: string; text: string }[] = [];
 
   const checkoutFor = (path: string): CheckoutState => {
     const existing = checkouts.get(path);
@@ -714,6 +787,34 @@ export async function createScenarioWorld(
     const verb = argv[1];
     const present = () => [...panes.entries()].filter(([, pane]) => pane.present);
     const ok = (value: unknown) => commandResult(JSON.stringify(value));
+    if (verb === "inspect") return ok({ clients: [{ kind: "window" }] });
+    if (verb === "open") {
+      if (ternRoutes === undefined) return commandResult("", 1, "no plugin handles that route");
+      return ternRoutes(argv[2] ?? "");
+    }
+    if (verb === "browser") {
+      const input = z
+        .object({ owner: z.number(), url: z.string().optional() })
+        .parse(JSON.parse(argv[2] ?? "{}"));
+      const owner = panes.get(String(input.owner));
+      if (owner === undefined || !owner.present)
+        return commandResult("", 1, "no block is called that id");
+      nextPaneNumber += 1;
+      nextPid += 1;
+      const browserId = String(10000 + nextPaneNumber);
+      panes.set(browserId, {
+        present: true,
+        title: "browser",
+        workspaceId: owner.workspaceId,
+        tabId: owner.tabId,
+        ...(owner.ternSessionId === undefined ? {} : { ternSessionId: owner.ternSessionId }),
+        ...(input.url === undefined ? {} : { browserUrl: input.url }),
+        foregroundCwd: owner.foregroundCwd,
+        shellPid: nextPid,
+        processes: [],
+      });
+      return ok({ ok: { block: browserId } });
+    }
     if (verb === "ls")
       return ok({
         sessions: [...ternSessions].map(([id, name]) => ({
@@ -775,8 +876,11 @@ export async function createScenarioWorld(
     }
     if (verb === "close") pane.present = false;
     else if (verb === "rename") workspaceLabels.set(pane.tabId, argv[3] ?? "");
-    else if (verb === "send") pane.processes = [{ pid: pane.shellPid, name: "sh", argv: ["sh"] }];
-    else if (verb === "run") {
+    else if (verb === "send") {
+      // Text is a prompt the running agent reads; keys such as an interrupt end it.
+      if (argv[3] === "text") sentKeys.push({ paneId, text: argv[4] ?? "" });
+      else pane.processes = [{ pid: pane.shellPid, name: "sh", argv: ["sh"] }];
+    } else if (verb === "run") {
       const command = await bootstrapProcessArgv(argv[3] ?? "");
       let start = command[0] === "env" ? 1 : 0;
       while (start > 0 && command[start]?.includes("=")) start += 1;
@@ -937,6 +1041,11 @@ export async function createScenarioWorld(
         checks: [],
         events: [],
         conflictFiles: [],
+        body: "",
+        patch: "",
+        comments: [],
+        threads: [],
+        postedReviews: [],
         ...input,
       };
       if (!trees.has(created.head)) trees.set(created.head, `tree-${input.number}`);
@@ -973,6 +1082,7 @@ export async function createScenarioWorld(
     const argv = request.argv;
     if (argv[1] === "pr" && argv[2] === "view") {
       const pr = findPullRequest(argv[argv.indexOf("--repo") + 1] ?? "", Number(argv[3]));
+      if (argv.includes("--jq")) return commandResult(`${pr.head}\n`);
       const [owner, name] = pr.repo.split("/");
       return commandResult(
         JSON.stringify({
@@ -995,9 +1105,17 @@ export async function createScenarioWorld(
           autoMergeRequest: pr.autoMerge ? { enabledAt: SCENARIO_NOW } : null,
           mergedAt: pr.mergedAt ?? null,
           statusCheckRollup: pr.checks.map(scenarioCheckRun),
+          number: pr.number,
+          body: pr.body,
+          commits: [{ oid: pr.head }],
+          additions: pr.patch.split("\n").filter((line) => /^\+(?!\+\+)/u.test(line)).length,
+          deletions: pr.patch.split("\n").filter((line) => /^-(?!--)/u.test(line)).length,
+          comments: pr.comments.map(githubComment),
+          reviews: [],
         }),
       );
     }
+    if (argv[1] === "pr" && argv[2] === "diff") return commandResult(pullRequestArgument(argv).patch);
     if (argv[1] === "pr" && argv[2] === "edit") {
       const pr = pullRequestArgument(argv);
       const option = (name: string) =>
@@ -1043,6 +1161,47 @@ export async function createScenarioWorld(
     }
     if (argv[1] !== "api") throw new Error(`unexpected gh command ${JSON.stringify(argv)}`);
     const endpoint = githubEndpoint(argv);
+    const reviews = /^repos\/([^/]+\/[^/]+)\/pulls\/(\d+)\/(reviews|comments)$/u.exec(endpoint);
+    if (reviews !== null) {
+      const pr = findPullRequest(reviews[1] ?? "", Number(reviews[2]));
+      if (!argv.includes("POST"))
+        return commandResult(JSON.stringify([reviews[3] === "reviews" ? pr.postedReviews : []]));
+      if (reviews[3] !== "reviews") throw new Error("scripted GitHub posts reviews, not comments");
+      const url = `https://github.com/${pr.repo}/pull/${pr.number}#pullrequestreview-${pr.postedReviews.length + 1}`;
+      const { body } = z.object({ body: z.string() }).parse(JSON.parse(request.stdin ?? "{}"));
+      pr.postedReviews.push({ body, url });
+      return commandResult(JSON.stringify({ html_url: url }));
+    }
+    if (endpoint === "graphql" && githubField(argv, "query")?.includes("reviewThreads") === true) {
+      const pr = findPullRequest(
+        `${githubField(argv, "owner")}/${githubField(argv, "name")}`,
+        Number(githubField(argv, "number")),
+      );
+      const done = { hasNextPage: false, endCursor: null };
+      return commandResult(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: pr.head,
+                reviewThreads: {
+                  nodes: pr.threads.map((thread) => ({
+                    id: thread.id,
+                    path: thread.path,
+                    line: thread.line,
+                    diffSide: thread.side,
+                    isResolved: thread.resolved,
+                    isOutdated: thread.outdated,
+                    comments: { nodes: thread.comments.map(githubComment), pageInfo: done },
+                  })),
+                  pageInfo: done,
+                },
+              },
+            },
+          },
+        }),
+      );
+    }
     if (endpoint === "graphql" && githubField(argv, "number") !== undefined) {
       const pr = findPullRequest(
         `${githubField(argv, "owner")}/${githubField(argv, "name")}`,
@@ -1168,6 +1327,20 @@ export async function createScenarioWorld(
       );
       return commandResult(JSON.stringify(pane?.processes ?? []));
     }
+    const ttyPid = /^\/dev\/ttys(\d+)$/u.exec(request.argv[3] ?? "")?.[1];
+    if (request.argv[1] === "-e" && ttyPid !== undefined) {
+      const owner = [...panes.entries()].find(
+        ([, pane]) => pane.present && pane.shellPid === Number(ttyPid),
+      );
+      if (owner === undefined) return commandResult("", 1, "no such tty");
+      ttyWrites.push({ paneId: owner[0], text: request.argv[4] ?? "" });
+      return commandResult();
+    }
+    if (program === "ps" && request.argv.includes("tty=")) {
+      const pid = Number(request.argv.at(-1));
+      const live = [...panes.values()].some((pane) => pane.present && pane.shellPid === pid);
+      return live ? commandResult(`ttys${pid}\n`) : commandResult("", 1, "");
+    }
     if (program === "ps") {
       const lines = [...panes.values()]
         .filter((pane) => pane.present)
@@ -1213,7 +1386,7 @@ export async function createScenarioWorld(
     return result;
   };
 
-  let now = Date.parse(SCENARIO_NOW);
+  let now = Date.parse(options.now ?? SCENARIO_NOW);
   const clock: Clock = () => new Date(now).toISOString();
   const idFactory: IdFactory = () => {
     identifier += 1;
@@ -1255,6 +1428,23 @@ export async function createScenarioWorld(
       if (pane === undefined) throw new Error("unknown pane");
       pane.title = title;
     },
+    ternBlocks: () =>
+      [...panes.entries()]
+        .filter(([, pane]) => pane.present && pane.ternSessionId !== undefined)
+        .map(([paneId, pane]) => ({
+          paneId,
+          sessionId: pane.ternSessionId ?? "",
+          tabId: pane.tabId,
+          cwd: pane.foregroundCwd,
+          ...(pane.blockProgram === undefined ? {} : { program: pane.blockProgram }),
+          ...(pane.blockArgs === undefined ? {} : { args: pane.blockArgs }),
+          ...(pane.browserUrl === undefined ? {} : { browserUrl: pane.browserUrl }),
+        })),
+    routeTernOpen: (routes) => {
+      ternRoutes = routes;
+    },
+    ttyWrites: () => [...ttyWrites],
+    sentKeys: () => [...sentKeys],
     paneIsPresent: (paneId) => panes.get(paneId)?.present === true,
     replaceForeground: (paneId, argv) => {
       const pane = panes.get(paneId);
@@ -1388,6 +1578,9 @@ async function classifyResources(
 }
 
 export type SeedTaskInput = Readonly<{
+  readonly id?: string;
+  readonly title?: string;
+  readonly repoPath?: string;
   readonly kind: TaskRecord["kind"];
   readonly requestId?: string;
   readonly policy?: ResolvedPolicy;
@@ -1413,10 +1606,11 @@ export async function seedScenarioTask(
   input: SeedTaskInput,
 ): Promise<TaskRecord> {
   let task = await world.store.create({
-    id: SCENARIO_TASK_ID,
-    repoPath: world.repoPath,
+    id: input.id ?? SCENARIO_TASK_ID,
+    repoPath: input.repoPath ?? world.repoPath,
     kind: input.kind,
-    objective: "exercise one durable scenario path",
+    objective: input.title ?? "exercise one durable scenario path",
+    ...(input.title === undefined ? {} : { title: input.title }),
     acceptanceCriteria: ["the durable outcome is observable"],
     ...(input.manualVerification === undefined
       ? {}
@@ -1458,6 +1652,62 @@ export async function seedScenarioTask(
     ...(input.endpoints === undefined ? {} : { endpoints: input.endpoints }),
     ...(input.pullRequest === undefined ? {} : { pullRequest: input.pullRequest }),
   }));
+}
+
+export type ScenarioTernProject = Readonly<{
+  readonly repoPath: string;
+  readonly coordinator: Endpoint;
+  readonly helper: Endpoint;
+  readonly worktree: WorktreeLease;
+}>;
+
+/**
+ * Seeds a project whose coordinator runs in a Tern pane beside its alert helper, with the durable
+ * record `tandem` writes when it launches one. Pane ids must be numeric, as Tern's are.
+ */
+export async function seedTernProject(
+  world: ScenarioWorld,
+  input: Readonly<{ coordinatorPaneId: string; helperPaneId: string; repoPath?: string }>,
+): Promise<ScenarioTernProject> {
+  const repoPath = input.repoPath ?? world.repoPath;
+  await mkdir(join(repoPath, ".git"), { recursive: true });
+  await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
+  const worktree = await world.grantLease({
+    name: `coordinator-${basename(repoPath)}`,
+    holder: `coordinator:${repoPath}`,
+  });
+  const root = world.openPane({ paneId: input.coordinatorPaneId, cwd: worktree.path });
+  const helper = world.openPane({ paneId: input.helperPaneId, cwd: worktree.path });
+  const registration = join(world.home, "repositories", repositoryKey(repoPath));
+  await mkdir(registration, { recursive: true });
+  await writeFile(join(registration, "settings.toml"), `repoPath = ${JSON.stringify(repoPath)}\n`);
+  const coordinator: Endpoint = {
+    ...root,
+    terminalSessionId: "100",
+    role: "coordinator",
+    notificationPane: {
+      paneId: helper.paneId,
+      tabId: helper.tabId,
+      workspaceId: helper.workspaceId,
+    },
+  };
+  const command = [
+    "omp",
+    "--cwd",
+    worktree.path,
+    "--session-dir",
+    join(world.home, "conversations", basename(repoPath)),
+  ];
+  world.replaceForeground(input.coordinatorPaneId, command);
+  await saveCoordinatorRecord(world.home, {
+    schemaVersion: 1,
+    repoPath,
+    endpoint: coordinator,
+    command,
+    harness: DEFAULT_HARNESS,
+    worktree,
+  });
+  return { repoPath, coordinator, helper, worktree };
 }
 
 export async function seedScenarioRuntime(
