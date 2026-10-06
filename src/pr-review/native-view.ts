@@ -6,6 +6,7 @@ import type { DraftComment, ReviewConcern } from "./review.ts";
 
 export type PrComment = Readonly<{
   id: string;
+  databaseId?: number;
   author: string;
   at: IsoTimestamp;
   body: string;
@@ -90,7 +91,8 @@ export type PrPaneView = Readonly<{
   }>[];
   /** Outdated, deleted-file, or non-hunk threads remain readable instead of silently disappearing. */
   unanchoredThreads: readonly PrThread[];
-  commentDestination: "worker" | "review";
+  commentDestination: "worker" | "review" | "read-only";
+  readOnlyReason?: string;
   review?: Readonly<{
     taskId: string;
     generation: number;
@@ -204,7 +206,14 @@ export function prPaneView(
             .map((row) => row.id) ?? [],
       })),
     })),
-    commentDestination: input.review === undefined ? "worker" : "review",
+    commentDestination:
+      taskId === undefined ? "read-only" : input.review === undefined ? "worker" : "review",
+    ...(taskId === undefined
+      ? {
+          readOnlyReason:
+            "Read-only: this watched PR has no Tandem task. Start a PR review task to comment or post a review.",
+        }
+      : {}),
     ...(input.review === undefined ? {} : { review: input.review }),
   };
 }
