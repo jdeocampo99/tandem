@@ -216,10 +216,12 @@ refused). The posted message counts every reply with a `posted` receipt.
 
 Older builds sent addressed prior-comment replies directly after saving the review receipt, with no
 claim, marker or `replyPosts` entry. Every receipt this build saves, from a publish or from
-`mark-posted` recovery, carries `priorRepliesClaimed:true`. On a posted round whose receipt lacks
-it, the build that saved the receipt already sent the prior-comment replies, so they are never
-claimed, POSTed, reported in notes or recoverable (`sentWithoutClaim`). Thread replies on such a
-round still follow the claim rules, as older builds claimed those too.
+`mark-posted` recovery, carries `priorRepliesClaimed:true`. A posted round whose receipt lacks it
+was saved by an older build, which either already sent the prior-comment replies or never will:
+its publish sent them, but its `mark-posted` recovery saved the receipt without sending them and
+its later review-post only reconciled. Either way they are never claimed, POSTed, reported in
+notes or recoverable (`sentWithoutClaim`), matching what that build would do. Thread replies on
+such a round still follow the claim rules, as older builds claimed those too.
 
 Every review-post or submission that finds the receipt saved sends the round's unclaimed replies
 and reconciles the claimed ones, so a crash mid-loop loses no reply: on re-entry the sent ones are
