@@ -309,13 +309,18 @@ for (const verb of ["brief-request-changes"] as const) {
         },
         reviewPane: false,
       });
-      const outcome = await f.act({
-        verb,
-        requestId: f.record.id,
-        ...f.seen,
-        text: "Keep the original goal",
-        comments: [{ lineId: originalLine.id, text: "Keep this goal" }],
-      });
+      // Without native views, feedback retires the request's own review pane.
+      const deps = { terminal: { ...f.deps.terminal, views: undefined } };
+      const outcome = await f.act(
+        {
+          verb,
+          requestId: f.record.id,
+          ...f.seen,
+          text: "Keep the original goal",
+          comments: [{ lineId: originalLine.id, text: "Keep this goal" }],
+        },
+        { deps },
+      );
       expect(outcome.status).toBe("done");
       expect(f.prompts[0]).toContain("From the open review page:");
       expect(f.prompts[0]).toContain(`Brief ${f.record.id}, revision 1: Request changes`);
@@ -332,12 +337,15 @@ for (const verb of ["brief-request-changes"] as const) {
         (line) => line.text === "A newly added question",
       );
       if (latestOnlyLine === undefined) throw new Error("Missing new line");
-      const refused = await f.act({
-        verb,
-        requestId: f.record.id,
-        ...f.seen,
-        comments: [{ lineId: latestOnlyLine.id, text: "Not in old view" }],
-      });
+      const refused = await f.act(
+        {
+          verb,
+          requestId: f.record.id,
+          ...f.seen,
+          comments: [{ lineId: latestOnlyLine.id, text: "Not in old view" }],
+        },
+        { deps },
+      );
       expect(refused.status).toBe("refused");
       expect(refused.notice?.text).toContain("Unknown brief line id");
       expect(f.prompts).toHaveLength(1);
@@ -415,6 +423,7 @@ test("request changes forwards feedback and retires only the matching brief proj
       },
       {
         deps: {
+          terminal: { ...f.deps.terminal, views: undefined },
           service: {
             ...f.service,
             closeRequestBriefReview: async (id: string, revision: number) => {
@@ -602,6 +611,7 @@ test("request changes reports delivered feedback, not success, when retiring the
       },
       {
         deps: {
+          terminal: { ...f.deps.terminal, views: undefined },
           service: {
             ...f.service,
             closeRequestBriefReview: async () => {
