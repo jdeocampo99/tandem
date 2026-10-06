@@ -137,7 +137,10 @@ local brief: BlockDef<State> = {
  view = function(state)
   sync(state)
   local model = state.shown
-  if not model then return { main = components.text("Brief unavailable. Waiting for the project's view file.", "muted") } end
+  if not model then return { main = ui.col({
+   ui.el("div", { class = "brief-header" }, { components.text("Brief", "strong"), components.button("×", "close") }),
+   ui.el("div", { class = "brief-document" }, { components.text("Loading brief… Waiting for a published revision.", "muted") }),
+  }) } end
   local document: { Node } = {}
   if state.notice then table.insert(document, components.text(state.notice, "warn")) end
   if state.file.status ~= "ready" then

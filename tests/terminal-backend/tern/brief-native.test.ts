@@ -33,7 +33,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
 );
 
 (enabled ? test : test.skip)(
-  "native brief comments stay pinned, stale approval toasts, and action files are private and removed",
+  "native brief waits for publication before enabling bound actions, reuses exact identity, and keeps comments pinned",
   async () => {
     const root = await realpath(await mkdtemp("/tmp/tdm-brief-"));
     const repo = join(root, "repo");
@@ -116,7 +116,6 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       writeFile(path, JSON.stringify({ version: 1, kind: "brief", revision, model: value }), {
         mode: 0o600,
       });
-    await publish("fixture-2");
     // The shared writer and scoped host close run unchanged; durable action effects use a receipt sink.
     await mkdir(join(root, "src", "terminal"), { recursive: true });
     await cp(
@@ -325,16 +324,65 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         wait: (ms) => Bun.sleep(ms),
         guard: async (_key, operation) => operation(),
       });
+      const terminal = terminalBackend(runner, {
+        terminal: "tern",
+        home: env.TANDEM_HOME,
+        tern: { binary },
+      });
+      // A pane may be hosted before either its index or detail is published.
+      const waiting = await terminal.openView({
+        coordinator,
+        cwd: root,
+        home: env.TANDEM_HOME,
+        view: { kind: "brief", requestId: model.requestId },
+      });
+      const waitingPane = waiting.endpoint?.paneId;
+      if (waitingPane === undefined) throw new Error("Waiting brief identity missing");
+      expect(waiting.endpoint).toEqual({ ...coordinator, terminal: "tern", paneId: waitingPane });
+      expect(waitingPane).not.toBe(coordinator.paneId);
+      const waitingBlock = (await commands.ls(root)).sessions
+        .flatMap((session) => session.tabs.flatMap((tab) => tab.blocks))
+        .find((block) => block.id === waitingPane);
+      expect(waitingBlock?.program).toBe("tandem.brief");
+      await until(async () =>
+        (await tree()).some((each) => each.text?.startsWith("Loading brief…") === true),
+      );
+      expect(
+        (await tree()).some(
+          (each) => each.text === "Approve" || each.text?.startsWith("Request changes"),
+        ),
+      ).toBe(false);
+      if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-loading");
+      // A partial approval triplet cannot make the unpublished brief actionable.
+      await writeFile(
+        path,
+        JSON.stringify({
+          version: 1,
+          kind: "brief",
+          revision: "partial",
+          model: {
+            ...model,
+            approval: {
+              briefRevision: model.revision,
+              contentDigest: model.approval.contentDigest,
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+      await Bun.sleep(1200);
+      expect(
+        (await tree()).some(
+          (each) => each.text === "Approve" || each.text?.startsWith("Request changes"),
+        ),
+      ).toBe(false);
+      expect(await Bun.file(join(root, "received.json")).exists()).toBe(false);
       const workflow = new RequestBriefWorkflow({
         home: env.TANDEM_HOME,
         sessionId: coordinator.sessionId,
         parentWorkspaceId: coordinator.workspaceId,
         coordinatorPaneId: coordinator.paneId,
-        terminal: terminalBackend(runner, {
-          terminal: "tern",
-          home: env.TANDEM_HOME,
-          tern: { binary },
-        }),
+        terminal,
         clock: () => NOW,
         store: createRequestBriefStore({
           home: env.TANDEM_HOME,
@@ -352,6 +400,11 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         content: first.draft.content,
         reviewPane: true,
       });
+      expect(projected.record.reviewPane?.endpoint).toEqual(waiting.endpoint);
+      await until(async () =>
+        (await tree()).some((each) => each.text?.includes("rev 1 ·") === true),
+      );
+      expect((await tree()).some((each) => each.text === "Approve")).toBe(true);
       const updated = await workflow.draft({
         repoPath: repo,
         requestId: model.requestId,

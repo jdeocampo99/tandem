@@ -218,7 +218,9 @@ the plugin never retries an action, including an operation whose outcome is unce
 
 The terminal port's `openView` returns `{ opened: boolean, warnings: readonly string[],
 endpoint?: Endpoint, fallback?: "brief-review" }`. A confirmed native brief returns its exact
-split endpoint for the automatic request workflow's retirement receipt. The action handler carries warnings in its result and fails
+split endpoint for the automatic request workflow's retirement receipt. Its explicit `terminal:"tern"`
+tag, terminal session, tab, workspace and pane ids come from exact native block evidence,
+including reuse, rather than a title. The action handler carries warnings in its result and fails
 when no view opened. The `brief-review` fallback tells the action handler to use the existing
 request-brief review workflow and verify that its pane opened. Callers do not create a second
 view or retry an open merely because warnings or a fallback are present.
@@ -302,6 +304,10 @@ malformed file leaves the last readable content visible with actions disabled. A
 only `model.approval` into its input, without recalculating any digest. Request changes carries
 the displayed revision and digests, pending line comments and the optional overall comment.
 The CLI validates the durable revision and feedback anchors.
+
+Opening before detail publication shows a loading message in the brief container, with no
+Approve or Request changes controls. Missing or partial approval triplets remain non-actionable;
+only a successfully parsed published revision supplies the displayed action binding.
 
 Each submit passes UTF-8 JSON on stdin to the shared `native-input.sh` caller. Its TypeScript
 helper creates a unique private directory and exclusively writes the input before invoking the

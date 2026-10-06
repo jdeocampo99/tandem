@@ -15,6 +15,7 @@ import {
   BlockAck,
   blocks,
   Id,
+  type LocatedBlock,
   Processes,
   type TernCommands,
   TernOutcomeUnknownError,
@@ -155,12 +156,28 @@ export function ternViewHost(
         input.origin?.windowId ?? "",
         indexPath,
       ];
+      const resultFor = (entry: LocatedBlock) => ({
+        paneId: entry.block.id,
+        project,
+        ...(kind === "brief" && placement === "split"
+          ? {
+              endpoint: {
+                ...input.coordinator,
+                terminal: "tern" as const,
+                terminalSessionId: entry.session.id,
+                workspaceId: entry.tab.id,
+                tabId: entry.tab.id,
+                paneId: entry.block.id,
+              },
+            }
+          : {}),
+      });
       return withNativeOpenIntent({ ...input, indexPath }, cmd, async (intent) => {
         const reused =
           placement === "panel" || (kind === "brief" && placement === "split") || intent.recovered
             ? await exactNativeView(cmd, input.cwd, input.coordinator, kind, placement, args)
             : undefined;
-        if (reused !== undefined) return { paneId: reused.block.id, project };
+        if (reused !== undefined) return resultFor(reused);
         let closeOrigin: string | undefined;
         let proveClosingOrigin: (() => Promise<void>) | undefined;
         if (
@@ -351,7 +368,7 @@ export function ternViewHost(
             "native block disappeared during verification",
           );
         await intent.settle();
-        return { paneId: result.paneId, project };
+        return confirmed === undefined ? { paneId: result.paneId, project } : resultFor(confirmed);
       });
     });
   };
@@ -521,11 +538,13 @@ export function ternViewHost(
             : "window",
         path,
       );
+      if (input.view.kind === "brief" && opened.endpoint === undefined)
+        throw new TernOutcomeUnknownError("tern open", "native brief endpoint was not confirmed");
       return {
         opened: true,
         warnings: [],
-        ...(input.view.kind === "brief"
-          ? { endpoint: { ...input.coordinator, paneId: opened.paneId } }
+        ...(input.view.kind === "brief" && opened.endpoint !== undefined
+          ? { endpoint: opened.endpoint }
           : {}),
       };
     },

@@ -366,9 +366,23 @@ for (const mode of [
           expect(effects).toBe(before);
         }
       } else if (mode === "success" || mode === "brief-success") {
-        expect(await open()).toEqual({ paneId: "4", project: home });
+        const expected = {
+          paneId: "4",
+          project: home,
+          ...(mode === "brief-success"
+            ? {
+                endpoint: {
+                  ...endpoint,
+                  terminal: "tern" as const,
+                  terminalSessionId: "1",
+                  paneId: "4",
+                },
+              }
+            : {}),
+        };
+        expect(await open()).toEqual(expected);
         const before = effects;
-        expect(await open()).toEqual({ paneId: "4", project: home });
+        expect(await open()).toEqual(expected);
         expect(effects).toBe(before);
       } else {
         await expect(open()).rejects.toThrow();
