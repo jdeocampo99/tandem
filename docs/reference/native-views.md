@@ -1,6 +1,7 @@
 # Native view data
 
-The data contract for Tern screens 1–8 from #282. All models are computed by Tandem in
+The data contract for Tern screens. Start with [terminal.md](terminal.md) for the backend
+and [tern-views.md](tern-views.md) for hosting and the shared Luau API. All models are computed by Tandem in
 TypeScript. The terminal renderer reads the JSON and runs CLI actions. It never fetches
 GitHub, provider limits, or the task store itself.
 
@@ -53,7 +54,7 @@ and fills in subsequent reconciliations. No empty or failing read means zero usa
 ## JSON schema (version 1)
 
 Every native index and per-entity file matches the Luau hosting foundation's
-`NativeViewFile<Model>` from `src/tern-view/file.ts` in PR #286 (`tern/host-plugin`):
+`NativeViewFile<Model>` from `src/tern-view/file.ts`:
 
 ```ts
 {
@@ -252,8 +253,8 @@ Native brief comments and request changes take the same three identity fields pl
 revision/digests and resolves ids through `briefView` for the exact preserved historical draft,
 never the latest draft. Unknown ids, missing historical revisions and mismatched digests refuse
 delivery. Numeric `line` anchors are refused. See [native brief feedback](request-briefs.md#native-brief-feedback).
-The builder accepts comments and a browser URL; their collection and CLI actions belong to the
-annotation/action integration, which can supply them when opening the pane.
+The builder accepts comments and a browser URL. Native comments are delivered through the CLI
+to the coordinator; local drafts remain transient in the renderer until sent.
 
 ### PR pane and diff/tour
 
