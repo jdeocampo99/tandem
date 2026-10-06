@@ -337,7 +337,9 @@ board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with 
 coordinator, home, cwd and origin context.
 
 Task hosting floats and hides the conversation in its **same recorded tab**, retaining its
-exact endpoint and process. It refuses existing pictures in picture. Returning docks that
+exact endpoint and process. It refuses unrelated pictures in picture. Opening a second task proves the previous task block's
+coordinator and home launch arguments, replaces only that block, and keeps the floated
+coordinator in its recorded tab. Returning docks that
 coordinator and closes only the exact task block; it never closes or restarts the agent.
 `native view-file ROOT#orchestrator` performs that return; `navigation.back` builds it.
 `ROOT#inbox` opens Tern's inbox, and `ROOT#open-project` sends the user's project-opening
@@ -349,3 +351,17 @@ rows, re-proves the destination coordinator, and uses an exact-block `tern focus
 switch. Supplied window keys are independently scoped and must contain the originating pane.
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
+
+
+### Transition delivery
+
+The native publisher consumes durable task timeline events for questions, approval waits and
+blocked transitions. It observes new draft PR identities for `done`, and new brief or failing-PR
+Needs you rows. A private per-project delivery cursor under `<home>/native-alerts` is saved
+before sending OSC. Repeated ticks, relaunches and unknown delivery outcomes never resend a
+claimed transition. The first snapshot establishes a baseline without replaying historical alerts.
+These cursors are presentation delivery state, not task authority.
+
+Tern groups notifications from the same helper pane into one inbox entry, increasing its count
+and showing the latest title/body. Each of the three kinds therefore appears as that entry's
+latest alert, with the helper tab's waiting badge. Herdr retains its existing arrival notifications.
