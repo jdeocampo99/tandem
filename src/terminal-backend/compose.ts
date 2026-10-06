@@ -14,7 +14,12 @@ import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
 import { probeTern } from "./tern/availability.ts";
 import { type TernBackendOptions, ternBackend, ternNotificationEndpoint } from "./tern/backend.ts";
 import { TERN_CONTEXT } from "./tern/context.ts";
-import { ensureTernPlugin, reloadTernPlugin, type TernPluginDependencies } from "./tern/plugin.ts";
+import {
+  ensureTernPlugin,
+  reloadTernPlugin,
+  restoreTernPluginPreferences,
+  type TernPluginDependencies,
+} from "./tern/plugin.ts";
 
 export type TerminalComposition = Readonly<{
   /** Overrides saved settings; without either choice, Herdr is the default. */
@@ -178,7 +183,11 @@ export async function installTerminalPlugin(
   dependencies: TernPluginDependencies,
   readiness?: TerminalAvailability,
 ): Promise<boolean> {
-  if (savedTerminalPreference(readHomeSettingsSync(home)).terminal !== "tern") return true;
+  const selected = savedTerminalPreference(readHomeSettingsSync(home));
+  if (selected.terminal !== "tern") {
+    if (selected.chosen) await restoreTernPluginPreferences(dependencies);
+    return true;
+  }
   const available = readiness ?? (await ternAvailability(dependencies.run));
   if (available.status !== "ready") {
     return false;
@@ -191,7 +200,8 @@ export async function reloadTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
 ): Promise<boolean> {
-  return savedTerminalPreference(readHomeSettingsSync(home)).terminal === "tern"
-    ? reloadTernPlugin(dependencies)
-    : false;
+  const selected = savedTerminalPreference(readHomeSettingsSync(home));
+  if (selected.terminal === "tern") return reloadTernPlugin(dependencies);
+  if (selected.chosen) await restoreTernPluginPreferences(dependencies);
+  return false;
 }
