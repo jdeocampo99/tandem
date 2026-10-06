@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { nativeViewText } from "../../src/board/native-views.ts";
+import { nativeViewsPath } from "../../src/board/snapshot.ts";
 import { runCli } from "../../src/cli.ts";
 import { saveTerminalChoice } from "../../src/config/home-settings.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
@@ -1198,7 +1200,7 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
   try {
     let starts = 0;
     const { service: _service, ...dependencies } = f.deps;
-    const commands = [["board"], ["prs"], ["usage"], ["new-request"]];
+    const commands = [["board"], ["usage"], ["new-request"]];
     for (const command of commands) {
       const errors: string[] = [];
       const output: string[] = [];
@@ -1363,3 +1365,34 @@ for (const outcome of ["opened", "refused"] as const)
       await rm(f.root, { recursive: true, force: true });
     }
   });
+
+test("Show PRs opens the indexed durable task in the originating project without fetching GitHub", async () => {
+  const f = await fixture();
+  try {
+    const task = await createPrTask(f);
+    const path = nativeViewsPath(f.home, f.repo);
+    await mkdir(join(f.home, "native-views"), { recursive: true });
+    const model = {
+      version: 1,
+      project: f.repo,
+      writtenAt: NOW,
+      tasks: {},
+      briefs: {},
+      projects: [],
+      pullRequests: {
+        "owner/repo#42": { header: { taskId: task.id }, detailFile: "pr-owner%2Frepo-42.json" },
+      },
+    };
+    await writeFile(path, nativeViewText("panel", model));
+    const result = await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps);
+    expect(result.exitCode).toBe(0);
+    expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+    await writeFile(path, nativeViewText("panel", { ...model, pullRequests: {} }));
+    expect(
+      (await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps)).exitCode,
+    ).toBe(1);
+    expect(f.opened).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});

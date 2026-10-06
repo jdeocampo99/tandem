@@ -69,6 +69,8 @@ export type PrPaneView = Readonly<{
     firstThreadId?: string;
   }>;
   readAt: IsoTimestamp;
+  /** Age basis for native elapsed nodes, sampled when the projection is written. */
+  clockAt: IsoTimestamp;
   tabs: readonly string[];
   checks: readonly (PrCheck & Readonly<{ duration?: string; elapsedMs?: number }>)[];
   description: Readonly<{
@@ -123,8 +125,7 @@ export function prPaneView(
     path: file.path,
     additions: file.adds,
     deletions: file.dels,
-    commentCount: cached.threads.filter((thread) => thread.file === file.path && !thread.resolved)
-      .length,
+    commentCount: cached.threads.filter((thread) => thread.file === file.path).length,
     rows: file.rows.map((row, index) => ({
       id: `${file.path}:${index}`,
       row,
@@ -163,6 +164,13 @@ export function prPaneView(
       head: cached.head,
       draft: cached.draft,
       next:
+        (input.review === undefined
+          ? undefined
+          : input.review.posted
+            ? "You posted this review"
+            : input.review.head !== input.review.currentHead
+              ? "The PR changed. Re-review before posting"
+              : "Waiting on you: choose comments and post your review") ||
         watch?.row?.note ||
         (cached.draft ? "Waiting on you: publish it (draft → ready)" : "Waiting for PR watch"),
       ...(taskId === undefined ? {} : { taskId }),
@@ -173,8 +181,9 @@ export function prPaneView(
       ...(unresolved[0] === undefined ? {} : { firstThreadId: unresolved[0].id }),
     },
     readAt: cached.readAt,
+    clockAt: input.now,
     tabs: ["Description", ...(cached.tour.length === 0 ? [] : ["Tour"]), "Diff"],
-    checks: cached.checks.map((check) => presentCheck(check, cached.readAt)),
+    checks: cached.checks.map((check) => presentCheck(check, input.now)),
     description: {
       markdown: cached.body,
       blocks: prMarkdownBlocks(cached.body),

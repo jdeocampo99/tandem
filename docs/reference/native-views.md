@@ -266,11 +266,13 @@ The existing HTML review page and native view share `parsePatch` in `src/pr-revi
 - `header`: `{repo,number,title,url,head,draft,next,taskId?,commits,additions,deletions,
   unresolved,firstThreadId?}`. `next` comes from the saved PR-watch note, with a draft fallback.
 - `readAt`: timestamp of the last complete cached GitHub read.
+- `clockAt`: timestamp used to sample running-check ages for this publication.
 - `tabs`: Description, optional Tour, Diff. Tour appears only with chapters.
 - `checks`: `{name,state:"passed"|"running"|"failed"|"pending",startedAt?,completedAt?,
-  logUrl?}[]`. Renderers derive running timers from `startedAt` and stop them at `completedAt`.
-  Advancing the clock alone does not change PR detail bytes or their presentation revision.
-- `description`: `{markdown,conversation:PrComment[]}` for top-level comments/reviews.
+  logUrl?,duration?,elapsedMs?}[]`. TypeScript computes completed durations and running ages
+  from the publication clock. Renderers advance `elapsedMs` locally between publications.
+- `description`: `{markdown,blocks:string[],conversation:PrComment[]}` for top-level comments/reviews.
+  Markdown blocks retain fenced-code blank lines; each block becomes one native Markdown node.
 - `tour`: `{title,why,stops:(TourStopInput & {rowIds:string[]})[]}[]`. `rowIds` selects the
   existing diff rows touched by the stop's new-side inclusive range.
 - `files`: `{path,additions,deletions,commentCount,rows:{id,row:DiffRow,threads:PrThread[],drafts:DraftComment[]}[]}[]`.

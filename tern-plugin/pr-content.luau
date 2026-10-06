@@ -19,7 +19,7 @@ local function bind(s: State, model: models.Model)
   s.generation = model.review.generation
   s.summary = fields.create(model.review.summary, true)
  end
- if s.readAt ~= model.readAt then s.clock = tern.now(); s.readAt = model.readAt end
+ if s.readAt ~= model.clockAt then s.clock = tern.now(); s.readAt = model.clockAt end
 end
 function M.view(s: State, model: models.Model, ready: boolean, prefix: string?): { dock: Node, main: Node }
  s.prefix = prefix or "main.content"
@@ -53,7 +53,7 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?):
  }
  if not valid then table.insert(header, components.text("View changed or unavailable. Reopen this PR before sending comments or posting.", "warn")) end
  local body: Node
- if s.tab == "Diff" then body = diff.view(s.diff, model, valid, s.prefix)
+ if s.tab == "Diff" then body = diff.view(s.diff, model, valid, s.prefix .. ".body")
  elseif s.tab == "Tour" then
   local nodes = {}
   for ci, chapter in model.tour do
@@ -87,7 +87,8 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?):
   if #model.description.conversation == 0 then table.insert(nodes, components.text("No conversation yet", "muted")) end
   body = components.keyed(ui.col(nodes), "description")
  end
- local main = {components.keyed(ui.col(header), "header"), body}
+ local main = {ui.el("div", {class="tdm-pr-header",key="header"}, header), ui.el("div", {class="tdm-pr-body",key="body"}, {body})}
+ local footer = {}
  if model.review then
   local review = model.review
   local canPost = valid and not review.posted and review.head == review.currentHead and not s.posting and not s.submitted
@@ -95,15 +96,15 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?):
   for _, verdict in {"comment", "approve", "request-changes"} do
    table.insert(buttons, components.button((if s.verdict == verdict then "✓ " else "") .. verdict, "pr-verdict=" .. verdict, if s.verdict == verdict then "accent" else "muted"))
   end
-  table.insert(main, ui.rule("Your review"))
+  table.insert(footer, ui.rule("Your review"))
   if canPost then
-   table.insert(main, components.keyed(fields.node(s.summary :: fields.Field, "pr-summary", "Overall review…"), "pr-summary"))
+   table.insert(footer, components.keyed(fields.node(s.summary :: fields.Field, "pr-summary", "Overall review…"), "pr-summary"))
    table.insert(buttons, components.button("Post", "pr-post", "accent"))
-  else table.insert(main, components.text(if review.posted or s.submitted then "Review already posted" elseif s.posting then "Posting…" else "PR changed or view unavailable. Re-review before posting.", "warn")) end
-  table.insert(main, ui.row(buttons))
-  table.insert(main, components.text("Reviewed commit " .. review.head .. " · Only drafts marked Keep and your new comments will be posted.", "muted"))
+  else table.insert(footer, components.text(if review.posted or s.submitted then "Review already posted" elseif s.posting then "Posting…" else "PR changed or view unavailable. Re-review before posting.", "warn")) end
+  table.insert(footer, ui.row(buttons))
+  table.insert(footer, components.text("Reviewed commit " .. review.head .. " · Only drafts marked Keep and your new comments will be posted.", "muted"))
  end
- return {dock=ui.col({}), main=components.keyed(ui.col(main), "content")}
+ return {dock=ui.col(footer), main=ui.el("div", {class="tdm-pr-content",key="content"}, main)}
 end
 local function sender(s: State, model: models.Model, invoke: Invoke): diff.Send
  return function(mine, done)
@@ -118,7 +119,7 @@ function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx:
   elseif ev.act == "pr-url" then cx:open(model.header.url); return true
   elseif ev.act == "pr-log" then local check = model.checks[tonumber(ev.value) or 0]; if check and check.logUrl then cx:open(check.logUrl) end; return true
   elseif ev.act == "pr-task" and model.header.taskId then invoke("open", "task", model.header.taskId); return true
-  elseif ev.act == "pr-unresolved" then s.tab = "Diff"; diff.jump(s.diff, model, cx, s.prefix); return true
+  elseif ev.act == "pr-unresolved" then s.tab = "Diff"; diff.jump(s.diff, model, cx, s.prefix .. ".body"); return true
   elseif ev.act == "pr-stop" then local c, stop = string.match(ev.value or "", "^(%d+):(%d+)$"); s.chapter, s.stop = tonumber(c) or 1, tonumber(stop) or 1; return true
   elseif ev.act == "pr-verdict" and table.find({"comment", "approve", "request-changes"}, ev.value) and valid and model.review and not model.review.posted and not s.posting and not s.submitted then s.verdict = ev.value; return true
   elseif ev.act == "pr-post" and valid and model.review and not model.review.posted and model.review.head == model.review.currentHead and not s.posting and not s.submitted then
@@ -127,7 +128,7 @@ function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx:
    local yours = {}
    for _, mine in s.diff.yours do table.insert(yours, {file=mine.file,line=mine.line,body=mine.body}) end
    s.posting = true
-   invoke("review-submit", model.review.taskId, {tandemPrReview=1,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours)}, function() s.submitted = true end)
+   invoke("review-submit", model.review.taskId, {tandemPrReview=1,reviewHead=s.head,reviewGeneration=s.generation,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours)}, function() s.submitted = true end)
    return true
   end
  end

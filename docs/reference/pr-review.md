@@ -100,6 +100,12 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   added like `review-edit` `add`, and `summary` replaces the summary comment. A draft id the round
   does not have is an error. It refuses a round already posted, then posts as below. Nothing is
   saved unless the post lands, so a refused submission can be sent again.
+- Native `review-submit` input also requires the displayed `reviewHead` and `reviewGeneration`.
+  These travel separately from `ReviewSubmission` to the submit workflow. The service serializes
+  submissions with task mutations through GitHub posting and saving the receipt; it refuses a
+  head/round generation mismatch or an advanced re-review task generation before applying draft choices.
+  Question follow-ups retain the same finished review round, so its unchanged binding remains valid.
+  A stale pane must reopen before submitting. The HTML submission shape remains unchanged.
 - `review-edit` rewrites, re-labels, or drops comments by id, adds the user's own comments
   (`add: [{file, line, body}]`), and replaces the summary, until the round is posted. An added
   comment must sit on a line the run's diff can anchor; otherwise the error names the lines that
