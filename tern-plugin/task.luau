@@ -253,9 +253,13 @@ local function run(state: State, cx: BlockCx, args: { string }, clear: boolean?)
 end
 local function invokePr(state: State, cx: BlockCx): prContent.Invoke
  return function(verb, id, payload, done)
-  if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then return end
+  local function refused(reason: string)
+   if verb == 'review-submit' and done then done({status=1, stdout='', stderr=reason}) end
+  end
+  if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then refused('The displayed PR review is unavailable or changed. Reopen it before submitting.'); return end
   if verb == 'open' and type(payload) == 'string' then run(state, cx, { 'open', id, payload }); return end
-  if state.busy or string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then return end
+  if state.busy then refused('Another task action is still running.'); return end
+  if string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then refused('The originating absolute cwd and native index path are required.'); return end
   local argv = { '/bin/sh', 'native-input.sh', verb, id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
   if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
   local window = state.origin.window
@@ -264,11 +268,12 @@ local function invokePr(state: State, cx: BlockCx): prContent.Invoke
   local ok, problem = pcall(function()
    tern.process.run(argv, { cwd = '.', stdin = tern.json.encode(payload) }, function(result)
     state.busy = false; state.prContent.diff.busy = false
-    if result.status ~= 0 then cx:toast('error', 'PR action failed', result.stderr) elseif done then done() end
+    if result.status ~= 0 then cx:toast('error', 'PR action failed', result.stderr) end
+    if done and (result.status == 0 or verb == 'review-submit') then done(result) end
     cx:render()
    end)
   end)
-  if not ok then state.busy = false; state.prContent.diff.busy = false; cx:toast('error', 'PR action could not start', tostring(problem)) end
+  if not ok then state.busy = false; state.prContent.diff.busy = false; cx:toast('error', 'PR action could not start', tostring(problem)); refused(tostring(problem)); cx:render() end
  end
 end
 
