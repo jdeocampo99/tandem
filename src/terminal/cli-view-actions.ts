@@ -338,7 +338,25 @@ export async function submitReview(context: CliCommandContext): Promise<CliComma
     context.invocation.options.input,
     context.invocation.command,
   );
-  const parsed = parseReviewSubmission(JSON.stringify(input));
+  const { reviewHead, reviewGeneration, ...submission } = input;
+  if (typeof reviewHead !== "string" || reviewHead.length === 0 || reviewHead.trim() !== reviewHead)
+    throw new CliUsageError("review-submit requires reviewHead copied from the displayed review");
+  if (
+    typeof reviewGeneration !== "number" ||
+    !Number.isSafeInteger(reviewGeneration) ||
+    reviewGeneration < 0
+  ) {
+    throw new CliUsageError(
+      "review-submit requires a nonnegative integer reviewGeneration copied from the displayed review",
+    );
+  }
+  const parsed = parseReviewSubmission(JSON.stringify(submission));
   if (!parsed.ok) throw new CliUsageError(parsed.problems.join("; "));
-  return { value: await context.service().reviewSubmit(taskId, parsed.submission), approved: true };
+  return {
+    value: await context.service().reviewSubmit(taskId, parsed.submission, {
+      head: reviewHead,
+      generation: reviewGeneration,
+    }),
+    approved: true,
+  };
 }

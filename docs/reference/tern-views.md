@@ -148,7 +148,7 @@ convention and plugin only, without a shared native dispatcher.
 
 JSON actions pass `--input` and an absolute file path as separate argv elements. Renderers
 finish writing one UTF-8 JSON object before spawning the CLI, with a new file for each action
-in a private Tandem-owned directory supplied by the TypeScript view producer. The directory
+in a new private temporary directory owned by the shared TypeScript caller. The directory
 uses `0700`; TypeScript-created input files use `0600`. Never put action input in the plugin
 package, a repository, an environment variable, or an interpolated shell command. The file
 stays unchanged until that invocation finishes; the caller owns cleanup after completion or
@@ -191,7 +191,14 @@ user text is one argv element, including spaces and newlines.
 `review-submit` uses the existing `ReviewSubmission` object from `src/pr-review/page.ts`:
 `tandemPrReview: 1`, `verdict: "comment" | "approve" | "request-changes"`, `summary`,
 `drafts: [{ id, decision: "post" | "drop" | "undecided", body? }]`, and
-`yours: [{ file, line, body }]`. The CLI reuses the pinned-HEAD and no-double-post checks of
+`yours: [{ file, line, body }]`, plus required native fields `reviewHead` and `reviewGeneration`.
+Copy those two fields from the displayed `PrPaneView.review.head` and `.generation`; generation
+is a nonnegative safe integer, including zero. Keep the bindings frozen with the user's choices.
+Missing/invalid bindings are refused. The service checks both against the latest authoritative
+round and checks the re-review task generation inside submission serialization before applying choices or
+posting, so stale pane choices cannot become a review of a newer round even when draft ids repeat.
+Question follow-ups retain their finished review round and its binding. The HTML page's
+`ReviewSubmission` shape stays unchanged. The CLI reuses the pinned-HEAD and no-double-post checks of
 the review page; the renderer does not publish directly.
 
 `restart` names the task and goes through central recovery. `steer` requires `--task TASK_ID` and
@@ -351,6 +358,27 @@ rows, re-proves the destination coordinator, and uses an exact-block `tern focus
 switch. Supplied window keys are independently scoped and must contain the originating pane.
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
+
+### Reusing the native PR components
+
+`tern-plugin/pr-content.luau` exports `create`, `view`, `event`, `key`, and `ready`.
+`view(state, model, ready, prefix?, strip?)` returns `{main,dock}`. Mount `dock` for the review
+summary, explicit verdict and Post controls. Set `prefix` to the actual embedded content root
+(default `main.content`); the shared diff uses it for comment focus and thread reveal.
+The optional strip is rendered inside the PR header. `pr-diff.luau` exports `create`,
+`view`, `rows`, `jump`, `event`, and `key`; both modules use `pr-model.luau` wire types.
+Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
+for wheel and keyboard input; the review dock remains visible while the content scrolls.
+
+PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. The shared
+`src/terminal/native-input.ts` helper writes one exclusive 0600 file in a private unique
+directory, invokes the native action once, and removes
+the directory after that invocation settles. Draft decisions and new review comments remain
+local until Post; displayed HEAD/generation are included in the submission for authority checks.
+Pass `native-input.sh` the verb, task/request ID, and the native CLI context flags
+(`--pane`, `--cwd`, optional `--window` and `--home`), with the JSON object on stdin.
+It supports `brief-comment`, `brief-request-changes`, `brief-approve`, `pr-comment`, and
+`review-submit`. Callers use this shared writer rather than adding a screen-specific one.
 
 
 ### Transition delivery

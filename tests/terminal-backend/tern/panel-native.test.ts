@@ -66,6 +66,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       const child = Bun.spawn([...request.argv], {
         cwd: request.cwd,
         env: { ...env, ...request.env },
+        timeout: request.timeoutMs ?? 8000,
+        killSignal: "SIGKILL",
         stdout: "pipe",
         stderr: "pipe",
       });
