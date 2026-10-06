@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
+import { nativeBriefFile, nativeViewText } from "../../../src/board/native-views.ts";
+import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import {
   ternBackend,
@@ -56,11 +56,11 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
     );
     await writeFile(
       join(plugin, "host.luau"),
-      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\n`,
+      `${await readFile(join(plugin, "host.luau"), "utf8")}\ntern.block.define("task", require("./layout-fixture"))\ntern.block.define("brief", require("./layout-fixture"))\n`,
     );
     await writeFile(
       join(plugin, "plugin.toml"),
-      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n`,
+      `${await readFile(join(plugin, "plugin.toml"), "utf8")}\n[[blocks]]\nid="task"\ntitle="Layout fixture task"\n[[blocks]]\nid="brief"\ntitle="Layout fixture brief"\n`,
     );
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
@@ -216,6 +216,33 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         wait: Bun.sleep,
         guard: async (_key, operation) => operation(),
       });
+      const brief = await host.open(
+        { coordinator, cwd: root, home, view: { kind: "brief", requestId: "req-native" } },
+        root,
+        "brief",
+        "split",
+        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+      );
+      expect(
+        await host.close(
+          {
+            coordinator,
+            cwd: root,
+            home,
+            origin: { paneId: brief.paneId },
+            view: { kind: "brief", requestId: "req-native" },
+          },
+          root,
+        ),
+      ).toEqual({ closed: true, warnings: [] });
+      expect(
+        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          (entry) => entry.block.id === brief.paneId,
+        ),
+      ).toBe(false);
+      expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
+        true,
+      );
       const task = await host.open(
         { coordinator, cwd: root, home, view: { kind: "task", taskId: "adapter" } },
         root,
