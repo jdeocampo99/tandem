@@ -103,6 +103,11 @@
 .tdp-secondary {
   color: #87909e;
   font-size: 11px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .tdp-dot {
   font-size: 8px;
@@ -125,6 +130,7 @@
 }
 .tdp-pr {
   color: #929dac;
+  flex-shrink: 0;
   cursor: pointer;
   font-size: 11px;
   text-decoration: underline;
