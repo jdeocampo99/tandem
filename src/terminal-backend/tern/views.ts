@@ -19,7 +19,7 @@ import {
   type TernCommands,
   TernOutcomeUnknownError,
 } from "./protocol.ts";
-import { exactNativeView, withNativeOpenIntent } from "./view-intent.ts";
+import { exactNativeView, proveTaskReplacement, withNativeOpenIntent } from "./view-intent.ts";
 
 const Opened = z.object({
   blocks: z.array(z.union([Id, z.number().int().safe().positive().transform(String)])),
@@ -251,6 +251,7 @@ export function ternViewHost(
           coordinator: input.coordinator.paneId,
           session: Id.parse(input.coordinator.terminalSessionId),
           receipt,
+          ...(replaced === undefined ? {} : { replaced }),
         });
         // Keep the final exact-id read immediately before focus. A failed read safely
         // cancels this invocation's intent because no mutation has been attempted.
@@ -350,6 +351,7 @@ export function ternViewHost(
             "tern open",
             "native block disappeared during verification",
           );
+        await proveTaskReplacement(cmd, input.cwd, replaced);
         await intent.settle();
         return { paneId: result.paneId, project };
       });

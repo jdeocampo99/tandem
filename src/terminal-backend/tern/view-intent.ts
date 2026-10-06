@@ -33,6 +33,7 @@ const Ticket = z.object({
   coordinator: Id,
   session: Id,
   receipt: z.string(),
+  replaced: Id.optional(),
 });
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
 const NativeIntent = z.object({
@@ -57,6 +58,22 @@ async function readPrivateJson(path: string): Promise<unknown> {
 }
 function missing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+/** The new task's identity cannot prove that retiring its predecessor succeeded. */
+export async function proveTaskReplacement(
+  commands: TernCommands,
+  cwd: string,
+  replaced: string | undefined,
+): Promise<void> {
+  if (replaced === undefined) return;
+  try {
+    const listing = await commands.ls(cwd);
+    if (listing.detached.length > 0 || blocks(listing).some((entry) => entry.block.id === replaced))
+      throw new Error("replaced task is still present or its absence is ambiguous");
+  } catch (cause) {
+    throw new TernOutcomeUnknownError("tern task replacement", cause);
+  }
 }
 
 /** Match all launch arguments in the exact session and intended tab placement, never a title. */
@@ -210,6 +227,19 @@ export async function withNativeOpenIntent<T>(
         );
         if (exact === undefined)
           throw new Error("Earlier opening has no exact native block evidence");
+        let replaced = attempt.ticket.replaced;
+        if (replaced === undefined && attempt.ticket.placement === "task") {
+          // Older durable intents omitted replacement metadata, but their retained
+          // layout routes included it. Missing/conflicting routes cannot prove retirement.
+          const retained = Ticket.parse(await readPrivateJson(attempt.route));
+          if (
+            JSON.stringify({ ...retained, replaced: undefined }) !==
+            JSON.stringify({ ...attempt.ticket, replaced: undefined })
+          )
+            throw new Error("Retained task route conflicts with its opening intent");
+          replaced = retained.replaced;
+        }
+        await proveTaskReplacement(commands, input.cwd, replaced);
         try {
           const receipt = Receipt.parse(await readPrivateJson(attempt.ticket.receipt));
           if (

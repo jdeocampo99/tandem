@@ -355,6 +355,13 @@ retained intents and route tickets from that same exact block evidence before it
 A missing receipt can be settled by the unique exact block; conflicting receipts or missing
 block evidence retain the fence and resources. Lock files remain for later callers.
 
+Task replacement and return additionally require a same-scope listing proving the replaced
+task pane is absent, with no detached ambiguity, before settling the opening intent. The intent
+keeps the replaced pane id for fresh CLI recovery; evidence for the new pane alone never settles
+retirement of its predecessor. Older task intents recover replacement metadata from the retained
+layout route, refusing missing or conflicting route evidence. Unconfirmed retirement keeps the
+intent, route, receipt and resources, without another opening mutation.
+
 All renderers use these block ids and the same five string launch arguments:
 
 | Block id | Input | Placement |
