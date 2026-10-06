@@ -137,6 +137,15 @@ The registered screens and action handlers are in `tern-plugin/host.luau`, `plug
 renderer is registered; that alone does not make a screen available. The panel always shows
 PRs, Board and usage buttons independently of shortcut consent.
 
+### Registered screens
+
+The current package registers Panel, Welcome, Brief and PR. `native prs` selects a project's
+published PR and opens that PR pane; New request focuses and prompts the verified coordinator.
+Project switching and published-detail file navigation are also implemented. Task, Board, Usage
+and Catch-up have data models and hosting support, but their renderer registrations are still
+pending. The Board, Usage and Open task command slots currently return an unavailable error.
+Their panel buttons and palette entries remain visible.
+
 ## Tern 0.5.0 facts and limits
 
 The initial probes and hosting comparison used 0.4.5; subsequent native hosting checks used

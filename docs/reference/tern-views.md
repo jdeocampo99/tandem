@@ -256,7 +256,9 @@ retained intents and route tickets from that same exact block evidence before it
 A missing receipt can be settled by the unique exact block; conflicting receipts or missing
 block evidence retain the fence and resources. Lock files remain for later callers.
 
-All renderers use these block ids and the same five string launch arguments:
+The host accepts these layout kinds and five string launch arguments. A kind is available
+only after its block is registered in `host.luau` and `plugin.toml` and its CLI handler is
+implemented; host acceptance alone does not register a screen:
 
 | Block id | Input | Placement |
 | --- | --- | --- |
