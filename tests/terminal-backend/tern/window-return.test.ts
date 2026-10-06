@@ -8,7 +8,14 @@ import {
 } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
-for (const mode of ["closed", "wrong-args", "busy", "retained", "listing-failed"] as const) {
+for (const mode of [
+  "closed",
+  "toggle",
+  "wrong-args",
+  "busy",
+  "retained",
+  "listing-failed",
+] as const) {
   test(`full-window Back ${mode}: restore the exact coordinator and verify originating view closure`, async () => {
     const home = await mkdtemp("/tmp/tandem-window-return-");
     const coordinator: Endpoint = {
@@ -102,18 +109,32 @@ for (const mode of ["closed", "wrong-args", "busy", "retained", "listing-failed"
       },
     });
     const back = () =>
-      host.open(
-        { coordinator, cwd: home, home, origin: { paneId: "4" }, view: { kind: "orchestrator" } },
-        home,
-        "panel",
-        "return",
-        path,
-      );
+      mode === "toggle"
+        ? host.toggleBoard(
+            { coordinator, cwd: home, home, origin: { paneId: "4" }, view: { kind: "board" } },
+            home,
+          )
+        : host.open(
+            {
+              coordinator,
+              cwd: home,
+              home,
+              origin: { paneId: "4" },
+              view: { kind: "orchestrator" },
+            },
+            home,
+            "panel",
+            "return",
+            path,
+          );
     try {
-      if (mode === "closed") expect(await back()).toEqual({ paneId: "3", project: home });
+      if (mode === "toggle") expect(await back()).toBe(true);
+      else if (mode === "closed") expect(await back()).toEqual({ paneId: "3", project: home });
       else await expect(back()).rejects.toThrow();
       expect(opened).toBe(
-        mode === "closed" || mode === "retained" || mode === "listing-failed" ? 1 : 0,
+        mode === "closed" || mode === "toggle" || mode === "retained" || mode === "listing-failed"
+          ? 1
+          : 0,
       );
       if (mode === "listing-failed") {
         expect(quarantined).toBe(true);
