@@ -8,6 +8,7 @@ import type { PullRequestRef } from "../pr-review/pull-request.ts";
 const author = z.object({ login: z.string() }).nullable();
 const comment = z.object({
   id: z.union([z.string(), z.number()]),
+  databaseId: z.number().int().positive().optional(),
   author,
   createdAt: z.string(),
   body: z.string(),
@@ -54,8 +55,8 @@ const threadPage = z.object({
     }),
   }),
 });
-const THREAD_QUERY = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$cursor){nodes{id path line diffSide isResolved isOutdated comments(first:100){nodes{id author{login} createdAt body url} pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}}`;
-const COMMENT_QUERY = `query($id:ID!,$cursor:String){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id author{login} createdAt body url}pageInfo{hasNextPage endCursor}}}}}`;
+const THREAD_QUERY = `query($owner:String!,$name:String!,$number:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid reviewThreads(first:100,after:$cursor){nodes{id path line diffSide isResolved isOutdated comments(first:100){nodes{id databaseId author{login} createdAt body url} pageInfo{hasNextPage endCursor}}}pageInfo{hasNextPage endCursor}}}}}`;
+const COMMENT_QUERY = `query($id:ID!,$cursor:String){node(id:$id){... on PullRequestReviewThread{comments(first:100,after:$cursor){nodes{id databaseId author{login} createdAt body url}pageInfo{hasNextPage endCursor}}}}}`;
 const commentPage = z.object({
   data: z.object({ node: z.object({ comments: z.object({ nodes: z.array(comment), pageInfo }) }) }),
 });
@@ -161,7 +162,7 @@ export async function readNativePullRequest(
   };
 }
 
-async function readNativeThreads(
+export async function readNativeThreads(
   run: CommandRunner,
   ref: PullRequestRef,
   cwd: string,
@@ -245,6 +246,7 @@ async function readNativeThreads(
 function toComment(value: z.infer<typeof comment>): PrComment {
   return {
     id: String(value.id),
+    ...(value.databaseId === undefined ? {} : { databaseId: value.databaseId }),
     author: value.author?.login ?? "deleted user",
     at: value.createdAt,
     body: value.body,

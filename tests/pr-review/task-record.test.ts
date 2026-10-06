@@ -127,3 +127,69 @@ test("a review with a tour stop off the diff is sent back naming the stop and it
   );
   expect(JSON.parse(submit(9, 11).text).tour[0].stops).toHaveLength(1);
 });
+
+test("reply claims, outcomes and receipts survive the task codec and reject invalid reply bindings", () => {
+  const reply = {
+    threadId: "thread-1",
+    commentId: "node-22",
+    replyTo: 22,
+    body: "Keep this guard.",
+  };
+  const round = {
+    generation: 0,
+    head: "abc123",
+    from: "base000",
+    notes: [],
+    review: { ...review, replies: [reply] },
+    posted: {
+      url: "https://github.com/acme/api/pull/7#pullrequestreview-1",
+      verdict: "comment",
+      postedAt: SCENARIO_NOW,
+    },
+  };
+  const record = createTask(
+    { ...base, kind: "pr-review", prReview: { ...prReview, rounds: [] } },
+    SCENARIO_NOW,
+  );
+  for (const post of [
+    { index: 0, kind: "pending", attemptedAt: SCENARIO_NOW, attemptRevision: 1 },
+    {
+      index: 0,
+      kind: "uncertain",
+      attemptedAt: SCENARIO_NOW,
+      attemptRevision: 1,
+      message: "response lost",
+    },
+    { index: 0, kind: "failed", message: "PR moved" },
+    {
+      index: 0,
+      kind: "posted",
+      url: "https://github.com/acme/api/pull/7#discussion_r23",
+      postedAt: SCENARIO_NOW,
+      confirmedByUser: true,
+    },
+  ] as const) {
+    const input = {
+      ...record,
+      prReview: { ...prReview, rounds: [{ ...round, replyPosts: [post] }] },
+    };
+    expect(
+      parseTaskRecord(JSON.parse(JSON.stringify(input))).prReview?.rounds[0]?.replyPosts,
+    ).toEqual([post]);
+    expect(() =>
+      parseTaskRecord({
+        ...input,
+        prReview: { ...input.prReview, rounds: [{ ...round, replyPosts: [post, post] }] },
+      }),
+    ).toThrow("unique saved reply");
+    expect(() =>
+      parseTaskRecord({
+        ...input,
+        prReview: {
+          ...input.prReview,
+          rounds: [{ ...round, replyPosts: [{ ...post, index: 1 }] }],
+        },
+      }),
+    ).toThrow("unique saved reply");
+  }
+});

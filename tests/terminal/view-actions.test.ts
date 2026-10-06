@@ -3,12 +3,12 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nativeViewText } from "../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
+import { nativeDetailPath, nativeViewsPath } from "../../src/board/snapshot.ts";
 import { runCli } from "../../src/cli.ts";
 import { saveTerminalChoice } from "../../src/config/home-settings.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
 import { repositoryKey } from "../../src/config/repositories.ts";
-import type { RequestBriefContent } from "../../src/contracts.ts";
+import type { CommandRequest, RequestBriefContent } from "../../src/contracts.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
@@ -1494,7 +1494,7 @@ test("New request rechecks coordinator ownership after focusing before sending i
   }
 });
 
-test("Show PRs opens the indexed durable task in the originating project without fetching GitHub", async () => {
+test("Show PRs opens the cached repository-qualified PR in the originating project without fetching GitHub", async () => {
   const f = await fixture("tern");
   try {
     const task = await createPrTask(f);
@@ -1508,13 +1508,16 @@ test("Show PRs opens the indexed durable task in the originating project without
       briefs: {},
       projects: [],
       pullRequests: {
-        "owner/repo#42": { header: { taskId: task.id }, detailFile: "pr-owner%2Frepo-42.json" },
+        "owner/repo#42": {
+          header: { taskId: task.id, repo: "owner/repo", number: 42 },
+          detailFile: "pr-owner%2Frepo-42.json",
+        },
       },
     };
     await writeFile(path, nativeViewText("panel", model));
     const result = await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps);
     expect(result.exitCode).toBe(0);
-    expect(f.opened).toEqual([{ kind: "pr", taskId: task.id }]);
+    expect(f.opened).toEqual([{ kind: "pr", repo: "owner/repo", number: 42 }]);
     await writeFile(path, nativeViewText("panel", { ...model, pullRequests: {} }));
     expect(
       (await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps)).exitCode,
@@ -1724,6 +1727,134 @@ test("a refused native approval never closes the brief or prompts the coordinato
     expect(f.closed).toEqual([]);
     expect(f.prompts).toEqual([]);
     expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});
+
+test("cached taskless PRs open from palette, repo#number, numeric fallback and detail file, without mutation", async () => {
+  const f = await fixture("tern");
+  try {
+    const path = nativeViewsPath(f.home, f.repo);
+    const detailFile = "pr-owner%2Frepo-43.json";
+    await mkdir(join(f.home, "native-views"), { recursive: true });
+    await writeFile(
+      path,
+      nativeViewText("panel", {
+        version: 1,
+        project: f.repo,
+        writtenAt: NOW,
+        tasks: {},
+        briefs: {},
+        projects: [],
+        pullRequests: {
+          "owner/repo#43": { header: { repo: "owner/repo", number: 43 }, detailFile },
+        },
+      }),
+    );
+    for (const argv of [
+      ["prs"],
+      ["open", "pr", "owner/repo#43"],
+      ["open", "pr", "43"],
+      ["view-file", nativeDetailPath(f.home, f.repo, detailFile)],
+    ]) {
+      const result = await runTerminal(
+        ["native", ...argv, "--pane", "101", "--cwd", f.clean],
+        f.deps,
+      );
+      expect(result.error?.message).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+    }
+    expect(f.opened).toEqual(Array(4).fill({ kind: "pr", repo: "owner/repo", number: 43 }));
+    expect(await f.service.list()).toEqual([]);
+    expect(
+      (await runCli(["pr-comment", "owner/repo#43", "--text", "Fix this"], f.deps)).exitCode,
+    ).not.toBe(0);
+    await f.write({
+      tandemPrReview: 1,
+      verdict: "comment",
+      summary: "",
+      drafts: [],
+      yours: [],
+      reviewHead: "abc",
+      reviewGeneration: 0,
+    });
+    expect(
+      (await runCli(["review-submit", "owner/repo#43", "--input", f.input], f.deps)).exitCode,
+    ).not.toBe(0);
+    expect(f.prompts).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("owned PR thread replies retain exact context in a worker fix request without GitHub writes", async () => {
+  const f = await fixture();
+  try {
+    const task = await createPrTask(f);
+    const reply = {
+      threadId: "thread-second",
+      commentId: "node-second",
+      replyTo: 22,
+      body: "Keep this guard",
+    };
+    await f.write({ reviewHead: "a".repeat(40), replies: [reply] });
+    const calls: string[][] = [];
+    const run = async (request: CommandRequest) => {
+      calls.push([...request.argv]);
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: "a".repeat(40),
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: reply.threadId,
+                      path: "removed.ts",
+                      line: null,
+                      diffSide: "RIGHT",
+                      isResolved: false,
+                      isOutdated: true,
+                      comments: {
+                        nodes: [
+                          {
+                            id: reply.commentId,
+                            databaseId: 22,
+                            author: { login: "sam" },
+                            createdAt: NOW,
+                            body: "Earlier guard",
+                          },
+                        ],
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      };
+    };
+    expect(
+      (await runCli(["pr-comment", task.id, "--input", f.input], { ...f.deps, run })).exitCode,
+    ).toBe(0);
+    const text = (await f.service.get(task.id)).communication?.messages[0]?.text;
+    expect(text).toContain(
+      "thread thread-second, root comment node-second (GitHub 22), removed.ts (outside current diff): Keep this guard",
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.includes("POST")).toBe(false);
+    await f.write({ reviewHead: "a".repeat(40), replies: [{ ...reply, commentId: "wrong" }] });
+    expect(
+      (await runCli(["pr-comment", task.id, "--input", f.input], { ...f.deps, run })).exitCode,
+    ).not.toBe(0);
+    expect((await f.service.get(task.id)).communication?.messages).toHaveLength(1);
   } finally {
     await f.close();
   }

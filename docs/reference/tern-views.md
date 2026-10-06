@@ -134,7 +134,8 @@ CONTEXT = --pane ID --cwd PATH [--window KEY]
 decimal strings; cwd is that pane's absolute directory, passed as one argv element. The plugin
 shows an error without spawning when either is unavailable. No context comes from
 `TANDEM_NATIVE_CWD` or a guessed first pane. Task/brief ids contain letters, digits, `_` and `-`;
-PR ids are decimal numbers. The native file route calls `native view-file PATH` with the same
+PR routes accept a durable task id, a decimal number, or a cached `owner/repo#number`.
+The repository-qualified form can open taskless watched PRs read-only. The native file route calls `native view-file PATH` with the same
 context, for renderer registration.
 
 The optional window key is an opaque Tern control-window key, never a pane, tab or session id.

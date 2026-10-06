@@ -59,8 +59,8 @@ local block: BlockDef<State> = {
    local entries = {}
    for _, pr in s.index.model.pullRequests do table.insert(entries, pr) end
    table.sort(entries, function(a, b) return a.header.number < b.header.number end)
-   for i, pr in entries do
-    if pr.header.taskId then table.insert(top, components.button("#" .. pr.header.number .. " " .. pr.header.title, "pr-select=" .. i)) end
+   for _, pr in entries do
+    table.insert(top, components.button("#" .. pr.header.number .. " " .. pr.header.title, "pr-select=" .. pr.header.repo .. "#" .. pr.header.number))
    end
   end
   table.insert(top, result.main)
@@ -73,9 +73,10 @@ local block: BlockDef<State> = {
    local entries = {}
    for _, pr in s.index.model.pullRequests do table.insert(entries, pr) end
    table.sort(entries, function(a, b) return a.header.number < b.header.number end)
-   local pr = entries[tonumber(ev.value) or 0]
-   if pr and pr.header.taskId then
-    invoke(s, cx)("open", "pr", pr.header.taskId, function() cx:exit(0) end)
+   local pr: typeof(entries[1])? = nil
+   for _, entry in entries do if entry.header.repo .. "#" .. entry.header.number == ev.value then pr = entry end end
+   if pr then
+    invoke(s, cx)("open", "pr", pr.header.repo .. "#" .. pr.header.number, function() cx:exit(0) end)
     s.switcher = false
    end
    return

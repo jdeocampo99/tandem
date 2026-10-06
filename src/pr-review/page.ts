@@ -1,3 +1,4 @@
+import { parseReviewReplies, type ReviewReply } from "./review.ts";
 /**
  * The PR review page: one JSON input in, one self-contained HTML page plus a sibling data file
  * out, and one JSON submission back from the page. Nothing here imports Tandem's task, service,
@@ -73,6 +74,7 @@ export type SubmissionVerdict = "comment" | "approve" | "request-changes";
 
 /** What the page's Submit sends through `window.lavish.queuePrompt`, as JSON text. */
 export type ReviewSubmission = Readonly<{
+  replies?: readonly ReviewReply[];
   tandemPrReview: 1;
   verdict: SubmissionVerdict;
   summary: string;
@@ -475,7 +477,7 @@ export function parseReviewSubmission(text: string): ParsedSubmission {
 
   const problems = unknownKeys(
     raw,
-    ["tandemPrReview", "verdict", "summary", "drafts", "yours"],
+    ["tandemPrReview", "verdict", "summary", "drafts", "yours", "replies"],
     "submission",
   );
   if (raw.tandemPrReview !== 1) problems.push("submission: tandemPrReview must be 1.");
@@ -517,6 +519,14 @@ export function parseReviewSubmission(text: string): ParsedSubmission {
     }
   }
 
+  let replies: readonly ReviewReply[] | undefined;
+  if (raw.replies !== undefined) {
+    try {
+      replies = parseReviewReplies(raw.replies);
+    } catch (error) {
+      problems.push(String(error));
+    }
+  }
   const yours: ReviewSubmission["yours"][number][] = [];
   if (!Array.isArray(raw.yours)) {
     problems.push("submission: yours must be an array.");
@@ -550,6 +560,13 @@ export function parseReviewSubmission(text: string): ParsedSubmission {
   }
   return {
     ok: true,
-    submission: { tandemPrReview: 1, verdict, summary: raw.summary, drafts, yours },
+    submission: {
+      tandemPrReview: 1,
+      verdict,
+      summary: raw.summary,
+      drafts,
+      yours,
+      ...(replies === undefined ? {} : { replies }),
+    },
   };
 }
