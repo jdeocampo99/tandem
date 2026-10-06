@@ -139,7 +139,10 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
   call) and takes no task ID, `--json`, `--logs`, or `--watch`.
   A locked state or any other error exits non-zero with nothing on stdout, and Herdr clears the
   entry until the next run.
-- `setup.sh` runs src/terminal-backend/herdr/setup.ts, which:
+- `setup.sh` runs src/terminal-backend/setup.ts. With Tern, the default, it links Tandem's Tern
+  package (see [terminal.md](terminal.md#plugin-consent-and-restoration)) and nothing below runs.
+  Only when `<home>/settings.toml` says `terminal = "herdr"` does it run
+  src/terminal-backend/herdr/setup.ts, which:
   - updates Herdr when `herdr --version` is older than 0.8.2, the first release with command
     entries in the tab bar (popup keybindings arrived in 0.7.4): `brew upgrade herdr` when the
     binary resolves under Homebrew, `herdr update` otherwise, showing its output only if Herdr is

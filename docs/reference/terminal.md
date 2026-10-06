@@ -8,36 +8,29 @@ Start here for terminal behavior. [Native views](native-views.md) covers the Ter
 store, contracts, click transport, staged opens and every screen. Approval and posting stay in
 [request briefs](request-briefs.md) and [PR review](pr-review.md).
 
-Code: `src/terminal-backend/contract.ts`, `compose.ts`, `identity.ts`, `setting.ts`,
-`herdr/`, `tern/`. Tests mirror these under `tests/terminal-backend/`.
+Code: `src/terminal-backend/contract.ts`, `compose.ts`, `identity.ts`, `herdr/`, `tern/`. Tests
+mirror these under `tests/terminal-backend/`.
 
 ## Choosing a terminal
 
-`<home>/settings.toml` stores the top-level `terminal = "herdr"` or `terminal = "tern"`.
-An absent key selects Herdr. `compose.ts` alone selects the implementation, reading the saved
-choice before operations and caching each adapter's uncertain-effect guard. Injected callers
-can supply a fixed choice with the same identity guards.
+Tern is the default terminal. `<home>/settings.toml` stores an optional top-level `terminal`;
+an absent key selects Tern, and only `terminal = "herdr"` selects Herdr. `compose.ts` alone
+selects the implementation (`savedTerminal`), reading the saved choice before operations and
+caching each adapter's uncertain-effect guard. Injected callers can supply a fixed choice with the
+same identity guards. Tern is a closed beta and requires a signed-in Stencil account.
 
-Chat setup, the setup page and direct interactive onboarding offer Tern only when `probeTern`
-returns `ready`. Its other results are `missing`, `signedOut` and `unknown` with a reason;
-new setup explains the result and uses Herdr. A previously saved choice remains selected when
-readiness is unavailable; saving unrelated page settings does not switch terminals. Selecting
-"Not now" in direct onboarding saves Herdr. The `terminal-setting` action rechecks Tern before
-saving a changed choice. Tern is a closed beta and requires a signed-in Stencil account.
+No setup surface asks about the terminal or offers Herdr: chat setup, the native setup block and
+direct terminal onboarding take the saved choice as given. Herdr is a working backend for anyone
+who writes `terminal = "herdr"` into the file by hand. Tandem has no action that switches it and
+does not check for unfinished work when the file changes, so edit it only while no task is
+unfinished: endpoints belong to the terminal that created them.
 
-The probe resolves `tern` from PATH, then `/Applications/Tern.app/Contents/MacOS/tern`.
-It checks the version and the account gate in its own temporary configuration, daemon socket,
-Tandem home and control window. A headless account is synthetic and cannot prove sign-in.
-The probe's own window may briefly appear in front. It closes that window and aborts and awaits
-its owned processes, without hiding the app or touching other windows. The check has an
-eight-second budget, with one second for control-window shutdown; timeout or failed cleanup
-returns `unknown`. A version string alone does not mean ready.
-
-Switching terminals is refused under the state lock while any task is unfinished, including
-paused, blocked, ready or awaiting approval, or tasks/presentations retain active jobs,
-endpoints, reservations, pending endpoint launches or quarantined operations. Availability is
-checked outside the lock; the live-work guard runs immediately before saving. Finish or safely
-stop the existing work through normal task controls before choosing the other terminal.
+Tandem does not probe Tern. A missing or unusable Tern shows at link time:
+`installTerminalPlugin` (every `tandem` command except `update`, and `setup.sh`) resolves `tern`
+as described under [Plugin consent and restoration](#plugin-consent-and-restoration) and throws
+`TernRequiredError` when Tern is missing or the package cannot be linked or become ready. Its one
+plain message says Tandem needs Tern and where to install it. With Herdr selected it restores
+Tern's preferences instead and never touches the plugin.
 
 ## The terminal port
 
@@ -150,7 +143,7 @@ notifications are disabled. Coordinator ask notifications stay enabled.
   collision-safe name. Matching names never permit reuse. The alert helper is likewise reused
   only by its recorded identity in that session.
 - Every Tern effect goes through `mutate(op)` in `tern/cli.ts`, the only module that runs the
-  Tern CLI (including `tern plugin` and the readiness probe) or writes the alert helper's tty.
+  Tern CLI (including `tern plugin`) or writes the alert helper's tty.
   Biome forbids importing the command runner, `node:child_process` or the `Bun` global anywhere
   else under `tern/` (`process-reader.ts`, which runs `ps` for the process proof, is the one
   exception for `Bun`). The op union is closed
@@ -244,10 +237,11 @@ Plugin list, link and reload resolve an explicit executable override first, then
 injected `PATH` (or the process `PATH`), then the macOS app bundle executable. PATH-only
 installs work without a bundle.
 
-Selecting ready Tern consents to linking Tandem's native view package. One separate question
+Linking Tandem's native view package needs no question: Tern is the terminal. One separate question
 asks before setting global `tabs_autohide=true` and adding global shortcuts. Declining leaves
 the settings byte-identical and remembers the decision. Palette commands and panel header
-buttons remain available. To reconsider, choose Herdr, then Tern again in setup.
+buttons remain available. To reconsider, set `terminal = "herdr"` and start Tandem, which
+restores the settings, then remove that line to be asked again.
 
 Link, consent, reload and restoration run under one machine-wide lock, `tandem-setup.lock`, in
 Tern's config directory next to `settings.json`. That directory holds the plugin links and the
@@ -256,10 +250,11 @@ re-reads the catalog and links only when the package is absent; a caller that wa
 first caller's recorded decision and asks nothing. A waiting caller gives up after five minutes.
 Restoration with no record returns without taking the lock.
 
-The shortcuts cover Board (⌘⇧B), PRs (⌘⇧P), Usage (⌘⇧U), projects (⌘1–9) and previous/next
-project (⌘⇧[ / ⌘⇧]). Explicit custom bindings, modifier/physical-key aliases and sequences are
-preserved. Alternate keymap presets are preserved as a whole; setup reports skipped keys or
-the preset. Window commands register no default chords. New windows read the saved mappings.
+The shortcuts cover Board (⌘⇧B), PRs (⌘⇧P), Usage (⌘⇧U), Settings (⌘⇧,), projects (⌘1–9) and
+previous/next project (⌘⇧[ / ⌘⇧]). Explicit custom bindings, modifier/physical-key aliases and
+sequences are preserved. Alternate keymap presets are preserved as a whole; setup reports
+skipped keys or the preset. Window commands register no default chords. New windows read the
+saved mappings.
 
 Before applying approved changes, the private `settings.json.tandem.json` record saves the
 decision, exact added key/action pairs, original keybind-table presence and sidebar's original

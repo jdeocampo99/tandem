@@ -566,9 +566,10 @@ not terminal identifiers.
 ### Panel and project switcher
 
 The panel header shows `tandem ▾`, the count of other projects that need you, the 5-hour meter
-and label, the bell count, and PRs and Board buttons. The panel always shows the PRs, Board and
-usage buttons, whatever the user decided about shortcuts. Rows open their task, brief or PR
-target through `open`. The bell opens Tern's inbox through `open` with `ref:{kind:"inbox"}` and
+and label, the bell count, and PRs, Board and Settings (⚙) buttons. The panel always shows the PRs,
+Board, Settings and usage buttons, whatever the user decided about shortcuts. Rows open their
+task, brief or PR target through `open`. The Settings button opens `ref:{kind:"setup",
+mode:"settings"}`. The bell opens Tern's inbox through `open` with `ref:{kind:"inbox"}` and
 marks alerts read.
 
 The project dropdown targets each online row by `project` with `target:{repoPath}`, including
