@@ -25,6 +25,8 @@ import {
   buildDurableDigest,
   summarizeTandemActionValue,
 } from "../../src/session/summary.ts";
+import { BUILT_IN_SPECIALISTS } from "../../src/specialists/built-in.ts";
+import type { SpecialistRegistry } from "../../src/specialists/registry.ts";
 import type { StoredTimelineEvent } from "../../src/tasks/timeline.ts";
 import type { BoundedTaskTrace, TaskTrace } from "../../src/tasks/trace.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
@@ -1940,4 +1942,44 @@ test("a catch-up goes on screen as its own card, and the tool result only carrie
     undefined,
   );
   expect(plain.text).toContain("WHERE YOU LEFT OFF");
+});
+
+test("the specialists action lists without asking and keeps the table's line breaks", async () => {
+  const repository = "/repo/.tandem/specialists";
+  const registry: SpecialistRegistry = {
+    folders: { repository, home: "/home/specialists" },
+    entries: [
+      ...BUILT_IN_SPECIALISTS.map((specialist) => ({
+        status: "ready" as const,
+        specialist,
+        replaces: [],
+      })),
+      {
+        status: "broken",
+        name: "seo",
+        origin: "repository",
+        path: `${repository}/seo.md`,
+        problem: 'line 3: unknown key "model"',
+        replaces: [],
+      },
+    ],
+    problems: [{ path: `${repository}/seo.md`, problem: 'line 3: unknown key "model"' }],
+  };
+  const asked: string[] = [];
+  const service = {
+    specialists: async (repoPath: string) => {
+      asked.push(repoPath);
+      return registry;
+    },
+  } as unknown as TandemService;
+
+  const result = await executeTandemAction({ action: "specialists", repoPath: "/repo" }, service, {
+    confirm: undefined,
+  });
+
+  expect(asked).toEqual(["/repo"]);
+  expect(result.approved).toBeUndefined();
+  const summary = summarizeTandemActionValue("specialists", result.value);
+  expect(summary.split("\n").length).toBeGreaterThan(BUILT_IN_SPECIALISTS.length);
+  expect(summary).toContain("seo.md");
 });

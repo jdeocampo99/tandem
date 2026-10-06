@@ -19,6 +19,8 @@ import { renderPrWatchView } from "./pr-watch/view.ts";
 import { type PublishedReport, publishReport } from "./report/publish.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
 import type { TandemService, TandemServiceOptions } from "./service/controller.ts";
+import { loadSpecialists } from "./specialists/registry.ts";
+import { renderSpecialistList } from "./specialists/view.ts";
 import { renderTaskTrace, renderTraceSummary } from "./tasks/trace.ts";
 import {
   parseTerminalArgs,
@@ -102,6 +104,7 @@ Usage:
   tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
                            --stop PR stops watching it
   tandem memory [NAME]     This project's workstreams; with a name, its catch-up and notes file
+  tandem specialists       This project's specialists, where each comes from, and file problems
   tandem update            Load your latest local Tandem code into every coordinator
                            Keeps chats and tasks; --fresh starts new chats
   tandem fix               Find stale Tandem resources and offer the repair
@@ -119,7 +122,7 @@ Usage:
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
-  --json                   Machine-readable output (status, trace, report, watch, memory, fix)
+  --json                   Machine-readable output (status, trace, report, watch, memory, specialists, fix)
   --watch                  Redraw every 2 seconds until Esc, q, or Ctrl-C (status)
   --line                   One line: what needs you, what's running, PRs (status)
   --verbose                Full paths and reasons (fix)
@@ -479,6 +482,37 @@ async function handleMemory({
   } finally {
     await service.shutdown();
   }
+}
+
+/**
+ * `tandem specialists` lists what a new task in this project could use, read from the working tree
+ * of the project the current directory is in. Any problem exits 1, so it doubles as a check.
+ */
+async function handleSpecialists({
+  invocation,
+  environment,
+  run,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly run: CommandRunner;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult> {
+  const project = await gitRootForPath(".", environment.cwd, run);
+  if (project === undefined) {
+    throw new Error("tandem specialists runs inside a project; cd into one of your repositories");
+  }
+  const registry = await loadSpecialists({
+    repositoryCheckout: project,
+    tandemHome: environment.home,
+  });
+  stdout(
+    invocation.json
+      ? `${JSON.stringify(registry)}\n`
+      : `${renderSpecialistList(registry, basename(project))}\n`,
+  );
+  return { exitCode: registry.problems.length === 0 ? 0 : 1, status: "specialists" };
 }
 
 /**
@@ -904,6 +938,9 @@ export async function runTerminal(
     }
     if (invocation.command === "memory") {
       return await handleMemory({ invocation, environment, dependencies, run, stdout });
+    }
+    if (invocation.command === "specialists") {
+      return await handleSpecialists({ invocation, environment, run, stdout });
     }
     if (invocation.command === "panel") {
       // Panels read only the snapshot coordinators write, never the state, so they take no lock.

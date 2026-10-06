@@ -10,6 +10,7 @@ export type TerminalCommand =
   | "config"
   | "configure"
   | "memory"
+  | "specialists"
   | "panel"
   | "welcome";
 
@@ -51,6 +52,7 @@ export type TerminalRunResult = Readonly<{
     | "report"
     | "watch"
     | "memory"
+    | "specialists"
     | "fixed"
     | "reset"
     | "panel"
@@ -94,6 +96,7 @@ const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   config: "config",
   configure: "configure",
   memory: "memory",
+  specialists: "specialists",
   panel: "panel",
   welcome: "welcome",
 };
@@ -146,6 +149,7 @@ const ALLOWED: Readonly<
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
   memory: { flags: ["json"], maxPaths: 1 },
+  specialists: { flags: ["json"], maxPaths: 0 },
   panel: { flags: ["popup"], maxPaths: 1 },
   welcome: { flags: [], maxPaths: 0 },
 };

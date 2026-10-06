@@ -1321,6 +1321,46 @@ test("tandem memory lists this project's workstreams, and with a name shows its 
   }
 });
 
+test("tandem specialists reads this project's working tree and exits 1 while a file has a problem", async () => {
+  const project = await realpath(await mkdtemp(join(tmpdir(), "tandem-specialists-project-")));
+  const home = await mkdtemp(join(tmpdir(), "tandem-specialists-home-"));
+  const gitRoot = async (request: CommandRequest): Promise<CommandResult> => ({
+    code: request.argv.includes("--show-toplevel") ? 0 : 1,
+    stdout: `${project}\n`,
+    stderr: "",
+  });
+  const run = async (argv: readonly string[]) => {
+    const output: string[] = [];
+    const result = await runTerminal(argv, {
+      cwd: project,
+      processEnvironment: { TANDEM_HOME: home },
+      run: gitRoot,
+      stdout: (text) => output.push(text),
+      stderr: (text) => output.push(text),
+    });
+    return { result, text: output.join("") };
+  };
+  try {
+    const folder = join(project, ".tandem", "specialists");
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, "blog-writer.md"), "---\nname: blog-writer\n---\nShort posts.\n");
+    const clean = await run(["specialists"]);
+    expect(clean.result).toEqual({ exitCode: 0, status: "specialists" });
+    expect(clean.text).toContain("blog-writer");
+
+    await writeFile(join(folder, "seo.md"), "---\nname: seo\nmodel: opus\n---\nBody\n");
+    const broken = await run(["specialists", "--json"]);
+    expect(broken.result.exitCode).toBe(1);
+    expect(JSON.parse(broken.text)).toMatchObject({
+      problems: [{ problem: expect.any(String) }],
+      entries: expect.arrayContaining([expect.objectContaining({ name: "seo", status: "broken" })]),
+    });
+  } finally {
+    await rm(project, { recursive: true, force: true });
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
 test("tandem status shows the board from saved state, and --json adds tasks with their IDs", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-status-test-"));
   const gitLog = async (request: CommandRequest): Promise<CommandResult> => ({
