@@ -172,19 +172,28 @@ export async function dismissNativeCatchUp(input: NativeVisitInput): Promise<voi
   }));
 }
 
-/** Foreground heartbeats and departure capture the latest visible signature, never open a view. */
+/** Heartbeats advance at most once a minute; transitions capture visibility without opening a view. */
 export async function recordNativeVisibility(
-  input: Omit<NativeVisitInput, "signature"> & Readonly<{ signature?: string }>,
+  input: Omit<NativeVisitInput, "signature"> &
+    Readonly<{ signature?: string; heartbeat?: boolean }>,
 ): Promise<void> {
-  await updateVisit(input, async (previous) => ({
-    version: 1,
-    project: input.project,
-    lastOpenedAt: previous?.lastOpenedAt ?? input.now,
-    lastVisibleAt: input.now,
-    ...(input.signature === undefined
-      ? previous?.previousSignature === undefined
-        ? {}
-        : { previousSignature: previous.previousSignature }
-      : { previousSignature: input.signature }),
-  }));
+  await updateVisit(input, async (previous) => {
+    const elapsed =
+      previous?.lastVisibleAt === undefined
+        ? undefined
+        : Date.parse(input.now) - Date.parse(previous.lastVisibleAt);
+    if (input.heartbeat && elapsed !== undefined && elapsed < 60_000) return undefined;
+    const signature = input.signature ?? previous?.previousSignature;
+    const lastVisibleAt =
+      elapsed !== undefined && elapsed <= 0 ? (previous?.lastVisibleAt ?? input.now) : input.now;
+    if (previous?.lastVisibleAt === lastVisibleAt && previous.previousSignature === signature)
+      return undefined;
+    return {
+      version: 1,
+      project: input.project,
+      lastOpenedAt: previous?.lastOpenedAt ?? input.now,
+      lastVisibleAt,
+      ...(signature === undefined ? {} : { previousSignature: signature }),
+    };
+  });
 }

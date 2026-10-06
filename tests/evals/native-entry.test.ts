@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NativeAlerts, nativeAlertCounts } from "../../src/board/native-alerts.ts";
 import { nativeViewText } from "../../src/board/native-views.ts";
@@ -159,6 +159,36 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
         ),
       );
       expect(visit.previousSignature).toBe(failure === "none" ? "after" : "before");
+      if (failure === "none") {
+        const path = join(world.home, "native-visits", `${repositoryKey(world.repoPath)}.json`);
+        const saved = await readFile(path, "utf8");
+        const inode = (await lstat(path)).ino;
+        const viewPath = nativeViewsPath(world.home, world.repoPath);
+        const view = await readFile(viewPath, "utf8");
+        const viewInode = (await lstat(viewPath)).ino;
+        for (let heartbeat = 0; heartbeat < 2; heartbeat++) {
+          const pulse = await runTerminal(
+            ["native", "project", "visible", "--pane", "101", "--cwd", lease.path],
+            {
+              cwd: world.repoPath,
+              processEnvironment: {
+                TANDEM_HOME: world.home,
+                TANDEM_SESSION: world.sessionId,
+                TANDEM_POOL_ROOT: world.poolRoot,
+              },
+              terminal,
+              run: world.run,
+              stdout: () => {},
+              stderr: () => {},
+            },
+          );
+          expect(pulse.exitCode).toBe(0);
+          expect(await readFile(path, "utf8")).toBe(saved);
+          expect((await lstat(path)).ino).toBe(inode);
+          expect(await readFile(viewPath, "utf8")).toBe(view);
+          expect((await lstat(viewPath)).ino).toBe(viewInode);
+        }
+      }
     });
   });
 }

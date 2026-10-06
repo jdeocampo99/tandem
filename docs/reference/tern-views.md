@@ -516,13 +516,18 @@ acknowledge the changed signature. An explicit catch-up opens without the automa
 `native project entry|away|visible` are internal lifecycle calls carrying the exact originating
 pane/cwd/window. The CLI proves the running coordinator and originating pane in its recorded Tern
 session before writing presentation state. Luau serializes focus departure/entry callbacks and
-sends a last-visible heartbeat every 30 seconds for the currently selected pane. These calls
+sends a last-visible heartbeat every minute for the currently selected pane. TypeScript skips
+heartbeats unless the saved last-visible time advances by at least one minute, including across
+windows. Focus/away transitions can update sooner; duplicate values skip the atomic write, and
+timestamps never move backwards. Only the private visit record changes; lifecycle heartbeats do
+not rewrite task authority or root/detail view files. These calls
 never start a task or change policy. Non-project focus callbacks quietly refuse.
 
 The private locked visit record retains `lastOpenedAt` for entry history and uses `lastVisibleAt`
 for the one-hour gate. Visible heartbeats and departure capture the current signature; continuous
 work for hours followed by an immediate switch back stays quiet. A closed/disconnected window
-stops heartbeats; its last sample is the baseline (up to 30 seconds of sampling precision).
+stops heartbeats; its last persisted sample is the baseline. A pulse within a minute of a
+transition is skipped, so the next persisted sample can lag by almost two minutes.
 Visibility means the selected project in a Tern window, rather than time since launch or keyboard
 inactivity. Tern's API exposes pane focus, not macOS application activation; a selected window
 continues to count as visible while another application is active. Another window's heartbeats

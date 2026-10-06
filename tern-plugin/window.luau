@@ -99,7 +99,7 @@ local function enter(cx:WindowCx)
 end
 tern.on("focus",function(_ev:FocusEvent,cx:WindowCx) enter(cx) end)
 local function pulse()
- tern.timer(30000,function(cx)
+ tern.timer(60000,function(cx)
   if cx then
    local origin=focused(cx)
    if origin then table.insert(queue,{origin=origin,action="visible"}); drain(cx) end

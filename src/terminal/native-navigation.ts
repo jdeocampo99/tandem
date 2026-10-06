@@ -46,6 +46,7 @@ async function lifecycle(context: NativeRendererContext, action: "entry" | "away
       home: context.environment.home,
       project: current.repoPath,
       now: new Date().toISOString(),
+      heartbeat: action === "visible",
       ...(model.changeSignature === undefined ? {} : { signature: model.changeSignature }),
     });
     return { value: { visible: action === "visible" } };

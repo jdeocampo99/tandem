@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nativeViewText } from "../../src/board/native-views.ts";
 import { nativeViewsPath } from "../../src/board/snapshot.ts";
@@ -177,6 +177,43 @@ test("long foreground work then an immediate return stays quiet; one hour away s
       ),
     ).toBe(true);
     expect(shows).toBe(1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("visibility heartbeats skip writes within a minute; transitions capture departure immediately", async () => {
+  const home = await mkdtemp("/tmp/tdm-visibility-");
+  const input = {
+    home,
+    project: "/fixture/project",
+    now: "2030-01-02T09:00:00Z",
+    signature: "start",
+  };
+  const path = join(home, "native-visits", `${repositoryKey(input.project)}.json`);
+  try {
+    await visitNativeProject(input, async () => {});
+    const original = await readFile(path, "utf8");
+    const inode = (await lstat(path)).ino;
+    for (const now of ["2030-01-02T09:00:00Z", "2030-01-02T09:00:30Z", "2030-01-02T09:00:59Z"]) {
+      await recordNativeVisibility({ ...input, now, signature: "changed", heartbeat: true });
+      expect(await readFile(path, "utf8")).toBe(original);
+      expect((await lstat(path)).ino).toBe(inode);
+    }
+    await recordNativeVisibility({ ...input, now: "2030-01-02T09:01:00Z", heartbeat: true });
+    expect(JSON.parse(await readFile(path, "utf8")).lastVisibleAt).toBe("2030-01-02T09:01:00Z");
+    await recordNativeVisibility({ ...input, now: "2030-01-02T09:01:05Z", signature: "departure" });
+    const departed = await readFile(path, "utf8");
+    const departureInode = (await lstat(path)).ino;
+    expect(JSON.parse(departed)).toMatchObject({
+      lastVisibleAt: "2030-01-02T09:01:05Z",
+      previousSignature: "departure",
+    });
+    for (const now of ["2030-01-02T09:01:05Z", "2030-01-02T09:00:00Z"]) {
+      await recordNativeVisibility({ ...input, now, signature: "departure" });
+      expect(await readFile(path, "utf8")).toBe(departed);
+      expect((await lstat(path)).ino).toBe(departureInode);
+    }
   } finally {
     await rm(home, { recursive: true, force: true });
   }
