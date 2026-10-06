@@ -99,6 +99,7 @@ export async function saveCoordinator(
     schemaVersion: 1,
     repoPath,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: SESSION,
       workspaceId,
       tabId: `tab-${workspaceId}`,
@@ -144,6 +145,7 @@ export async function seedTasks(
       policy,
     });
     const endpoint: Endpoint = {
+      terminal: "herdr" as const,
       sessionId: SESSION,
       workspaceId: task.workspaceId,
       tabId: `tab-${task.id}`,
@@ -169,6 +171,7 @@ export async function seedTasks(
       taskId: presentation.taskId,
       recordPath: join(home, "presentations", presentation.id, "record.json"),
       endpoint: {
+        terminal: "herdr" as const,
         sessionId: SESSION,
         workspaceId: presentation.workspaceId,
         tabId: `tab-${presentation.id}`,

@@ -26,6 +26,7 @@ const saved: RepoPolicy["models"] = {
 };
 
 const input: SetupViewInput = {
+  tern: { status: "missing" },
   generatedAt: "2026-09-26T12:00:00.000Z",
   homeFolder: "/Users/me",
   ompCatalogue: catalogue,
@@ -163,4 +164,27 @@ test("names from disk cannot close the data script", () => {
   );
   expect(html).not.toContain("<img");
   expect(html.toLowerCase().match(/<\/script>/g)).toHaveLength(3);
+});
+
+for (const tern of [
+  { status: "missing" },
+  { status: "signedOut" },
+  { status: "unknown", reason: "Tern could not start." },
+] as const) {
+  test(`${tern.status} Tern does not replace a saved terminal choice`, () => {
+    const view = buildSetupView({ ...input, terminal: "tern", tern });
+    expect(view.ternReady).toBe(false);
+    expect(view.terminal).toBe("tern");
+    expect(view.terminalReason).toContain("Keeping the saved Tern choice.");
+    const firstSetup = buildSetupView({ ...input, tern });
+    expect(firstSetup.terminal).toBe("herdr");
+    expect(firstSetup.terminalReason).toContain("Using Herdr.");
+  });
+}
+
+test("setup offers Tern only with confirmed readiness", () => {
+  const view = buildSetupView({ ...input, terminal: "tern", tern: { status: "ready" } });
+  expect(view.ternReady).toBe(true);
+  expect(view.terminal).toBe("tern");
+  expect(view.terminalReason).toBeUndefined();
 });

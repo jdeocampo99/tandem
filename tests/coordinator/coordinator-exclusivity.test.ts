@@ -120,6 +120,7 @@ function foundRecord(
       schemaVersion: 1,
       repoPath: "/repo",
       endpoint: {
+        terminal: "herdr" as const,
         sessionId: values.sessionId,
         workspaceId: "workspace-a",
         tabId: "tab-a",
@@ -161,6 +162,7 @@ function ghostRecord(repoPath: string, poolRoot: string): Readonly<Record<string
     schemaVersion: 1,
     repoPath,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: "tandem-ghost",
       workspaceId: "workspace-ghost",
       tabId: "tab-ghost",

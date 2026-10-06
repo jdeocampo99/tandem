@@ -110,7 +110,7 @@ h2{font-size:15px;font-weight:600;margin:0}
 <div class="wrap">
   <div class="mast">
     <h1>Tandem setup</h1>
-    <span><b>First run</b> · a few quick steps. On Review, Save and continue is your one consent to apply the shown models and providers, code folders, issue setting, and selected repository settings, then open chats for selected repos. Tandem validates them before saving; chat setup keeps its own approval step.</span>
+    <span><b>First run</b> · a few quick steps. On Review, Save and continue is your one consent to apply the shown models and providers, code folders, terminal, issue setting, and selected repository settings, then open chats for selected repos. Tandem validates them before saving; chat setup keeps its own approval step.</span>
   </div>
 
   <ol class="stepper" id="stepper" aria-label="Setup steps"></ol>
@@ -118,6 +118,12 @@ h2{font-size:15px;font-weight:600;margin:0}
   <section class="stage" data-stage="models" aria-labelledby="h-models">
     <h2 id="h-models">Which model does each job?</h2>
     <p class="sec-note">Start from a preset, then change any job. Each job runs in Claude Code or OMP, whichever its model belongs to; its thinking choices follow the model.</p>
+    <div class="panel" style="padding:16px;margin-bottom:16px">
+      <h3>Which terminal should Tandem use?</h3>
+      <label><input type="radio" name="terminal" value="herdr"> Herdr</label>
+      <label id="tern-choice" style="margin-left:20px"><input type="radio" name="terminal" value="tern"> Tern</label>
+      <p class="sec-note" id="terminal-note"></p>
+    </div>
     <div class="presets" id="presets"></div>
     <p class="harness-notes" id="harness-notes"></p>
     <div class="panel">
@@ -226,6 +232,11 @@ const state = {
 };
 const repos = [];
 const pendingFolders = new Set(Array.isArray(VIEW.pendingFolders) ? VIEW.pendingFolders : []);
+document.getElementById("tern-choice").hidden = !VIEW.ternReady && VIEW.terminal !== "tern";
+document.querySelector('input[name="terminal"][value="tern"]').disabled = !VIEW.ternReady && VIEW.terminal !== "tern";
+document.getElementById("terminal-note").textContent = VIEW.terminalReason ?? "Tern is signed in and ready. Finish or stop running tasks before switching.";
+const initialTerminal = VIEW.ternReady ? (draft?.terminal ?? VIEW.terminal) : VIEW.terminal;
+document.querySelector(`input[name="terminal"][value="${initialTerminal}"]`).checked = true;
 const initialSelfImprovement = draft?.selfImprovement ?? VIEW.selfImprovement;
 document.querySelector(`input[name="self"][value="${initialSelfImprovement}"]`).checked = true;
 const viewRepos = Array.isArray(VIEW.repos) ? VIEW.repos : [];
@@ -409,6 +420,7 @@ function setupDraft() {
       install: r.install,
       pasted: Boolean(r.pasted),
     })),
+    terminal: document.querySelector('input[name="terminal"]:checked').value,
     selfImprovement: document.querySelector('input[name="self"]:checked')?.value ?? "fix",
   };
 }
@@ -655,6 +667,7 @@ function answer() {
         ...(install ? { setupCommands: [install] } : {}),
       };
     }),
+    terminal: document.querySelector('input[name="terminal"]:checked').value,
     selfImprovement: document.querySelector('input[name="self"]:checked').value,
   };
 }
@@ -678,6 +691,7 @@ function renderReview() {
   const rows = [
     ["Models", modelReview, 0],
     ["Repos", reposReview, 1],
+    ["Terminal", a.terminal === "tern" ? "Tern (Herdr if unavailable)" : "Herdr", 0],
     ["Self-improvement", { off: "Off", fix: "Fix: look into it and offer a fix", report: "Report: draft a GitHub issue" }[a.selfImprovement], 2],
   ];
   const box = $("#review");

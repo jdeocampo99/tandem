@@ -1,5 +1,5 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
-import type { AgentRole, Endpoint } from "../contracts.ts";
+import type { AgentRole, Endpoint, TerminalName } from "../contracts.ts";
 import type { ToolCheck } from "../onboarding/tools.ts";
 
 /** A pane Tandem owns, and the directory the backend's commands run from. */
@@ -80,6 +80,17 @@ export type OpenViewResult = Readonly<{
   fallback?: "brief-review";
 }>;
 
+/** Installation and account readiness proved before offering a terminal in setup. */
+export type TerminalAvailability =
+  | Readonly<{ status: "missing" | "signedOut" | "ready" }>
+  | Readonly<{ status: "unknown"; reason: string }>;
+
+/** The last proven window width, and any limitation that prevented fitting the panel. */
+export type PanelFitResult = Readonly<{
+  fittedWidth: number | undefined;
+  warnings: readonly string[];
+}>;
+
 export type AgentState = "idle" | "working" | "blocked" | "unknown";
 
 /** Presentation-only lifecycle state for the pane an agent runs in; it never grants ownership. */
@@ -111,7 +122,7 @@ export type SplitAnchor =
  */
 export type TerminalBackend = Readonly<{
   /** What doctor checks and messages call this terminal. */
-  name: string;
+  name: TerminalName;
 
   /** Reads the pane's identity and foreground processes, proving it is still `endpoint`. */
   inspect(target: EndpointTarget): Promise<EndpointInspection>;
@@ -163,10 +174,12 @@ export type TerminalBackend = Readonly<{
         env?: Readonly<Record<string, string>>;
         parentWorkspaceId?: string;
         insertIndex?: number;
+        /** Previous durable identity, when reconnecting to a retained native project session. */
+        previousEndpoint?: Endpoint;
       }>,
   ): Promise<Readonly<{ endpoint: Endpoint; warnings: readonly string[] }>>;
   /**
-   * Opens a pane right of an anchor, without focus, proven to share its workspace and tab. An
+   * Opens a pane beside an anchor, without focus, proven to share its workspace and tab. An
    * anchor known only by pane id is read first; nothing is ever written to the anchor.
    */
   splitBeside(
@@ -258,13 +271,13 @@ export type TerminalBackend = Readonly<{
   /** Closes a panel; one already gone counts as closed. */
   closePanel(target: SessionTarget & Readonly<{ panelPaneId: string }>): Promise<void>;
   /**
-   * Brings the panel back to `columns` wide, once per window width: returns the window width it
-   * fitted for, or `fittedWidth` unchanged when there was nothing to do or the terminal refused.
+   * Brings the panel back to `columns` wide, once per window width. Retains `fittedWidth` when
+   * nothing changed or fitting was refused; terminals can report a limitation as a warning.
    */
   fitPanel(
     target: SessionTarget &
       Readonly<{ paneId: string; columns: number; fittedWidth: number | undefined }>,
-  ): Promise<number | undefined>;
+  ): Promise<PanelFitResult>;
   /** Publishes the agent's state on the pane this process inherited, or undefined outside one. */
   agentStatusReporter(
     input: Readonly<{
@@ -298,7 +311,7 @@ export type TerminalContext = Readonly<{
   focus(environment: TandemEnvironmentSource): TerminalFocus;
   /** The panel's own pane, when this process is the panel the terminal opened beside a coordinator. */
   panelPaneId(environment: TandemEnvironmentSource): string | undefined;
-  /** The pane the welcome popup prompts, when this process is that popup. */
+  /** The agent pane targeted by the welcome view, when this process hosts that view. */
   welcomePaneId(environment: TandemEnvironmentSource): string | undefined;
 }>;
 

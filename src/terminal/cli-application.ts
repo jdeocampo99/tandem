@@ -128,12 +128,11 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
   let activeWatch: WatchControl | undefined;
   let shutdownPromise: Promise<void> | undefined;
   const run = dependencies.run ?? runCommand;
-  const capabilities: CliCapabilities = {
+  const capabilities: Omit<CliCapabilities, "terminal"> = {
     ...(dependencies.nativeRendererHandlers === undefined
       ? {}
       : { nativeRendererHandlers: dependencies.nativeRendererHandlers }),
     run,
-    terminal: dependencies.terminal ?? terminalBackend(run),
     statPath: dependencies.statPath ?? defaultStatPath,
     startPersistent: dependencies.startPersistent ?? defaultStartPersistent,
     runInteractive: dependencies.runInteractive ?? defaultRunInteractive,
@@ -155,17 +154,18 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
 
   const invoke = async (invocation: CliInvocation, signal?: AbortSignal): Promise<CliResult> => {
     if (invocation.options.help) return { command: invocation.command, value: HELP_TEXT };
-    const environment = await resolveViewActionEnvironment(
-      resolveEnvironment(invocation, dependencies),
-      invocation,
-      capabilities.terminal,
-    );
+    const boundary = resolveEnvironment(invocation, dependencies);
+    const terminal = dependencies.terminal ?? terminalBackend(run, { home: boundary.home });
+    const environment = await resolveViewActionEnvironment(boundary, invocation, terminal);
     return runCliCommand({
       invocation,
       environment,
       service: () => getService(environment),
       signal,
-      capabilities,
+      capabilities: {
+        ...capabilities,
+        terminal,
+      },
     });
   };
   const shutdown = async (): Promise<void> => {

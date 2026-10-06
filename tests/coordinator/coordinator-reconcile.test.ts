@@ -174,6 +174,7 @@ function ghostRecord(repoPath: string, poolRoot: string): Readonly<Record<string
     schemaVersion: 1,
     repoPath,
     endpoint: {
+      terminal: "herdr" as const,
       sessionId: "tandem-ghost",
       workspaceId: "workspace-ghost",
       tabId: "tab-ghost",
@@ -230,6 +231,7 @@ async function seedPendingScout(
     leasedAt: TIMESTAMP,
   };
   const endpoint: Endpoint = {
+    terminal: "herdr" as const,
     sessionId: FIRST_SESSION,
     workspaceId: "workspace-scout",
     tabId: "tab-scout",
@@ -339,6 +341,7 @@ async function seedPendingImplementation(
     path: lease.path,
   });
   const endpoint: Endpoint = {
+    terminal: "herdr" as const,
     sessionId: FIRST_SESSION,
     workspaceId: "workspace-implementation",
     tabId: "tab-implementation",

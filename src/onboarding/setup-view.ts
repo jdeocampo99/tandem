@@ -7,12 +7,15 @@ import {
   MODEL_ROLE_ORDER,
   type ModelSpec,
   type RepoPolicy,
+  type TerminalName,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
 import { type ClaudeCodeAvailability, modsOffReason } from "../harness/claude-code/availability.ts";
 import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harness/contract.ts";
+import type { TerminalAvailability } from "../terminal-backend/contract.ts";
+import { ternFallbackReason } from "../terminal-backend/setting.ts";
 import type { SetupPageDraft } from "./setup-answer.ts";
 
 /**
@@ -37,6 +40,9 @@ export type SetupView = Readonly<{
   pendingFolders: readonly string[];
   repos: readonly SetupRepo[];
   selfImprovement: SelfImprovementMode;
+  terminal: TerminalName;
+  ternReady: boolean;
+  terminalReason?: string;
   draft?: SetupPageDraft;
   searchStatus?: SetupSearchStatus;
 }>;
@@ -119,6 +125,8 @@ export type SetupViewInput = Readonly<{
   repos: readonly SetupRepoFacts[];
   /** Saved mode; absent when the user never chose, so the page starts at fix. */
   selfImprovement?: SelfImprovementMode;
+  terminal?: TerminalName;
+  tern: TerminalAvailability;
   draft?: SetupPageDraft;
   searchStatus?: SetupSearchStatus;
 }>;
@@ -199,6 +207,11 @@ export function setupCatalogue(
 }
 
 export function buildSetupView(input: SetupViewInput): SetupView {
+  const fallbackReason = ternFallbackReason(input.tern);
+  const terminalReason =
+    input.terminal === "tern"
+      ? fallbackReason?.replace(/Using Herdr\.$/u, "Keeping the saved Tern choice.")
+      : fallbackReason;
   const models = setupCatalogue(input.ompCatalogue, input.claudeCode).map(setupModel);
   return {
     schemaVersion: 1,
@@ -236,6 +249,9 @@ export function buildSetupView(input: SetupViewInput): SetupView {
       .sort((left, right) => left.path.localeCompare(right.path))
       .map((repo) => setupRepo(repo, input.homeFolder)),
     selfImprovement: input.selfImprovement ?? "fix",
+    terminal: input.terminal ?? "herdr",
+    ternReady: input.tern.status === "ready",
+    ...(terminalReason === undefined ? {} : { terminalReason }),
     ...(input.draft === undefined ? {} : { draft: input.draft }),
     ...(input.searchStatus === undefined ? {} : { searchStatus: input.searchStatus }),
   };

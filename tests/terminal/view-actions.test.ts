@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../../src/cli.ts";
+import { saveTerminalChoice } from "../../src/config/home-settings.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
 import type { RequestBriefContent } from "../../src/contracts.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
@@ -43,6 +44,7 @@ async function fixture() {
   await mkdir(repo);
   await mkdir(clean, { recursive: true });
   const endpoint = {
+    terminal: "herdr",
     sessionId: "isolated",
     workspaceId: "workspace",
     tabId: "tab",
@@ -599,6 +601,7 @@ test("Herdr reports unsupported native views and uses its existing review pane f
             reviewPane: {
               status: "open" as const,
               endpoint: {
+                terminal: "herdr" as const,
                 sessionId: "isolated",
                 workspaceId: "workspace",
                 tabId: "tab",
@@ -1028,6 +1031,68 @@ test("native PR comment explicitly refuses a completed implementation worker", a
     expect(result.exitCode).not.toBe(0);
     expect(result.error?.message).toContain("worker has finished");
     expect((await f.service.get(task.id)).communication?.messages).toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});
+
+test("native project lookup uses the terminal saved in the explicit home before dispatch", async () => {
+  const f = await fixture();
+  try {
+    const record = await readCoordinatorRecord(recordPath(f.home, "isolated", f.repo));
+    if (record === undefined) throw new Error("Missing fixture coordinator");
+    await saveCoordinatorRecord(f.home, {
+      ...record,
+      endpoint: {
+        ...record.endpoint,
+        terminal: "tern",
+        terminalSessionId: "201",
+        workspaceId: "301",
+        tabId: "301",
+      },
+    });
+    await saveTerminalChoice(f.home, "tern");
+    const calls: string[][] = [];
+    const { terminal: _terminal, service: _service, ...dependencies } = f.deps;
+    const result = await runTerminal(
+      ["native", "board", "--home", f.home, "--pane", "101", "--cwd", f.clean],
+      {
+        ...dependencies,
+        processEnvironment: { TANDEM_HOME: join(f.root, "different-home") },
+        run: async (request) => {
+          calls.push([...request.argv]);
+          if (request.argv[1] !== "ls") throw new Error("Only a Tern pane listing expected");
+          return {
+            code: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              sessions: [
+                {
+                  id: "201",
+                  name: "isolated",
+                  tabs: [
+                    {
+                      id: "301",
+                      name: "project",
+                      blocks: [{ id: "101", title: "coordinator", cwd: f.clean, live: true }],
+                    },
+                  ],
+                },
+              ],
+              detached: [],
+            }),
+          };
+        },
+        createService: () => {
+          throw new Error("Unavailable renderer must not start a service");
+        },
+      },
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.error?.message).toBe("tandem native board is not implemented yet");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0]).not.toBe("herdr");
+    expect(calls[0]?.slice(1)).toEqual(["ls", "--json"]);
   } finally {
     await f.close();
   }

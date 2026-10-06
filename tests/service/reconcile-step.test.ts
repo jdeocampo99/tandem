@@ -70,6 +70,7 @@ const worktree: WorktreeLease = {
 };
 
 const writer: Endpoint = {
+  terminal: "herdr" as const,
   sessionId: "s",
   workspaceId: "w",
   tabId: "t",
@@ -183,6 +184,7 @@ test("each live stage maps to its scheduler step", () => {
 test("a writer stage waits on a launch, blocks without a worktree, and recovers without a pane", () => {
   const launching = runtime({
     endpointLaunch: {
+      terminal: "herdr" as const,
       schemaVersion: 1,
       reservationId: "reservation-1",
       sessionId: "s",

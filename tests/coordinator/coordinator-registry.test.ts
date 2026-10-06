@@ -34,6 +34,7 @@ function result(stdout = "", code = 0, stderr = ""): CommandResult {
 
 function endpoint(sessionId = "tandem", paneId = "pane-a"): CoordinatorRecord["endpoint"] {
   return {
+    terminal: "herdr" as const,
     sessionId,
     workspaceId: `workspace-${paneId}`,
     tabId: `tab-${paneId}`,
@@ -1008,6 +1009,7 @@ test("allows reset when historical worker endpoints are no longer live", async (
   try {
     await saveCoordinatorRecord(values.home, values.recordA);
     const historicalEndpoint: Endpoint = {
+      terminal: "herdr" as const,
       sessionId: "tandem",
       workspaceId: "workspace-dead-worker",
       tabId: "tab-dead-worker",

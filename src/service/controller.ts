@@ -15,6 +15,7 @@ import {
   type SelfImprovementMode,
   saveProjectRoots,
   saveSelfImprovement,
+  saveTerminalChoice,
 } from "../config/home-settings.ts";
 import { type ModelPreset, modelPresets } from "../config/model-presets.ts";
 import {
@@ -56,6 +57,7 @@ import type {
   TaskCommunicationView,
   TaskRecord,
   TaskTarget,
+  TerminalName,
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { openProject } from "../coordinator/open-project.ts";
@@ -200,8 +202,17 @@ import {
   taskRollup,
 } from "../tasks/trace.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
-import { terminalBackend } from "../terminal-backend/compose.ts";
-import type { TerminalBackend } from "../terminal-backend/contract.ts";
+import {
+  savedTerminalPreference,
+  terminalBackend,
+  ternAvailability,
+} from "../terminal-backend/compose.ts";
+import type { TerminalAvailability, TerminalBackend } from "../terminal-backend/contract.ts";
+import {
+  assertTerminalSwitch,
+  type TerminalChoiceResult,
+  ternFallbackReason,
+} from "../terminal-backend/setting.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
@@ -314,6 +325,8 @@ export type TandemServiceOptions = Readonly<{
   }>;
   /** Callback runs under coordinator launch-lock then task-store serialization; it must not reacquire the launch lock. */
   readonly refreshSource?: () => Promise<SourceRefreshResult>;
+  /** Coordinator host offers separate plugin consent after a Tern choice is saved. */
+  readonly installTerminalPlugin?: (readiness: TerminalAvailability) => Promise<boolean>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
   readonly clock?: Clock;
@@ -357,6 +370,8 @@ export type TandemService = Readonly<{
   readonly findRepo: (name: string) => Promise<readonly FoundRepo[]>;
   /** Saves the folders the user keeps code in, for finding repositories by name. */
   readonly saveProjectRoots: (roots: readonly string[]) => Promise<HomeSettings>;
+  /** Saves the chosen terminal only when no active or uncertain work spans the switch. */
+  readonly configureTerminal: (terminal: TerminalName) => Promise<TerminalChoiceResult>;
   /** Saves the self-improvement mode the user chose during onboarding. */
   readonly saveSelfImprovement: (mode: SelfImprovementMode) => Promise<HomeSettings>;
   /** Checks the tools onboarding depends on, without changing anything. */
@@ -567,6 +582,7 @@ type ServiceDependencies = Readonly<{
       }>
     | undefined;
   refreshSource: (() => Promise<SourceRefreshResult>) | undefined;
+  installTerminalPlugin: ((readiness: TerminalAvailability) => Promise<boolean>) | undefined;
   workerTimeoutMs: number | undefined;
   run: CommandRunner;
   terminal: TerminalBackend;
@@ -659,6 +675,7 @@ class TandemController {
   readonly #memory: ProjectMemory;
   readonly #selfImprovement: SelfImprovement;
   readonly #setupPage: SetupPageWorkflow;
+  #onboardingTern: ReturnType<typeof ternAvailability> | undefined;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -692,6 +709,7 @@ class TandemController {
       models: (repoPath) => this.models(repoPath),
       roots: () => deps.projectRoots(),
       homeSettings: () => readHomeSettings(deps.home),
+      probeTern: () => ternAvailability(deps.run),
       registeredProjects: () => readRegisteredProjects(deps.home),
       inspectRepo: async (path) => {
         const onboarded = await this.setupOnboard(path, false);
@@ -706,6 +724,7 @@ class TandemController {
       },
       saveModels: (input) => this.configureModels(input),
       saveSelfImprovement: (mode) => saveSelfImprovement(deps.home, mode),
+      configureTerminal: (terminal) => this.configureTerminal(terminal),
       saveCodeFolders: (folders) => saveProjectRoots(deps.home, folders),
       setupRepo: (path, repo) =>
         this.setupOnboard(path, true, {
@@ -922,6 +941,7 @@ class TandemController {
           readTextList(roots, "projectRoots").map((root) => expandHome(root)),
         ),
       saveSelfImprovement: (mode) => saveSelfImprovement(this.#deps.home, mode),
+      configureTerminal: (terminal) => this.configureTerminal(terminal),
       checkTools: () =>
         checkTools(this.#deps.run, this.#deps.terminal, {
           cwd: this.#deps.home,
@@ -999,6 +1019,7 @@ class TandemController {
             (record) => ({
               repoPath: record.repoPath,
               project: basename(record.repoPath),
+              terminal: record.endpoint.terminal,
               workspaceId: record.endpoint.workspaceId,
               paneId: record.endpoint.paneId,
             }),
@@ -1098,6 +1119,42 @@ class TandemController {
     return found.map((checkout) => ({ ...checkout, setUp: saved.has(checkout.path) }));
   }
 
+  private async configureTerminal(requested: TerminalName): Promise<TerminalChoiceResult> {
+    await this.#deps.store.exclusive(async () => {
+      assertTerminalSwitch(
+        this.#deps.terminal.name,
+        requested,
+        await this.#deps.store.list(),
+        await readRuntimeState(this.#deps.runtimePath),
+      );
+    });
+    const available =
+      requested === "tern" ? await ternAvailability(this.#deps.run) : { status: "ready" as const };
+    if (requested === "tern") this.#onboardingTern = Promise.resolve(available);
+    const reason = ternFallbackReason(available);
+    const terminal = available.status === "ready" ? requested : "herdr";
+    const selected = await this.#deps.store.exclusive(async () => {
+      const tasks = await this.#deps.store.list();
+      const state = await readRuntimeState(this.#deps.runtimePath);
+      assertTerminalSwitch(this.#deps.terminal.name, requested, tasks, state);
+      assertTerminalSwitch(this.#deps.terminal.name, terminal, tasks, state);
+      await saveTerminalChoice(this.#deps.home, terminal);
+      return { requested, terminal, ...(reason === undefined ? {} : { reason }) };
+    });
+    if (
+      selected.terminal === "tern" &&
+      this.#deps.installTerminalPlugin !== undefined &&
+      !(await this.#deps.installTerminalPlugin(available))
+    ) {
+      return {
+        ...selected,
+        reason:
+          "Tern selected. Tandem's views and shortcuts were left unchanged; run setup.sh to add them later.",
+      };
+    }
+    return selected;
+  }
+
   private async onboardingFacts(repoPath: string): Promise<OnboardingFacts> {
     const [models, settings, registered, tandem, setupPage] = await Promise.all([
       readModelSettings({ repoPath, home: this.#deps.home }),
@@ -1106,8 +1163,15 @@ class TandemController {
       realpath(repoPath),
       this.#setupPage.status(),
     ]);
+    const terminalChosen = savedTerminalPreference(settings).chosen;
+    const probe = terminalChosen
+      ? undefined
+      : (this.#onboardingTern ?? ternAvailability(this.#deps.run));
+    if (probe !== undefined) this.#onboardingTern = probe;
     return {
       modelsChosen: models.configured,
+      terminalChosen,
+      ...(probe === undefined ? {} : { tern: await probe }),
       codeFolders: settings.projectRoots,
       projects: registered.filter((project) => project !== tandem),
       selfImprovementChosen: settings.selfImprovementChosen,
@@ -2850,9 +2914,10 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     poolRoot,
     sourceWorkspace,
     refreshSource,
+    installTerminalPlugin: options.installTerminalPlugin,
     workerTimeoutMs,
     run,
-    terminal: terminalBackend(run),
+    terminal: terminalBackend(run, { home }),
     clock,
     idFactory,
     classifyResearchContinuation,

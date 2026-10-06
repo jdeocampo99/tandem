@@ -43,6 +43,7 @@ const answer = {
     },
     { path: "~/pasted" },
   ],
+  terminal: "herdr",
   selfImprovement: "fix",
 };
 
@@ -148,6 +149,7 @@ test("a folder search is separate from the final answer and retains in-progress 
           pasted: false,
         },
       ],
+      terminal: "herdr",
       selfImprovement: "fix",
     },
   };
@@ -195,6 +197,7 @@ test("native folder requests preserve draft and never become a setup answer or q
           pasted: false,
         },
       ],
+      terminal: "herdr",
       selfImprovement: "fix",
     },
   };
@@ -251,6 +254,7 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
       ...noModels,
       models: { ...answer.models, presentation: undefined, verifier: {} },
       extra: true,
+      terminal: "herdr",
       selfImprovement: "sometimes",
       workerSkills: ["tdd"],
     }),

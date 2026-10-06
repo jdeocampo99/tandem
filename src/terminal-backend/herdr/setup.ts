@@ -432,7 +432,7 @@ async function applyToSession(deps: HerdrSetupDependencies, herdr: Herdr): Promi
   return true;
 }
 
-async function main(): Promise<void> {
+export async function setUpHerdrIntegration(): Promise<void> {
   const interactive = process.stdin.isTTY === true && process.stdout.isTTY === true;
   const tandemMain = fileURLToPath(new URL("../../main.ts", import.meta.url));
   const tandem = resolveTandemEnvironment(process.env, {
@@ -480,4 +480,4 @@ async function main(): Promise<void> {
   });
 }
 
-if (import.meta.main) await main();
+if (import.meta.main) await setUpHerdrIntegration();
