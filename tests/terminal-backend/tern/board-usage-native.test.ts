@@ -209,19 +209,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           expect(await ctl("tree")).toContain("Fix panel width");
           expect(await ctl("tree")).not.toContain("Open what needs me");
         }
-        // The CLI's host effect restores focus. Only the screen's successful callback exits itself.
-        expect(
-          (
-            await backend.openView({
-              coordinator,
-              cwd: project,
-              home,
-              origin: { paneId: viewPane, cwd: project },
-              view: { kind: "orchestrator" },
-            })
-          ).opened,
-        ).toBe(true);
-        await run("focus", viewPane);
+        // A status-0 shell action exits its own block; the guarded backend return is proven separately.
         await ctl("key", "escape");
         actionCount += 1;
         await until(
@@ -303,15 +291,11 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           })
         ).opened,
       ).toBe(true);
-      await run("focus", catchupPane);
-      await ctl("key", "escape");
-      actionCount += 1;
-      await until(
-        async () =>
-          !blocks(decode(await run("ls", "--json"), Listing, "automatic dismiss exit")).some(
-            (entry) => entry.block.id === catchupPane,
-          ),
-      );
+      expect(
+        blocks(decode(await run("ls", "--json"), Listing, "automatic return close")).some(
+          (entry) => entry.block.id === catchupPane,
+        ),
+      ).toBe(false);
       expect(
         await maybeShowCatchUp(backend, {
           home,

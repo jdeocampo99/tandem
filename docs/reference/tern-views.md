@@ -318,7 +318,7 @@ The host proves the block's program, all launch arguments, scoped session and id
 then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
 are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
 
-The host never sets `keep_open` when launching split/detail blocks or task replacements.
+The host explicitly launches renderer blocks and task replacements with `keep_open=false`.
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.
 An exited retained pane can still report `live=true`. Neither `live` nor `exited` proves closure:
 only the exact pane id's absence from a scoped `tern ls` does.
@@ -354,13 +354,13 @@ that scope. Multiple windows are refused rather than choosing one by ordering.
 ## Board, usage and catch-up actions
 
 Board and usage are full-window tabs with Escape and “← Orchestrator” returns. Returning proves
-this coordinator's exact block program, root/detail path and launch arguments, then focuses the
-preserved coordinator. Hosting passes `keep_open=false`. Screen callbacks invoke `cx:exit(0)`
-only after CLI success; failures toast
-stderr and keep the screen open. Shared `navigation.run/back` accept an optional success callback.
-A window-command Board toggle has no `BlockCx`: the backend restores the coordinator and closes
-only the exact owned Board block after proving its program, five arguments, idle process and close
-acknowledgement. Uncertain closure is quarantined without retries.
+this coordinator's exact block program, root/detail path and launch arguments, restores the
+preserved coordinator, then retires only the exact idle full-window view through the backend's
+`tern close` guard and confirms scoped absence. A window-command Board toggle uses the same return.
+The active window scope is independent of the view's immutable launch window argument.
+Hosting passes `keep_open=false`. Screen success callbacks invoke captured `cx:exit(0)`; nonzero
+results toast stderr and never invoke callback exit. Shared `navigation.run/back` accept an optional
+success callback. Uncertain opening or closure is quarantined without retries.
 
 `maybeShowCatchUp` in `src/memory/native-visits.ts` owns the project-visit trigger. Visible front-door
 launches/reconnects, `coordinator/open-project.ts` after confirmed focus, and the project-switch

@@ -163,7 +163,7 @@ export function ternViewHost(
             input.coordinator,
             "return requires this coordinator's exact native view",
           );
-        if (windowPrograms.has(source.block.program)) {
+        if (windowPrograms.has(program)) {
           const endpoint: Endpoint = {
             ...input.coordinator,
             paneId: source.block.id,
@@ -180,7 +180,7 @@ export function ternViewHost(
           proveClosingOrigin = async () => {
             const current = await exactPane(cmd, { endpoint, cwd: input.cwd });
             if (
-              current.block.program !== source.block.program ||
+              current.block.program !== program ||
               JSON.stringify(current.block.args) !== JSON.stringify(expected)
             )
               throw new EndpointOwnershipError(
@@ -200,9 +200,9 @@ export function ternViewHost(
           closeOrigin = source.block.id;
           closingView = {
             kind:
-              source.block.program === "tandem.board"
+              program === "tandem.board"
                 ? "board"
-                : source.block.program === "tandem.usage"
+                : program === "tandem.usage"
                   ? "usage"
                   : "catchup",
           };
@@ -426,9 +426,11 @@ export function ternViewHost(
             ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
             BrowserOpened,
           );
-          const created = blocks(await cmd.ls(input.cwd)).find(
-            (entry) => entry.block.id === opened.ok.block,
-          );
+          const created = blocks(
+            await cmd.ls(input.cwd).catch((cause: unknown) => {
+              throw new TernOutcomeUnknownError("tern browser", cause);
+            }),
+          ).find((entry) => entry.block.id === opened.ok.block);
           if (
             !created ||
             created.session.id !== input.coordinator.terminalSessionId ||
