@@ -338,19 +338,18 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           (entry) => entry.block.id === board.paneId,
         )?.tab.id,
       ).not.toBe(coordinator.tabId);
-      await host.open(
-        {
-          coordinator,
-          cwd: root,
-          home,
-          view: { kind: "orchestrator" },
-          origin: { paneId: board.paneId, cwd: root },
-        },
-        root,
-        "panel",
-        "return",
-        path,
-      );
+      expect(
+        await host.toggleBoard(
+          {
+            coordinator,
+            cwd: root,
+            home,
+            view: { kind: "board" },
+            origin: { paneId: board.paneId, cwd: root },
+          },
+          root,
+        ),
+      ).toBe(true);
       expect(
         blocks(await ternCommands(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === behindBoard.paneId,
