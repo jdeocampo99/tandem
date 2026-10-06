@@ -87,17 +87,21 @@ Luau modules load with relative `require` inside the package:
 | `diff-row` | `row(line, commentAction?, cards?)`, `card(key, author, markdown, actions?)` |
 | `components` | `button(text, action, tone?)`, `text(text, tone?)`, `keyed(node, key)` |
 
-`host.luau` is the daemon entry point. It eagerly loads these four modules, so a missing or
-invalid helper fails plugin readiness before a block opens. Each renderer module returns its
-typed `BlockDef<State>`; register it with one line, with no shared dispatch table or view logic:
+`host.luau` is the daemon entry point. LOAD only registers lazy block callbacks; it does not
+require renderers or helpers, read view files, or change layout. Tern disables hooks exceeding
+50 ms, including initial plugin load. Each renderer module returns its typed `BlockDef<State>`;
+register it with one line using the local lazy forwarding function:
 
 ```lua
-tern.block.define("panel", require("./panel"))
+tern.block.define("panel", lazy(function() return require("./panel") end))
 ```
 
 The renderer also adds a matching `[[blocks]]` entry with `id = "panel"` and its title to
 `plugin.toml`. Its native block kind is `tandem.panel`. Register every declared block before
 `host.luau` finishes. Screen-specific registrations stay at the bottom of `host.luau`.
+The renderer and its helpers load on the first block initialization, so module failures surface
+when that block opens. Later panes reuse the cached definition. The window entry point likewise
+registers commands and routes without requiring the hosting module; a matching open route loads it.
 
 The loader checks the envelope and runs the renderer's shape parser before replacing its model.
 Reads are bounded to 8 MiB, regular files only, and refuse symlinks. Missing, malformed, wrong-kind

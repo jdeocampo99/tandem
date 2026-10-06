@@ -1,6 +1,5 @@
 --!strict
 -- Window routing only. The CLI owns state, project lookup, opening views, and every action guard.
-local nav=require("./navigation")
 type Origin={pane:number,cwd:string}
 local function run(cx: WindowCx, args: { string }, origin:Origin?, quiet:boolean?, done:((cx:WindowCx)->())?)
  local argv = { "/bin/sh", "tandem.sh", "native" }
@@ -22,7 +21,7 @@ local function run(cx: WindowCx, args: { string }, origin:Origin?, quiet:boolean
    if result.status ~= 0 and not quiet then
     (callbackCx or cx):toast("error", "Tandem couldn't run that action", result.stderr)
    elseif result.status == 0 then
-    local warnings=nav.warnings(result.stdout)
+    local warnings=require("./navigation").warnings(result.stdout)
     if #warnings>0 then (callbackCx or cx):toast("warning","Tandem action completed",table.concat(warnings,"\n")) end
    end
    if done then done(callbackCx or cx) end
@@ -62,9 +61,10 @@ tern.route.link(function(link, cx)
  return nil
 end)
 
-local viewHost = require("./view-host")
 tern.route.open(function(req, cx)
- local hosted = viewHost.open(req, cx)
+ -- Skip unrelated files without loading the hosting module or doing file/layout work.
+ if not string.match(req.path, "%.tandem%-open%.json$") and not string.match(req.path, "%.tandem%-view%.json$") then return nil end
+ local hosted = require("./view-host").open(req, cx)
  if hosted then return hosted end
  if string.match(req.path, "%.tandem%-view%.json$") then
   run(cx, { "view-file", req.path })

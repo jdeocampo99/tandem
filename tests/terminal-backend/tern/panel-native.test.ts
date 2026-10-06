@@ -64,8 +64,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
     await writeFile(
       join(plugin, "host.luau"),
       (await readFile(join(plugin, "host.luau"), "utf8"))
-        .replace('require("./task"))', 'require("./layout-fixture"))')
-        .replace('require("./brief"))', 'require("./layout-fixture"))'),
+        .replace('require("./task")', 'require("./layout-fixture")')
+        .replace('require("./brief")', 'require("./layout-fixture")'),
     );
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
