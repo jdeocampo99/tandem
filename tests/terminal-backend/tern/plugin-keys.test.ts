@@ -2,14 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  describeTernPluginKeys,
-  planTernPluginKeys,
-} from "../../../src/terminal-backend/tern/plugin-keys.ts";
-import {
   configureTernPluginSettings,
+  describeTernPluginKeys,
   PreferenceWriteNotCommittedError,
+  planTernPluginKeys,
   restoreTernPluginSettings,
-} from "../../../src/terminal-backend/tern/plugin-settings.ts";
+} from "../../../src/terminal-backend/tern/plugin.ts";
 
 test("Tandem shortcuts override presets while preserving custom chord aliases and sequences", () => {
   const plan = planTernPluginKeys(
