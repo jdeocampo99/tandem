@@ -12,6 +12,12 @@ function mentioned(text: string, value: string): boolean {
   return new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`, "iu").test(text);
 }
 
+function identityCounts(records: readonly Readonly<{ id: string }>[]): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const record of records) counts.set(record.id, (counts.get(record.id) ?? 0) + 1);
+  return counts;
+}
+
 /** A numeric id in a count, an issue reference, or a title is not a domain reference. */
 function explicitReference(text: string, kind: string, id: string): boolean {
   return new RegExp(
@@ -45,11 +51,16 @@ export function nativeReplyLinks(
     result.set(url, { url, label });
   };
   const scoped = tasks.filter((t) => t.repoPath === repoPath);
+  const taskIds = identityCounts(scoped);
   for (const task of scoped) {
+    if (taskIds.get(task.id) !== 1) continue;
     if (explicitReference(text, "task", task.id) || mentioned(text, `tandem://task/${task.id}`))
       add("task", task.id, `Task ${task.id}`);
   }
-  for (const brief of briefs.filter((b) => b.repoPath === repoPath)) {
+  const scopedBriefs = briefs.filter((b) => b.repoPath === repoPath);
+  const briefIds = identityCounts(scopedBriefs);
+  for (const brief of scopedBriefs) {
+    if (briefIds.get(brief.id) !== 1) continue;
     if (mentioned(text, brief.id)) add("brief", brief.id, `Brief ${brief.id}`);
   }
   // A number is clickable only when exactly one task in this project owns that PR.

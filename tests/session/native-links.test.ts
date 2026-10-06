@@ -80,6 +80,7 @@ test("brief references use the mentioned revision identity and reject foreign br
 test("reply links do not infer identities from task titles, counts, issue numbers, or foreign PR URLs", () => {
   for (const text of [
     "Tern adapter is ready.",
+    "responded in 102 ms",
     "Changed 102 files and discussed issue #281.",
     "Review https://github.com/foreign/repo/pull/281.",
     "task 1020, PR #2810, task-102, task102 and PR281.",
@@ -110,7 +111,12 @@ test("reply links do not infer identities from task titles, counts, issue number
 test("duplicate task titles and bare numbers never select a task or PR", () => {
   const duplicate = task({ id: "104", repoPath: "/repo", title: "Tern adapter" });
   const tasks = [record, duplicate];
-  for (const text of ["Tern adapter is ready.", "102, 104 and 281.", "#102 and #281."]) {
+  for (const text of [
+    "Tern adapter is ready.",
+    "responded in 102 ms",
+    "102, 104 and 281.",
+    "#102 and #281.",
+  ]) {
     expect(nativeReplyLinks([{ role: "assistant", content: text }], tasks, [], "/repo")).toEqual(
       [],
     );
@@ -118,4 +124,19 @@ test("duplicate task titles and bare numbers never select a task or PR", () => {
   expect(
     nativeReplyLinks([{ role: "assistant", content: "Task #104 is ready." }], tasks, [], "/repo"),
   ).toEqual([{ url: "tandem://task/104", label: "Task 104" }]);
+});
+
+test("explicit references refuse ambiguous scoped task and brief identities", () => {
+  const brief = createRequestBriefRecord(
+    { id: "req-282", repoPath: "/repo", content: content("Support Tern") },
+    NOW,
+  );
+  expect(
+    nativeReplyLinks(
+      [{ role: "assistant", content: "Task #102 and brief req-282." }],
+      [record, task({ ...record, title: "Another task" })],
+      [brief, { ...brief }],
+      "/repo",
+    ),
+  ).toEqual([]);
 });
