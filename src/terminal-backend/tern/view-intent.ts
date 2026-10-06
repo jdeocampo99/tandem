@@ -16,7 +16,18 @@ import {
 export const NativePlacement = z.enum(["panel", "split", "task", "window", "return", "inbox"]);
 const Ticket = z.object({
   version: z.literal(1),
-  kind: z.enum(["panel", "task", "brief", "pr", "prs", "board", "usage", "catchup", "welcome"]),
+  kind: z.enum([
+    "panel",
+    "task",
+    "task-picker",
+    "brief",
+    "pr",
+    "prs",
+    "board",
+    "usage",
+    "catchup",
+    "welcome",
+  ]),
   placement: NativePlacement,
   args: z.array(z.string()).length(5),
   coordinator: Id,

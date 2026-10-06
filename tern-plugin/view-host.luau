@@ -1,7 +1,7 @@
 --!strict
 -- Only immutable backend-authored opening tickets can reach the native layout API.
 local M = {}
-local kinds = { panel=true, task=true, brief=true, pr=true, prs=true, board=true, usage=true, catchup=true, welcome=true }
+local kinds = { panel=true, task=true, brief=true, pr=true, prs=true, board=true, usage=true, catchup=true, welcome=true, ["task-picker"]=true }
 function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
  if not string.match(req.path, "/native%-host/[%w%-]+%.tandem%-open%.json$") then return nil end
  local ok, ticket = pcall(function() return tern.json.decode(tern.fs.read(req.path, 16384)) end)
@@ -32,7 +32,13 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
   cx:command("inbox")
   pane=origin
  elseif ticket.placement=="return" then
-  if owner.floating then
+  if source.block=="tandem.task-picker" then
+   local old=if previous then cx.session:pane(previous) else nil
+   local layout=cx.session:layout(owner.tab)
+   if owner.floating and (not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
+    or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator) then return {handled=true} end
+   cx.layout:close(origin)
+  elseif owner.floating then
    local old=if previous then cx.session:pane(previous) else nil
    local layout=cx.session:layout(owner.tab)
    if not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
@@ -45,7 +51,7 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
     (source.block~="tandem.board" and source.block~="tandem.usage" and source.block~="tandem.catchup") then return {handled=true} end
    cx.layout:close(origin)
   end
-  cx.layout:focus(coordinator)
+  cx.layout:focus(if source.block=="tandem.task-picker" and owner.floating then tonumber(ticket.replaced) else coordinator)
   pane=coordinator
  else
   if ticket.placement=="task" then

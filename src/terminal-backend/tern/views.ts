@@ -30,9 +30,18 @@ const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 const windowPrograms = new Set(["tandem.board", "tandem.usage", "tandem.catchup"]);
 const returnPrograms = new Set(
-  ["panel", "task", "brief", "pr", "prs", "board", "usage", "catchup", "welcome"].map(
-    (kind) => `tandem.${kind}`,
-  ),
+  [
+    "panel",
+    "task",
+    "brief",
+    "pr",
+    "prs",
+    "board",
+    "usage",
+    "catchup",
+    "welcome",
+    "task-picker",
+  ].map((kind) => `tandem.${kind}`),
 );
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
 
@@ -120,7 +129,17 @@ export function ternViewHost(
   const open = async (
     input: ViewHostingInput,
     project: string,
-    kind: "panel" | "task" | "brief" | "pr" | "prs" | "board" | "usage" | "catchup" | "welcome",
+    kind:
+      | "panel"
+      | "task"
+      | "task-picker"
+      | "brief"
+      | "pr"
+      | "prs"
+      | "board"
+      | "usage"
+      | "catchup"
+      | "welcome",
     placement: "panel" | "split" | "task" | "window" | "return" | "inbox",
     path: string,
   ) => {
@@ -490,7 +509,10 @@ export function ternViewHost(
         input.view.kind,
         input.view.kind === "task"
           ? "task"
-          : input.view.kind === "brief" || input.view.kind === "pr" || input.view.kind === "prs"
+          : input.view.kind === "brief" ||
+              input.view.kind === "pr" ||
+              input.view.kind === "prs" ||
+              input.view.kind === "task-picker"
             ? "split"
             : "window",
         path,

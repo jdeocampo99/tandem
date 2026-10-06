@@ -346,6 +346,7 @@ All renderers use these block ids and the same five string launch arguments:
 | --- | --- | --- |
 | `tandem.panel` | Root `panel` envelope | Left of the coordinator, about 360 pixels |
 | `tandem.task` | Direct `task` envelope | Conversation area, preserving its live coordinator |
+| `tandem.task-picker` | Root `panel` envelope | Disposable split beside the conversation |
 | `tandem.brief` | Direct `brief` envelope | Beside the conversation |
 | `tandem.pr` | Direct `pr` envelope | Beside the conversation |
 | `tandem.prs` | Root `panel` envelope | Beside the conversation |
@@ -407,6 +408,32 @@ switch. Supplied window keys are independently scoped and must contain the origi
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
 
+### Task page and picker
+
+`task.luau` draws the direct `TaskPageView` envelope as `tandem.task`. It uses the
+five hosting arguments above and reads the explicit root index through `navigation.root`.
+Brief and PR detail references are project-relative filenames; they resolve beside the
+shown task detail file. The Brief tab reads saved lines; review and annotations open
+in the separate brief pane. Diff and PR use `pr-model` and `pr-content`, including
+its displayed-HEAD guard and immutable action-input path. Cost shows recorded receipt
+fields and labels unknown samples as unavailable.
+
+`native open-task` proves the project's Tern coordinator and opens `tandem.task-picker`
+against the root index in a disposable split. It searches the saved project's tasks by
+title, id or stage; arrows choose a result and Enter or a click invokes `native open task`.
+Success closes only the picker. Cancel invokes the exact orchestrator return route.
+Task Restart and worker messaging call `native restart` and `native steer`; a failed
+CLI action shows stderr without retrying or clearing the user's unsent direction.
+Malformed detail files keep the last readable page and disable its actions until a
+valid file returns. Navigation back remains available.
+
+Coordinator adapters append a compact references row after a reply mentioning explicit
+task or PR ids, a saved PR URL, or a known brief identity in their project. Task titles,
+plain counts, issue numbers and foreign PR URLs never imply a native identity. The row prints OSC 8 routes
+for `tandem://task/ID`, `tandem://brief/ID` and `tandem://pr/NUMBER`. It is enabled only
+inside an unambiguous inherited Tern pane context. Herdr output and model reply text
+remain unchanged. Unknown or foreign identities never become native links.
+
 ### Reusing the native PR components
 
 `tern-plugin/pr-model.luau` exports `parse` for the direct PR model and `parseIndex` for
@@ -434,7 +461,9 @@ The shared `Invoke` completion receives the process result `{status,stdout,stder
 missing origin or spawn failure. Other action completions remain success-only. Content clears
 `posting` on completion, retains drafts on failure/refusal, and marks `submitted` only for
 exit zero with decoded CLI stdout containing `posted: true`. A `posted: false` result displays
-its message; an unreadable receipt asks the user to check the PR. No outcome retries an action.
+its service message verbatim, preserving distinct definite-refusal and uncertain-post guidance,
+including the confirmation required to recover an uncertain post. An unreadable receipt asks
+the user to check the PR. No outcome retries an action.
 The standalone PR block calls `cx:exit(0)` only after that confirmed posted receipt, as it does
 for its close control. Embedded content records success locally; its task host owns navigation.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling

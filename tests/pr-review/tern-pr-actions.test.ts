@@ -3,11 +3,12 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { uncertainPostMessage } from "../../src/pr-review/render.ts";
 
 // Run the standalone Luau CLI, with no Tern daemon, window or live Tandem state.
 const luau = process.env.TANDEM_LUAU_BINARY ?? Bun.which("luau");
 (luau ? test : test.skip)(
-  "PR actions retain drafts on failure and only close for a posted receipt",
+  "PR and embedded task actions retain drafts on failure and require a posted receipt",
   async () => {
     const root = await mkdtemp(join(tmpdir(), "tandem-pr-luau-"));
     try {
@@ -23,6 +24,7 @@ const luau = process.env.TANDEM_LUAU_BINARY ?? Bun.which("luau");
         "pr-diff",
         "pr-content",
         "pr",
+        "task",
       ]) {
         const module = await readFile(
           fileURLToPath(new URL(`../../tern-plugin/${name}.luau`, import.meta.url)),
@@ -30,8 +32,17 @@ const luau = process.env.TANDEM_LUAU_BINARY ?? Bun.which("luau");
         );
         source += `modules["./${name}"] = function()\n${module.replaceAll("require(", "loadModule(")}\nend\n`;
       }
+      const uncertainMessage = uncertainPostMessage(
+        "https://github.com/acme/app/pull/281",
+        "GitHub response was lost.",
+      );
+      source += `local uncertainMessage = ${JSON.stringify(uncertainMessage)}\nlocal uncertainOutput = ${JSON.stringify(JSON.stringify({ taskId: "review-1", posted: false, message: uncertainMessage }))}\n`;
       source += await readFile(
         fileURLToPath(new URL("./tern-pr-actions.luau", import.meta.url)),
+        "utf8",
+      );
+      source += await readFile(
+        fileURLToPath(new URL("../tasks/tern-task-actions.luau", import.meta.url)),
         "utf8",
       );
       const path = join(root, "actions.luau");
@@ -46,6 +57,7 @@ const luau = process.env.TANDEM_LUAU_BINARY ?? Bun.which("luau");
       expect(stdout).toContain(
         "PR action result, home forwarding and draft retention checks passed",
       );
+      expect(stdout).toContain("Embedded task review completion checks passed");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
