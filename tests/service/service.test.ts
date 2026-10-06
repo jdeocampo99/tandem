@@ -599,10 +599,14 @@ type Fixture = Readonly<{
   readonly service: TandemService;
 }>;
 
+/** Tandem defaults to Tern; these fixtures fake Herdr commands, so their homes say so. */
+const HERDR_SETTINGS = 'terminal = "herdr"\n';
+
 async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   const home = await mkdtemp(join(tmpdir(), "tandem-service-regression-"));
   const repoPath = join(home, "repo");
   await mkdir(repoPath, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const sourcePath = join(home, "clean-source");
   const commonPath = join(home, "git-common");
   if (options.sourceWorkspace === true) {
@@ -778,6 +782,8 @@ test("bound coordinators scope tasks by physical original identity and reject fo
   const home = join(root, "home");
   const original = join(root, "original");
   const source = join(root, "clean-source");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const other = join(root, "other");
   const originalAlias = join(root, "original-alias");
   await Promise.all([mkdir(original), mkdir(source), mkdir(other)]);
@@ -838,6 +844,8 @@ test("bound task creation normalizes clean input to the original identity and pe
   const original = join(root, "original");
   const source = join(root, "clean-source");
   const common = join(root, "git-common");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
   const runner = fakeRunner({ commonDirectory: common });
   const service = createTandemService({
@@ -882,7 +890,6 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         setupCommands: ["bun install --frozen-lockfile"],
       },
     ],
-    terminal: "herdr",
     selfImprovement: "off",
   };
   await withFixture(
@@ -996,6 +1003,8 @@ test("looks skills up at creation, repository first, and pins them across a rest
   const home = join(root, "home");
   const repoPath = join(root, "repo");
   const personalHome = join(root, "personal");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const common = join(root, "git-common");
   await Promise.all([mkdir(repoPath, { recursive: true }), mkdir(common, { recursive: true })]);
   const repositorySkill = await writeSkill(
@@ -1093,7 +1102,10 @@ test("tasks pin only explicitly requested skills, ignoring legacy home worker sk
   ]);
   await writeSkill(join(personalHome, ".claude", "skills", "buildkite"), "Read Buildkite logs.");
   const tdd = await writeSkill(join(personalHome, ".claude", "skills", "tdd"), "Test first.");
-  await writeFile(join(home, "settings.toml"), 'workerSkills = ["buildkite", "tdd"]\n');
+  await writeFile(
+    join(home, "settings.toml"),
+    `${HERDR_SETTINGS}workerSkills = ["buildkite", "tdd"]\n`,
+  );
   const service = createTandemService({
     home,
     sessionId: "session-a",
@@ -1136,6 +1148,8 @@ test("new scouts persist a classified continuation and an explicit disposition s
   const original = join(root, "original");
   const source = join(root, "clean-source");
   const common = join(root, "git-common");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
   const runner = fakeRunner({ commonDirectory: common });
   const requests: ResearchContinuationRequest[] = [];
@@ -1267,6 +1281,7 @@ async function approvedBriefFixture(): Promise<
   const home = await mkdtemp(join(tmpdir(), "tandem-service-request-"));
   const repoPath = join(home, "repo");
   await mkdir(repoPath, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const runner = fakeRunner();
   const service = createTandemService({
     home,

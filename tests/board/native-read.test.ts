@@ -35,7 +35,7 @@ test("serialized brief detail exposes the exact native approval input for its di
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     const publication = await reader.read(
       {
@@ -113,7 +113,7 @@ test("native bundle reads saved task inspection/timeline and writes an atomic pr
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -198,7 +198,7 @@ test("provider refresh failure is visible and backs off while task data still pr
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -251,7 +251,7 @@ test("retained provider limits carry their original fetch time and failed-refres
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -304,7 +304,7 @@ test("slow remote usage never blocks native task snapshots and shutdown drains i
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -332,7 +332,7 @@ test("project switcher reads only other owners' published summaries without rewr
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -411,7 +411,7 @@ test("native publication refuses cross-project details and escaping filenames be
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     const publication = await reader.read(
       {
@@ -462,7 +462,7 @@ test("publication prunes absent task/brief/PR details only in its own project an
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     try {
       const publication = await reader.read(

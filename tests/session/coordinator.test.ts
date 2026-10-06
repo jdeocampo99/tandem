@@ -696,7 +696,6 @@ function welcomeSession(
         shutdown: async () => undefined,
         onboardingFacts: async () => ({
           modelsChosen: false,
-          terminalChosen: true,
           codeFolders: [],
           projects: options.projects.filter((project) => project !== "/repo"),
           selfImprovementChosen: false,

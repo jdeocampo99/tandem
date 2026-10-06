@@ -518,6 +518,8 @@ export async function createScenarioWorld(
   const repoPath = join(root, "repo");
   const poolRoot = join(root, "pool");
   await mkdir(home, { recursive: true });
+  // Tandem's own default is Tern; the scenario's fake terminal decides what its home selects.
+  await writeFile(join(home, "settings.toml"), `terminal = "${options.terminal ?? "herdr"}"\n`);
   await mkdir(join(repoPath, ".git"), { recursive: true });
   await mkdir(poolRoot, { recursive: true });
   const sessionId = options.sessionId ?? SCENARIO_SESSION;

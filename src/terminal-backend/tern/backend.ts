@@ -15,7 +15,6 @@ import {
   clearTernQuarantine,
   listTernQuarantine,
   missing,
-  probeTern,
   type TernCli,
   type TernOptions,
   type TernRunner,
@@ -493,29 +492,8 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
     },
     serverCommand: cli.serverCommand,
     clientCommand: cli.clientCommand,
-    checkInstall: async () => {
-      const result = await probeTern(run, { binary: cli.binary, now: cli.clock, sleep: cli.wait });
-      if (result.status === "unknown")
-        return [{ name: "Tern", ok: false, detail: `readiness unknown: ${result.reason}` }];
-      if (result.status === "ready") return [{ name: "Tern", ok: true, detail: "ready" }];
-      if (result.status === "signedOut")
-        return [
-          {
-            name: "Tern",
-            ok: false,
-            detail: "not signed in",
-            fix: "Open Tern and sign in to your Stencil account.",
-          },
-        ];
-      return [
-        {
-          name: "Tern",
-          ok: false,
-          detail: "not installed",
-          fix: "Install Tern from https://stencil.so/tern",
-        },
-      ];
-    },
+    // The coordinator already runs inside Tern; a missing app fails at link or launch instead.
+    checkInstall: async () => [],
     notify: async (target) => {
       const endpoint = await options.notificationEndpoint?.(target);
       if (endpoint === undefined)

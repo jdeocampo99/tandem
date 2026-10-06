@@ -475,21 +475,18 @@ export class TernParityHost {
     const { home } = this.world;
     const questions: string[] = [];
     const printed: string[] = [];
-    const ready = await installTerminalPlugin(
-      home,
-      {
-        run: this.#run,
-        cwd: home,
-        binary: "tern",
-        env: { TERN_CONFIG_DIR: join(home, configDirectory) },
-        confirm: async (question) => {
-          questions.push(question);
-          return answer;
-        },
-        print: (text) => printed.push(text),
+    await installTerminalPlugin(home, {
+      run: this.#run,
+      cwd: home,
+      binary: "tern",
+      env: { TERN_CONFIG_DIR: join(home, configDirectory) },
+      confirm: async (question) => {
+        questions.push(question);
+        return answer;
       },
-      { status: "ready" },
-    );
+      print: (text) => printed.push(text),
+    });
+    const ready = true;
     const settings: unknown = await readFile(
       join(home, configDirectory, "settings.json"),
       "utf8",

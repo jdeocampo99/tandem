@@ -44,7 +44,7 @@ async function liveExample(world: World, extra: readonly string[] = []): Promise
   return fakeSidebar(["wV", "w1F", "w1G", "w1B", ...extra]);
 }
 function fakeTerminal(sidebar: FakeSidebar): TerminalBackend {
-  const terminal = terminalBackend(sidebar.run);
+  const terminal = terminalBackend(sidebar.run, { terminal: "herdr" });
   return {
     ...terminal,
     orderWorkspaceAfter: async (input) => {
@@ -202,7 +202,7 @@ test("an unreadable Herdr session is a warning, never an error", async () => {
   await withWorld(async (world) => {
     await saveCoordinator(world.home, world.tagalog, "w1G");
     const report = await renestWorkspaces(
-      terminalBackend(async () => ({ code: 1, stdout: "", stderr: "no server" })),
+      terminalBackend(async () => ({ code: 1, stdout: "", stderr: "no server" }), { terminal: "herdr" }),
       { home: world.home, sessionId: SESSION, cwd: world.home, apply: true },
     );
     expect(report.moved).toBe(0);

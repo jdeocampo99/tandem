@@ -37,7 +37,6 @@ const answer = {
     },
     { path: "~/pasted" },
   ],
-  terminal: "herdr",
   selfImprovement: "fix",
 };
 
@@ -91,7 +90,6 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
       ...noModels,
       models: { ...answer.models, presentation: undefined, verifier: {} },
       extra: true,
-      terminal: "herdr",
       selfImprovement: "sometimes",
       workerSkills: ["tdd"],
     }),

@@ -1,13 +1,10 @@
 import { basename, dirname, realpath, resolve } from "node:path";
 import type { HomeSettings, SelfImprovementMode } from "../config/home-settings.ts";
 import type { ModelSettings } from "../config/models.ts";
-import type { Clock, CommandRunner, RepoPolicy, TerminalName } from "../contracts.ts";
+import type { Clock, CommandRunner, RepoPolicy } from "../contracts.ts";
 import type { ClaudeCodeAvailability } from "../harness/claude-code/availability.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
-import { savedTerminalPreference } from "../terminal-backend/compose.ts";
-import type { TerminalAvailability } from "../terminal-backend/contract.ts";
-import type { TerminalChoiceResult } from "../terminal-backend/setting.ts";
 import {
   checkSetupAnswer,
   type SetupAnswer,
@@ -53,8 +50,6 @@ export type SetupWorkflowDependencies = Readonly<{
       enabledProviders: readonly string[];
     }>,
   ) => Promise<unknown>;
-  probeTern: () => Promise<TerminalAvailability>;
-  configureTerminal: (terminal: TerminalName) => Promise<TerminalChoiceResult>;
   saveSelfImprovement: (mode: SelfImprovementMode) => Promise<unknown>;
   saveCodeFolders: (folders: readonly string[]) => Promise<unknown>;
   setupRepo: (
@@ -110,7 +105,7 @@ export class SetupWorkflow {
 
   /** What the setup block shows, from saved state and read-only discovery. */
   async view(repoPath: string, mode: SetupMode): Promise<SetupView> {
-    const [facts, tern] = await Promise.all([this.facts(repoPath), this.#deps.probeTern()]);
+    const facts = await this.facts(repoPath);
     const repos: SetupRepoFacts[] = await Promise.all(
       facts.checkouts.map(async (checkout) => {
         const setUp = facts.registered.has(checkout.path);
@@ -141,8 +136,6 @@ export class SetupWorkflow {
       ...(saved.configured && saved.models !== undefined ? { savedModels: saved.models } : {}),
       searchedFolders: facts.roots,
       repos,
-      terminal: savedTerminalPreference(facts.settings).terminal,
-      tern,
       ...(facts.settings.selfImprovementChosen
         ? { selfImprovement: facts.settings.selfImprovement }
         : {}),
@@ -216,18 +209,6 @@ export class SetupWorkflow {
         return false;
       }
     };
-    const savedTerminal = savedTerminalPreference(facts.settings);
-    if (!savedTerminal.chosen || answer.terminal !== savedTerminal.terminal) {
-      const terminalSaved = await step(
-        "Saved the terminal choice.",
-        "The terminal choice was not saved",
-        async () => {
-          const selected = await this.#deps.configureTerminal(answer.terminal);
-          if (selected.reason !== undefined) lines.push(selected.reason);
-        },
-      );
-      if (!terminalSaved) return { message: lines.join("\n"), complete: false };
-    }
     await step("Saved the model choices and providers.", "Model choices were not saved", () =>
       this.#deps.saveModels({
         repoPath,

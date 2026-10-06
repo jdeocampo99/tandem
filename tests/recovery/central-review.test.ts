@@ -290,7 +290,7 @@ async function fixture(options: FixtureOptions = {}) {
     home,
     sessionId: "session-1",
     run,
-    terminal: terminalBackend(run),
+    terminal: terminalBackend(run, { terminal: "herdr" }),
     clock,
     idFactory,
     store,

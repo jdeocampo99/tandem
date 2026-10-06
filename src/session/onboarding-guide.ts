@@ -67,7 +67,7 @@ export class OnboardingGuide {
   private async askCurrent(facts: OnboardingFacts): Promise<void> {
     const [current] = remainingOnboardingSteps(facts);
     if (current === undefined || this.asked.has(current)) return;
-    const question = onboardingQuestion(current, facts);
+    const question = onboardingQuestion(current);
     if (question === undefined) return;
     this.asked.add(current);
     await this.say(question.text, question.hidden);

@@ -77,7 +77,7 @@ async function fixture(): Promise<Fixture> {
     },
     dependencies: {
       run: pool.run,
-      terminal: terminalBackend(pool.run),
+      terminal: terminalBackend(pool.run, { terminal: "herdr" }),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("headless launches never attach interactively");

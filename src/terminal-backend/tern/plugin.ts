@@ -85,8 +85,27 @@ const recordSchema = z
   })
   .strict();
 
+/** Tandem cannot run without Tern, so a missing app and a failed link end in this one message. */
+export class TernRequiredError extends Error {
+  constructor(options?: ErrorOptions) {
+    super(
+      "Tandem needs Tern, which could not be used. Install Tern at /Applications/Tern.app, then try again.",
+      options,
+    );
+    this.name = "TernRequiredError";
+  }
+}
+
+async function pluginCommand(deps: TernPluginDependencies, args: readonly string[]) {
+  try {
+    return await ternPlugin(deps, args);
+  } catch (error) {
+    throw new TernRequiredError({ cause: error });
+  }
+}
+
 async function catalog(deps: TernPluginDependencies) {
-  const raw = await ternPlugin(deps, ["list"]);
+  const raw = await pluginCommand(deps, ["list"]);
   try {
     return catalogSchema.parse(JSON.parse(raw));
   } catch {
@@ -407,7 +426,7 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
     if (before.plugins.some((plugin) => plugin.id === TANDEM_TERN_PLUGIN)) {
       if (!readyIn(before.plugins)) return false;
     } else {
-      await ternPlugin(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
+      await pluginCommand(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
       if (!readyIn((await catalog(deps)).plugins)) return false;
     }
     printConfigureNotices(

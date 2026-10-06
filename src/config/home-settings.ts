@@ -11,7 +11,7 @@ import { assertKnownKeys, deduplicateStrings, isRecord, readNonEmptyString } fro
  * each use and never pinned to a task; an absent file means every default.
  */
 export type HomeSettings = Readonly<{
-  /** Absent until onboarding chooses a terminal; composition defaults to Herdr. */
+  /** Absent means Tern; only an explicit `terminal = "herdr"` selects Herdr. */
   readonly terminal?: TerminalName;
   /** What Tandem does when it looks into its own problems; see {@link SelfImprovementMode}. */
   readonly selfImprovement: SelfImprovementMode;

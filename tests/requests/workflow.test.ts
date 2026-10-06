@@ -54,7 +54,7 @@ async function fixture(): Promise<Fixture> {
     coordinatorPaneId: undefined,
     terminal: terminalBackend(() => {
       throw new Error("run must not be called when no review pane is open");
-    }),
+    }, { terminal: "herdr" }),
     clock: () => NOW,
     store,
     listTasks: async () => tasks,

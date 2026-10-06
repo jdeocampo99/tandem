@@ -37,7 +37,7 @@ function workflowFor(world: ScenarioWorld, blocks: RecordedBlock[]): WorkerWorkf
     poolRoot: world.poolRoot,
     workerTimeoutMs: undefined,
     run: world.run,
-    terminal: terminalBackend(world.run),
+    terminal: terminalBackend(world.run, { terminal: "herdr" }),
     clock: world.clock,
     idFactory: world.idFactory,
     store: world.store,

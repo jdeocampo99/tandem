@@ -395,7 +395,7 @@ function fakeTerminal() {
       readSnapshot: async () => SNAPSHOT,
       run: async () => ({ code: 0, stdout: "", stderr: "" }),
       terminal: {
-        ...terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" })),
+        ...terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" }), { terminal: "herdr" }),
         focusWorkspace: async () => ({ focused: false, code: 1, detail: "no such workspace" }),
         focusAgent: async () => false,
       },
@@ -553,7 +553,7 @@ for (const terminalName of ["herdr", "tern"] as const) {
     const foreign = terminalName === "herdr" ? "tern" : "herdr";
     const result = await runPanelAction("home", {
       run,
-      terminal: { ...terminalBackend(run), name: terminalName },
+      terminal: { ...terminalBackend(run, { terminal: "herdr" }), name: terminalName },
       sessionId: "test",
       cwd: APP,
       focus: { cwd: APP },

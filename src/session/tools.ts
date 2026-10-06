@@ -94,7 +94,6 @@ export const tandemRequestSchema = z.strictObject({
     }),
     z.strictObject({ action: z.literal("open-project"), repoPath: z.string() }),
     z.strictObject({ action: z.literal("find-repo"), name: z.string() }),
-    z.strictObject({ action: z.literal("terminal-setting"), terminal: z.enum(["herdr", "tern"]) }),
     z.strictObject({ action: z.literal("save-code-folders"), folders: z.array(z.string()) }),
     z.strictObject({
       action: z.literal("self-improvement"),

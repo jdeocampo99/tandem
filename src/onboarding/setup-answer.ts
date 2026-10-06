@@ -1,11 +1,5 @@
 import type { SelfImprovementMode } from "../config/home-settings.ts";
-import {
-  type AgentRole,
-  MODEL_ROLE_ORDER,
-  type ModelSpec,
-  type TerminalName,
-  THINKING_LEVELS,
-} from "../contracts.ts";
+import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
 import { CLAUDE_CODE_PROVIDER } from "../harness/claude-code/models.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import { SETUP_ROLE_COPY } from "./setup-view.ts";
@@ -18,7 +12,6 @@ export type SetupAnswer = Readonly<{
   models: Readonly<Record<AgentRole, ModelSpec>>;
   repositories: readonly SetupAnswerRepo[];
   selfImprovement: SelfImprovementMode;
-  terminal: TerminalName;
 }>;
 
 /** One repository to set up. Omitted command lists are discovered when Tandem saves. */
@@ -51,13 +44,7 @@ export type ParsedSetupAnswer =
   | Readonly<{ ok: false; problems: readonly string[] }>;
 
 const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "report"];
-const ANSWER_KEYS = [
-  "tandemSetup",
-  "models",
-  "repositories",
-  "selfImprovement",
-  "terminal",
-] as const;
+const ANSWER_KEYS = ["tandemSetup", "models", "repositories", "selfImprovement"] as const;
 const REPO_KEYS = ["path", "validationCommands", "setupCommands"];
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -101,25 +88,14 @@ export function parseSetupAnswer(text: string): ParsedSetupAnswer {
   unknownKeys(value, ANSWER_KEYS, "The answer", problems);
   const models = parseModels(value.models, problems);
   const repositories = parseRepositories(value.repositories, problems);
-  const terminal =
-    value.terminal === "herdr" || value.terminal === "tern" ? value.terminal : undefined;
-  if (terminal === undefined) problems.push('terminal must be "herdr" or "tern".');
   const selfImprovement = SELF_IMPROVEMENT_MODES.find((mode) => mode === value.selfImprovement);
   if (selfImprovement === undefined) {
     problems.push('selfImprovement must be "off", "fix", or "report".');
   }
-  if (
-    problems.length > 0 ||
-    models === undefined ||
-    selfImprovement === undefined ||
-    terminal === undefined
-  ) {
+  if (problems.length > 0 || models === undefined || selfImprovement === undefined) {
     return { ok: false, problems };
   }
-  return {
-    ok: true,
-    answer: { models, repositories, selfImprovement, terminal },
-  };
+  return { ok: true, answer: { models, repositories, selfImprovement } };
 }
 
 function parseModels(

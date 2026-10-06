@@ -1,15 +1,9 @@
-import type { TerminalAvailability } from "../terminal-backend/contract.ts";
-import { ternFallbackReason } from "../terminal-backend/setting.ts";
-
 /**
  * First-time setup, worked out from saved state so leaving halfway resumes at the next missing
  * step. Pure: the caller reads the facts and delivers what these return.
  */
 export type OnboardingFacts = Readonly<{
   readonly modelsChosen: boolean;
-  readonly terminalChosen: boolean;
-  /** Absent once the choice is saved; never grants a Tern offer. */
-  readonly tern?: TerminalAvailability;
   /** Folders saved for finding repositories by name. */
   readonly codeFolders: readonly string[];
   /** Saved projects other than the Tandem checkout. */
@@ -19,7 +13,6 @@ export type OnboardingFacts = Readonly<{
 
 export type OnboardingStep =
   | "models"
-  | "terminal"
   | "code-folders"
   | "self-improvement"
   | "repositories";
@@ -31,7 +24,6 @@ export type OnboardingStep =
 export function remainingOnboardingSteps(facts: OnboardingFacts): readonly OnboardingStep[] {
   const steps: OnboardingStep[] = [];
   if (!facts.modelsChosen) steps.push("models");
-  if (!facts.terminalChosen) steps.push("terminal");
   if (facts.codeFolders.length === 0) steps.push("code-folders");
   if (!facts.selfImprovementChosen) steps.push("self-improvement");
   if (facts.projects.length === 0) steps.push("repositories");
@@ -41,8 +33,6 @@ export function remainingOnboardingSteps(facts: OnboardingFacts): readonly Onboa
 const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
   models:
     "Choose models: call models, offer its presets by name (say why one is unavailable) and the Balanced profile, one line per role. They may pick a preset in plain words, then change any role. Recap all five roles with each one's harness, then configure-models; never list claude-code in enabledProviders.",
-  terminal:
-    "Offer Tern only when onboarding facts say ready. Otherwise use Herdr and explain the fallback reason in one line. Save the explicit choice with terminal-setting; availability is rechecked before saving. Never switch while tasks are running.",
   "code-folders": "Ask which folders hold their repositories and save them with save-code-folders.",
   "self-improvement":
     "Tandem asked about looking into its own problems; when they answer, call self-improvement with off, fix, or report.",
@@ -55,8 +45,7 @@ export function onboardingContext(facts: OnboardingFacts): string | undefined {
   const [current, ...later] = remainingOnboardingSteps(facts);
   if (current === undefined) return undefined;
   const after = later.length === 0 ? "" : ` Then: ${later.join(", ")}.`;
-  const reason = current === "terminal" ? onboardingQuestion("terminal", facts)?.text : undefined;
-  const step = `Current step: ${STEP_GUIDANCE[current]}${reason === undefined ? "" : ` ${reason}`}${after}`;
+  const step = `Current step: ${STEP_GUIDANCE[current]}${after}`;
   return `Setup is unfinished. ${step}`;
 }
 
@@ -66,24 +55,7 @@ export type OnboardingQuestion = Readonly<{
   readonly hidden: string;
 }>;
 
-export function onboardingQuestion(
-  step: OnboardingStep,
-  facts: OnboardingFacts,
-): OnboardingQuestion | undefined {
-  if (step === "terminal") {
-    const reason = ternFallbackReason(
-      facts.tern ?? { status: "unknown", reason: "Tern has not been checked." },
-    );
-    return reason === undefined
-      ? {
-          text: "Which terminal should Tandem use: Herdr or Tern?",
-          hidden: "Call terminal-setting with the terminal the user chooses: herdr or tern.",
-        }
-      : {
-          text: `${reason} Save Herdr as your terminal?`,
-          hidden: "Call terminal-setting with herdr if the user agrees.",
-        };
-  }
+export function onboardingQuestion(step: OnboardingStep): OnboardingQuestion | undefined {
   if (step === "self-improvement") {
     return {
       text: "When a task keeps failing, should Tandem look into why? Off: never. Fix: it offers a fix for your approval. Report: it drafts a GitHub issue for you to file.",

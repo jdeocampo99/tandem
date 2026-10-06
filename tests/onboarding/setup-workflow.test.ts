@@ -3,14 +3,15 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HomeSettings } from "../../src/config/home-settings.ts";
-import type { CommandRequest, CommandResult, TerminalName } from "../../src/contracts.ts";
+import type { CommandRequest, CommandResult } from "../../src/contracts.ts";
 import type { ClaudeCodeAvailability } from "../../src/harness/claude-code/availability.ts";
 import type { ModelRecord } from "../../src/harness/contract.ts";
 import type { SetupAnswer } from "../../src/onboarding/setup-answer.ts";
-import type { SetupWorkflowDependencies } from "../../src/onboarding/setup-workflow.ts";
-import { SetupWorkflow } from "../../src/onboarding/setup-workflow.ts";
+import {
+  SetupWorkflow,
+  type SetupWorkflowDependencies,
+} from "../../src/onboarding/setup-workflow.ts";
 import { findCheckoutsByName } from "../../src/repos/locate.ts";
-import type { TerminalAvailability } from "../../src/terminal-backend/contract.ts";
 
 const catalogue: readonly ModelRecord[] = [
   {
@@ -39,9 +40,6 @@ async function machine(
     savedRoots?: (code: string) => string[];
     availableModels?: readonly ModelRecord[];
     claudeCode?: ClaudeCodeAvailability;
-    terminal?: TerminalName;
-    terminalChosen?: boolean;
-    tern?: TerminalAvailability;
   }> = {},
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-setup-")));
@@ -64,7 +62,6 @@ async function machine(
   };
   const saved: string[] = [];
   let settings: HomeSettings = {
-    ...(options.terminalChosen === false ? {} : { terminal: options.terminal ?? "herdr" }),
     selfImprovement: "off",
     selfImprovementChosen: false,
     projectRoots: options.savedRoots?.(code) ?? [],
@@ -100,12 +97,6 @@ async function machine(
     saveModels: async (input) => {
       saved.push(`models ${input.enabledProviders.join(",")}`);
     },
-    probeTern: async () => options.tern ?? { status: "ready" },
-    configureTerminal: async (terminal) => {
-      await record(`terminal ${terminal}`)();
-      settings = { ...settings, terminal };
-      return { requested: terminal, terminal };
-    },
     saveSelfImprovement: async (mode) => record(`mode ${mode}`)(),
     saveCodeFolders: async (folders) => {
       await record(`folders ${folders.join(",")}`)();
@@ -127,7 +118,6 @@ async function machine(
 function answerOf(
   repositories: SetupAnswer["repositories"],
   scoutModel = "anthropic/opus",
-  terminal: TerminalName = "herdr",
 ): SetupAnswer {
   const pick = (model: string) => ({ model, thinking: "high" as const });
   return {
@@ -139,7 +129,6 @@ function answerOf(
       presentation: pick("anthropic/opus"),
     },
     repositories,
-    terminal,
     selfImprovement: "fix",
   };
 }
@@ -235,65 +224,4 @@ test("an answer that can't be saved is refused with every problem and saves noth
     `The setup answer can't be saved: ${join(code, "old")} is already set up. ${join(code, "api", "src")} is inside the repository at ${join(code, "api")}; add that folder.`,
   );
   expect(saved).toEqual([]);
-});
-
-for (const tern of [
-  { status: "ready" },
-  { status: "missing" },
-  { status: "signedOut" },
-  { status: "unknown", reason: "Tern could not start." },
-] as const) {
-  test(`the view carries ${tern.status} Tern availability`, async () => {
-    const { workflow } = await machine({ tern });
-    const view = await workflow.view("/tandem", "setup");
-    expect(view.ternReady).toBe(tern.status === "ready");
-    if (tern.status !== "ready") {
-      expect(view.terminal).toBe("herdr");
-      expect(view.terminalReason).toContain("Using Herdr.");
-    }
-  });
-}
-
-for (const tern of [
-  { status: "unknown", reason: "Temporary Tern outage." },
-  { status: "signedOut" },
-] as const) {
-  test(`saved Tern survives ${tern.status} while setup saves models and a repository`, async () => {
-    const { workflow, saved, code } = await machine({
-      terminal: "tern",
-      tern,
-      fail: () => new Set(["terminal herdr", "terminal tern"]),
-    });
-    const view = await workflow.view("/tandem", "setup");
-    expect(view.terminal).toBe("tern");
-    expect(view.ternReady).toBe(false);
-    const result = await workflow.apply(
-      "/tandem",
-      answerOf(
-        [{ path: join(code, "api"), validationCommands: ["make check"], setupCommands: [] }],
-        "anthropic/opus",
-        "tern",
-      ),
-    );
-    expect(result.complete).toBe(true);
-    expect(saved).toContain("models anthropic");
-    expect(saved).toContain("mode fix");
-    expect(saved).toContain(`open ${join(code, "api")}`);
-    expect(saved.some((step) => step.startsWith("terminal "))).toBe(false);
-  });
-}
-
-test("a changed terminal choice is still configured before other setup saves", async () => {
-  const { workflow, saved } = await machine();
-  const result = await workflow.apply("/tandem", answerOf([], "anthropic/opus", "tern"));
-  expect(result.complete).toBe(true);
-  expect(saved.slice(0, 2)).toEqual(["terminal tern", "models anthropic"]);
-});
-
-test("first setup saves an explicit Herdr choice once", async () => {
-  const { workflow, saved } = await machine({ terminalChosen: false });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    expect((await workflow.apply("/tandem", answerOf([]))).complete).toBe(true);
-  }
-  expect(saved.filter((step) => step.startsWith("terminal "))).toEqual(["terminal herdr"]);
 });

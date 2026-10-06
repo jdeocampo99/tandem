@@ -1,17 +1,34 @@
 import { expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readHomeSettings, saveTerminalChoice } from "../../src/config/home-settings.ts";
+import type { CommandRunner } from "../../src/contracts.ts";
 import { openProject } from "../../src/coordinator/open-project.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import {
+  savedTerminal,
   terminalBackend,
   terminalContext,
   terminalContextFor,
   terminalLaunchEnvironment,
 } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "../evals/scenario.ts";
+
+test("an absent terminal setting selects Tern, and settings can still name Herdr", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tandem-terminal-default-"));
+  const run: CommandRunner = async () => ({ code: 0, stdout: "", stderr: "" });
+  try {
+    expect(savedTerminal(await readHomeSettings(home))).toBe("tern");
+    expect(terminalBackend(run, { home }).name).toBe("tern");
+    await saveTerminalChoice(home, "herdr");
+    expect(terminalBackend(run, { home }).name).toBe("herdr");
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
 
 test("explicit Tern selection overrides saved Herdr and alerts reach only the recorded helper", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {

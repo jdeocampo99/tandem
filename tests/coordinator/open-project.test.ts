@@ -82,7 +82,7 @@ test("an opened project's workspace is brought forward", async () => {
       if (request.argv[0] === "env") await saveCoordinator(home, repo, "w-api");
       return { code: 0, stdout: "", stderr: "" };
     };
-    const opened = await openProject(run, terminalBackend(run), { ...input, repoPath: repo, home });
+    const opened = await openProject(run, terminalBackend(run, { terminal: "herdr" }), { ...input, repoPath: repo, home });
     expect(opened).toEqual({ focused: true });
     expect(ran.at(-1)).toEqual(["herdr", "--session", "tandem", "workspace", "focus", "w-api"]);
   } finally {
@@ -96,7 +96,7 @@ test("a failed open names the project and the front door's reason", async () => 
     requests.push(request);
     return { code: 1, stdout: "", stderr: "tandem: Herdr is not running\n" };
   };
-  await expect(openProject(failing, terminalBackend(failing), input)).rejects.toThrow(
+  await expect(openProject(failing, terminalBackend(failing, { terminal: "herdr" }), input)).rejects.toThrow(
     "Tandem could not open /code/app: Herdr is not running",
   );
   expect(requests).toHaveLength(1);
@@ -146,7 +146,7 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         events.push("launch --no-attach");
         return { code: 0, stdout: "", stderr: "" };
       };
-      const base = terminalBackend(run);
+      const base = terminalBackend(run, { terminal: "herdr" });
       const terminal = {
         ...base,
         name: "tern" as const,

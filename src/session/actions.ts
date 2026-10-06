@@ -1,12 +1,7 @@
 import { isBoardView } from "../board/view.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
-import type {
-  CreatableTaskKind,
-  RepoPolicy,
-  RequestBriefContent,
-  TerminalName,
-} from "../contracts.ts";
+import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
 import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
@@ -45,7 +40,6 @@ export type TandemAction =
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
   | Readonly<{ readonly action: "open-project"; readonly repoPath: string }>
   | Readonly<{ readonly action: "find-repo"; readonly name: string }>
-  | Readonly<{ readonly action: "terminal-setting"; readonly terminal: TerminalName }>
   | Readonly<{ readonly action: "save-code-folders"; readonly folders: readonly string[] }>
   | Readonly<{ readonly action: "self-improvement"; readonly mode: SelfImprovementMode }>
   | Readonly<{ readonly action: "check-tools" }>
@@ -317,7 +311,6 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "open-project" ||
     action.action === "save-code-folders" ||
     action.action === "self-improvement" ||
-    action.action === "terminal-setting" ||
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
@@ -370,12 +363,6 @@ async function approvalPrompt(
       message: action.folders.map((folder) => `- ${folder}`).join("\n"),
     };
   }
-  if (action.action === "terminal-setting")
-    return {
-      title: `Use ${action.terminal === "tern" ? "Tern" : "Herdr"} for Tandem?`,
-      message:
-        "Applies across this Tandem home. Running tasks prevent switching. If Tern is missing or signed out, Herdr is saved instead.",
-    };
   if (action.action === "self-improvement") {
     return {
       title: SELF_IMPROVEMENT_TITLES[action.mode],
@@ -595,10 +582,6 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   },
   "save-code-folders": async (action, service) =>
     actionResult(await service.saveProjectRoots(action.folders), action.action, {
-      approved: true,
-    }),
-  "terminal-setting": async (action, service) =>
-    actionResult(await service.configureTerminal(action.terminal), action.action, {
       approved: true,
     }),
   "self-improvement": async (action, service) =>

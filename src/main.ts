@@ -750,8 +750,7 @@ async function runProjectFlow({
       : {}),
   };
   if (invocation.command !== "update") {
-    if (!(await installTerminalPlugin(environment.home, pluginDependencies)))
-      stdout("Tandem left Tern's views and shortcuts unchanged. Run setup.sh to add them later.\n");
+    await installTerminalPlugin(environment.home, pluginDependencies);
   }
   closeInteraction();
   if (invocation.command === "reset") {

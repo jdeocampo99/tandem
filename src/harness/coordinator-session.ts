@@ -26,7 +26,7 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "../tasks/research-continuation-classifier.ts";
-import { installTerminalPlugin, terminalBackend } from "../terminal-backend/compose.ts";
+import { terminalBackend } from "../terminal-backend/compose.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -54,7 +54,6 @@ function createCoordinatorService(
   options: CoordinatorOptions,
   environment: TandemBoundaryEnvironment,
   environmentSnapshot: TandemEnvironmentSource,
-  host: SessionDeps["host"],
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const jevConfig = researchContinuationClassifierConfig(environmentSnapshot);
@@ -63,24 +62,6 @@ function createCoordinatorService(
   return createService({
     home: environment.home,
     sessionId: environment.sessionId,
-    installTerminalPlugin: (readiness) =>
-      installTerminalPlugin(
-        environment.home,
-        {
-          run: options.run ?? runCommand,
-          cwd: environment.repo,
-          confirm: (question) => host.confirm("Tandem's Tern integration", question),
-          env: {
-            ...(environmentSnapshot.TERN_CONFIG_DIR === undefined
-              ? {}
-              : { TERN_CONFIG_DIR: environmentSnapshot.TERN_CONFIG_DIR }),
-            ...(environmentSnapshot.TERN_DAEMON_SOCKET === undefined
-              ? {}
-              : { TERN_DAEMON_SOCKET: environmentSnapshot.TERN_DAEMON_SOCKET }),
-          },
-        },
-        readiness,
-      ),
     ...(environment.parentWorkspaceId === undefined
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
@@ -136,8 +117,7 @@ export function bindCoordinator(
     }),
     logError: harness.logError,
     environment,
-    createService: () =>
-      createCoordinatorService(options, environment, environmentSnapshot, harness.host),
+    createService: () => createCoordinatorService(options, environment, environmentSnapshot),
     realpath: (path) => realpath(path),
     isTandemCheckout: () => isTandemCheckout(environment.repo),
     openWelcome: async () => {

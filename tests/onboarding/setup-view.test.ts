@@ -26,7 +26,6 @@ const saved: RepoPolicy["models"] = {
 
 const input: SetupViewInput = {
   mode: "setup",
-  tern: { status: "missing" },
   generatedAt: "2026-09-26T12:00:00.000Z",
   homeFolder: "/Users/me",
   ompCatalogue: catalogue,
@@ -140,27 +139,4 @@ test("repositories say where their commands came from, with the home folder as ~
   expect(tandem?.setUp).toBe(true);
   expect(web?.validationSource).toStartWith("Could not inspect this repository:");
   expect(web?.installSource).toStartWith("Could not inspect this repository:");
-});
-
-for (const tern of [
-  { status: "missing" },
-  { status: "signedOut" },
-  { status: "unknown", reason: "Tern could not start." },
-] as const) {
-  test(`${tern.status} Tern does not replace a saved terminal choice`, () => {
-    const view = buildSetupView({ ...input, terminal: "tern", tern });
-    expect(view.ternReady).toBe(false);
-    expect(view.terminal).toBe("tern");
-    expect(view.terminalReason).toContain("Keeping the saved Tern choice.");
-    const firstSetup = buildSetupView({ ...input, tern });
-    expect(firstSetup.terminal).toBe("herdr");
-    expect(firstSetup.terminalReason).toContain("Using Herdr.");
-  });
-}
-
-test("setup offers Tern only with confirmed readiness", () => {
-  const view = buildSetupView({ ...input, terminal: "tern", tern: { status: "ready" } });
-  expect(view.ternReady).toBe(true);
-  expect(view.terminal).toBe("tern");
-  expect(view.terminalReason).toBeUndefined();
 });
