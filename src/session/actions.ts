@@ -13,6 +13,7 @@ import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
 import type { CommentEdit, NewComment } from "../pr-review/edits.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
+import type { ReviewPostRecovery } from "../pr-review/service.ts";
 import { TANDEM_REPOSITORY } from "../self-improvement/issue-draft.ts";
 import type { CreateTaskRequest, PullRequestInput, TandemService } from "../service/controller.ts";
 import { activeTaskMessages } from "../tasks/communication-protocol.ts";
@@ -206,6 +207,7 @@ export type TandemAction =
       readonly action: "review-post";
       readonly taskId: string;
       readonly verdict: ReviewVerdict;
+      readonly recovery?: ReviewPostRecovery | undefined;
     }>
   | Readonly<{ readonly action: "review-again"; readonly taskId: string }>
   | Readonly<{ readonly action: "review-close"; readonly taskId: string }>
@@ -478,6 +480,19 @@ async function approvalPrompt(
         message: `${capitalize(action.method)}, once checks pass.`,
       };
     case "review-post": {
+      if (action.recovery !== undefined) {
+        return action.recovery.kind === "post-again"
+          ? {
+              title: `Post the saved review for ${name} again?`,
+              message:
+                "Check the PR first. GitHub may already have it; this can create a duplicate review.",
+            }
+          : {
+              title: `Mark the saved review for ${name} as posted?`,
+              message:
+                "Use the review link you checked on the PR. This records your confirmation without posting to GitHub.",
+            };
+      }
       const round = task.prReview?.rounds.at(-1);
       const count = round?.review.comments.length ?? 0;
       const target =
@@ -791,7 +806,11 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     ),
   "review-post": async (action, service) =>
     actionResult(
-      await service.reviewPost(action.taskId, { verdict: action.verdict, approved: true }),
+      await service.reviewPost(action.taskId, {
+        verdict: action.verdict,
+        approved: true,
+        ...(action.recovery === undefined ? {} : { recovery: action.recovery }),
+      }),
       action.action,
       { approved: true },
     ),
