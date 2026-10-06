@@ -77,6 +77,7 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
   const prompts: string[] = [];
   const opened: TerminalView[] = [];
   const focused: string[] = [];
+  const closed: Parameters<TerminalBackend["closeView"]>[0][] = [];
   let ownsCoordinator = true;
   const run = async (): Promise<never> => {
     throw new Error("No external commands expected");
@@ -103,7 +104,12 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
         ],
       },
     }),
-    listPanes: async () => [{ ...endpoint, cwd: clean, foregroundCwd: clean }],
+    listPanes: async () => [
+      { ...endpoint, cwd: clean, foregroundCwd: clean },
+      ...(terminalName === "tern"
+        ? [{ ...endpoint, paneId: "102", cwd: clean, foregroundCwd: clean }]
+        : []),
+    ],
     focusAgent: async (target) => {
       focused.push(target.paneId ?? "");
       return true;
@@ -114,6 +120,10 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     openView: async (target) => {
       opened.push(target.view);
       return { opened: true, warnings: [] };
+    },
+    closeView: async (target) => {
+      closed.push(target);
+      return { closed: true, warnings: [] };
     },
   };
   let nextId = 0;
@@ -161,6 +171,8 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     prompts,
     opened,
     focused,
+    closed,
+    endpoint,
     setOwner: (owns: boolean) => {
       ownsCoordinator = owns;
     },
@@ -1499,6 +1511,136 @@ test("native navigation selects published projects and details, refusing stale o
     expect((await action("project", "1")).exitCode).not.toBe(0);
     expect(focused).toHaveLength(1);
     expect(f.opened).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+for (const action of ["brief-approve", "brief-request-changes"] as const) {
+  test(`${action} closes only its native brief origin after recording or delivering the action`, async () => {
+    const f = await fixture("tern");
+    try {
+      await f.write(action === "brief-approve" ? f.seen : { ...f.seen, text: "Narrow this scope" });
+      const result = await runTerminal(
+        [
+          "native",
+          action,
+          f.record.id,
+          "--input",
+          f.input,
+          "--pane",
+          "102",
+          "--cwd",
+          f.clean,
+          "--window",
+          "brief-window",
+        ],
+        f.deps,
+      );
+      expect(result.exitCode).toBe(0);
+      expect(f.prompts).toHaveLength(1);
+      expect(f.closed).toEqual([
+        {
+          coordinator: f.endpoint,
+          cwd: f.clean,
+          home: f.home,
+          origin: { paneId: "102", windowId: "brief-window" },
+          view: { kind: "brief", requestId: f.record.id },
+        },
+      ]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  test(`${action} keeps a newer native brief open when the coordinator revises it during delivery`, async () => {
+    const f = await fixture("tern");
+    const output: string[] = [];
+    try {
+      await f.write(action === "brief-approve" ? f.seen : { ...f.seen, text: "Narrow this scope" });
+      const result = await runTerminal(
+        ["native", action, f.record.id, "--input", f.input, "--pane", "102", "--cwd", f.clean],
+        {
+          ...f.deps,
+          stdout: (text) => output.push(text),
+          terminal: {
+            ...f.deps.terminal,
+            promptAgent: async (target) => {
+              f.prompts.push(target.text);
+              await f.service.draftRequestBrief({
+                requestId: f.record.id,
+                repoPath: f.repo,
+                content: { ...content, goal: "A newer draft" },
+                reviewPane: false,
+              });
+            },
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(f.prompts).toHaveLength(1);
+      expect(f.closed).toEqual([]);
+      expect(output.join("")).toContain("current brief was left open");
+      expect((await f.store.read(f.record.id))?.draft.revision).toBe(2);
+    } finally {
+      await f.close();
+    }
+  });
+
+  test(`${action} reports an uncertain native close as a success warning without retrying delivery or closure`, async () => {
+    const f = await fixture("tern");
+    const output: string[] = [];
+    let attempts = 0;
+    try {
+      await f.write(action === "brief-approve" ? f.seen : { ...f.seen, text: "Narrow this scope" });
+      const result = await runTerminal(
+        ["native", action, f.record.id, "--input", f.input, "--pane", "102", "--cwd", f.clean],
+        {
+          ...f.deps,
+          stdout: (text) => output.push(text),
+          terminal: {
+            ...f.deps.terminal,
+            closeView: async () => {
+              attempts++;
+              throw new Error("native close acknowledgement was lost");
+            },
+          },
+        },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(attempts).toBe(1);
+      expect(f.prompts).toHaveLength(1);
+      expect(output.join("")).toContain("Do not resubmit this action");
+      if (action === "brief-approve")
+        expect((await f.store.read(f.record.id))?.approval).toBeDefined();
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test("a refused native approval never closes the brief or prompts the coordinator", async () => {
+  const f = await fixture("tern");
+  try {
+    await f.write({ ...f.seen, contentDigest: "stale" });
+    const result = await runTerminal(
+      [
+        "native",
+        "brief-approve",
+        f.record.id,
+        "--input",
+        f.input,
+        "--pane",
+        "102",
+        "--cwd",
+        f.clean,
+      ],
+      f.deps,
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(f.closed).toEqual([]);
+    expect(f.prompts).toEqual([]);
+    expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
   } finally {
     await f.close();
   }

@@ -17,7 +17,7 @@ type Draft = { lineId: string, text: string }
 type State = {
  file: files.View<Brief>, shown: Brief?, shownRevision: string?, cwd: string, origin: string, window: string, home: string,
  comments: { Draft }, editing: string?, editor: fields.Field, overall: fields.Field, active: string,
- busy: boolean,
+ busy: boolean, submitted: boolean, notice: string?,
 }
 
 local function parse(value: unknown): Brief?
@@ -45,7 +45,7 @@ end
 -- A refreshed file never reattaches a user's pending comments to a later draft.
 local function sync(state: State)
  if state.file.status ~= "ready" then return end
- if state.shown == nil or (#state.comments == 0 and state.editing == nil and state.overall.text == "" and not state.busy) then
+ if state.shown == nil or (#state.comments == 0 and state.editing == nil and state.overall.text == "" and not state.busy and not state.submitted) then
   state.shown, state.shownRevision = state.file.model, state.file.revision
  end
 end
@@ -60,7 +60,7 @@ local function saveComment(state: State)
 end
 
 local function submit(state: State, cx: BlockCx, verb: string)
- if state.busy then return end
+ if state.busy or state.submitted then return end
  local model = state.shown
  if state.file.status ~= "ready" or not model or model.abandoned then
   cx:toast("error", "Brief unavailable", "Wait for a readable brief before sending an action.")
@@ -74,7 +74,7 @@ local function submit(state: State, cx: BlockCx, verb: string)
   cx:toast("warning", "Add a comment", "Explain what should change before requesting changes.")
   return
  end
- if state.cwd == "" or string.sub(state.cwd, 1, 1) ~= "/" or not string.match(state.origin, "^%d+$") then
+ if string.sub(state.cwd, 1, 1) ~= "/" or string.sub(state.home, 1, 1) ~= "/" or not string.match(state.origin, "^%d+$") then
   cx:toast("error", "Missing Tandem context", "Reopen the brief from the project's panel.")
   return
  end
@@ -89,13 +89,25 @@ local function submit(state: State, cx: BlockCx, verb: string)
  state.busy = true
  local ok, problem = pcall(function()
   tern.process.run(argv,
-   { cwd = ".", stdin = tern.json.encode(payload) }, function(result)
+   { cwd = ".", stdin = tern.json.encode(payload) }, function(result, callbackCx)
     state.busy = false
     if result.status ~= 0 then
-     cx:toast("error", "Tandem couldn't send the brief", result.stderr)
-     cx:render()
+     local actionCx = callbackCx or cx
+     actionCx:toast("error", "Tandem couldn't send the brief", result.stderr)
+     actionCx:render()
     else
-     cx:exit(0)
+     state.submitted = true
+     local messages: {string} = {}
+     local decoded, value = pcall(function() return tern.json.decode(result.stdout) end)
+     if decoded and type(value) == "table" and type(value.warnings) == "table" then
+      for _, message in value.warnings do if type(message) == "string" then table.insert(messages, message) end end
+     end
+     state.notice = if #messages > 0 then table.concat(messages, "\n") else "This action completed. You can close this pane."
+     -- The CLI owns guarded native closure; a retained pane must not offer the action again.
+     if callbackCx then
+      if #messages > 0 then callbackCx:toast("warning", "Brief action completed", state.notice) end
+      callbackCx:render()
+     end
     end
    end)
  end)
@@ -111,7 +123,7 @@ local brief: BlockDef<State> = {
   local state: State = {
    file = files.create(origin.path, "brief", parse), cwd = origin.cwd,
    origin = string.format("%.0f", cx.pane), window = origin.window, home = origin.home,
-   comments = {}, editor = fields.create(nil, true), overall = fields.create(), active = "overall", busy = false,
+   comments = {}, editor = fields.create(nil, true), overall = fields.create(), active = "overall", busy = false, submitted = false,
   }
   files.refresh(state.file)
   sync(state)
@@ -124,10 +136,13 @@ local brief: BlockDef<State> = {
   local model = state.shown
   if not model then return { main = components.text("Brief unavailable. Waiting for the project's view file.", "muted") } end
   local document: { Node } = {}
+  if state.notice then table.insert(document, components.text(state.notice, "warn")) end
   if state.file.status ~= "ready" then
    table.insert(document, components.text("Brief unavailable. Actions are disabled until the view file recovers.", "warn"))
   elseif state.shownRevision ~= state.file.revision then
-   table.insert(document, ui.row({ components.text("A newer revision is available. Your comments still describe this revision.", "warn"), components.button("Discard comments and refresh", "refresh") }))
+   local refreshed: {Node} = { components.text("A newer revision is available. Your comments still describe this revision.", "warn") }
+   if not state.submitted then table.insert(refreshed, components.button("Discard comments and refresh", "refresh")) end
+   table.insert(document, ui.row(refreshed))
   end
   if model.abandoned then table.insert(document, components.text("This request was abandoned.", "warn")) end
   for _, line in model.lines do
@@ -158,7 +173,7 @@ local brief: BlockDef<State> = {
   end
   local count = model.commentCount + #state.comments
   local actions: { Node } = { components.text(tostring(count) .. (if count == 1 then " comment" else " comments"), "strong"), fields.node(state.overall, "overall", "Overall comment (optional)") }
-  if state.file.status == "ready" and not model.abandoned and not state.busy then
+  if state.file.status == "ready" and not model.abandoned and not state.busy and not state.submitted then
    table.insert(actions, components.button("Approve", "approve", "success"))
    table.insert(actions, components.button("Request changes (" .. #state.comments .. ")", "changes"))
   elseif state.busy then table.insert(actions, components.text("Sending…", "muted")) end
@@ -170,7 +185,7 @@ local brief: BlockDef<State> = {
   return { main = ui.col({ ui.el("div", { class = "brief-header" }, header), ui.el("div", { class = "brief-document", key = "document" }, document) }), dock = ui.col({ ui.el("div", { class = "brief-bottom" }, actions) }) }
  end,
  key = function(state, key, cx)
-  if state.busy then return false end
+  if state.busy or state.submitted then return false end
   local field = if state.active == "comment" then state.editor else state.overall
   local outcome = fields.key(field, key)
   if outcome == "ignored" then return false end
@@ -189,6 +204,7 @@ local brief: BlockDef<State> = {
    return
   end
   if ev.ev ~= "action" or state.busy then return end
+  if state.submitted and ev.act ~= "close" and ev.act ~= "browser" then return end
   if ev.act == "add" then
    if state.editing and state.editor.text ~= "" then cx:toast("warning", "Finish your line comment", "Choose Comment or Cancel first."); return end
    state.editing = ev.value; state.editor = fields.create(nil, true); state.active = "comment"

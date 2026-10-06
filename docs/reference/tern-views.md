@@ -306,7 +306,10 @@ Each submit passes UTF-8 JSON on stdin to the shared `native-input.sh` caller. I
 helper creates a unique private directory and exclusively writes the input before invoking the
 CLI once with explicit pane/cwd/window/home context, then removes the directory in `finally`. While the
 CLI runs, another submit is disabled. Nonzero stderr becomes a toast and keeps the pane and
-comments open; a successful result ends the native block. There is no automatic retry.
+comments open. After success, the CLI closes the scoped native split only while the durable
+revision and digest triplet still match. A retained pane displays success warnings and disables
+submission, so an uncertain close never invites another approval or feedback delivery. Local ×
+uses `cx:exit(0)` with hosting's default `keep_open=false`. There is no automatic retry.
 
 "Tandem: New request…" focuses the ownership-proven coordinator and sends a short intake prompt
 asking what the user wants to change. The user answers in that conversation. The action rechecks
