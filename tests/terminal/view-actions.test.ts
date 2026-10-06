@@ -1173,13 +1173,19 @@ test("native project lookup uses the terminal saved in the explicit home before 
             }),
           };
         },
+        nativeRendererHandlers: {
+          board: async (context) => {
+            expect(context.capabilities.terminal.name).toBe("tern");
+            throw new Error("fixture renderer unavailable");
+          },
+        },
         createService: () => {
           throw new Error("Unavailable renderer must not start a service");
         },
       },
     );
     expect(result.exitCode).not.toBe(0);
-    expect(result.error?.message).toBe("tandem native board is not implemented yet");
+    expect(result.error?.message).toBe("fixture renderer unavailable");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[0]).not.toBe("herdr");
     expect(calls[0]?.slice(1)).toEqual(["ls", "--json"]);
@@ -1188,7 +1194,7 @@ test("native project lookup uses the terminal saved in the explicit home before 
   }
 });
 
-test("published wave-2 argv reaches an honest unavailable handler without starting a service", async () => {
+test("published wave-2 argv dispatches a registered renderer without starting a service", async () => {
   const f = await fixture();
   try {
     let starts = 0;
@@ -1211,6 +1217,11 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
       const result = await runTerminal(["native", ...command, "--pane", "101", "--cwd", f.clean], {
         ...dependencies,
         cwd: f.root,
+        nativeRendererHandlers: {
+          [command[0] ?? ""]: async () => {
+            throw new Error(`fixture ${command[0]} renderer unavailable`);
+          },
+        },
         createService: () => {
           starts += 1;
           return f.service;
@@ -1219,7 +1230,7 @@ test("published wave-2 argv reaches an honest unavailable handler without starti
         stderr: (value) => errors.push(value),
       });
       expect(result.exitCode).not.toBe(0);
-      expect(result.error?.message).toBe(`tandem native ${command[0]} is not implemented yet`);
+      expect(result.error?.message).toBe(`fixture ${command[0]} renderer unavailable`);
       expect(errors.join("")).toContain(result.error?.message ?? "missing error");
       expect(output).toEqual([]);
     }
@@ -1298,7 +1309,7 @@ test("renderer commands reject missing context and invalid project/file input be
       ["project", "unknown", "--pane", "101", "--cwd", f.clean],
       ["project", "--pane", "101", "--cwd", f.clean],
       ["view-file", "--pane", "101", "--cwd", f.clean],
-      ["board", "extra", "--pane", "101", "--cwd", f.clean],
+      ["usage", "extra", "--pane", "101", "--cwd", f.clean],
     ];
     let attempts = 0;
     const handler: NativeRendererHandler = async () => {
@@ -1311,6 +1322,7 @@ test("renderer commands reject missing context and invalid project/file input be
         nativeRendererHandlers: {
           board: handler,
           prs: handler,
+          usage: handler,
           project: handler,
           "view-file": handler,
         },
