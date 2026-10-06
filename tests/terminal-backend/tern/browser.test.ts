@@ -6,6 +6,7 @@ import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { openFiles } from "../../native/view-files.ts";
+import { viewsOf } from "../views.ts";
 
 // A browser opening can never be proved or disproved later, and it is never re-invoked. A
 // process that dies right after `tern browser`, or a reply that never proves the new browser,
@@ -112,7 +113,7 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
       });
       const terminal = ternBackend(run, { home, binary: "tern" });
       const open = (backend = terminal) =>
-        backend.openView({
+        viewsOf(backend).open({
           coordinator,
           cwd: repo,
           home,

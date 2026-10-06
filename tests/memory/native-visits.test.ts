@@ -14,6 +14,7 @@ import {
 } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 
 async function savedVisit(home: string, project: string) {
   const visit = (await readProjectState(home, project))?.visit;
@@ -108,13 +109,16 @@ test("the project trigger stays quiet without a publication and preserves visits
     },
   };
   let attempts = 0;
+  const base = terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" }));
   const terminal = {
-    ...terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" })),
+    ...base,
     name: "tern" as const,
-    openView: async () => {
-      attempts++;
-      return { opened: false, warnings: ["uncertain native outcome"] };
-    },
+    views: viewsWith(base, {
+      open: async () => {
+        attempts++;
+        return { opened: false, warnings: ["uncertain native outcome"] };
+      },
+    }),
   };
   try {
     expect(await maybeShowCatchUp(terminal, { home, record })).toBe(false);

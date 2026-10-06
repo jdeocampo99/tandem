@@ -780,17 +780,19 @@ class TandemController {
     });
     this.#prReviews = createPrReviewWorkflow({
       home: deps.home,
-      ...(deps.terminal.name === "tern"
-        ? {
+      ...(deps.terminal.views === undefined
+        ? {}
+        : {
             openNativePage: async (task: TaskRecord) => {
+              const views = deps.terminal.views;
               const owned = await findRunningCoordinator(deps.run, deps.terminal, {
                 home: deps.home,
                 sessionId: deps.sessionId,
                 repoPath: task.repoPath,
               });
-              if (owned?.endpoint.terminal !== "tern")
+              if (views === undefined || owned === undefined)
                 throw new Error("Open this project's Tern coordinator before showing its review");
-              const result = await deps.terminal.openView({
+              const result = await views.open({
                 coordinator: owned.endpoint,
                 cwd: owned.worktree.path,
                 home: deps.home,
@@ -800,8 +802,7 @@ class TandemController {
               if (!result.opened)
                 throw new Error(result.warnings.join("; ") || "Native review did not open");
             },
-          }
-        : {}),
+          }),
       run: deps.run,
       clock: deps.clock,
       projectRoots: deps.projectRoots,
@@ -1078,20 +1079,19 @@ class TandemController {
           })),
         };
         await writeBoardSnapshot(this.#deps.home, snapshot);
-        const ternRecords = records.filter((record) => record.endpoint.terminal === "tern");
+        const viewRecords = records.filter(
+          (record) => record.endpoint.terminal === this.#deps.terminal.name,
+        );
         const project =
           this.#deps.sourceWorkspace?.repoPath ??
-          ternRecords.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
+          viewRecords.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
             ?.repoPath;
-        if (this.#deps.terminal.name === "tern" && project !== undefined) {
+        if (this.#deps.terminal.views !== undefined && project !== undefined) {
           this.#nativeViews.schedule({
             snapshot,
             project,
             sessions: new Map(
-              ternRecords.map((record) => [
-                record.repoPath,
-                { terminal: "tern", sessionId: record.endpoint.sessionId },
-              ]),
+              viewRecords.map((record) => [record.repoPath, record.endpoint.sessionId]),
             ),
           });
         }
@@ -1615,10 +1615,10 @@ class TandemController {
     return this.#source.scopedTasks();
   }
 
-  /** Herdr arrival notifications; Tern consumes durable transitions through its native publisher. */
+  /** Arrival notifications for terminals without native views; those publish durable transitions. */
   async notifyNeedsYou(repoPath: string, rows: readonly BoardRow[]): Promise<void> {
     if (
-      this.#deps.terminal.name === "tern" ||
+      this.#deps.terminal.views !== undefined ||
       this.#deps.coordinatorPaneId === undefined ||
       rows.length === 0
     )

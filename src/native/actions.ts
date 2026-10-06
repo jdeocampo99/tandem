@@ -298,7 +298,7 @@ function viewOutcome(result: OpenViewResult): Outcome {
     : notice("kept", "view-kept", result.warnings.join("\n"));
 }
 
-/** The running coordinator of the origin's project; native navigation requires a Tern one. */
+/** The running coordinator of the origin's project; native navigation requires native views. */
 async function ternOwner(
   act: Act,
   purpose: string,
@@ -310,7 +310,7 @@ async function ternOwner(
     sessionId,
     repoPath,
   });
-  if (record?.endpoint.terminal !== "tern")
+  if (record === undefined || act.terminal.views === undefined)
     throw new Error(`Open this project's Tern coordinator before ${purpose}`);
   return record;
 }
@@ -341,13 +341,20 @@ async function coordinator(
   return owned;
 }
 
+/** A terminal without native views refuses every open with the reason Herdr has always given. */
 async function show(
   act: Act,
   owner: CoordinatorRecord,
   view: TerminalView,
   origin: Origin = act.origin,
 ): Promise<OpenViewResult> {
-  return act.terminal.openView({
+  if (act.terminal.views === undefined)
+    throw new Error(
+      origin.windowId === undefined
+        ? `Herdr cannot display a native ${view.kind} view. Use the conversation or tandem status instead.`
+        : "Herdr cannot target an opaque Tern control window key.",
+    );
+  return act.terminal.views.open({
     coordinator: owner.endpoint,
     cwd: owner.worktree.path,
     home: act.environment.home,
@@ -464,8 +471,12 @@ async function openDetail(
     }
   }
   const owned = await coordinator(act, repoPath);
-  const result = await show(act, owned, view);
-  if (result.fallback === "brief-review" && view.kind === "brief") {
+  // Without native views a brief opens in the request's own review pane.
+  if (
+    act.terminal.views === undefined &&
+    view.kind === "brief" &&
+    act.origin.windowId === undefined
+  ) {
     const brief = await service.reviewRequestBrief(view.requestId);
     if (brief.record.reviewPane?.status !== "open")
       throw new Error(
@@ -473,7 +484,7 @@ async function openDetail(
       );
     return DONE;
   }
-  return viewOutcome(result);
+  return viewOutcome(await show(act, owned, view));
 }
 
 /** Intake stays in the coordinator conversation, where scope and approval are established. */
@@ -679,7 +690,8 @@ async function closeNativeBrief(
   owned: CoordinatorRecord,
   seen: ViewedBrief,
 ): Promise<BriefKept | undefined> {
-  if (owned.endpoint.terminal !== "tern") return undefined;
+  const views = act.terminal.views;
+  if (views === undefined) return undefined;
   try {
     const latest = await act.service().requestBrief(seen.requestId);
     if (
@@ -693,7 +705,7 @@ async function closeNativeBrief(
       };
     const projected = latest.record.reviewPane;
     if (
-      projected?.endpoint.terminal === "tern" &&
+      projected?.endpoint.terminal === act.terminal.name &&
       projected.endpoint.paneId === act.origin.paneId &&
       projected.status !== "open"
     )
@@ -703,7 +715,7 @@ async function closeNativeBrief(
             code: "brief-warning",
             text: `The action completed, but the native brief remains ${projected.status}: ${projected.reason ?? "retirement was not confirmed"}. Do not resubmit this action.`,
           };
-    const result = await act.terminal.closeView({
+    const result = await views.close({
       coordinator: owned.endpoint,
       cwd: owned.worktree.path,
       home: act.environment.home,
@@ -742,7 +754,7 @@ async function requestChanges(
   const prompt = briefFeedbackPrompt(brief.record, feedback, true);
   const owned = await coordinator(act, brief.record.repoPath);
   await promptCoordinator(act, owned, prompt);
-  if (owned.endpoint.terminal === "tern") {
+  if (act.terminal.views !== undefined) {
     const kept = await closeNativeBrief(act, owned, feedback);
     return kept === undefined ? DONE : notice("kept", kept.code, kept.text);
   }
@@ -844,7 +856,7 @@ async function commentOnPr(
     const current = await service.get(action.taskId);
     return notice(
       "kept",
-      "failed",
+      "feedback-saved",
       `PR feedback was saved, but the worker could not start fixing: ${current.blockReason ?? current.blockCause?.summary ?? `task is ${current.stage}`}`,
     );
   }

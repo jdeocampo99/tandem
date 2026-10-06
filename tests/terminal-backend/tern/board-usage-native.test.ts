@@ -14,6 +14,7 @@ import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/hos
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
 import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { viewsOf } from "../views.ts";
 import { recordedActions } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -159,8 +160,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       });
       // An open fired during the window's startup tick either opens or fails cleanly with
       // nothing changed; it never pauses the opens below.
-      await backend
-        .openView({ coordinator, cwd: project, home, origin, view: { kind: "board" } })
+      await viewsOf(backend)
+        .open({ coordinator, cwd: project, home, origin, view: { kind: "board" } })
         .catch((error: unknown) => {
           if (!(error instanceof NativeViewNotOpenedError)) throw error;
         });
@@ -176,7 +177,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         ["catchup", "Where we left off"],
       ] as const) {
         expect(
-          (await backend.openView({ coordinator, cwd: project, home, origin, view: { kind } }))
+          (await viewsOf(backend).open({ coordinator, cwd: project, home, origin, view: { kind } }))
             .opened,
         ).toBe(true);
         const viewPane = blocks(decode(await run("ls", "--json"), Listing, "fixture listing")).find(
@@ -269,7 +270,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }));
       expect(
         (
-          await backend.openView({
+          await viewsOf(backend).open({
             coordinator,
             cwd: project,
             home,
@@ -284,7 +285,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       if (!toggled) throw new Error("Toggle board is missing");
       expect(
         (
-          await backend.openView({
+          await viewsOf(backend).open({
             coordinator,
             cwd: project,
             home,
@@ -320,7 +321,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       if (!catchupPane) throw new Error("Automatic catch-up did not create its view");
       expect(
         (
-          await backend.openView({
+          await viewsOf(backend).open({
             coordinator,
             cwd: project,
             home,
@@ -345,7 +346,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           (entry) => entry.block.program === "tandem.catchup",
         ),
       ).toBe(false);
-      const browser = await backend.openView({
+      const browser = await viewsOf(backend).open({
         coordinator,
         cwd: project,
         home,

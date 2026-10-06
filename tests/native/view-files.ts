@@ -63,7 +63,6 @@ export function projectRow(
   row: Readonly<{ current?: boolean; offline?: boolean; sessionId?: string }> = {},
 ): NativeProjectRow {
   return {
-    terminal: "tern",
     repoPath,
     name: repoPath.split("/").at(-1) ?? repoPath,
     current: row.current ?? false,

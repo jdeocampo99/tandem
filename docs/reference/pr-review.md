@@ -158,7 +158,9 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   comments: [{file, line, text}]}` sends a `PR fix request:` through normal worker steering. It
   never posts to GitHub. The task must have an open/draft PR; a finished worker is refused with a
   request to arrange follow-up in the coordinator. Feedback can be saved even if the worker cannot
-  start fixing; that outcome is `kept`, not `refused`, so it never invites a blind repeat.
+  start fixing; that outcome is `kept` with `feedback-saved`, not `refused`. Its toast reads "PR
+  feedback saved" and the pane clears the sent comment like a delivered one, so it never invites a
+  blind repeat.
   For someone else's reviewed PR, new comments instead stay local until Post.
 
 ### Recovering an uncertain post

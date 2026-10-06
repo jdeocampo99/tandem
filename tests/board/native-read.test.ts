@@ -342,7 +342,7 @@ test("project switcher reads only other owners' published summaries without rewr
     const initial = await reader.read(
       snapshot,
       world.repoPath,
-      new Map([[world.repoPath, { terminal: "tern", sessionId: "own-session" }]]),
+      new Map([[world.repoPath, "own-session"]]),
     );
     const other = {
       bundle: {
@@ -367,7 +367,6 @@ test("project switcher reads only other owners' published summaries without rewr
     expect(
       publication.bundle.projects.find((project) => project.repoPath === "/another/app"),
     ).toMatchObject({
-      terminal: "tern",
       name: "Other app",
       running: 4,
       needsYou: 9,
@@ -377,13 +376,7 @@ test("project switcher reads only other owners' published summaries without rewr
     });
     expect(publication.bundle.panel.header.otherProjectsNeedYou).toBe(9);
     expect(publication.bundle.summary.repoPath).toBe(world.repoPath);
-    expect(initial.bundle.summary).toMatchObject({ terminal: "tern", sessionId: "own-session" });
-    const foreignSession = await reader.read(
-      snapshot,
-      world.repoPath,
-      new Map([[world.repoPath, { terminal: "herdr", sessionId: "own-session" }]]),
-    );
-    expect(foreignSession.bundle.summary).not.toHaveProperty("sessionId");
+    expect(initial.bundle.summary).toMatchObject({ sessionId: "own-session" });
     await publishViews(world.home, publication.bundle.project, async () => publication);
     expect(await readFile(path, "utf8")).toBe(before);
     expect((await stat(path)).ino).toBe(inode);

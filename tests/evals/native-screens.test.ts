@@ -10,6 +10,7 @@ import { projectStoreDirectory, readProjectState } from "../../src/native/store.
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
 import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 import { withScenario } from "./scenario.ts";
 
@@ -46,12 +47,15 @@ async function withScreens(
     const opened: TerminalView[] = [];
     let fail = false;
     // Reuse the scenario's terminal/process ownership ledger; capture only the presentation port.
+    const base = terminalBackend(world.run, { home: world.home });
     const terminal: TerminalBackend = {
-      ...terminalBackend(world.run, { home: world.home }),
-      openView: async (input) => {
-        opened.push(input.view);
-        return { opened: !fail, warnings: fail ? ["isolated renderer unavailable"] : [] };
-      },
+      ...base,
+      views: viewsWith(base, {
+        open: async (input) => {
+          opened.push(input.view);
+          return { opened: !fail, warnings: fail ? ["isolated renderer unavailable"] : [] };
+        },
+      }),
     };
     const call = async (action: Action): Promise<Outcome> => {
       const output: string[] = [];

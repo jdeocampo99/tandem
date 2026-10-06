@@ -7,6 +7,7 @@ import { readProjectState, viewIndexPath } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
 import { state } from "../board/fixtures.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { seedScenarioTask, withScenario } from "./scenario.ts";
 
 for (const changed of [true, false]) {
@@ -19,12 +20,15 @@ for (const changed of [true, false]) {
         worktree: { path: world.repoPath },
       };
       const opened: TerminalView[] = [];
+      const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
       const terminal: TerminalBackend = {
-        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-        openView: async (input) => {
-          opened.push(input.view);
-          return { opened: true, warnings: [] };
-        },
+        ...base,
+        views: viewsWith(base, {
+          open: async (input) => {
+            opened.push(input.view);
+            return { opened: true, warnings: [] };
+          },
+        }),
       };
       const input = () => ({ home: world.home, record, now: world.clock() });
       const visitedAt = world.clock();

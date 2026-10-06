@@ -115,7 +115,8 @@ end
 local function sender(s: State, model: models.Model, invoke: Invoke): diff.Send
  return function(mine, done)
   local action = if mine.reply then {verb="pr-comment",taskId=model.header.taskId,reviewHead=model.header.head,replies=tern.json.array({{threadId=mine.reply.threadId,commentId=mine.reply.commentId,replyTo=mine.reply.replyTo,body=mine.body}})} else {verb="pr-comment",taskId=model.header.taskId,comments=tern.json.array({{file=mine.file,line=mine.line,text=mine.body}})}
-  invoke(action, function(outcome) if outcome and outcome.status == "done" then done() end end)
+  -- A kept comment was saved; keeping its draft would invite sending the same feedback twice.
+  invoke(action, function(outcome) if outcome and (outcome.status == "done" or outcome.status == "kept") then done() end end)
  end
 end
 function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx: BlockCx, invoke: Invoke): boolean

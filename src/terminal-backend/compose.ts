@@ -101,13 +101,11 @@ export function terminalBackend(
     get name() {
       return select().name;
     },
-    openView: (input) => select().openView(input),
-    closeView: (input) => select().closeView(input),
-    retainedViewOpens: (home) => select().retainedViewOpens(home),
-    abandonViewOpen: (open, conclusive) => select().abandonViewOpen(open, conclusive),
+    get views() {
+      return select().views;
+    },
     quarantinedPanes: (home) => select().quarantinedPanes(home),
     clearPaneQuarantine: (pane, conclusive) => select().clearPaneQuarantine(pane, conclusive),
-    recoverViewOpens: (home) => select().recoverViewOpens(home),
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),

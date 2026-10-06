@@ -11,6 +11,7 @@ import { runTerminal } from "../../../src/main.ts";
 import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { viewFileText } from "../../native/view-files.ts";
+import { viewsOf } from "../views.ts";
 
 const home = process.env.TANDEM_HOME;
 if (!home?.startsWith("/private/tmp/tdm-panel-spec-"))
@@ -32,12 +33,16 @@ const run: CommandRunner = async (request) => {
 const records = await listCoordinatorRecords(home, "fixture");
 const base = ternBackend(run, { home });
 const catchUpFailure = await Bun.file(join(home, "fixture-catchup-failure")).exists();
+const views = viewsOf(base);
 const terminal = {
   ...base,
-  openView: async (input: Parameters<typeof base.openView>[0]) => {
-    if (catchUpFailure && input.view.kind === "catchup")
-      throw new Error("Fixture catch-up unavailable");
-    return base.openView(input);
+  views: {
+    ...views,
+    open: async (input: Parameters<typeof views.open>[0]) => {
+      if (catchUpFailure && input.view.kind === "catchup")
+        throw new Error("Fixture catch-up unavailable");
+      return views.open(input);
+    },
   },
   inspect: async (target: Parameters<typeof base.inspect>[0]) => {
     const result = await base.inspect(target);

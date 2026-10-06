@@ -9,7 +9,7 @@ import {
   viewDetailPath,
   viewIndexPath,
 } from "../../native/store.ts";
-import type { TerminalBackend } from "../contract.ts";
+import type { ViewsCapability } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
 import { type OpenResult, openView, withSettledOpens } from "./host.ts";
@@ -26,7 +26,7 @@ class BrowserOpenUnconfirmedError extends AdapterError {
   }
 }
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
-export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
+export type ViewHostingInput = Parameters<ViewsCapability["open"]>[0];
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
   const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
   const records = (await listCoordinatorRecords(home, coordinator.sessionId)).filter(
@@ -121,7 +121,7 @@ export function ternViewHost(commands: TernCli) {
       placement,
       path,
     );
-  const close = async (input: Parameters<TerminalBackend["closeView"]>[0], project: string) => {
+  const close = async (input: Parameters<ViewsCapability["close"]>[0], project: string) => {
     if (input.origin.paneId === input.coordinator.paneId)
       throw new EndpointOwnershipError(
         input.coordinator,
@@ -169,7 +169,7 @@ export function ternViewHost(commands: TernCli) {
     scoped,
     close,
     toggleBoard,
-    closeView: async (input: Parameters<TerminalBackend["closeView"]>[0]) =>
+    closeView: async (input: Parameters<ViewsCapability["close"]>[0]) =>
       close(input, await projectForView(input.home, input.coordinator)),
     openView: async (input: ViewHostingInput) => {
       const project = await projectForView(input.home, input.coordinator);

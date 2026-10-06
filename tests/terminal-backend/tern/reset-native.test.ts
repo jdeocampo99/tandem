@@ -12,6 +12,7 @@ import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, Processes } from "../../../src/terminal-backend/tern/protocol.ts";
 import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { viewsOf } from "../views.ts";
 
 const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (native ? test : test.skip)(
@@ -220,7 +221,7 @@ exec /bin/sleep 30
         { kind: "board" },
         { kind: "usage" },
       ] as const) {
-        await terminal.openView({
+        await viewsOf(terminal).open({
           home,
           cwd: record.worktree.path,
           coordinator: record.endpoint,

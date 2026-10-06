@@ -57,12 +57,13 @@ src/native/actions.ts, tern-plugin/brief.luau
 
 ## Review pane
 
-- In Tern, `reviewPane: true` publishes the native brief detail and calls `terminal.openView`
+- With a terminal that hosts native views (Tern), `reviewPane: true` publishes the native brief
+  detail and calls `terminal.views.open`
   beside the recorded coordinator. Exact block evidence reuses the split across revisions;
   the existing `reviewPane` receipt holds its native endpoint, detail path and shown revision.
   That endpoint records only the brief's terminal, session, workspace, tab, pane, role and
   generation identity. The coordinator's `notificationPane` stays on its own endpoint for alerts.
-  Approval, abandonment and current-revision request changes retire it through scoped `closeView`.
+  Approval, abandonment and current-revision request changes retire it through scoped `views.close`.
   Unknown opening outcomes keep the host's durable ticket and resources quarantined; no legacy
   shell pane or automatic retry follows. Unknown closure leaves approval or feedback standing
   and quarantines the receipt. Tiny in-chat fixes still open no pane.

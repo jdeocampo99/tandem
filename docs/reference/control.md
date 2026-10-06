@@ -148,9 +148,9 @@ Missing or malformed origins are refused before any pane is read.
 The outcome's `status` is `done` (the click did what it asked), `kept` (part of it did not
 happen and the originating view stays) or `refused` (Tandem refused it or it failed; nothing to
 undo). An optional `notice: {code, text}` explains it. The closed codes are `failed`,
-`view-kept`, `catch-up-unavailable`, `brief-warning`, `brief-left-open`, `review-posted` and
-`review-unconfirmed`; `rt.luau` maps each to one toast title. No action is retried, and a `kept`
-outcome never invites a repeat.
+`view-kept`, `catch-up-unavailable`, `brief-warning`, `brief-left-open`, `review-posted`,
+`review-unconfirmed` and `feedback-saved`; `rt.luau` maps each to one toast title. No action is
+retried, and a `kept` outcome never invites a repeat.
 
 `src/native/actions.ts` dispatches one handler per verb:
 

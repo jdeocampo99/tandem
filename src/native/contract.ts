@@ -610,6 +610,7 @@ export const NOTICE_CODES = [
   "brief-left-open",
   "review-posted",
   "review-unconfirmed",
+  "feedback-saved",
 ] as const;
 export const NoticeCode = z.enum(NOTICE_CODES);
 export type NoticeCode = z.infer<typeof NoticeCode>;

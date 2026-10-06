@@ -32,6 +32,7 @@ tern.json={
   if raw == 'moved' then return {status='kept',notice={code='review-unconfirmed',text='PR head moved'}} end
   if raw == 'done' then return {status='done'} end
   if raw == uncertainOutput then return {status='kept',notice={code='review-unconfirmed',text=uncertainMessage}} end
+  if raw == 'feedback-saved' then return {status='kept',notice={code='feedback-saved',text='PR feedback was saved, but the worker could not start fixing: blocked'}} end
   error('Unreadable JSON')
  end,
 }
@@ -164,3 +165,18 @@ print('Exact thread replies and taskless read-only guards passed')
 
 for key in model do model[key]=nil end
 for key,value in savedModel do model[key]=value end
+
+-- Feedback the service saved but could not start is kept: it says so and clears the draft.
+model.commentDestination='worker'
+model.files={{path='port.ts',additions=1,deletions=0,commentCount=0,rows={{id='r1',row={kind='add',new=1,text='guard();'},drafts={},threads={}}}}}
+local fix=block.init(cx,args,nil); block.view(fix,cx)
+block.event(fix,{ev='action',act='pr-line',value='1'},cx)
+assert(fix.content.diff.editor~=nil)
+fix.content.diff.editor.text='Fix the guard'
+block.event(fix,{ev='action',act='pr-save'},cx)
+local fixRequest=pending[#pending]
+assert(fixRequest.opts.stdin.action.verb=='pr-comment' and fixRequest.opts.stdin.action.taskId=='review-1')
+fixRequest.callback({status=0,stdout='feedback-saved',stderr=''})
+assert(toasts[#toasts].level=='warning' and toasts[#toasts].title=='PR feedback saved')
+assert(fix.content.diff.editor==nil and fix.content.diff.yours[1].sent and fix.content.diff.yours[1].body=='Fix the guard')
+print('Saved PR feedback is kept without inviting a resend')

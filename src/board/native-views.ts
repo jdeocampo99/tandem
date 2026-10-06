@@ -9,7 +9,6 @@ import type { NativeBoardView } from "./native.ts";
 import type { NativePanelView, NativeProjectRow, NativeTaskSummary } from "./panel.ts";
 
 export type NativeProjectSummary = Readonly<{
-  terminal: "tern";
   repoPath: string;
   name: string;
   writtenAt: string;
@@ -64,7 +63,6 @@ export function nativeSummaryProjects(
       const age = Date.parse(now) - Date.parse(summary.writtenAt);
       const offline = !Number.isFinite(age) || age < 0 || age > 10_000;
       return {
-        terminal: summary.terminal,
         repoPath: summary.repoPath,
         name: summary.name,
         current: summary.repoPath === project,

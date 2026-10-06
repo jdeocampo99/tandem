@@ -14,6 +14,7 @@ import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
 import { state } from "../board/fixtures.ts";
 import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { withScenario } from "./scenario.ts";
 
 for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
@@ -59,8 +60,9 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
       await visitNativeProject(baseline, async () => {});
       const focused: string[] = [];
       let opens = 0;
+      const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
       const terminal: TerminalBackend = {
-        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+        ...base,
         notify: async () => {},
         focusAgent: async (input) => {
           focused.push(input.paneId);
@@ -69,11 +71,13 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
           expect(input.originCoordinator).toEqual(endpoint);
           return failure !== "focus";
         },
-        openView: async (input) => {
-          expect(input.view).toEqual({ kind: "catchup" });
-          opens++;
-          return { opened: failure !== "catchup", warnings: ["fixture catch-up failure"] };
-        },
+        views: viewsWith(base, {
+          open: async (input) => {
+            expect(input.view).toEqual({ kind: "catchup" });
+            opens++;
+            return { opened: failure !== "catchup", warnings: ["fixture catch-up failure"] };
+          },
+        }),
       };
       const alerts = new NativeAlerts({
         home: world.home,

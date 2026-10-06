@@ -239,14 +239,15 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
   };
   return {
     name: "tern",
-    openView: async (input) => (await native()).views.openView(input),
-    closeView: async (input) => (await native()).views.closeView(input),
     // Loaded on use, as native() is, to keep native hosting out of every backend load.
-    retainedViewOpens: async (home) => (await import("./host.ts")).listRetainedNativeOpens(home),
-    abandonViewOpen: async (open, conclusive) =>
-      (await import("./host.ts")).abandonRetainedNativeOpen(open, conclusive),
-    recoverViewOpens: async (home) =>
-      (await import("./host.ts")).recoverViewOpens(cli, home, cli.clock()),
+    views: {
+      open: async (input) => (await native()).views.openView(input),
+      close: async (input) => (await native()).views.closeView(input),
+      recover: async (home) => (await import("./host.ts")).recoverViewOpens(cli, home, cli.clock()),
+      retained: async (home) => (await import("./host.ts")).listRetainedNativeOpens(home),
+      abandon: async (open, conclusive) =>
+        (await import("./host.ts")).abandonRetainedNativeOpen(open, conclusive),
+    },
     quarantinedPanes: listTernQuarantine,
     clearPaneQuarantine: clearTernQuarantine,
     inspect: check,

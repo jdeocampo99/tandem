@@ -89,7 +89,6 @@ export type Visit = z.infer<typeof Visit>;
 
 const Summary = z
   .object({
-    terminal: z.literal("tern"),
     repoPath: z.string().min(1),
     name: z.string(),
     writtenAt: z.string().datetime(),
