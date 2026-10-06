@@ -517,6 +517,17 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       expect(JSON.parse(await readFile(join(root, "received.json"), "utf8"))).toEqual(
         model.approval,
       );
+      // Conversation approval uses the same scoped retirement as the native action.
+      const conversationReview = await workflow.review(model.requestId);
+      const conversationPane = conversationReview.record.reviewPane?.endpoint.paneId;
+      if (conversationPane === undefined) throw new Error("Workflow brief pane missing");
+      await until(async () => (await tree()).some((each) => each.text === "Approve"));
+      const approved = await workflow.approve({ requestId: model.requestId, ...model.approval });
+      expect(approved.approvalState).toBe("current");
+      expect(approved.record.reviewPane?.status).toBe("closed");
+      expect(await paneExists(conversationPane)).toBe(false);
+      expect(await paneExists(coordinator.paneId)).toBe(true);
+      if (shots) await ctl("shot", "brief-workflow-closed");
     } catch (error) {
       if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-failed").catch(() => {});
       console.error(
