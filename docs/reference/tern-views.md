@@ -318,9 +318,21 @@ The host proves the block's program, all launch arguments, scoped session and id
 then checks the close acknowledgement and absence. Missing blocks count as closed; unknown outcomes
 are quarantined. This does not register or mutate the legacy Markdown `reviewPane`.
 
+The host never sets `keep_open` when launching split/detail blocks or task replacements.
+Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.
+An exited retained pane can still report `live=true`. Neither `live` nor `exited` proves closure:
+only the exact pane id's absence from a scoped `tern ls` does.
+For a split's local × control, `cx:exit(0)` removes that exact block on Tern 0.5.0 under this default.
+`BlockCx` has no other close API; renderers must not use the raw window-level layout close API.
+Successful hosting already removed its private ticket and receipt, so no host cleanup remains.
+Task pages use the Orchestrator return action instead, which restores the hidden conversation
+before removing its replacement block.
+
 Known owned renderer back buttons all restore the conversation. When the coordinator is floated,
 the host proves its exact task block by program, coordinator and index launch arguments before
-docking the coordinator and closing that task. Other native tabs remain open.
+docking the coordinator and closing that task. Returning from Board, Usage or Catch-up also
+closes only its exact idle originating block; the backend proves all launch arguments before
+the guarded route and exact pane id absence afterwards. Brief/PR panes remain open on return.
 
 Task hosting floats and hides the conversation in its **same recorded tab**, retaining its
 exact endpoint and process. It refuses unrelated pictures in picture. Opening a second task proves the previous task block's
