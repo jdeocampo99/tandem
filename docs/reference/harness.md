@@ -350,8 +350,9 @@ src/harness/claude-code/plugins/ (see [The mods](#the-mods)). A coordinator's si
   inode), shuts the session down, and exits 0. It takes SIGTERM and SIGHUP over from OMP's
   postmortem module, which the service loads through the OMP launch harness and which would exit
   with 143 before the socket is removed.
-  It captures its parent before initialization, refuses an already orphaned start, and checks
-  again before announcing ready so a parent that exits during startup cannot be adopted as alive.
+  It captures and monitors its parent before initialization, refuses an already orphaned start,
+  and cancels startup when the parent exits, including a pending socket health check. A socket it
+  has not claimed is preserved. It checks again before announcing ready.
 - **Reload.** A mod hot-reload kills the sidecar, and the mod's `session.start` spawns a new one,
   so the mod reads the socket path from each new ready line. State that lives only in memory
   (notifications already sent this process, held next-turn context, an open thread) starts over,

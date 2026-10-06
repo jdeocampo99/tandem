@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TANDEM_CHECKOUT } from "../../../src/coordinator/tandem-checkout.ts";
@@ -268,6 +268,7 @@ test("a parent exiting during socket initialization is not adopted as the sideca
       return new Response("ok");
     },
   });
+  const previousInode = statSync(socket).ino;
   cleanups.push(async () => {
     release.resolve();
     await previous.stop(true);
@@ -276,10 +277,10 @@ test("a parent exiting during socket initialization is not adopted as the sideca
   await observed.promise;
   await parent.stdin.end();
   expect(await parent.exited).toBe(0);
-  await rm(socket, { force: true });
-  release.resolve();
   await expect(lineReader(parent.stdout)()).rejects.toThrow("stdout ended");
-  expect(existsSync(socket)).toBe(false);
+  expect(statSync(socket).ino).toBe(previousInode);
+  release.resolve();
+  expect(await (await fetch("http://sidecar/health", { unix: socket })).text()).toBe("ok");
 }, 10_000);
 
 test("a shutdown event answers, then stops the sidecar", async () => {
