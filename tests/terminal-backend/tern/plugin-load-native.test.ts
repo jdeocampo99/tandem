@@ -168,6 +168,19 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_LOAD_NA
       for (const name of ["host", "window"])
         await writeFile(join(plugin, `${name}.luau`), entries[name] as string);
       await checked("plugin", "reload", "--json");
+      // Verify INITIAL window load of production code, apart from the reload benchmark.
+      await ctl("quit");
+      if (window.exitCode === null) window.kill();
+      await window.exited;
+      window = Bun.spawn(
+        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
+        { cwd: root, env, stdout: "ignore", stderr: Bun.file(join(root, "proof-window.log")) },
+      );
+      await until(async () => {
+        await ctl("state");
+        return true;
+      });
+      await ctl("account", "signed-in");
       const terminal = ternBackend(run, { home, environment: env });
       const coordinator = (
         await terminal.createWorkspace({
@@ -183,6 +196,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_LOAD_NA
         cwd: root,
         workspaceId: coordinator.workspaceId,
       });
+      await until(async () => (await ctl("tree")).includes("coordinator · tandem"));
       await mkdir(join(home, "native-views"));
       const panel = panelFixture(root);
       await writeFile(
@@ -211,13 +225,19 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_LOAD_NA
       expect(tree).toContain("Needs you");
       expect(tree).toContain("Ready");
       await ctl("shot", "panel-under-cpu-load");
-      await ctl("palette");
-      await until(async () => (await ctl("tree")).includes("Tandem: New request"));
-      await writeFile(join(root, "palette-tree.json"), await ctl("tree"));
+      await ctl("palette", "Tandem");
+      // Search highlights split the matched prefix into nodes; assert the stable suffixes.
+      await until(async () => (await ctl("tree")).includes("New request"));
+      const palette = await ctl("tree");
+      for (const title of ["New request", "Open task", "Toggle board", "Show PRs", "Usage"]) {
+        expect(palette).toContain(title);
+      }
+      await writeFile(join(root, "palette-tree.json"), palette);
       await ctl("shot", "palette-under-cpu-load");
       const logs =
         (await readFile(join(root, "daemon.log"), "utf8")) +
-        (await readFile(join(root, "window.log"), "utf8"));
+        (await readFile(join(root, "window.log"), "utf8")) +
+        (await readFile(join(root, "proof-window.log"), "utf8"));
       expect(logs).not.toContain("exceeded its 50 ms");
     } finally {
       for (const process of busy) process.kill();
