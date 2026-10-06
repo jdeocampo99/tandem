@@ -173,6 +173,22 @@ type ControlNode = {
       await click("PR");
       await until(async () => JSON.stringify(await tree()).includes("exact pane ownership"));
       await ctl("shot", "03-task-pr");
+      await writeNativeViews(env.TANDEM_HOME, taskScreenPublication(root, true));
+      await until(async () => JSON.stringify(await tree()).includes("Reopen this PR"));
+      expect(JSON.stringify(await tree())).toContain("PR changed or view unavailable");
+      opened = await host.open(
+        { ...input, origin: { paneId: opened.paneId, cwd: root } },
+        root,
+        "task",
+        "task",
+        file,
+      );
+      await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
+      await click("PR");
+      await until(async () => JSON.stringify(await tree()).includes("Overall review…"));
+      expect(JSON.stringify(await tree())).toContain("Post");
+      expect(JSON.stringify(await tree())).toContain("Reviewed commit abc123");
+      await ctl("shot", "03-task-pr-review");
       await click("Cost");
       await until(async () => JSON.stringify(await tree()).includes("Usage receipt"));
       expect(JSON.stringify(await tree())).toContain("Additional charges · unavailable");

@@ -173,7 +173,7 @@ export function taskScreenFixture(blocked = false) {
   });
 }
 
-export function taskScreenPublication(project: string): NativeViewsPublication {
+export function taskScreenPublication(project: string, review = false): NativeViewsPublication {
   const taskView = taskScreenFixture();
   const brief = briefView(
     createRequestBriefRecord(
@@ -190,6 +190,22 @@ export function taskScreenPublication(project: string): NativeViewsPublication {
     ),
   );
   const pr = prPaneView({
+    ...(review
+      ? {
+          review: {
+            taskId: "102",
+            generation: 1,
+            head: "abc123",
+            currentHead: "abc123",
+            posted: false,
+            intent: "Confirm exact pane ownership before approving.",
+            summary: "",
+            drafts: [],
+            concerns: [],
+            notes: [],
+          },
+        }
+      : {}),
     taskId: "102",
     now: "2030-01-02T03:16:05.000Z",
     cached: {
