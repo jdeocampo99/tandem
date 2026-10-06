@@ -23,7 +23,7 @@ type ControlNode = {
 (enabled ? test : test.skip)(
   "PR replies select exact threads and taskless watched PRs remain read-only in an isolated window",
   async () => {
-    const otherWindows = Bun.spawn(["pgrep", "-f", "^.*tern --control "], {
+    const otherWindows = Bun.spawn(["pgrep", "-f", "^(/[^ ]*/)?tern --control "], {
       stdout: "pipe",
       stderr: "ignore",
     });
