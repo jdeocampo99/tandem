@@ -5,7 +5,6 @@ import type { PanelFocus } from "./board/panel.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
 import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
-import { runCli } from "./cli.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -15,6 +14,7 @@ import { resetCoordinators } from "./coordinator/reset.ts";
 import { isTandemCheckout, TANDEM_CHECKOUT } from "./coordinator/tandem-checkout.ts";
 import { terminalOpensLinks } from "./harness/omp/terminal.ts";
 import { renderCatchUpCard, renderWorkstreamList } from "./memory/view.ts";
+import { nativeAct, readEnvelope } from "./native/actions.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
 import { type PublishedReport, publishReport } from "./report/publish.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
@@ -27,7 +27,6 @@ import {
 } from "./terminal/arguments.ts";
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
-import { nativeAct, readEnvelope } from "./native/actions.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
 import {
   fixCleanupCount,

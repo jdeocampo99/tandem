@@ -5,7 +5,7 @@ and posting one review only with the user's approval.
 
 Code: src/pr-review/ (worktree.ts, run.ts, diff.ts, review.ts, edits.ts, page.ts,
 page-input.ts, page-feedback.ts, post.ts, service.ts, route.ts, shell.ts, native-view.ts),
-src/terminal/cli-view-actions.ts, tern-plugin/pr.luau, pr-content.luau, pr-diff.luau,
+src/native/actions.ts, tern-plugin/pr.luau, pr-content.luau, pr-diff.luau,
 src/session/review-page.ts (the page listener), src/workers/worktree-lease.ts
 (`preparePrReviewLease`), src/workers/workflow.ts (`readPrReviewRound`),
 src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/pr-review-scenarios.test.ts.
@@ -134,14 +134,14 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
 
 ### Native PR pane and submission
 
-- `tandem native open pr TASK_ID` opens the task's PR beside the conversation. A numeric PR id
+- An `open` action for a PR opens the task's PR beside the conversation. A numeric PR id
   resolves one owning task first, then one cached PR in the selected project's bundle; ambiguous
   matches refuse. `repo#number` selects the exact cached PR, including a taskless watched PR.
   `native prs` opens a cached PR pane with a selector strip. Taskless PRs are read-only.
   PRs show Description, optional Tour, Diff, cached CI and threads.
   Read-only GitHub refreshes belong to TypeScript; the renderer makes no network reads.
 - For `pr-review`, the summary, explicit verdict and Post controls stay visible below the diff.
-  `tandem native review-submit TASK_ID --input FILE` takes the normal `ReviewSubmission`
+  The `review-submit` action takes the normal `ReviewSubmission`
   (`tandemPrReview:1`, `verdict`, `summary`, `drafts:[{id,decision,body?}]`,
   `yours:[{file,line,body}]`) plus the displayed `reviewHead` and `reviewGeneration`.
   Draft choices and new comments remain local until Post. The Post click is the user's approval;

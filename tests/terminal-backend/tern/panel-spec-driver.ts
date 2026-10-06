@@ -2,6 +2,7 @@
 // Invoked only by the private copy of tandem.sh in panel-spec-native.test.ts.
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
 import { nativeViewText } from "../../../src/board/native-views.ts";
@@ -54,12 +55,14 @@ const terminal = {
     };
   },
 };
-await writeFile(join(home, "actions.log"), `${process.argv.slice(2).join("\n")}\n`, { flag: "a" });
+const envelope = await Bun.stdin.text();
+await writeFile(join(home, "actions.log"), `${envelope}\n`, { flag: "a" });
 const outcome = await runTerminal(process.argv.slice(2), {
   cwd: records[0]?.repoPath ?? home,
   processEnvironment: process.env,
   run,
   terminal,
+  input: Readable.from([envelope]),
 });
 for (const record of records) {
   const path = nativeViewsPath(home, record.repoPath);

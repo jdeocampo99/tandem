@@ -139,7 +139,7 @@ const Text = z
   .refine((value) => value.trim().length > 0, "must be non-empty text")
   .refine((value) => !value.includes("\0"), "must not contain NUL characters")
   .transform((value) => value.trim());
-const Count = z.number().int().positive();
+const Count = z.number().int().positive().safe();
 
 /**
  * Where a click came from. A block echoes the context it was launched with; a window command
@@ -214,9 +214,7 @@ export const Action = z.discriminatedUnion("verb", [
       verb: z.literal("pr-comment"),
       taskId: Id,
       text: Text.optional(),
-      comments: z
-        .array(z.object({ file: Text, line: Count, text: Text }).strict())
-        .optional(),
+      comments: z.array(z.object({ file: Text, line: Count, text: Text }).strict()).optional(),
       replies: z.array(z.unknown()).optional(),
       reviewHead: Text.optional(),
     })
@@ -229,7 +227,7 @@ export const Action = z.discriminatedUnion("verb", [
         .string()
         .min(1)
         .refine((head) => head.trim() === head, "must be copied from the displayed review"),
-      reviewGeneration: z.number().int().nonnegative(),
+      reviewGeneration: z.number().int().nonnegative().safe(),
       /** The review page's `ReviewSubmission`, validated by its own parser. */
       submission: z.record(z.string(), z.unknown()),
     })
@@ -271,7 +269,10 @@ export type NoticeCode = z.infer<typeof NoticeCode>;
 export const Outcome = z
   .object({
     status: z.enum(["done", "kept", "refused"]),
-    notice: z.object({ code: NoticeCode, text: z.string().min(1) }).strict().optional(),
+    notice: z
+      .object({ code: NoticeCode, text: z.string().min(1) })
+      .strict()
+      .optional(),
   })
   .strict();
 export type Outcome = z.infer<typeof Outcome>;

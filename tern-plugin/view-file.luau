@@ -10,15 +10,6 @@ function M.create<T>(path: string, kind: string, parse: (unknown) -> T?): View<T
  return { path = path, kind = kind, status = "waiting", parse = parse }
 end
 
--- A task, brief or PR detail file lives in the directory named after its project's index file.
-function M.index(path: string): string
- for _, kind in {"task", "brief", "pr"} do
-  local project = string.match(path, "^(.*)/" .. kind .. "%-[^/]*%.json$")
-  if project then return project .. ".json" end
- end
- return path
-end
-
 function M.refresh<T>(state: View<T>): boolean
  local before = state.status
  local ok, raw = pcall(tern.fs.read, state.path, 8 * 1024 * 1024)

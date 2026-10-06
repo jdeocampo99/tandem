@@ -135,7 +135,7 @@ lives in `approvalPrompt` in src/session/actions.ts.
 
 ## Native view actions
 
-Every native click invokes `tandem native COMMAND`. The view never edits durable state. The same
+Every native click invokes `tandem native act` with one action envelope. The view never edits durable state. The same
 commands are also available in the advanced action CLI (`bun src/cli.ts`).
 Every native command requires exact decimal `--pane` and absolute originating-pane `--cwd`;
 missing or invalid context is refused before handler effects. Shared non-native callers retain
@@ -145,7 +145,7 @@ different matching project. When no readable/live candidate matches, the command
 
 - The native boundary also registers `board`, `prs`, `usage`, `new-request`, `open-task`,
   `project 1..9|prev|next|repo:ABSOLUTE_PATH`, and `view-file PATH`. Each dispatches once through the typed
-  `nativeRendererHandlers` registration in `src/terminal/native-renderers.ts`; all these handlers
+  the verb table in `src/native/actions.ts`; all these handlers
   are implemented. `open-task` opens the project's searchable task picker. Board/Usage open
   full-window views, `prs` selects a published PR pane, and `new-request` prompts the coordinator.
   Renderer implementations receive the resolved project environment, required origin,

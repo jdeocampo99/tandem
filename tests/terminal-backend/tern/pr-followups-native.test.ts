@@ -9,6 +9,7 @@ import {
   publishNativeViews,
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { ActionEnvelope } from "../../../src/native/contract.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
@@ -53,11 +54,11 @@ type ControlNode = {
       recursive: true,
     });
     await writeFile(
-      join(plugin, "native-input.sh"),
+      join(plugin, "tandem.sh"),
       `#!/bin/sh
 cat >> '${join(root, "actions.jsonl")}'
 printf '\n' >> '${join(root, "actions.jsonl")}'
-printf '{"posted":true,"url":"https://github.com/owner/repo/pull/281#review-1"}'
+printf '{"status":"done","notice":{"code":"review-posted","text":"https://github.com/owner/repo/pull/281#review-1"}}'
 `,
     );
     const publication = taskScreenPublication(root, true);
@@ -222,9 +223,11 @@ printf '{"posted":true,"url":"https://github.com/owner/repo/pull/281#review-1"}'
           return false;
         }
       });
-      const sent = JSON.parse((await readFile(join(root, "actions.jsonl"), "utf8")).trim());
-      expect(sent.yours).toEqual([]);
-      expect(sent.replies).toEqual([
+      const line = (await readFile(join(root, "actions.jsonl"), "utf8")).trim();
+      const sent = ActionEnvelope.parse(JSON.parse(line)).action;
+      if (sent.verb !== "review-submit") throw new Error(`Post sent ${sent.verb}`);
+      expect(sent.submission.yours).toEqual([]);
+      expect(sent.submission.replies).toEqual([
         {
           threadId: "thread-second",
           commentId: "node-22",
@@ -262,9 +265,7 @@ printf '{"posted":true,"url":"https://github.com/owner/repo/pull/281#review-1"}'
       await click("#282 ▾");
       await until(async () => JSON.stringify(await tree()).includes("#282 Watched external PR"));
       await ctl("shot", "05-pr-taskless-switcher");
-      expect((await readFile(join(root, "actions.jsonl"), "utf8")).trim()).toBe(
-        JSON.stringify(sent),
-      );
+      expect((await readFile(join(root, "actions.jsonl"), "utf8")).trim()).toBe(line);
       console.log(`Native PR followups proof: ${root}`);
     } finally {
       if (window) {

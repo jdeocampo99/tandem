@@ -25,6 +25,11 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import {
+  DEFAULT_COORDINATOR_SESSION,
+  environmentSource,
+  serviceOptions,
+} from "../terminal/cli-application.ts";
 import { terminalBackend } from "../terminal-backend/compose.ts";
 import type {
   OpenViewResult,
@@ -32,11 +37,6 @@ import type {
   TerminalBackend,
   TerminalView,
 } from "../terminal-backend/contract.ts";
-import {
-  DEFAULT_COORDINATOR_SESSION,
-  environmentSource,
-  serviceOptions,
-} from "../terminal/cli-application.ts";
 import {
   type Action,
   ActionEnvelope,
@@ -337,8 +337,7 @@ async function coordinator(
     sessionId: act.environment.sessionId,
     repoPath: candidates[0]?.repoPath ?? canonical,
   });
-  if (owned === undefined)
-    throw new Error(`Open this project's coordinator before ${purpose}`);
+  if (owned === undefined) throw new Error(`Open this project's coordinator before ${purpose}`);
   return owned;
 }
 
@@ -394,7 +393,8 @@ async function open(act: Act, ref: ViewRef): Promise<Outcome> {
           ? await nativeAlertCounts(act.environment.home, owner.repoPath)
           : undefined;
       const outcome = viewOutcome(await show(act, owner, { kind: ref.kind }));
-      if (alerts) await markNativeAlertsRead(act.environment.home, owner.repoPath, alerts.delivered);
+      if (alerts)
+        await markNativeAlertsRead(act.environment.home, owner.repoPath, alerts.delivered);
       return outcome;
     }
     case "new-request":
@@ -475,6 +475,7 @@ async function openDetail(
       throw new Error(
         brief.record.reviewPane?.reason ?? "The request brief review pane could not be opened",
       );
+    return DONE;
   }
   return viewOutcome(result);
 }

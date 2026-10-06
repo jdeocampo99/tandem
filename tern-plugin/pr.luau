@@ -25,7 +25,7 @@ local block: BlockDef<State> = {
   local path = args[1] or ""
   local s: State = {view=views.create(path, "pr", models.parse), content=content.create(), origin=rt.origin(args), switcher=false}
   views.watch(s.view, cx)
-  local indexPath = views.index(path)
+  local indexPath = args[3] or ""
   if indexPath ~= path then s.index = views.create(indexPath, "panel", models.parseIndex); views.watch(s.index, cx) end
   return s
  end,

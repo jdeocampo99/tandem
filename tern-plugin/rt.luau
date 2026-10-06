@@ -31,15 +31,6 @@ function M.origin(args: {string}): Origin
  return {ctx = args[2] or "", busy = false}
 end
 
--- The focused pane at the gesture, when it has an absolute cwd.
-function M.focused(cx: WindowCx): Origin?
- local pane = cx.session:focused()
- local info = if pane then cx.session:pane(pane) else nil
- if not pane or not info or not info.cwd or string.sub(info.cwd, 1, 1) ~= "/" then return nil end
- local window = tern.getenv("TERN_WINDOW_KEY")
- return {pane = pane, cwd = info.cwd, window = if window and window ~= "" then window else nil, busy = false}
-end
-
 local function decode(stdout: string): Outcome?
  local ok, value = pcall(function() return tern.json.decode(stdout) end)
  if not ok or type(value) ~= "table" or type(value.status) ~= "string" then return nil end

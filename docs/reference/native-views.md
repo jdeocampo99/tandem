@@ -257,7 +257,7 @@ changes. Comments must match request, revision, content digest and line id. Old 
 reattach to a different revision. The approval payload identifies exactly the visible draft;
 the action handler must still recheck the authoritative revision and both digests.
 `file.model.approval` is exactly the JSON input for
-`tandem native brief-approve REQUEST_ID --input FILE`. Write those three values to the input
+the `brief-approve` action of `tandem native act`. Write those three values to the input
 file untouched; use `file.model.requestId` as the positional request id. All three values come
 from the same draft used to produce the visible lines, including its agreement digest.
 Native brief comments and request changes take the same three identity fields plus optional

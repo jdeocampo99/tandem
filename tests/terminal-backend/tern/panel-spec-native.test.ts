@@ -19,6 +19,7 @@ import {
 } from "../../../src/terminal-backend/tern/backend.ts";
 import { state } from "../../board/fixtures.ts";
 import { policy } from "../../session/fixtures.ts";
+import { recordedActions } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -270,9 +271,14 @@ const tree = z.object({ tree: z.array(node) });
             .id === Number(tenth.endpoint.paneId),
       );
       await writeFile(join(root, "selected-state.json"), JSON.stringify(await ctl("state")));
-      expect(await readFile(join(home, "actions.log"), "utf8")).toContain(
-        `project\nrepo:${tenth.repo}`,
-      );
+      expect(
+        (await recordedActions(join(home, "actions.log"))).some(
+          ({ action }) =>
+            action.verb === "project" &&
+            typeof action.target === "object" &&
+            action.target.repoPath === tenth.repo,
+        ),
+      ).toBe(true);
       await ctl("shot", "03-tenth-selected");
       await terminal.focusAgent({
         sessionId: "fixture",

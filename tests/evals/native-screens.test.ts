@@ -1,11 +1,13 @@
 import { expect, test } from "bun:test";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { nativeViewText } from "../../src/board/native-views.ts";
 import { nativeViewsPath } from "../../src/board/snapshot.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
+import { type Action, Outcome } from "../../src/native/contract.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
@@ -13,7 +15,7 @@ import { withScenario } from "./scenario.ts";
 
 async function withScreens(
   action: (input: {
-    call: (...args: string[]) => ReturnType<typeof runTerminal>;
+    call: (action: Action) => Promise<Outcome>;
     opened: TerminalView[];
     home: string;
     repo: string;
@@ -52,8 +54,12 @@ async function withScreens(
         return { opened: !fail, warnings: fail ? ["isolated renderer unavailable"] : [] };
       },
     };
-    const call = (...args: string[]) =>
-      runTerminal(["native", ...args, "--pane", "101", "--cwd", lease.path], {
+    const call = async (action: Action): Promise<Outcome> => {
+      const output: string[] = [];
+      await runTerminal(["native", "act"], {
+        input: Readable.from([
+          JSON.stringify({ v: 1, origin: { pane: "101", cwd: lease.path }, action }),
+        ]),
         cwd: world.repoPath,
         processEnvironment: {
           TANDEM_HOME: world.home,
@@ -62,9 +68,11 @@ async function withScreens(
         },
         terminal,
         run: world.run,
-        stdout: () => {},
+        stdout: (text) => output.push(text),
         stderr: () => {},
       });
+      return Outcome.parse(JSON.parse(output.join("")));
+    };
     await action({
       call,
       opened,
@@ -80,8 +88,8 @@ async function withScreens(
 
 test("native board and usage invoke the guarded presentation port without changing task state", async () => {
   await withScreens(async ({ call, opened }) => {
-    expect((await call("board")).exitCode).toBe(0);
-    expect((await call("usage")).exitCode).toBe(0);
+    expect((await call({ verb: "open", ref: { kind: "board" } })).status).toBe("done");
+    expect((await call({ verb: "open", ref: { kind: "usage" } })).status).toBe("done");
     expect(opened).toEqual([{ kind: "board" }, { kind: "usage" }]);
   });
 });
@@ -89,33 +97,37 @@ test("native board and usage invoke the guarded presentation port without changi
 test("native screens refuse a replaced coordinator and return presentation failures without retrying", async () => {
   await withScreens(async ({ call, opened, failOpen, loseOwner }) => {
     failOpen();
-    const failure = await call("board");
-    expect(failure.exitCode).not.toBe(0);
-    expect(failure.error?.message).toContain("isolated renderer unavailable");
+    const failure = await call({ verb: "open", ref: { kind: "board" } });
+    expect(failure.status).toBe("refused");
+    expect(failure.notice?.text).toContain("isolated renderer unavailable");
     expect(opened).toHaveLength(1);
     loseOwner();
-    expect((await call("usage")).exitCode).not.toBe(0);
+    expect((await call({ verb: "open", ref: { kind: "usage" } })).status).toBe("refused");
     expect(opened).toHaveLength(1);
   });
 });
 
 test("PR link clicks resolve saved project identities, never arbitrary caller URLs", async () => {
   await withScreens(async ({ call, opened }) => {
-    expect((await call("board", "pr-link", "task:terminal-port")).exitCode).toBe(0);
+    expect((await call({ verb: "board-link", cardKey: "task:terminal-port" })).status).toBe("done");
     expect(opened).toEqual([{ kind: "browser", url: "https://github.com/acme/app/pull/281" }]);
-    expect((await call("board", "pr-link", "https://attacker.invalid")).exitCode).not.toBe(0);
+    expect((await call({ verb: "board-link", cardKey: "https://attacker.invalid" })).status).toBe(
+      "refused",
+    );
     expect(opened).toHaveLength(1);
     const merged = "https://github.com/acme/app/pull/276";
-    expect((await call("board", "merged-link", merged)).exitCode).toBe(0);
+    expect((await call({ verb: "merged-link", url: merged })).status).toBe("done");
     expect(opened[1]).toEqual({ kind: "browser", url: merged });
-    expect((await call("board", "merged-link", "https://attacker.invalid")).exitCode).not.toBe(0);
+    expect((await call({ verb: "merged-link", url: "https://attacker.invalid" })).status).toBe(
+      "refused",
+    );
     expect(opened).toHaveLength(2);
   });
 });
 
 test("Open what needs me returns to the orchestrator and opens the saved brief", async () => {
   await withScreens(async ({ call, opened, home }) => {
-    expect((await call("board", "catchup-open-needs")).exitCode).toBe(0);
+    expect((await call({ verb: "catchup-open-needs" })).status).toBe("done");
     expect(opened).toEqual([{ kind: "orchestrator" }, { kind: "brief", requestId: "req-tern" }]);
     const entries = await readdir(join(home, "native-visits"));
     const record = entries.find((entry) => entry.endsWith(".json"));
@@ -130,7 +142,7 @@ test("Open what needs me returns to the orchestrator and opens the saved brief",
 test("catch-up dismissal still returns when a live publication becomes malformed", async () => {
   await withScreens(async ({ call, opened, home, repo }) => {
     await writeFile(nativeViewsPath(home, repo), "{broken");
-    expect((await call("board", "catchup-dismiss")).exitCode).toBe(0);
+    expect((await call({ verb: "catchup-dismiss" })).status).toBe("done");
     expect(opened).toEqual([{ kind: "orchestrator" }]);
   });
 });

@@ -5,7 +5,7 @@ The durable request brief, how approval binds to one revision, and the read-only
 Code: src/requests/brief.ts, src/requests/store.ts, src/requests/store-codec.ts,
 src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts,
 src/requests/plain-language.ts, src/requests/native-view.ts,
-src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
+src/native/actions.ts, tern-plugin/brief.luau
 
 ## Brief record
 
@@ -40,7 +40,7 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 - An explicit, human-confirmed decision in the main conversation or an Approve click in the native
   brief view records request id, revision, content digest, and agreement digest. The native click
   is the user's confirmation, like Submit on the PR review page; it needs no second dialog or
-  `--yes`. `tandem native brief-approve REQUEST_ID --input FILE` requires `briefRevision`,
+  `--yes`. the `brief-approve` action of `tandem native act` requires `briefRevision`,
   `contentDigest`, and `agreementDigest` copied from the displayed view. All must match the current
   durable draft inside the approval compare-and-swap. A stale click records nothing and never
   approves a revision the user did not see. Conversation approval still requires the exact id,
@@ -108,7 +108,7 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 
 ## Native brief feedback
 
-- `tandem native brief-comment REQUEST_ID --input FILE` and `brief-request-changes` carry the
+- The `brief-feedback` and `brief-request-changes` actions carry the
   displayed `briefRevision`, `contentDigest`, and `agreementDigest`, plus optional overall `text`
   and `comments: [{lineId, text}]`. Copy each stable string `lineId` from the displayed
   `briefView.lines[].id`; numeric Markdown line anchors are refused. At least
@@ -131,7 +131,7 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 
 ## Native brief pane
 
-- `tandem native open brief REQUEST_ID` opens `tandem.brief` beside the verified project's
+- An `open` action for a brief opens `tandem.brief` beside the verified project's
   conversation. All native actions include `--pane ID --ctx CTX`, echoing the context the block was launched with;
   JSON inputs use the private immutable transport in [terminal.md](terminal.md#native-views-and-actions).
 - The pane shows the title, revision, change count and NEW lines. Hover `+` opens a line editor;

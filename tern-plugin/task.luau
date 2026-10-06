@@ -262,7 +262,7 @@ end
 local block: BlockDef<State> = {
  init = function(cx, args)
   local state: State = { origin = rt.origin(args), prContent = prContent.create(), prMatch = false, view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', editing = false }
-  local root = views.index(state.view.path)
+  local root = args[3] or ''
   views.refresh(state.view); views.watch(state.view, cx)
   if root ~= '' then state.index = views.create(root, 'panel', parseIndex); views.refresh(state.index); views.watch(state.index, cx) end
   return state
