@@ -92,6 +92,12 @@ assigned to new work.
 
 ## Tern terminal backend
 
+Onboarding and the backend's installation check share `availability.ts`'s `probeTern`, returning
+`missing`, `signedOut`, `ready` or `unknown`. It checks the account gate in a private daemon/window
+and cleans them up afterward. A version string alone never proves readiness. The isolated sign-in
+check is described in [policy.md](policy.md). Backend commands resolve Tern from PATH, then the
+app bundle, with an explicit binary override for injected runners.
+
 Tern's daemon maps to a Tandem terminal session; a Tern tab supplies both workspace and tab ids.
 A project gets a uniquely named `tandem-<project>` Tern session and workers get background tabs in
 that same session. Names and titles are display state and never prove ownership. The adapter binds
@@ -104,8 +110,10 @@ environments, and refuses busy closes unless the caller explicitly authorizes fo
 Unknown outcomes keep resources and quarantine the effect rather than retrying it.
 
 Closing the last pane also sends `tern kill session` for its exact empty session. Tern 0.4.5 keeps
-its sole empty session after acknowledging that kill; Tandem preserves it and verifies no panes
-remain. The durable endpoint retains the native project session id. A coordinator relaunch reuses
+its sole empty session after acknowledging that kill. An exact acknowledgement followed by no
+tabs or panes in the same scoped listing is known successful cleanup; keep the empty session
+and never retry the kill. Other unconfirmed cleanup polls for at most five seconds before
+quarantining with resources retained. The durable endpoint retains the native project session id. A coordinator relaunch reuses
 that exact session after checking its id, including an empty session retained by Tern. It creates
 a new session only when the stored id is absent; matching names never authorize reuse. Tern
 cannot reorder tabs or resize panes, so those operations return warnings. Native welcome and

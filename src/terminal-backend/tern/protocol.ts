@@ -87,8 +87,9 @@ export function ternCommands(run: CommandRunner, options: TernOptions) {
     cwd: string,
     args: readonly string[],
     schema: S,
+    timeoutMs?: number,
   ): Promise<z.infer<S>> => {
-    const req = request(cwd, args);
+    const req = { ...request(cwd, args), ...(timeoutMs === undefined ? {} : { timeoutMs }) };
     const result = await run(req);
     if (result.code !== 0) throw new AdapterCommandError(`tern ${args[0]}`, req, result);
     return decode(result.stdout, schema, `tern ${args[0]}`);
@@ -105,8 +106,8 @@ export function ternCommands(run: CommandRunner, options: TernOptions) {
       throw new TernOutcomeUnknownError(`tern ${args[0]}`, cause);
     }
   };
-  const ls = async (cwd: string): Promise<TernListing> => {
-    const listing = await read(cwd, ["ls"], Listing);
+  const ls = async (cwd: string, timeoutMs?: number): Promise<TernListing> => {
+    const listing = await read(cwd, ["ls"], Listing, timeoutMs);
     const ids = listing.sessions.flatMap((s) => [
       s.id,
       ...s.tabs.flatMap((t) => [t.id, ...t.blocks.map((b) => b.id)]),

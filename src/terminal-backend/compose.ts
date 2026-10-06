@@ -17,14 +17,12 @@ import { TERN_CONTEXT } from "./tern/context.ts";
 import { ensureTernPlugin, reloadTernPlugin, type TernPluginDependencies } from "./tern/plugin.ts";
 
 export type TerminalComposition = Readonly<{
-  /** A fixed selection supplied by the caller; otherwise read the saved home preference. */
+  /** Overrides saved settings; without either choice, Herdr is the default. */
   terminal?: TerminalName;
-  /** Explicit Tandem home; without a home or fixed selection, use Herdr. */
+  /** Explicit Tandem home supplies saved settings and durable notification ownership. */
   home?: string;
   herdr?: HerdrBackendOptions;
   tern?: TernBackendOptions;
-  /** Tests can replace the adapter factory while retaining selection and identity guards. */
-  createTern?: typeof ternBackend;
 }>;
 
 /** Resolve the dedicated helper from the one durable project owner, never a substitute pane. */
@@ -75,7 +73,7 @@ export function terminalBackend(
     const backend =
       chosen === "herdr"
         ? herdrBackend(run, options.herdr)
-        : (options.createTern ?? ternBackend)(run, {
+        : ternBackend(run, {
             ...options.tern,
             ...(notificationEndpoint === undefined
               ? {}

@@ -8,6 +8,7 @@ import {
 } from "../../adapters/primitives.ts";
 import type { CommandRunner, Endpoint, TerminalPaneLocation } from "../../contracts.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
+import { probeTern } from "./availability.ts";
 import {
   close,
   exactPane,
@@ -197,14 +198,19 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           }
         }
       }
-      await close(commands, target, strict);
+      await close(commands, target, strict, { clock, wait });
       if (helper !== undefined)
         await guard(helper.paneId, () =>
-          close(commands, {
-            endpoint: helper,
-            cwd: target.cwd,
-            ...(target.force === undefined ? {} : { force: target.force }),
-          }),
+          close(
+            commands,
+            {
+              endpoint: helper,
+              cwd: target.cwd,
+              ...(target.force === undefined ? {} : { force: target.force }),
+            },
+            false,
+            { clock, wait },
+          ),
         );
     });
   return {
@@ -473,26 +479,28 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     },
     serverCommand: () => [commands.binary, "daemon"],
     clientCommand: () => [commands.binary],
-    checkInstall: async (target) => {
-      try {
-        const version = await run({ argv: [commands.binary, "--version"], cwd: target.cwd });
-        return [
-          {
-            name: "Tern",
-            ok: version.code === 0,
-            detail: version.code === 0 ? version.stdout.trim() : "not available",
-          },
-        ];
-      } catch {
+    checkInstall: async () => {
+      const result = await probeTern(run, { binary: commands.binary, now: clock, sleep: wait });
+      if (result.status === "unknown")
+        return [{ name: "Tern", ok: false, detail: `readiness unknown: ${result.reason}` }];
+      if (result.status === "ready") return [{ name: "Tern", ok: true, detail: "ready" }];
+      if (result.status === "signedOut")
         return [
           {
             name: "Tern",
             ok: false,
-            detail: "not installed",
-            fix: "Install Tern from https://stencil.so/tern",
+            detail: "not signed in",
+            fix: "Open Tern and sign in to your Stencil account.",
           },
         ];
-      }
+      return [
+        {
+          name: "Tern",
+          ok: false,
+          detail: "not installed",
+          fix: "Install Tern from https://stencil.so/tern",
+        },
+      ];
     },
     notify: async (target) => {
       const endpoint = await options.notificationEndpoint?.(target);

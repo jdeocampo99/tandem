@@ -13,6 +13,7 @@ import {
 import {
   Created,
   decode,
+  Listing,
   TernOutcomeUnknownError,
   TernUnsupportedOperationError,
 } from "../../../src/terminal-backend/tern/protocol.ts";
@@ -475,6 +476,88 @@ test("a failed mutation retains its pane and is never retried", async () => {
     await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
       TernOutcomeUnknownError,
     );
+    expect(world.trace().filter((event) => event.action === "tern close")).toHaveLength(1);
+  });
+});
+
+test("close waits for its exact session to disappear without retrying an acknowledged kill", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const endpoint = world.openPane({ paneId: "44", cwd: world.repoPath });
+    let now = 0;
+    let pendingKill: CommandRequest | undefined;
+    let kills = 0;
+    const polls: CommandRequest[] = [];
+    const terminal = ternBackend(
+      async (request) => {
+        if (request.argv[1] === "kill") {
+          pendingKill = request;
+          kills++;
+          return { code: 0, stdout: JSON.stringify({ session: request.argv[3] }), stderr: "" };
+        }
+        const result = await world.run(request);
+        if (pendingKill !== undefined && request.argv[1] === "ls") {
+          polls.push(request);
+          const listing = decode(result.stdout, Listing, "delayed cleanup");
+          const retained = listing.sessions.find((session) => session.id === pendingKill?.argv[3]);
+          if (retained !== undefined)
+            retained.tabs.push({ id: "80000000", name: null, blocks: [] });
+          return { ...result, stdout: JSON.stringify(listing) };
+        }
+        return result;
+      },
+      {
+        windowKey: "owned-window",
+        clock: () => now,
+        wait: async (milliseconds) => {
+          now += milliseconds;
+          if (now === 200 && pendingKill !== undefined) await world.run(pendingKill);
+        },
+      },
+    );
+    await terminal.close({ endpoint, cwd: world.repoPath });
+    expect(now).toBe(200);
+    expect(kills).toBe(1);
+    expect(polls).toHaveLength(3);
+    expect(polls.every((request) => request.argv.includes("owned-window"))).toBe(true);
+    expect(polls.map((request) => request.timeoutMs)).toEqual([5_000, 4_900, 4_800]);
+  });
+});
+
+test("a killed session with an unconfirmed tab times out and quarantines another close", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const endpoint = world.openPane({ paneId: "45", cwd: world.repoPath });
+    let now = 0;
+    let kills = 0;
+    let killedSession: string | undefined;
+    const terminal = ternBackend(
+      async (request) => {
+        if (request.argv[1] === "kill") {
+          kills++;
+          killedSession = request.argv[3];
+          return { code: 0, stdout: JSON.stringify({ session: request.argv[3] }), stderr: "" };
+        }
+        const result = await world.run(request);
+        if (killedSession !== undefined && request.argv[1] === "ls") {
+          const listing = decode(result.stdout, Listing, "unconfirmed cleanup");
+          const retained = listing.sessions.find((session) => session.id === killedSession);
+          if (retained !== undefined)
+            retained.tabs.push({ id: "80000000", name: null, blocks: [] });
+          return { ...result, stdout: JSON.stringify(listing) };
+        }
+        return result;
+      },
+      {
+        clock: () => now,
+        wait: async (milliseconds) => {
+          now += milliseconds;
+        },
+      },
+    );
+    const target = { endpoint, cwd: world.repoPath };
+    await expect(terminal.close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    expect(now).toBe(5_000);
+    await expect(terminal.close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    expect(kills).toBe(1);
     expect(world.trace().filter((event) => event.action === "tern close")).toHaveLength(1);
   });
 });

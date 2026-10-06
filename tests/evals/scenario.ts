@@ -417,6 +417,8 @@ async function bootstrapProcessArgv(command: string): Promise<readonly string[]>
 export type ScenarioWorldOptions = Readonly<{
   readonly sessionId?: string;
   readonly terminal?: "herdr" | "tern";
+  /** Model Tern keeping its acknowledged last empty session alive. */
+  readonly retainEmptyTernSessions?: boolean;
   /** What `git remote get-url origin` prints in every checkout; empty when unset. */
   readonly origin?: string;
   readonly ompModels?: readonly unknown[];
@@ -727,7 +729,7 @@ export async function createScenarioWorld(
     if (verb === "kill") {
       if (!ternSessions.has(argv[3] ?? ""))
         return commandResult("", 1, "no session is called that id");
-      ternSessions.delete(argv[3] ?? "");
+      if (!options.retainEmptyTernSessions) ternSessions.delete(argv[3] ?? "");
       return ok({ session: argv[3] });
     }
     if (verb === "new") {

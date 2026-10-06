@@ -159,6 +159,7 @@ nativeTest(
         notificationEndpoint: async () => ternNotificationEndpoint(created.endpoint),
       }).notify({ ...session, title: "Done", body: "Tandem isolated native check" });
       await terminal.close(target);
+      await terminal.close(target);
       expect(await terminal.listPanes(session)).toEqual([]);
       expect(await terminal.listWorkspaces(session)).toEqual([]);
       const relaunched = await ternBackend(run, { binary: TERN_BINARY }).createWorkspace({
