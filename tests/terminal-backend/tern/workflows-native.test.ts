@@ -9,6 +9,7 @@ import { type BoardSnapshot, publishNativeViews } from "../../../src/board/snaps
 import { onboardRepo } from "../../../src/config/repositories.ts";
 import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
+import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import {
   readRuntimeState,
   runtimeFile,
@@ -172,13 +173,59 @@ async function selectTab(window: TernWindow, tab: string): Promise<void> {
   });
 }
 
-/** The tab of every open native brief pane. */
-async function briefTabs(window: TernWindow): Promise<readonly string[]> {
+type Block = Readonly<{ tab: string; id: string; program?: string | undefined; cwd: string }>;
+
+async function blocks(window: TernWindow): Promise<readonly Block[]> {
   const listing = await ternCommands(window.run, { binary: window.binary }).ls(window.root);
   return listing.sessions.flatMap((session) =>
     session.tabs.flatMap((tab) =>
-      tab.blocks.filter((block) => block.program === "tandem.brief").map(() => tab.id),
+      tab.blocks.map((block) => ({
+        tab: tab.id,
+        id: block.id,
+        program: block.program,
+        cwd: block.cwd,
+      })),
     ),
+  );
+}
+
+/** The tab of every open native brief pane. */
+async function briefTabs(window: TernWindow): Promise<readonly string[]> {
+  return (await blocks(window))
+    .filter((block) => block.program === "tandem.brief")
+    .map((block) => block.tab);
+}
+
+/**
+ * Waits for the full-window view `program` showing `heading`, presses Esc in it, and waits until
+ * it is gone and the conversation has focus again.
+ */
+async function escapeFullWindowView(
+  window: TernWindow,
+  project: Project,
+  program: string,
+  heading: string,
+  shot: string,
+): Promise<void> {
+  let pane: string | undefined;
+  await window.until(`${program} open`, async () => {
+    pane = (await blocks(window)).find((block) => block.program === program)?.id;
+    return pane !== undefined && (await window.screen()).includes(heading);
+  });
+  await window.until(`${program} focused`, async () => (await window.focusedPane()) === pane);
+  await window.shot(shot);
+  const open = async () => (await blocks(window)).some((block) => block.id === pane);
+  // A new block takes keyboard focus a few frames after Tern reports it focused, and a key sent
+  // before that is dropped; Esc is resent only once the view has stayed open for a while.
+  for (let attempt = 0; attempt < 5 && (await open()); attempt += 1) {
+    await window.ctl("key", "escape");
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline && (await open())) await Bun.sleep(100);
+  }
+  await window.until(`${program} closed by Esc`, async () => !(await open()));
+  await window.until(
+    `conversation focused after ${program}`,
+    async () => (await window.focusedPane()) === project.endpoint.paneId,
   );
 }
 
@@ -615,6 +662,79 @@ workflow(
         );
       });
       await window.shot("04-pr-line-comment");
+    });
+  },
+  120_000,
+);
+
+workflow(
+  "board, usage and catch-up: shortcuts and panel buttons open them, catch-up greets a return after an hour away, and Esc returns to the conversation",
+  async () => {
+    await withTernWindow({ name: "wf-screens", driver }, async (window) => {
+      const project = await seedProject(window, "tandem");
+      await seedTask(project, { id: "width", title: "Panel width fix", stage: "implementing" });
+      await project.publish();
+      await project.panel();
+      await window.until("panel row", async () =>
+        (await window.screen()).includes("Panel width fix"),
+      );
+      const focusConversation = async () => {
+        await window.tern("focus", project.endpoint.paneId, "--json");
+        await window.until(
+          "conversation focused",
+          async () => (await window.focusedPane()) === project.endpoint.paneId,
+        );
+      };
+
+      await focusConversation();
+      await window.ctl("key", "cmd+shift+b");
+      await escapeFullWindowView(window, project, "tandem.board", "Board · tandem", "05-board-key");
+      await window.ctl("key", "cmd+shift+u");
+      await escapeFullWindowView(window, project, "tandem.usage", "Usage · tandem", "05-usage-key");
+      await window.click("▦");
+      await escapeFullWindowView(
+        window,
+        project,
+        "tandem.board",
+        "Board · tandem",
+        "05-board-button",
+      );
+      await window.click("5h unavailable");
+      await escapeFullWindowView(
+        window,
+        project,
+        "tandem.usage",
+        "Usage · tandem",
+        "05-usage-button",
+      );
+
+      // Away from the project in an unrelated shell for two hours while its work changed.
+      const log = join(window.root, "driver.log");
+      const outside = (await blocks(window)).find((block) => block.cwd === window.root)?.id;
+      if (outside === undefined) throw new Error("No shell outside the project");
+      const aways = async () =>
+        (await Bun.file(log).text())
+          .split("\n")
+          .filter((line) => line.includes(`"away","--pane","${project.endpoint.paneId}"`)).length;
+      const before = await aways();
+      await window.tern("focus", outside, "--json");
+      await window.until(
+        "project left for the unrelated shell",
+        async () => (await aways()) > before,
+      );
+      await visitNativeProject(
+        {
+          home: window.home,
+          project: project.repo,
+          now: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+          signature: "before-you-left",
+        },
+        async () => {
+          throw new Error("The earlier visit cannot show catch-up");
+        },
+      );
+      await focusConversation();
+      await escapeFullWindowView(window, project, "tandem.catchup", "Since you left", "05-catchup");
     });
   },
   120_000,

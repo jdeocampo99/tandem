@@ -7,6 +7,7 @@ import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../../src/terminal-backend/contract.ts";
+import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin.ts";
 
 /** Every real-Tern test runs only on macOS with this one opt-in. */
 export const ternNativeEnabled =
@@ -124,6 +125,8 @@ export async function withTernWindow(
     join(env.TERN_CONFIG_DIR, "settings.json"),
     JSON.stringify({ tabs_autohide: true, layout: "rail", link_target: "Tern" }),
   );
+  // The shortcuts a user gets by accepting Tandem's Tern preferences during setup.
+  await configureTernPluginSettings({ configDirectory: env.TERN_CONFIG_DIR, approved: true });
   await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
     recursive: true,
   });
