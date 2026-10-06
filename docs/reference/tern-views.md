@@ -200,8 +200,12 @@ user text is one argv element, including spaces and newlines.
 Copy those two fields from the displayed `PrPaneView.review.head` and `.generation`; generation
 is a nonnegative safe integer, including zero. Keep the bindings frozen with the user's choices.
 Missing/invalid bindings are refused. The service checks both against the latest authoritative
-round and checks the re-review task generation inside submission serialization before applying choices or
-posting, so stale pane choices cannot become a review of a newer round even when draft ids repeat.
+round and checks the re-review task generation before applying choices. A revision-checked
+`pendingPost` claim binds those choices before posting; a lost CAS never sends a POST.
+Network calls run outside the global store lock. A short receipt transaction updates only the
+exact reviewed head/generation, preserving concurrent changes and newer rounds. See the
+[posting contract](pr-review.md#show-edit-post). Stale pane choices cannot become a review of a
+newer round even when draft ids repeat.
 Question follow-ups retain their finished review round and its binding. The HTML page's
 `ReviewSubmission` shape stays unchanged. The CLI reuses the pinned-HEAD and no-double-post checks of
 the review page; the renderer does not publish directly.

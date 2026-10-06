@@ -188,9 +188,15 @@ different matching project. When no readable/live candidate matches, the command
 - `review-submit TASK_ID --input FILE` parses the same `ReviewSubmission` as the review page,
   with required native input fields `reviewHead` and `reviewGeneration` copied from the displayed
   `PrPaneView.review.head` and `.generation`. The CLI passes this binding separately to the
-  existing submit service. While serialized with task mutations, it refuses a different latest
-  round head/generation or an advanced re-review task generation before applying choices or posting.
-  A question follow-up retains the existing finished round and its binding.
+  existing submit service. It refuses a different latest round head/generation or an advanced
+  re-review task generation before applying choices. A question follow-up retains the existing
+  finished round and its binding. Before a new POST, a task-revision compare-and-swap (CAS)
+  saves the exact choices/verdict in `pendingPost` as the exclusive claim; a losing caller never
+  POSTs. Preflight, marker reads, the network POST and thread replies run outside the global
+  store lock. A short receipt transaction matches the PR and exact reviewed head/generation,
+  preserves concurrent task changes and newer rounds, and leaves an existing receipt intact.
+  Only the caller that saves a new receipt sends addressed-thread replies. Later submissions
+  with a pending attempt only reconcile its marker, without changing choices or blindly posting.
   The click is confirmation; pinned-head refusal and
   duplicate-post prevention remain in that service. Plain comments never become submissions.
   Uncertain submissions explain that GitHub may or may not have received the review and ask the
