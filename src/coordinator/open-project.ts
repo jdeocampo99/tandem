@@ -57,7 +57,7 @@ export async function openProject(
   run: CommandRunner,
   terminal: TerminalBackend,
   input: OpenProjectInput,
-): Promise<Readonly<{ readonly focused: boolean }>> {
+): Promise<Readonly<{ readonly focused: boolean; readonly warnings?: readonly string[] }>> {
   const result = await run(openProjectCommand(input));
   if (result.code !== 0) {
     const detail = (result.stderr.trim() || result.stdout.trim()).replace(/^tandem: /u, "");
@@ -74,6 +74,16 @@ export async function openProject(
     cwd: input.repoPath,
     workspaceId: record.endpoint.workspaceId,
   });
-  if (focus.focused) await maybeShowCatchUp(terminal, { home: input.home, record });
+  if (focus.focused) {
+    try {
+      await maybeShowCatchUp(terminal, { home: input.home, record });
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return {
+        focused: true,
+        warnings: [`Project opened, but catch-up is unavailable: ${detail}`],
+      };
+    }
+  }
   return { focused: focus.focused };
 }
