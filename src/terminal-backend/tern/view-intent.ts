@@ -146,6 +146,7 @@ export async function withNativeOpenIntent<T>(
     settle: () => Promise<void>;
   }) => Promise<T>,
   onUnresolved?: (cause: TernOutcomeUnknownError) => Promise<T>,
+  runOperation?: (operation: () => Promise<T>, recovered: boolean) => Promise<T>,
 ): Promise<T> {
   const directory = join(input.home, "native-host");
   await ensurePrivateDirectoryTree(directory, "native route directory");
@@ -261,29 +262,31 @@ export async function withNativeOpenIntent<T>(
     if (recovered) await settle();
     pending.length = 0;
     recovering = false;
-    return await operation({
-      recovered,
-      markMutationAttempted: () => {
-        mutationAttempted = true;
-      },
-      claim: async (route, ticket) => {
-        await writeFile(path, JSON.stringify({ version: 1, owner, route, ticket }), {
-          flag: "wx",
-          mode: 0o600,
-        });
-        pending.push({ route, ticket });
-        claimedThisCall = true;
-      },
-      claimBrowser: async (browser) => {
-        await writeFile(path, JSON.stringify({ version: 1, owner, browser }), {
-          flag: "wx",
-          mode: 0o600,
-        });
-        browserPending = true;
-        claimedThisCall = true;
-      },
-      settle,
-    });
+    const invoke = () =>
+      operation({
+        recovered,
+        markMutationAttempted: () => {
+          mutationAttempted = true;
+        },
+        claim: async (route, ticket) => {
+          await writeFile(path, JSON.stringify({ version: 1, owner, route, ticket }), {
+            flag: "wx",
+            mode: 0o600,
+          });
+          pending.push({ route, ticket });
+          claimedThisCall = true;
+        },
+        claimBrowser: async (browser) => {
+          await writeFile(path, JSON.stringify({ version: 1, owner, browser }), {
+            flag: "wx",
+            mode: 0o600,
+          });
+          browserPending = true;
+          claimedThisCall = true;
+        },
+        settle,
+      });
+    return await (runOperation === undefined ? invoke() : runOperation(invoke, recovered));
   } catch (cause) {
     // Only this invocation can prove that its opening was never attempted.
     // Earlier retained attempts remain uncertain, even if recovery's reads fail.
