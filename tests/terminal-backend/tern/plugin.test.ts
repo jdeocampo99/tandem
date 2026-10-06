@@ -1,5 +1,5 @@
-import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { afterAll, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { readHomeSettings, saveTerminalChoice } from "../../../src/config/home-settings.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
@@ -9,11 +9,16 @@ import {
   reloadTerminalPlugin,
 } from "../../../src/terminal-backend/compose.ts";
 import {
+  configureTernPluginSettings,
   ensureTernPlugin,
   reloadTernPlugin,
   TERN_APP_BINARY,
 } from "../../../src/terminal-backend/tern/plugin.ts";
-import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin-settings.ts";
+
+const scratch = await mkdtemp("/tmp/tandem-plugin-scratch-");
+afterAll(() => rm(scratch, { recursive: true, force: true }));
+// Keeps the setup lock and settings out of the user's real Tern config directory.
+const settingsPath = join(scratch, "settings.json");
 
 function runner(catalogs: readonly string[]) {
   const calls: CommandRequest[] = [];
@@ -71,6 +76,28 @@ test("onboarding links palette actions even when global preferences are declined
   ]);
 });
 
+test("first-time setup links and configures Tern before its config directory exists", async () => {
+  const root = await mkdtemp("/tmp/tandem-plugin-fresh-");
+  const config = join(root, "Tern");
+  const fresh = runner([missing, ready]);
+  try {
+    expect(
+      await ensureTernPlugin({
+        ...fresh,
+        cwd: root,
+        env: { TERN_CONFIG_DIR: config },
+        confirm: async () => true,
+      }),
+    ).toBe(true);
+    expect(fresh.calls.map((call) => call.argv[2])).toEqual(["list", "link", "list"]);
+    const applied = JSON.parse(await readFile(join(config, "settings.json"), "utf8"));
+    expect(applied.tabs_autohide).toBe(true);
+    expect(applied.keybinds["cmd+shift+b"]).toBe("plugin.tandem.board");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 for (const selection of ["injected-path", "explicit-binary", "app-fallback"] as const) {
   test(`plugin list, link and reload resolve the executable with ${selection}`, async () => {
     const root = await mkdtemp("/tmp/tandem-plugin-binary-");
@@ -112,19 +139,21 @@ for (const selection of ["injected-path", "explicit-binary", "app-fallback"] as 
 
 test("update reloads an existing integration and refuses a broken reload", async () => {
   const installed = runner([ready, ready]);
-  expect(await reloadTernPlugin({ ...installed, cwd: "/tmp" })).toBe(true);
+  expect(await reloadTernPlugin({ ...installed, cwd: "/tmp", settingsPath })).toBe(true);
   expect(installed.calls[1]?.argv).toContain("reload");
   const absent = runner([missing]);
-  expect(await reloadTernPlugin({ ...absent, cwd: "/tmp" })).toBe(false);
+  expect(await reloadTernPlugin({ ...absent, cwd: "/tmp", settingsPath })).toBe(false);
   expect(absent.calls).toHaveLength(1);
   const broken = runner([ready, missing]);
-  await expect(reloadTernPlugin({ ...broken, cwd: "/tmp" })).rejects.toThrow("failed to reload");
+  await expect(reloadTernPlugin({ ...broken, cwd: "/tmp", settingsPath })).rejects.toThrow(
+    "failed to reload",
+  );
 });
 
 test("malformed catalog fails closed before installation", async () => {
   const invalid = runner(["not JSON"]);
   await expect(
-    ensureTernPlugin({ ...invalid, cwd: "/tmp", confirm: async () => true }),
+    ensureTernPlugin({ ...invalid, cwd: "/tmp", settingsPath, confirm: async () => true }),
   ).rejects.toThrow("invalid plugin catalog");
   expect(invalid.calls).toHaveLength(1);
 });
@@ -136,7 +165,7 @@ test("window bindings alone do not count as a ready native view integration", as
       problems: [],
     }),
   ]);
-  expect(await ensureTernPlugin({ ...incomplete, cwd: "/tmp" })).toBe(false);
+  expect(await ensureTernPlugin({ ...incomplete, cwd: "/tmp", settingsPath })).toBe(false);
   expect(incomplete.calls).toHaveLength(1);
 });
 
@@ -315,5 +344,58 @@ test("declined global preferences print once and explain how to change the decis
     expect(notices[1]).toContain("switch to Herdr and select Tern again");
   } finally {
     await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("two projects starting together link Tern once and ask the consent question once", async () => {
+  const root = await mkdtemp("/tmp/tandem-plugin-concurrent-");
+  const settings = join(root, "settings.json");
+  let linked = false;
+  let links = 0;
+  let prompts = 0;
+  const run: CommandRunner = async (request) => {
+    // A caller waiting on the real file lock polls silently, so there is no event to await. Real
+    // delays keep each Tern command and the consent answer slow enough that callers overlap.
+    await Bun.sleep(10);
+    if (request.argv.includes("link")) {
+      links += 1;
+      linked = true;
+    }
+    return {
+      code: 0,
+      stdout: request.argv.includes("list") ? (linked ? ready : missing) : "{}",
+      stderr: "",
+    };
+  };
+  const project = async (name: string) => {
+    const home = join(root, name);
+    await mkdir(home);
+    await saveTerminalChoice(home, "tern");
+    return installTerminalPlugin(
+      home,
+      {
+        run,
+        cwd: home,
+        settingsPath: settings,
+        confirm: async () => {
+          prompts += 1;
+          await Bun.sleep(50);
+          return true;
+        },
+      },
+      { status: "ready" },
+    );
+  };
+  try {
+    await writeFile(settings, "{}");
+    expect(await Promise.all([project("first"), project("second")])).toEqual([true, true]);
+    expect(links).toBe(1);
+    expect(prompts).toBe(1);
+    const applied = JSON.parse(await readFile(settings, "utf8"));
+    expect(applied.tabs_autohide).toBe(true);
+    expect(applied.keybinds["cmd+shift+b"]).toBe("plugin.tandem.board");
+    expect(JSON.parse(await readFile(`${settings}.tandem.json`, "utf8")).approved).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
