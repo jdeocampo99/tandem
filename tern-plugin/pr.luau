@@ -5,15 +5,7 @@ local nav = require("./navigation")
 local models = require("./pr-model")
 local content = require("./pr-content")
 local components = require("./components")
-type Index = { pullRequests: { [string]: { header: { number: number, title: string, taskId: string?, repo: string }, detailFile: string } } }
-type State = { view: views.View<models.Model>, index: views.View<Index>?, content: content.State, cwd: string?, window: string, home: string, switcher: boolean }
-local function parseIndex(value: unknown): Index?
- if type(value) ~= "table" or type(value.pullRequests) ~= "table" then return nil end
- for _, pr in value.pullRequests do
-  if type(pr) ~= "table" or type(pr.header) ~= "table" or type(pr.header.number) ~= "number" or type(pr.header.title) ~= "string" or type(pr.detailFile) ~= "string" then return nil end
- end
- return value :: Index
-end
+type State = { view: views.View<models.Model>, index: views.View<models.Index>?, content: content.State, cwd: string?, window: string, home: string, switcher: boolean }
 local function invoke(s: State, cx: BlockCx): content.Invoke
  return function(verb, id, payload, done)
   if not s.cwd or string.sub(s.cwd, 1, 1) ~= "/" or string.sub(s.home, 1, 1) ~= "/" then cx:toast("error", "Tandem couldn't run that action", "The originating absolute cwd and native index path are required."); s.content.diff.busy = false; return end
@@ -44,7 +36,7 @@ local block: BlockDef<State> = {
   local s: State = {view=views.create(origin.path, "pr", models.parse), content=content.create(), cwd=origin.cwd, window=origin.window, home=origin.home, switcher=false}
   views.watch(s.view, cx)
   local indexPath = nav.root(origin)
-  if indexPath ~= origin.path then s.index = views.create(indexPath, "panel", parseIndex); views.watch(s.index, cx) end
+  if indexPath ~= origin.path then s.index = views.create(indexPath, "panel", models.parseIndex); views.watch(s.index, cx) end
   return s
  end,
  title = function(s) return if s.view.model then "#" .. s.view.model.header.number .. " ▾" else "Pull requests" end,

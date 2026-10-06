@@ -1,6 +1,9 @@
 --!strict
 -- Wire shapes only. TypeScript owns the projection and review policy.
 local M = {}
+local views = require("./view-file")
+export type TaskIndex = { pullRequests: { [string]: { header: { taskId: string? }, detailFile: string } } }
+export type Index = { pullRequests: { [string]: { header: { number: number, title: string, taskId: string?, repo: string }, detailFile: string } } }
 export type Comment = { id: string, author: string, at: string, body: string, url: string? }
 export type Thread = { id: string, file: string, line: number?, side: string, resolved: boolean, outdated: boolean, comments: { Comment } }
 export type Draft = { id: string, file: string, line: number, severity: string, body: string }
@@ -78,4 +81,38 @@ function M.parse(value: unknown): Model?
  end
  return value :: Model
 end
+function M.parseIndex(value: unknown): Index?
+ if type(value) ~= "table" or type(value.pullRequests) ~= "table" then return nil end
+ for _, pr in value.pullRequests do
+  if type(pr) ~= "table" or type(pr.header) ~= "table" or type(pr.header.number) ~= "number" or type(pr.header.title) ~= "string" or type(pr.header.repo) ~= "string" or (pr.header.taskId ~= nil and type(pr.header.taskId) ~= "string") or type(pr.detailFile) ~= "string" then return nil end
+ end
+ return value :: Index
+end
+
+-- Follow the task association published by TypeScript, never a PR number from another repo.
+function M.taskDetailPath(taskPath: string, taskId: string, index: TaskIndex): string?
+ if string.sub(taskPath, 1, 1) ~= "/" then return nil end
+ local parent = string.match(taskPath, "^(.*)/task%-[^/]+%.json$")
+ if not parent then return nil end
+ local file: string? = nil
+ for _, pr in index.pullRequests do
+  if pr.header.taskId == taskId then
+   if file ~= nil or not string.match(pr.detailFile, "^pr%-[%w%%_.-]+%.json$") then return nil end
+   file = pr.detailFile
+  end
+ end
+ return if file then parent .. "/" .. file else nil
+end
+
+function M.forTask(taskPath: string, taskId: string, index: TaskIndex): views.View<Model>?
+ local path = M.taskDetailPath(taskPath, taskId, index)
+ if not path then return nil end
+ local view = views.create(path, "pr", function(value: unknown): Model?
+  local model = M.parse(value)
+  return if model and model.header.taskId == taskId then model else nil
+ end)
+ views.refresh(view)
+ return view
+end
+
 return M

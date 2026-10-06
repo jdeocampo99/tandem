@@ -340,12 +340,26 @@ that scope. Multiple windows are refused rather than choosing one by ordering.
 
 ### Reusing the native PR components
 
+`tern-plugin/pr-model.luau` exports `parse` for the direct PR model and `parseIndex` for
+the panel's PR index. `taskDetailPath(taskDetailPath, taskId, indexModel)` resolves exactly
+one `header.taskId` association supplied by TypeScript to its sibling PR file. Missing or
+ambiguous associations and unsafe relative filenames return `nil`; PR numbers alone are
+not associations. `forTask(taskDetailPath, taskId, indexModel)` returns a refreshed
+`view-file.View<Model>` or `nil` when there is no safe association. It also checks that the
+loaded PR model names the same task. A missing, malformed or mismatched file returns a view
+with `status="unavailable"`; callers may retain and watch it with `view-file.watch`.
+Use `taskDetailPath` before reusing an existing watched view or cancelling it when the path
+changes. Pass the task model's `header.id` and the ready index at launch argument five.
+
 `tern-plugin/pr-content.luau` exports `create`, `view`, `event`, `key`, and `ready`.
 `view(state, model, ready, prefix?, strip?)` returns `{main,dock}`. Mount `dock` for the review
 summary, explicit verdict and Post controls. Set `prefix` to the actual embedded content root
 (default `main.content`); the shared diff uses it for comment focus and thread reveal.
 The optional strip is rendered inside the PR header. `pr-diff.luau` exports `create`,
 `view`, `rows`, `jump`, `event`, and `key`; both modules use `pr-model.luau` wire types.
+For the task's Diff tab set the content state's `tab="Diff"`; for its PR tab set
+`tab="Description"`. Pass readiness from both the task/index and PR detail views to
+`view` and `event`. Retain the same content state while navigating to preserve local drafts.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
 for wheel and keyboard input; the review dock remains visible while the content scrolls.
 PR line numbers use muted text color rather than element opacity, avoiding a compositing

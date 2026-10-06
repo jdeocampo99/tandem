@@ -83,6 +83,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         }),
       ),
     );
+    await copyFile(join(plugin, "fixture.json"), join(plugin, "pr-fixture.json"));
+    await writeFile(join(plugin, "task-path.txt"), join(plugin, "task-task-98.json"));
     const daemon = Bun.spawn([TERN_BINARY, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
       env,
       cwd: root,
@@ -119,6 +121,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         comment: true,
         review: true,
         stale: true,
+        reuse: true,
       });
       const production = join(root, "tandem-plugin");
       await cp(fileURLToPath(new URL("../../tern-plugin", import.meta.url)), production, {
