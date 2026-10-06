@@ -29,6 +29,29 @@ const navigationModel = z.object({
       sessionId: z.string().optional(),
     }),
   ),
+  /** Board and catch-up links resolve only to URLs this project published. */
+  board: z
+    .object({
+      lanes: z.array(
+        z.object({
+          cards: z.array(
+            z.object({
+              key: z.string(),
+              pullRequest: z.object({ url: z.string().url() }).optional(),
+            }),
+          ),
+        }),
+      ),
+    })
+    .optional(),
+  catchup: z
+    .object({
+      needsYou: z.array(
+        z.object({ key: z.string(), taskId: z.string().optional(), cause: z.string() }),
+      ),
+      merged: z.array(z.object({ url: z.string().url() })),
+    })
+    .optional(),
 });
 export type NativeNavigationModel = z.infer<typeof navigationModel>;
 export async function readNativeBundle(

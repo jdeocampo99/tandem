@@ -9,11 +9,12 @@ import {
   publishNativeViews,
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { blockArgs } from "../../../src/native/contract.ts";
+import { blockArgs, parseBlockContext } from "../../../src/native/contract.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
+import { recordedActions, recordingCli } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -46,7 +47,10 @@ type ControlNode = {
     });
     await writeFile(
       join(plugin, "tandem.sh"),
-      `#!/bin/sh\nfor arg do printf '%s\\0' "$arg"; done >> '${join(root, "actions.log")}'\nprintf '\\n' >> '${join(root, "actions.log")}'\nfor arg do if [ "$arg" = 'Reject this direction' ]; then printf 'Direction refused by saved task policy' >&2; exit 7; fi; done\n`,
+      recordingCli(join(root, "actions.log"), {
+        text: "Reject this direction",
+        reason: "Direction refused by saved task policy",
+      }),
     );
     const publication = taskScreenPublication(root);
     await publishNativeViews(env.TANDEM_HOME, publication.bundle.project, async () => publication);
@@ -207,19 +211,24 @@ type ControlNode = {
       await until(async () => JSON.stringify(await tree()).includes("Restart"));
       await ctl("shot", "03b-task-stuck");
       await click("Restart");
+      const sent = () => recordedActions(join(root, "actions.log"));
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("native\0restart\x00102\0"),
+        (await sent()).some(({ action }) => action.verb === "restart" && action.taskId === "102"),
       );
       await click("Steer…");
       await ctl("type", JSON.stringify("Try a safer close guard 😀"));
       await ctl("key", "enter");
-      await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("Try a safer close guard 😀"),
-      );
-      const log = await readFile(join(root, "actions.log"), "utf8");
-      expect(log).toContain(`--cwd\0${root}\0`);
-      expect(log).toContain(`--home\0${env.TANDEM_HOME}\0`);
-      expect(log).toContain("steer\0--task\x00102\0--text\0Try a safer close guard 😀");
+      await until(async () => (await sent()).some(({ action }) => action.verb === "steer"));
+      const steer = (await sent()).find(({ action }) => action.verb === "steer");
+      expect(steer?.action).toEqual({
+        verb: "steer",
+        taskId: "102",
+        text: "Try a safer close guard 😀",
+      });
+      const origin = steer?.origin;
+      if (origin === undefined || !("ctx" in origin))
+        throw new Error("steer lost its block origin");
+      expect(parseBlockContext(origin.ctx)).toMatchObject({ cwd: root, home: env.TANDEM_HOME });
       await click("Steer…");
       await ctl("type", JSON.stringify("Reject this direction"));
       await ctl("key", "enter");
@@ -286,7 +295,9 @@ type ControlNode = {
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       await click("← Orchestrator");
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("#orchestrator"),
+        (await sent()).some(
+          ({ action }) => action.verb === "open" && action.ref.kind === "orchestrator",
+        ),
       );
       await host.open(
         { ...input, origin: { paneId: opened.paneId, cwd: root } },
@@ -312,7 +323,10 @@ type ControlNode = {
       await ctl("shot", "03-task-picker");
       await ctl("key", "enter");
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("native\0open\0task\x00102"),
+        (await sent()).some(
+          ({ action }) =>
+            action.verb === "open" && action.ref.kind === "task" && action.ref.taskId === "102",
+        ),
       );
       expect(picker.paneId).not.toBe(endpoint.paneId);
       await until(async () => {

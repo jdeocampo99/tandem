@@ -3,7 +3,7 @@ local ui = tern.ui
 local views = require('./view-file')
 local fields = require('./text-field')
 local components = require('./components')
-local navigation = require('./navigation')
+local rt = require('./rt')
 local prModels = require('./pr-model')
 local prContent = require('./pr-content')
 
@@ -27,7 +27,7 @@ type Model = {
 }
 type Index = prModels.Index & { briefs: { [string]: { detailFile: string } } }
 type Brief = { title: string, revision: number, lines: { { id: string, number: number, text: string, kind: string, isNew: boolean } } }
-type State = { origin: navigation.Origin, index: views.View<Index>?, brief: views.View<Brief>?, pr: views.View<prModels.Model>?, prContent: prContent.State, stopBrief: (() -> ())?, stopPr: (() -> ())?, view: views.View<Model>, field: fields.Field, tab: string, prMatch: boolean, busy: boolean, editing: boolean }
+type State = { origin: rt.Origin, index: views.View<Index>?, brief: views.View<Brief>?, pr: views.View<prModels.Model>?, prContent: prContent.State, stopBrief: (() -> ())?, stopPr: (() -> ())?, view: views.View<Model>, field: fields.Field, tab: string, prMatch: boolean, editing: boolean }
 
 local function optionalString(value: unknown): boolean return value == nil or type(value) == 'string' end
 local function events(value: unknown): boolean
@@ -109,7 +109,7 @@ local function parseBrief(value: unknown): Brief?
 end
 local function detailPath(state: State, file: string): string?
  if not string.match(file, '^[%w%%_.-]+%.json$') then return nil end
- local parent = string.match(state.origin.path, '^(.*)/[^/]+$')
+ local parent = string.match(state.view.path, '^(.*)/[^/]+$')
  return if parent then parent .. '/' .. file else nil
 end
 local function related(state: State, cx: BlockCx)
@@ -123,14 +123,14 @@ local function related(state: State, cx: BlockCx)
   if state.stopBrief then state.stopBrief() end
   state.brief = views.create(briefPath, 'brief', parseBrief); views.refresh(state.brief); state.stopBrief = views.watch(state.brief, cx)
  end
- local path = prModels.taskDetailPath(state.origin.path, model.header.id, index.model)
+ local path = prModels.taskDetailPath(state.view.path, model.header.id, index.model)
  state.prMatch = path ~= nil
  if not path and state.pr then if state.stopPr then state.stopPr() end; state.pr = nil; state.stopPr = nil end
  if not brief and state.brief then if state.stopBrief then state.stopBrief() end; state.brief = nil; state.stopBrief = nil end
  if path and (not state.pr or state.pr.path ~= path) then
   if state.stopPr then state.stopPr() end
   state.stopPr = nil
-  state.pr = prModels.forTask(state.origin.path, model.header.id, index.model)
+  state.pr = prModels.forTask(state.view.path, model.header.id, index.model)
   if state.pr then state.stopPr = views.watch(state.pr, cx) end
  end
 end
@@ -230,54 +230,39 @@ local function body(state: State, model: Model): Node
  return text('Choose a tab.', 'muted')
 end
 
-local function run(state: State, cx: BlockCx, args: { string }, clear: boolean?)
- if state.busy or state.view.status ~= 'ready' then return end
- local argv = { '/bin/sh', 'tandem.sh', 'native' }
- for _, arg in args do table.insert(argv, arg) end
- navigation.context(argv, state.origin, cx)
- state.busy = true; cx:render()
- local ok, problem = pcall(function()
-  tern.process.run(argv, { cwd = '.' }, function(result)
-   state.busy = false
-   if result.status == 0 and clear then state.field = fields.create('', true) end
-   if result.status ~= 0 then cx:toast('error', 'Tandem action failed', result.stderr) end
-   cx:render()
-  end)
- end)
- if not ok then state.busy = false; cx:toast('error', 'Tandem action could not start', tostring(problem)); cx:render() end
+local function run(state: State, cx: BlockCx, action: { [string]: unknown }, clear: boolean?)
+ if state.view.status ~= 'ready' then return end
+ local sent = rt.act(cx, state.origin, action, function(outcome)
+  if clear and outcome and outcome.status == 'done' then state.field = fields.create('', true) end
+  cx:render()
+ end, rt.TASK)
+ if sent then cx:render() end
 end
 local function invokePr(state: State, cx: BlockCx): prContent.Invoke
- return function(verb, id, payload, done)
-  local function refused(reason: string)
-   if verb == 'review-submit' and done then done({status=1, stdout='', stderr=reason}) end
+ return function(action, done)
+  local function refused()
+   state.prContent.diff.busy = false
+   if action.verb == 'review-submit' and done then done(nil) end
   end
-  if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then refused('The displayed PR review is unavailable or changed. Reopen it before submitting.'); return end
-  if verb == 'open' and type(payload) == 'string' then run(state, cx, { 'open', id, payload }); return end
-  if state.busy then refused('Another task action is still running.'); return end
-  local argv = { '/bin/sh', 'native-input.sh', verb, id }
-  navigation.context(argv, state.origin, cx)
-  state.busy = true
-  local ok, problem = pcall(function()
-   tern.process.run(argv, { cwd = '.', stdin = tern.json.encode(payload) }, function(result)
-    state.busy = false; state.prContent.diff.busy = false
-    if result.status ~= 0 then cx:toast('error', 'PR action failed', result.stderr) end
-    if done and (result.status == 0 or verb == 'review-submit') then done(result) end
-    cx:render()
-   end)
-  end)
-  if not ok then state.busy = false; state.prContent.diff.busy = false; cx:toast('error', 'PR action could not start', tostring(problem)); refused(tostring(problem)); cx:render() end
+  if not state.pr or not state.pr.model or not prReady(state) or not prContent.ready(state.prContent, state.pr.model, true) then refused(); return end
+  if action.verb == 'open' then run(state, cx, action); return end
+  local sent = rt.act(cx, state.origin, action, function(outcome)
+   state.prContent.diff.busy = false
+   if done then done(outcome) end
+   cx:render()
+  end, rt.PR)
+  if not sent then refused() end
  end
 end
 
 local function send(state: State, cx: BlockCx)
  local model = state.view.model
- if model and string.match(state.field.text, '%S') then run(state, cx, { 'steer', '--task', model.header.id, '--text', state.field.text }, true) end
+ if model and string.match(state.field.text, '%S') then run(state, cx, { verb = 'steer', taskId = model.header.id, text = state.field.text }, true) end
 end
 local block: BlockDef<State> = {
  init = function(cx, args)
-  local origin = navigation.origin(args)
-  local root = navigation.root(origin)
-  local state: State = { origin = origin, prContent = prContent.create(), prMatch = false, view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', busy = false, editing = false }
+  local state: State = { origin = rt.origin(args), prContent = prContent.create(), prMatch = false, view = views.create(args[1] or '', 'task', parse), field = fields.create('', true), tab = 'Overview', editing = false }
+  local root = args[3] or ''
   views.refresh(state.view); views.watch(state.view, cx)
   if root ~= '' then state.index = views.create(root, 'panel', parseIndex); views.refresh(state.index); views.watch(state.index, cx) end
   return state
@@ -317,7 +302,7 @@ local block: BlockDef<State> = {
   table.insert(children, ui.el('div', { class = 'tt-message', actions = { click = 'focus-message' } }, {
    fields.node(state.field, 'worker-message', model.message.placeholder),
    ui.row({ text(model.message.model or model.header.model or 'Model unavailable', 'accent'), text('Steers the worker; it reads this at its next safe step', 'muted'),
-    button(if state.busy then 'Sending…' else 'Send ↑', 'send', true) }),
+    button(if state.origin.busy then 'Sending…' else 'Send ↑', 'send', true) }),
   }))
   return { main = ui.el('div', { class = 'tt-page' }, children) }
  end,
@@ -329,13 +314,13 @@ local block: BlockDef<State> = {
   local tab = string.match(action, '^tab=(.+)$')
   if tab and state.view.model and table.find(state.view.model.tabs, tab) then state.tab = tab; state.editing = false; if tab == 'Diff' then state.prContent.tab = 'Diff' elseif tab == 'PR' then state.prContent.tab = 'Description' end; cx:render(); return end
   if action == 'focus-message' or action == 'steer' then state.editing = true; cx:frame({ { 'focus', 'main.worker-message' } }); cx:render(); return end
-  if action == 'orchestrator' then navigation.back(state.origin, cx); return end
+  if action == 'orchestrator' then rt.act(cx, state.origin, { verb = 'open', ref = { kind = 'orchestrator' } }); return end
   if action == 'send' then send(state, cx); return end
   local model = state.view.model
   if not model then return end
-  if action == 'restart' and model.stuck then run(state, cx, { 'restart', model.header.id })
-  elseif action == 'open-brief' and model.requestId then run(state, cx, { 'open', 'brief', model.requestId })
-  elseif action == 'open-pr' and model.pullRequest then run(state, cx, { 'open', 'pr', tostring(model.pullRequest.number) })
+  if action == 'restart' and model.stuck then run(state, cx, { verb = 'restart', taskId = model.header.id })
+  elseif action == 'open-brief' and model.requestId then run(state, cx, { verb = 'open', ref = { kind = 'brief', requestId = model.requestId } })
+  elseif action == 'open-pr' and model.pullRequest then run(state, cx, { verb = 'open', ref = { kind = 'pr', number = model.pullRequest.number } })
   end
  end,
  key = function(state, key, cx)

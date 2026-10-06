@@ -8,11 +8,13 @@ import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { parseBlockContext } from "../../../src/native/contract.ts";
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { recordedActions } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (enabled ? test : test.skip)(
@@ -51,7 +53,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     });
     await writeFile(
       join(plugin, "tandem.sh"),
-      `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\nif [ -f '${fail}' ]; then printf 'isolated action failure\\n' >&2; exit 1; fi\n`,
+      `#!/bin/sh\ninput="$(cat)"\nprintf '%s\\n' "$input" >> '${log}'\nif [ -f '${fail}' ]; then printf 'isolated action failure\\n' >&2; exit 1; fi\nprintf '{"status":"done"}'\n`,
     );
     const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
       env,
@@ -229,12 +231,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           await writeFile(fail, "fail");
           await ctl("key", "escape");
           actionCount += 1;
-          await until(
-            async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
-          );
+          await until(async () => (await recordedActions(log)).length === actionCount);
           await until(async () => (await ctl("tree")).includes("isolated action failure"));
           await Bun.sleep(100);
-          expect((await readFile(log, "utf8")).match(/--pane/g)?.length).toBe(actionCount);
+          expect((await recordedActions(log)).length).toBe(actionCount);
           expect(
             blocks(decode(await run("ls", "--json"), Listing, "failed action")).some(
               (entry) => entry.block.id === viewPane,
@@ -252,9 +252,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         // A status-0 shell action exits its own block; the guarded backend return is proven separately.
         await ctl("key", "escape");
         actionCount += 1;
-        await until(
-          async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
-        );
+        await until(async () => (await recordedActions(log)).length === actionCount);
         await until(
           async () =>
             !blocks(decode(await run("ls", "--json"), Listing, "callback exit")).some(
@@ -262,7 +260,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
             ),
         );
         expect(await readFile(log, "utf8")).toContain(
-          kind === "catchup" ? "catchup-dismiss" : `${path}#orchestrator`,
+          kind === "catchup" ? '"catchup-dismiss"' : '"orchestrator"',
         );
         const remaining = blocks(decode(await run("ls", "--json"), Listing, "fixture return"));
         expect(remaining.some((entry) => entry.block.id === viewPane)).toBe(false);
@@ -355,10 +353,13 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         view: { kind: "browser", url: "https://example.invalid/pull/281" },
       });
       expect(browser.opened).toBe(true);
-      const actions = await readFile(log, "utf8");
-      expect(actions.match(/--pane/g)?.length).toBe(actionCount);
-      expect(actions).toContain(`--cwd\n${project}`);
-      expect(actions).toContain(`--home\n${home}`);
+      const actions = await recordedActions(log);
+      expect(actions).toHaveLength(actionCount);
+      for (const { origin } of actions)
+        expect("ctx" in origin && parseBlockContext(origin.ctx)).toMatchObject({
+          cwd: project,
+          home,
+        });
     } catch (error) {
       console.error(await readFile(join(root, "window.log"), "utf8").catch(() => ""));
       throw error;

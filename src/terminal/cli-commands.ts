@@ -45,20 +45,10 @@ import {
   waitForWatchDelay,
 } from "./cli-process.ts";
 
-import {
-  approveViewedBrief,
-  commentOnBrief,
-  commentOnPr,
-  openView,
-  submitReview,
-} from "./cli-view-actions.ts";
-import { type NativeRendererHandlers, runNativeRenderer } from "./native-renderers.ts";
-
 const DEFAULT_WATCH_INTERVAL_MS = 2_000;
 
 /** Process capabilities the command handlers may use; each is injectable by the application. */
 export type CliCapabilities = Readonly<{
-  readonly nativeRendererHandlers?: Partial<NativeRendererHandlers>;
   readonly run: CommandRunner;
   readonly terminal: TerminalBackend;
   readonly statPath: (path: string) => Promise<PathStat>;
@@ -255,19 +245,6 @@ async function watch(context: CliCommandContext): Promise<CliCommandOutcome> {
 }
 
 const CLI_COMMAND_HANDLERS: Readonly<Record<CliCommand, CliCommandHandler>> = {
-  board: runNativeRenderer,
-  prs: runNativeRenderer,
-  usage: runNativeRenderer,
-  "new-request": runNativeRenderer,
-  "open-task": runNativeRenderer,
-  project: runNativeRenderer,
-  "view-file": runNativeRenderer,
-  "brief-comment": (context) => commentOnBrief(context, false),
-  "brief-request-changes": (context) => commentOnBrief(context, true),
-  "brief-approve": approveViewedBrief,
-  "pr-comment": commentOnPr,
-  "review-submit": submitReview,
-  open: openView,
   launch,
   restart: async ({ invocation, service }) => ({
     value: await service().restart(taskIdFor(invocation)),

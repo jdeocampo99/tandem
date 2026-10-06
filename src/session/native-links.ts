@@ -1,4 +1,5 @@
 import type { RequestBriefRecord, TaskRecord } from "../contracts.ts";
+import { type LinkKind, nativeLink } from "../native/contract.ts";
 import type { CoordinatorMessage } from "./coordinator-reply.ts";
 
 export type NativeReplyLink = Readonly<{ label: string; url: string }>;
@@ -45,9 +46,9 @@ export function nativeReplyLinks(
     )
     .join("\n");
   const result = new Map<string, NativeReplyLink>();
-  const add = (kind: string, id: string, label: string) => {
+  const add = (kind: LinkKind, id: string, label: string) => {
     if (!safeId.test(id)) return;
-    const url = `tandem://${kind}/${id}`;
+    const url = nativeLink(kind, id);
     result.set(url, { url, label });
   };
   const scoped = tasks.filter((t) => t.repoPath === repoPath);

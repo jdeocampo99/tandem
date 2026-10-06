@@ -1,41 +1,32 @@
 --!strict
 local ui = tern.ui
 local views = require("./view-file")
-local nav = require("./navigation")
+local rt = require("./rt")
 local models = require("./pr-model")
 local content = require("./pr-content")
 local components = require("./components")
-type State = { view: views.View<models.Model>, index: views.View<models.Index>?, content: content.State, origin: nav.Origin, switcher: boolean }
+type State = { view: views.View<models.Model>, index: views.View<models.Index>?, content: content.State, origin: rt.Origin, switcher: boolean }
 local function invoke(s: State, cx: BlockCx): content.Invoke
- return function(verb, id, payload, done)
-  local json = verb == "pr-comment" or verb == "review-submit"
-  local argv = {"/bin/sh", if json then "native-input.sh" else "tandem.sh"}
-  if not json then table.insert(argv, "native") end
-  table.insert(argv, verb); table.insert(argv, id)
-  if verb == "open" and type(payload) == "string" then table.insert(argv, payload) end
-  nav.context(argv, s.origin, cx)
-  local ok, problem = pcall(function()
-   tern.process.run(argv, {cwd=".", stdin=if json then tern.json.encode(payload) else nil}, function(result)
-    s.content.diff.busy = false
-    if result.status ~= 0 then cx:toast("error", "Tandem couldn't run that action", result.stderr) end
-    if done and (result.status == 0 or verb == "review-submit") then done(result) end
-    if verb == "review-submit" and s.content.submitted then cx:exit(0); return end
-    cx:render()
-   end)
+ return function(action, done)
+  local sent = rt.act(cx, s.origin, action, function(outcome)
+   s.content.diff.busy = false
+   if done then done(outcome) end
+   if action.verb == "review-submit" and s.content.submitted then cx:exit(0); return end
+   cx:render()
   end)
-  if not ok then
-   s.content.diff.busy = false; cx:toast("error", "Tandem couldn't start that action", tostring(problem))
-   if verb == "review-submit" and done then done({status=1,stdout="",stderr=tostring(problem)}) end
+  if not sent then
+   s.content.diff.busy = false
+   if action.verb == "review-submit" and done then done(nil) end
   end
  end
 end
 local block: BlockDef<State> = {
  init = function(cx, args, _saved)
-  local origin = nav.origin(args)
-  local s: State = {view=views.create(origin.path, "pr", models.parse), content=content.create(), origin=origin, switcher=false}
+  local path = args[1] or ""
+  local s: State = {view=views.create(path, "pr", models.parse), content=content.create(), origin=rt.origin(args), switcher=false}
   views.watch(s.view, cx)
-  local indexPath = nav.root(origin)
-  if indexPath ~= origin.path then s.index = views.create(indexPath, "panel", models.parseIndex); views.watch(s.index, cx) end
+  local indexPath = args[3] or ""
+  if indexPath ~= path then s.index = views.create(indexPath, "panel", models.parseIndex); views.watch(s.index, cx) end
   return s
  end,
  title = function(s) return if s.view.model then "#" .. s.view.model.header.number .. " ▾" else "Pull requests" end,
@@ -66,7 +57,7 @@ local block: BlockDef<State> = {
    local pr: typeof(entries[1])? = nil
    for _, entry in entries do if entry.header.repo .. "#" .. entry.header.number == ev.value then pr = entry end end
    if pr then
-    invoke(s, cx)("open", "pr", pr.header.repo .. "#" .. pr.header.number, function() cx:exit(0) end)
+    invoke(s, cx)({verb="open",ref={kind="pr",repo=pr.header.repo,number=pr.header.number}}, function(outcome) if outcome and outcome.status == "done" then cx:exit(0) end end)
     s.switcher = false
    end
    return

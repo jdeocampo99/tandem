@@ -7,7 +7,7 @@ import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.t
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { parseBlockArgs } from "../../../src/native/contract.ts";
+import { parseBlockArgs, parseBlockContext } from "../../../src/native/contract.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
@@ -16,6 +16,7 @@ import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { recordedActions, recordingCli } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -52,7 +53,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     // A synthetic CLI records action argv; this proof never reaches the user's task store or GitHub.
     await writeFile(
       join(plugin, "tandem.sh"),
-      `#!/bin/sh\nprintf '%s\\n' "$@" >> '${join(root, "actions.log")}'\nif [ "$2" = "usage" ]; then printf 'fixture action refused\\n' >&2; exit 7; fi\n`,
+      recordingCli(join(root, "actions.log"), {
+        text: '"usage"',
+        reason: "fixture action refused",
+      }),
     );
     // Task layout fixture; the registered board renderer is exercised through the real host.
     await writeFile(
@@ -229,20 +233,22 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       const row = visit((await ctl("tree")).tree as Node[], "tdp-row")?.rect;
       if (!row) throw new Error("task row missing");
       await ctl("click", String((row[0] ?? 0) + 80), String((row[1] ?? 0) + 12));
-      await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("brief\ntern"),
-      );
-      const argv = await readFile(join(root, "actions.log"), "utf8");
-      expect(argv).toContain(
-        `native\nopen\nbrief\ntern\n--home\n${home}\n--pane\n${pane}\n--cwd\n${root}`,
-      );
+      const sent = () => recordedActions(join(root, "actions.log"));
+      await until(async () => (await sent()).length > 0);
+      const clicked = (await sent())[0];
+      expect(clicked?.action).toEqual({ verb: "open", ref: { kind: "brief", requestId: "tern" } });
+      expect(clicked?.origin.pane).toBe(String(pane));
+      const origin = clicked?.origin;
+      expect(
+        origin !== undefined && "ctx" in origin && parseBlockContext(origin.ctx),
+      ).toMatchObject({ home, cwd: root });
       await ctl("key", "down");
       await ctl("key", "enter");
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("open\ntask\nadapter"),
-      );
-      expect(await readFile(join(root, "actions.log"), "utf8")).toContain(
-        "native\nopen\ntask\nadapter",
+        (await sent()).some(
+          ({ action }) =>
+            action.verb === "open" && action.ref.kind === "task" && action.ref.taskId === "adapter",
+        ),
       );
 
       const limit = visit((await ctl("tree")).tree as Node[], "tdp-limit")?.rect;
@@ -418,19 +424,16 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           await ctl("shot", "12-usage-reused");
           expect(JSON.stringify(await ctl("tree"))).toContain("Opus");
           const originalCli = await readFile(join(plugin, "tandem.sh"), "utf8");
-          const warningFile = join(root, "safe-return.json");
-          await writeFile(
-            warningFile,
-            JSON.stringify({
-              opened: true,
-              warnings: [
-                "Returned to your conversation. The uncertain view and recovery record were kept. Use Tern's tab switcher to continue.",
-              ],
-            }),
-          );
+          const kept = JSON.stringify({
+            status: "kept",
+            notice: {
+              code: "view-kept",
+              text: "Returned to your conversation. The uncertain view and recovery record were kept. Use Tern's tab switcher to continue.",
+            },
+          });
           await writeFile(
             join(plugin, "tandem.sh"),
-            `#!/bin/sh\nif [ "$2" = "view-file" ]; then cat '${warningFile}'; exit 0; fi\n${originalCli.replace("#!/bin/sh\n", "")}`,
+            `#!/bin/sh\nprintf '%s' '${kept.replaceAll("'", "'\\''")}'\n`,
           );
           await ctl("key", "escape");
           await until(async () =>

@@ -126,36 +126,29 @@ identify the file, side and line stably; actions carry the same anchor in their 
 The linked package registers ⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘1–9 and ⌘⇧[ / ⌘⇧], the five Tandem palette
 entries, and task/brief/PR links. Arguments pass through an argv array and `tandem.sh`, with the
 originating pane id and cwd; no user text is interpolated into a shell command.
-Window and native view actions use the following CLI surface:
+Every click, key and window command reaches Tandem through one transport, `rt.act` in
+`tern-plugin/rt.luau`. It writes one `ActionEnvelope` (`src/native/contract.ts`) to the stdin of
+`/bin/sh tandem.sh native act` and reads one `Outcome` from stdout:
 
 ```text
-tandem native board|prs|usage|new-request|open-task CONTEXT
-tandem native open task|brief|pr ID CONTEXT
-tandem native project 1..9|prev|next|repo:ABSOLUTE_PATH CONTEXT
-tandem native brief-comment|brief-request-changes|brief-approve REQUEST_ID --input FILE CONTEXT
-tandem native pr-comment TASK_ID --text TEXT CONTEXT
-tandem native pr-comment TASK_ID --input FILE CONTEXT
-tandem native review-submit TASK_ID --input FILE CONTEXT
-tandem native restart TASK_ID CONTEXT
-tandem native steer --task TASK_ID --text TEXT CONTEXT
-CONTEXT = --pane ID (--ctx CTX | --cwd PATH [--window KEY])
+{ v: 1, origin: { pane, ctx } | { pane, cwd, window? }, action: { verb, ... } }
+→ { status: "done" | "kept" | "refused", notice?: { code, text } }
 ```
 
-`--pane` is required. Pane ids come from the current `WindowCx`, formatted as exact decimal
-strings. A block passes `--ctx` with the context it was launched with, verbatim; the CLI accepts
-only a context `blockArgs` would write and takes the home, cwd and window key from it. Window
-commands without a block pass the focused pane's absolute cwd as `--cwd`, as one argv element,
-and show an error without spawning when it is unavailable. No context comes from
-`TANDEM_NATIVE_CWD` or a guessed first pane. Task/brief ids contain letters, digits, `_` and `-`;
-PR routes accept a durable task id, a decimal number, or a cached `owner/repo#number`.
-The repository-qualified form can open taskless watched PRs read-only.
+A block's origin is its exact pane id and the `ctx` it was launched with, echoed verbatim; Luau
+never reads it. A window command's origin is the focused pane, captured at the gesture, with its
+absolute cwd and `TERN_WINDOW_KEY` when known; without one the command toasts and sends nothing.
+`src/native/actions.ts` parses the envelope (at most 1 MiB), proves the origin (exactly one
+recorded coordinator session lists the pane), dispatches its verb table to the existing services
+and prints the outcome. No user text is interpolated into a shell command and no input file is
+written. `rt.act` holds one action per origin at a time, and toasts by `notice.code`: one title
+and level per code; `failed` takes the asking screen's title. Refusals read as refusals: a
+request-changes on a revised brief is `kept` with "Brief left open", never "completed".
 
 The optional window key is an opaque Tern control-window key, never a pane, tab or session id.
 It is included only when `TERN_WINDOW_KEY` is known; WindowCx has no documented key accessor.
 The backend must prove that a supplied key owns the named pane. Without a key it derives the
-unique owning window from that exact pane and refuses ambiguous targeting. Native action
-handlers are in `src/terminal/cli-view-actions.ts`; screen command slots are
-registered in `src/terminal/native-renderers.ts`. This layer defines the calling convention
+unique owning window from that exact pane and refuses ambiguous targeting. This layer defines the calling convention
 and plugin routing.
 
 Private native opening tickets are consumed by `route.open` immediately. Ticket reads and layout
@@ -194,14 +187,9 @@ effect and preserves the originating view and recovery evidence.
 
 ### JSON action input
 
-JSON actions pass `--input` and an absolute file path as separate argv elements. Renderers
-finish writing one UTF-8 JSON object before spawning the CLI, with a new file for each action
-in a new private temporary directory owned by the shared TypeScript caller. The directory
-uses `0700`; TypeScript-created input files use `0600`. Never put action input in the plugin
-package, a repository, an environment variable, or an interpolated shell command. The file
-stays unchanged until that invocation finishes; the caller owns cleanup after completion or
-known spawn failure. The CLI reads the file without deleting it. An uncertain process outcome
-does not authorize another invocation.
+Action input travels only inside the envelope on stdin. Never put it in the plugin package, a
+repository, an environment variable, a file, or an interpolated shell command. An uncertain
+process outcome does not authorize another invocation.
 
 Every brief action carries the exact identity of the displayed draft:
 
@@ -213,7 +201,7 @@ Every brief action carries the exact identity of the displayed draft:
 }
 ```
 
-`brief-approve` sends only those three fields. `brief-comment` and `brief-request-changes` may
+`brief-approve` sends only those three fields and `requestId`. `brief-request-changes` may
 also include `text` and `comments`, where each comment is
 `{ "lineId": "TL;DR:0:0", "text": "Feedback" }`.
 The renderer copies the stable string id from `briefView.lines[].id` and copies revision and
@@ -222,24 +210,17 @@ behind the user's click. The CLI owns shape, revision, digest and approval valid
 fields and numeric `line` anchors are refused. Feedback resolves ids through `briefView` for the
 exact preserved historical revision. Unknown ids, missing historical revisions, and mismatched
 digests refuse the action before delivery. Feedback allows at most 100 comments and 64,000 bytes of encoded feedback.
-The JSON object does not contain `requestId`: the command's positional `REQUEST_ID` names it.
+The action names its brief with `requestId`.
 
-For example, the caller passes this argv suffix, preserving paths with spaces as one argument:
 
-```text
-native brief-request-changes REQUEST_ID --input /absolute/private/action.json
-  --pane ID --ctx CTX
-```
-
-`pr-comment` accepts either `--text TEXT` or `--input FILE`, never both. Its JSON object has
-optional `text` and `comments: [{ "file": "src/file.ts", "line": 12, "text": "Feedback" }]`.
-The path and positive one-based line are the displayed diff anchor. With `--text`, the complete
-user text is one argv element, including spaces and newlines.
+`pr-comment` names `taskId` and carries optional `text`, `comments: [{ "file": "src/file.ts",
+"line": 12, "text": "Feedback" }]` and thread `replies` with the displayed `reviewHead`. The path
+and positive one-based line are the displayed diff anchor.
 
 `review-submit` uses the existing `ReviewSubmission` object from `src/pr-review/page.ts`:
 `tandemPrReview: 1`, `verdict: "comment" | "approve" | "request-changes"`, `summary`,
 `drafts: [{ id, decision: "post" | "drop" | "undecided", body? }]`, and
-`yours: [{ file, line, body }]`, plus required native fields `reviewHead` and `reviewGeneration`.
+`yours: [{ file, line, body }]`, inside the action's `submission`, beside its required `reviewHead` and `reviewGeneration`.
 Copy those two fields from the displayed `PrPaneView.review.head` and `.generation`; generation
 is a nonnegative safe integer, including zero. Keep the bindings frozen with the user's choices.
 Missing/invalid bindings are refused. The service checks both against the latest authoritative
@@ -253,20 +234,18 @@ Question follow-ups retain their finished review round and its binding. The HTML
 `ReviewSubmission` shape stays unchanged. The CLI reuses the pinned-HEAD and no-double-post checks of
 the review page; the renderer does not publish directly.
 
-`restart` names the task and goes through central recovery. `steer` requires `--task TASK_ID` and
-the user's direction as one `--text` argv value; positional task ids are refused. Both carry
-the same explicit pane/cwd/window context.
-The native CLI owns these handlers alongside brief/PR mutations and `native open`;
-renderers own collecting input, writing the action file, invoking the CLI and cleanup.
+`restart` names the task and goes through central recovery. `steer` names the task and carries
+the user's direction as `text`. `src/native/actions.ts` owns these handlers alongside brief/PR
+mutations and `open`; renderers only collect input and call `rt.act`.
 
 ### Completion and installation
 
-Exit 0 means the action completed or the user cancelled a picker. Refusal, missing context,
-unavailable commands and effect failures exit nonzero with a useful diagnostic on stderr.
-The plugin shows nonzero stderr in an error toast and also reports synchronous spawn failure.
-Renderers may add `--json` to consume the CLI's structured result on stdout, including warnings;
-that output does not authorize subsequent mutations. A handled link stays handled on failure;
-the plugin never retries an action, including an operation whose outcome is uncertain.
+`tandem native act` exits 0 whenever it printed an outcome, including a refusal; only a
+malformed invocation exits nonzero. `rt.act` turns a nonzero exit, an unreadable outcome or a
+synchronous spawn failure into the screen's error toast. A `refused` outcome toasts its notice
+under the screen's title; other notices toast under their code's title. The outcome never
+authorizes a later mutation. A handled link stays handled on failure; the plugin never retries an
+action, including an operation whose outcome is uncertain.
 
 The terminal port's `openView` returns `{ opened: boolean, warnings: readonly string[],
 endpoint?: Endpoint, fallback?: "brief-review" }`. A confirmed native brief returns its exact
@@ -376,11 +355,11 @@ implemented; host acceptance alone does not register a screen:
 `args = blockArgs(viewPath, ctx) = [viewPath, ctxJson, indexPath]`, built only by `src/native/contract.ts`
 and matched in listings only through `parseBlockArgs`. `ctx` holds the coordinator pane, cwd,
 home, index path and optional window key. Luau never reads it: every native CLI action echoes it
-back verbatim as `--ctx`, with the renderer's **own** `cx.pane` as `--pane`, and the CLI parses it
-with `parseBlockContext`. `tern-plugin/navigation.luau` provides `origin(args)`,
-`context(argv, origin, cx)`, `run(origin, cx, argv)`, `root(origin)` and `back(origin, cx)`
-without action policy or retries. `root` returns `indexPath`, the project's root index (equal to
-the context's `index`), so Luau never derives a path from another.
+back verbatim as the envelope origin's `ctx`, with the renderer's **own** `cx.pane` as `pane`,
+and `tandem native act` parses it with `parseBlockContext`. `tern-plugin/rt.luau` provides
+`origin(args)` and `act(cx, origin, action, done)` without action policy or retries. Screens that
+also watch the project index read `args[3]`, `indexPath` (equal to the context's `index`), so
+Luau never derives a path from another.
 Root inputs come from `nativeViewsPath`; detail inputs come from `nativeDetailPath`.
 Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
 board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
@@ -426,7 +405,7 @@ exact endpoint and process. It refuses unrelated pictures in picture. Opening a 
 coordinator and index launch arguments, replaces only that block, and keeps the floated
 coordinator in its recorded tab. Returning docks that
 coordinator and closes only the exact task block; it never closes or restarts the agent.
-`native view-file ROOT#orchestrator` performs that return; `navigation.back` builds it.
+An `open` action with `ref: {kind: "orchestrator"}` performs that return.
 `ROOT#inbox` opens Tern's inbox, and `ROOT#open-project` sends the user's project-opening
 request to the verified coordinator. Other file paths must name an already published detail
 of the selected project. The view-file handler cannot open arbitrary renderer files.
@@ -487,14 +466,13 @@ The optional strip is rendered inside the PR header. `pr-diff.luau` exports `cre
 For the task's Diff tab set the content state's `tab="Diff"`; for its PR tab set
 `tab="Description"`. Pass readiness from both the task/index and PR detail views to
 `view` and `event`. Retain the same content state while navigating to preserve local drafts.
-The shared `Invoke` completion receives the process result `{status,stdout,stderr}`. For
-`review-submit`, callers invoke it after every settled outcome, including a nonzero exit,
-missing origin or spawn failure. Other action completions remain success-only. Content clears
-`posting` on completion, retains drafts on failure/refusal, and marks `submitted` only for
-exit zero with decoded CLI stdout containing `posted: true`. A `posted: false` result displays
-its service message verbatim, preserving distinct definite-refusal and uncertain-post guidance,
-including the confirmation required to recover an uncertain post. An unreadable receipt asks
-the user to check the PR. No outcome retries an action.
+The shared `Invoke` takes an action table and a completion that receives the `Outcome`, or nil
+when none arrived. For `review-submit`, callers invoke the completion after every settled
+outcome, including a refusal, a busy origin or a spawn failure. Content clears `posting` on
+completion, retains drafts unless the outcome is `done`, and marks `submitted` only then. The
+`review-unconfirmed` notice shows the service message verbatim, preserving distinct
+definite-refusal and uncertain-post guidance, including the confirmation required to recover an
+uncertain post. No outcome retries an action.
 The standalone PR block calls `cx:exit(0)` only after that confirmed posted receipt, as it does
 for its close control. Embedded content records success locally; its task host owns navigation.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
@@ -507,18 +485,9 @@ only when drawing an `elapsed` node; Tern then ticks the text itself. No Lua tim
 for CI and no `clockAt` or sampled `elapsedMs` is published. Clock-only publications preserve
 the PR detail bytes, inode and modification time, including while checks are running.
 
-PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. The shared
-`src/terminal/native-input.ts` helper creates one exclusive 0600 file in a private unique
-0700 directory, makes it read-only (0400) before invoking the native action once, and removes
-the directory in `finally` after that invocation settles. The wrapper accepts `VERB ID` plus
-explicit `--pane` and `--ctx` arguments, preserving their argv
-boundaries and the child's stdout, stderr and exit status. The native CLI owns the verb
-allow-list and all context, JSON and domain validation. Draft decisions and new review comments remain
-local until Post; displayed HEAD/generation are included in the submission for authority checks.
-Pass `native-input.sh` the verb, task/request ID, and the native CLI context flags
-(`--pane` and the echoed `--ctx`), with the JSON object on stdin.
-It supports `brief-comment`, `brief-request-changes`, `brief-approve`, `pr-comment`, and
-`review-submit`. Callers use this shared writer rather than adding a screen-specific one.
+PR and brief actions travel like every other click: `rt.act` sends their fields inside the
+action envelope on stdin. Draft decisions and new review comments remain local until Post;
+displayed HEAD/generation are included in the submission for authority checks.
 
 
 ## Board, usage and catch-up actions
@@ -528,14 +497,10 @@ this coordinator's exact block program, root/detail path and launch arguments, r
 preserved coordinator, and retires only the exact idle full-window view in the guarded
 return route, then confirms scoped absence. A window-command Board toggle uses the same return.
 The active window scope is independent of the view's immutable launch window argument.
-Hosting passes `keep_open=false`. Screen success callbacks invoke captured `cx:exit(0)`; nonzero
-results toast stderr and never invoke callback exit. Shared `navigation.run/back` accept an optional
-success callback. Uncertain opening or closure is quarantined without retries.
-Warnings suppress callback exit unless the result proves successful project entry (`entered: true`
-or `focused: true`) and every warning has the catch-up boundary's fixed
-`Project opened, but catch-up is unavailable: ` prefix. These informational warnings still toast
-and complete entry. Retention, mixed, unknown and malformed warnings preserve the originating pane;
-warning text alone cannot authorize callback exit without the successful-entry result.
+Hosting passes `keep_open=false`. Screens invoke captured `cx:exit(0)` only for a `done`
+outcome; a `refused` or `kept` outcome keeps the originating pane. A `catch-up-unavailable`
+notice still toasts but the entry is `done`, since catch-up is optional. Uncertain opening or
+closure is quarantined without retries.
 
 `tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger
 with the single non-fatal boundary shared by every entry path. Visible

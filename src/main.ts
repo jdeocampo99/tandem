@@ -5,7 +5,6 @@ import type { PanelFocus } from "./board/panel.ts";
 import { readBoard, runLiveBoard } from "./board/read.ts";
 import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
-import { runCli } from "./cli.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
@@ -15,6 +14,7 @@ import { resetCoordinators } from "./coordinator/reset.ts";
 import { isTandemCheckout, TANDEM_CHECKOUT } from "./coordinator/tandem-checkout.ts";
 import { terminalOpensLinks } from "./harness/omp/terminal.ts";
 import { renderCatchUpCard, renderWorkstreamList } from "./memory/view.ts";
+import { nativeAct, readEnvelope } from "./native/actions.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
 import { type PublishedReport, publishReport } from "./report/publish.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
@@ -26,9 +26,7 @@ import {
   type TerminalRunResult,
 } from "./terminal/arguments.ts";
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
-import { parseCliArgs } from "./terminal/cli-arguments.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
-import { validateNativeContext } from "./terminal/cli-view-context.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
 import {
   fixCleanupCount,
@@ -50,11 +48,6 @@ import {
   workspaceRetirementFromLaunch,
   workspaceRetirementNotice,
 } from "./terminal/launch.ts";
-import {
-  isNativeCommand,
-  type NativeRendererHandlers,
-  nativeCommandNames,
-} from "./terminal/native-renderers.ts";
 import type { TerminalPrompt, TerminalPrompter } from "./terminal/onboarding.ts";
 import { type PanelAction, runPanel, runPanelAction } from "./terminal/panel.ts";
 import {
@@ -114,7 +107,7 @@ Usage:
                            --popup closes on Esc or after going somewhere
   tandem panel home|prev|next
                            Go to this project's chat, or the previous or next project
-  tandem native COMMAND    Run a native action or view (requires --pane ID --cwd PATH)
+  tandem native act        Run one native view action read as JSON from stdin (Tern plugin only)
   tandem welcome           Show the welcome message again
 
 Options:
@@ -128,7 +121,6 @@ Options:
 `;
 
 export type TerminalMainDependencies = Readonly<{
-  readonly nativeRendererHandlers?: Partial<NativeRendererHandlers>;
   readonly cwd?: string;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly run?: CommandRunner;
@@ -854,15 +846,9 @@ export async function runTerminal(
   const { stdout, stderr } = createTerminalOutput(dependencies);
   try {
     if (argv[0] === "native") {
-      const action = argv[1];
-      if (action === undefined || !isNativeCommand(action)) {
-        throw new Error(`tandem native requires one of: ${nativeCommandNames.join(", ")}`);
-      }
-      validateNativeContext(parseCliArgs(argv.slice(1)));
-      const result = await runCli(argv.slice(1), {
-        ...(dependencies.nativeRendererHandlers === undefined
-          ? {}
-          : { nativeRendererHandlers: dependencies.nativeRendererHandlers }),
+      if (argv[1] !== "act" || argv.length !== 2)
+        throw new Error("tandem native takes only `act`, with its action on stdin");
+      const outcome = await nativeAct(await readEnvelope(dependencies.input ?? process.stdin), {
         ...(dependencies.cwd === undefined ? {} : { cwd: dependencies.cwd }),
         ...(dependencies.processEnvironment === undefined
           ? {}
@@ -873,14 +859,9 @@ export async function runTerminal(
         ...(dependencies.createService === undefined
           ? {}
           : { createService: dependencies.createService }),
-        stdout,
-        stderr,
       });
-      return {
-        exitCode: result.exitCode,
-        status: result.error === undefined ? "native" : "error",
-        ...(result.error === undefined ? {} : { error: result.error }),
-      };
+      stdout(`${JSON.stringify(outcome)}\n`);
+      return { exitCode: 0, status: "native" };
     }
     const invocation = parseTerminalArgs(argv);
     if (invocation.help) {

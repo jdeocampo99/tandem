@@ -1,4 +1,4 @@
--- Only the Tern UI and navigation boundaries are mocked. Render the real panel and board.
+-- Only the Tern UI and action transport boundaries are mocked. Render the real panel and board.
 local calls = {}
 local function node(kind, props, children)
  local seen = {}
@@ -20,9 +20,9 @@ local tern = {ui={
 }}
 local function loadModule(name)
  if name == './view-file' then return {} end
- if name == './navigation' then return {
-  origin=function(args) return args end,
-  run=function(_origin, _cx, args) table.insert(calls, args) end,
+ if name == './rt' then return {
+  origin=function(args) return {ctx=args[2] or '', busy=false} end,
+  act=function(_cx, _origin, action) table.insert(calls, action); return true end,
  } end
  if name == './screen' then return {
   header=function() return node('header') end,
@@ -42,10 +42,10 @@ local rendered = panel.view(state, {})
 assert(rendered.main and rendered.layer)
 panel.event(state, {ev='action', act='row:1'}, {})
 panel.event(state, {ev='action', act='row:2'}, {})
-assert(calls[1][1]=='open' and calls[1][2]=='task' and calls[1][3]=='blocked')
-assert(calls[2][1]=='open' and calls[2][2]=='pr' and calls[2][3]=='acme/app#284')
+assert(calls[1].verb=='open' and calls[1].ref.kind=='task' and calls[1].ref.taskId=='blocked')
+assert(calls[2].verb=='open' and calls[2].ref.kind=='pr' and calls[2].ref.repo=='acme/app' and calls[2].ref.number==284)
 panel.event(state, {ev='action', act='project:repo:/work/app'}, {})
-assert(calls[3][1]=='project' and calls[3][2]=='repo:/work/app')
+assert(calls[3].verb=='project' and calls[3].target.repoPath=='/work/app')
 local board = loadBoard()
 assert(board.view({view={model=bundle,status='ready'},args={}}, {}).main)
 local prCard
@@ -54,5 +54,5 @@ for _, lane in bundle.board.lanes do for _, card in lane.cards do
 end end
 assert(prCard and prCard.pullRequest.number==284)
 board.event({view={model=bundle,status='ready'},args={}}, {ev='action',act='pr',value=prCard.key}, {})
-assert(calls[4][1]=='board' and calls[4][2]=='pr-link' and calls[4][3]==prCard.key)
+assert(calls[4].verb=='board-link' and calls[4].cardKey==prCard.key)
 print('Panel and board child keys and row actions pass')

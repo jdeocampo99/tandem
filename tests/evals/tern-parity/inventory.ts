@@ -993,7 +993,7 @@ export const inventory: readonly InventoryEntry[] = [
         mark = host.events.length;
         await brief.click("Request changes (1)");
         expect(host.toasts(mark).map((toast) => `${toast.title}: ${toast.message}`)).toEqual([
-          "Brief action completed: The brief changed after this action; the current brief was left open. Do not resubmit this action.",
+          "Brief left open: The brief changed after this action; the current brief was left open. Do not resubmit this action.",
         ]);
         expect(world.sentKeys()).toEqual([
           {

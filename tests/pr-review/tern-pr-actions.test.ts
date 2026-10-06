@@ -14,7 +14,7 @@ test("PR and embedded task actions retain drafts on failure and require a posted
       "local tern = {}\nlocal modules = {}\nlocal cache = {}\nlocal function loadModule(name)\nif cache[name] == nil then cache[name] = modules[name]() end\nreturn cache[name]\nend\n";
     for (const name of [
       "view-file",
-      "navigation",
+      "rt",
       "components",
       "text-field",
       "diff-row",
@@ -34,7 +34,7 @@ test("PR and embedded task actions retain drafts on failure and require a posted
       "https://github.com/acme/app/pull/281",
       "GitHub response was lost.",
     );
-    source += `local uncertainMessage = ${JSON.stringify(uncertainMessage)}\nlocal uncertainOutput = ${JSON.stringify(JSON.stringify({ taskId: "review-1", posted: false, message: uncertainMessage }))}\n`;
+    source += `local uncertainMessage = ${JSON.stringify(uncertainMessage)}\nlocal uncertainOutput = ${JSON.stringify(JSON.stringify({ status: "kept", notice: { code: "review-unconfirmed", text: uncertainMessage } }))}\n`;
     source += await readFile(
       fileURLToPath(new URL("./tern-pr-actions.luau", import.meta.url)),
       "utf8",

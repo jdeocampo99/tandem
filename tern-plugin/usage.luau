@@ -2,13 +2,14 @@
 local views = require("./view-file")
 local components = require("./components")
 local screen = require("./screen")
+local rt = require("./rt")
 local ui = tern.ui
 
 type Meter = {label: string, remaining: string, reset: string, fetched: string, percent: number?}
 type Cost = {model: string, cost: string, percent: number}
 type Display = {accounts: {{title: string, meters: {Meter}}}, totals: {{label: string, value: string}}, todayModels: {Cost}, weekModels: {Cost}, stages: {{label: string, today: string, week: string}}, updated: string, limitWarnings: {string}, warning: string?}
 type Model = {usage: {display: Display}}
-type State = {view: views.View<Model>, args: {string}}
+type State = {view: views.View<Model>, args: {string}, origin: rt.Origin}
 local function parse(value: unknown): Model?
  if type(value) ~= "table" or type(value.usage) ~= "table" or type(value.usage.display) ~= "table" then return nil end
  local d = value.usage.display
@@ -47,7 +48,8 @@ local function chart(title: string, rows: {Cost}): Node
 end
 local block: BlockDef<State> = {
  init = function(cx, args, saved)
-  local state: State = {args=screen.args(args, saved), view=views.create(screen.path(args, saved), "panel", parse)}
+  local restored = screen.args(args, saved)
+  local state: State = {args=restored, origin=rt.origin(restored), view=views.create(screen.path(args, saved), "panel", parse)}
   views.refresh(state.view); views.watch(state.view, cx); return state
  end,
  title = function() return "Tandem usage" end,
@@ -81,8 +83,8 @@ local block: BlockDef<State> = {
   end
   return {main=ui.col({ui.el("div", {class="tdm-usage-screen"}, children)})}
  end,
- key = function(state, key, cx) if key.name ~= "escape" then return false end screen.back(state.args, cx); return true end,
- event = function(state, ev, cx) if ev.ev == "action" and ev.act == "back" then screen.back(state.args, cx) end end,
+ key = function(state, key, cx) if key.name ~= "escape" then return false end screen.back(state.origin, cx); return true end,
+ event = function(state, ev, cx) if ev.ev == "action" and ev.act == "back" then screen.back(state.origin, cx) end end,
  save = function(state) return {args=state.args} end,
 }
 return block

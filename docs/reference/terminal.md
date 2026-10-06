@@ -10,7 +10,7 @@ models and publication. Approval and posting remain in [request briefs](request-
 and [PR review](pr-review.md).
 
 Code: `src/terminal-backend/contract.ts`, `compose.ts`, `identity.ts`, `setting.ts`,
-`herdr/`, `tern/`; `tern-plugin/`; `src/terminal/native-renderers.ts`, `native-input.ts`.
+`herdr/`, `tern/`; `tern-plugin/`; `src/native/actions.ts`, `tern-plugin/rt.luau`.
 Tests mirror these domains under `tests/terminal-backend/` and `tests/terminal/`.
 
 ## Choosing a terminal
@@ -191,14 +191,12 @@ All blocks receive three strings, `[viewPath, ctxJson, indexPath]`, from `blockA
 `ctxJson` as opaque and echo it back with every action, with their own pane id. `indexPath` is
 the project's root index, which detail views also watch.
 
-Actions run once as `tandem native <verb> ... --pane <decimal id> --ctx <ctxJson>`. The CLI validates project and origin ownership before acting. JSON actions
-use `native-input.sh` and `src/terminal/native-input.ts`: stdin becomes one unique immutable UTF-8
-file in a private 0700 directory, created exclusively as 0600 then made 0400. The caller deletes
-it after the invocation settles. Exit zero means done or cancelled; nonzero stderr becomes a
-toast. No renderer retries, including when feedback was saved or a post may have reached GitHub.
+Actions run once as `tandem native act` with one `ActionEnvelope` on stdin; the CLI proves the
+origin pane and project before acting and prints one `Outcome`. See
+[tern-views.md](tern-views.md#window-integration).
 
 The registered screens and action handlers are in `tern-plugin/host.luau`, `plugin.toml` and
-`src/terminal/native-renderers.ts`. The hosting API also supports layout kinds before their
+`src/native/actions.ts`. The hosting API also supports layout kinds before their
 renderer is registered; that alone does not make a screen available. The panel always shows
 PRs, Board and usage buttons independently of shortcut consent.
 
