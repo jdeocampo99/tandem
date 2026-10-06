@@ -8,7 +8,7 @@ import {
   TernOutcomeUnknownError,
   ternCommands,
 } from "../../../src/terminal-backend/tern/protocol.ts";
-import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { detailForView, ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 const endpoint: Endpoint = {
   terminal: "tern",
@@ -246,7 +246,8 @@ for (const mode of [
       wait: async (ms) => {
         now += ms;
       },
-      guard: async (key, operation) => {
+      guard: async (key, operation, recoveredNativeOpen) => {
+        if (recoveredNativeOpen) quarantined.delete(key);
         if (quarantined.has(key)) throw new TernOutcomeUnknownError(key, "quarantined");
         try {
           return await operation();
@@ -377,16 +378,46 @@ for (const mode of [
           ].includes(mode)
         ) {
           const before = effects;
-          await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+          if (["verification-failed", "verification-malformed", "unknown"].includes(mode)) {
+            expect((await open()).paneId).toBe("4");
+            expect(await Bun.file(routePath).exists()).toBe(false);
+            expect(
+              (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
+            ).toEqual([]);
+          } else {
+            await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+            expect(await Bun.file(routePath).exists()).toBe(true);
+            expect(
+              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
+            ).toBe(true);
+          }
           expect(effects).toBe(before);
           expect(created).toBe(true);
-          expect(await Bun.file(routePath).exists()).toBe(true);
-          expect(
-            (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-          ).toBe(true);
         } else expect(effects).toBe(0);
       }
     } finally {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+test("PR detail navigation resolves the cached repository and number without requiring a task", () => {
+  const bundle = {
+    version: 1 as const,
+    project: "/fixture",
+    writtenAt: "2030-01-01",
+    tasks: {},
+    briefs: {},
+    projects: [],
+    pullRequests: {
+      "one/repo#42": { header: { repo: "one/repo", number: 42 }, detailFile: "pr-one.json" },
+      "two/repo#42": {
+        header: { repo: "two/repo", number: 42, taskId: "owned" },
+        detailFile: "pr-two.json",
+      },
+    },
+  };
+  expect(detailForView(bundle, { kind: "pr", repo: "one/repo", number: 42 })).toBe("pr-one.json");
+  expect(detailForView(bundle, { kind: "pr", repo: "two/repo", number: 42 })).toBe("pr-two.json");
+  expect(detailForView(bundle, { kind: "pr", taskId: "owned" })).toBe("pr-two.json");
+  expect(detailForView(bundle, { kind: "pr", repo: "missing/repo", number: 42 })).toBeUndefined();
+});

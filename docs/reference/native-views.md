@@ -284,14 +284,24 @@ The existing HTML review page and native view share `parsePatch` in `src/pr-revi
   `DiffRow` is `{kind:"add",text,new}`, `{kind:"del",text,old}`, `{kind:"ctx",text,old,new}`,
   or `{kind:"hunk",oldStart,oldCount,newStart,newCount,label}`.
 - `PrThread`: `{id,file,line?,side:"LEFT"|"RIGHT",resolved,outdated,comments:PrComment[]}`.
-  `PrComment`: `{id,author,at,body,url?}`. A thread includes its replies in order.
+  `PrComment`: `{id,databaseId?,author,at,body,url?}`. A thread includes its replies in order.
 - `unanchoredThreads`: outdated/non-hunk/deleted-file threads, still readable.
-- `commentDestination`: `"worker"` for Tandem's PRs, `"review"` for pr-review tasks.
+- `commentDestination`: `"worker"` for Tandem's PRs, `"review"` for pr-review tasks, `"read-only"` for taskless watched PRs.
+  Taskless views include a plain `readOnlyReason` and omit worker/comment/review actions.
 - `review?`: `{taskId,generation,head,currentHead,posted,verdict?,intent,summary,
   drafts:DraftComment[],concerns:ReviewConcern[],notes:string[]}`. Drafts also attach to their
   new-side diff row and retain their ids/severity for posting choices. The reviewed diff and
   posting identity stay pinned to the recorded round; checks/threads from another head are not
   attached to it. Posting rules remain in pr-review.md and the action handler.
+
+Reply editors retain `{threadId,commentId,replyTo}` from the selected thread's root comment;
+`commentId` is the exact GitHub node identity and `replyTo` its REST `databaseId`. Two threads on
+the same line remain distinct. Outdated and unanchored threads offer Reply too. Native review
+submission keeps `replies:[{threadId,commentId,replyTo,body}]` separate from `yours` root comments.
+Worker feedback accepts the same replies plus `reviewHead`; TypeScript checks the live thread and
+preserves its root, file and optional line in the worker direction. Taskless cached PRs open through
+`open pr owner/repo#N` or a published detail path, without creating a task. PR palette and switcher
+navigation use this repository-qualified identity.
 
 GitHub reads are cached inside Tandem, with paginated review threads and replies. The cache checks
 HEAD before/after the diff, refusing a moving PR rather than mixing anchors. Failed reads retain

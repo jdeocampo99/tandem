@@ -1,7 +1,7 @@
 import { isRecord } from "../adapters/primitives.ts";
 import type { CommandRunner } from "../contracts.ts";
 import type { PullRequestRef } from "./pull-request.ts";
-import type { PrReview } from "./review.ts";
+import type { PrReview, ReviewReply } from "./review.ts";
 
 /** The verdict is always the user's; Tandem never picks it. */
 export type ReviewVerdict = "comment" | "approve" | "request-changes";
@@ -126,6 +126,100 @@ export async function replyToComment(
   return result.code === 0;
 }
 
+export type PostThreadReplyInput = Readonly<{
+  ref: PullRequestRef;
+  cwd: string;
+  head: string;
+  reply: ReviewReply;
+  marker: string;
+}>;
+
+/** Read-only reconciliation of a saved reply attempt, including after restart. */
+export async function findPostedReply(
+  run: CommandRunner,
+  input: PostThreadReplyInput,
+): Promise<PostedReviewLookup> {
+  try {
+    const result = await run({
+      argv: [
+        "gh",
+        "api",
+        "--paginate",
+        "--slurp",
+        `repos/${input.ref.repo}/pulls/${input.ref.number}/comments`,
+      ],
+      cwd: input.cwd,
+    });
+    if (result.code !== 0) throw new Error(result.stderr || "GitHub returned no comments");
+    const pages: unknown = JSON.parse(result.stdout);
+    if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page)))
+      throw new Error("Invalid comment pages");
+    for (const comment of pages.flat()) {
+      if (!isRecord(comment) || typeof comment.body !== "string")
+        throw new Error("Invalid comment record");
+      if (comment.in_reply_to_id === input.reply.replyTo && comment.body.includes(input.marker)) {
+        if (typeof comment.html_url !== "string" || !comment.html_url)
+          throw new Error("Missing reply receipt");
+        return { kind: "found", url: comment.html_url };
+      }
+    }
+    return { kind: "absent" };
+  } catch (error) {
+    return { kind: "unreadable", message: String(error) };
+  }
+}
+
+/** Claims one exact reply before sending; an uncertain reply never automatically retries. */
+export async function postThreadReply(
+  run: CommandRunner,
+  input: PostThreadReplyInput,
+  beforePost: () => Promise<void>,
+): Promise<PostReviewOutcome> {
+  const existing = await findPostedReply(run, input);
+  if (existing.kind === "found") return { kind: "already-posted", url: existing.url };
+  if (existing.kind === "unreadable") return { kind: "failed", message: existing.message };
+  const head = await currentHead(run, { ref: input.ref, cwd: input.cwd });
+  if (head.kind === "unreadable") return { kind: "failed", message: head.message };
+  if (head.head !== input.head) return { kind: "moved", head: head.head };
+  await beforePost();
+  let failure = "GitHub returned no reply receipt";
+  try {
+    const result = await run({
+      argv: [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        `repos/${input.ref.repo}/pulls/${input.ref.number}/comments`,
+        "--input",
+        "-",
+      ],
+      cwd: input.cwd,
+      stdin: JSON.stringify({
+        commit_id: input.head,
+        in_reply_to: input.reply.replyTo,
+        body: `${input.reply.body}\n\n${input.marker}`,
+      }),
+    });
+    if (result.code === 0) {
+      const receipt: unknown = JSON.parse(result.stdout);
+      if (
+        isRecord(receipt) &&
+        receipt.in_reply_to_id === input.reply.replyTo &&
+        typeof receipt.html_url === "string" &&
+        receipt.html_url
+      )
+        return { kind: "posted", url: receipt.html_url };
+    }
+    failure = result.stderr.trim() || failure;
+  } catch (error) {
+    failure = String(error);
+  }
+  const landed = await findPostedReply(run, input);
+  if (landed.kind === "found") return { kind: "posted", url: landed.url };
+  return { kind: "uncertain", message: failure };
+}
+
 export async function findPostedReview(
   run: CommandRunner,
   input: PostReviewInput,
@@ -168,7 +262,7 @@ export async function findPostedReview(
 
 async function currentHead(
   run: CommandRunner,
-  input: PostReviewInput,
+  input: Pick<PostReviewInput, "ref" | "cwd">,
 ): Promise<
   Readonly<{ kind: "head"; head: string }> | Readonly<{ kind: "unreadable"; message: string }>
 > {

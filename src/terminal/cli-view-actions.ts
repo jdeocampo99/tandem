@@ -1,9 +1,13 @@
+import { readNativeBundle } from "../board/native-file.ts";
 import type { TaskRecord } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import type { CoordinatorRecord } from "../coordinator/record.ts";
 import { canonicalPath } from "../coordinator/record.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import { parseReviewSubmission } from "../pr-review/page.ts";
+import { validateThreadReplies } from "../pr-review/replies.ts";
+import { parseReviewReplies } from "../pr-review/review.ts";
+import { readNativeThreads } from "../pr-watch/native-cache.ts";
 import { type BriefFeedback, briefFeedbackPrompt, type ViewedBrief } from "../requests/feedback.ts";
 import type { TerminalView } from "../terminal-backend/contract.ts";
 import { CliUsageError, positiveInteger, text } from "./cli-arguments.ts";
@@ -252,6 +256,9 @@ function requireOwnPr(task: TaskRecord): void {
 export async function commentOnPr(context: CliCommandContext): Promise<CliCommandOutcome> {
   const taskId = taskIdFor(context.invocation);
   const invocation = context.invocation;
+  const service = context.service();
+  const before = await service.get(taskId);
+  requireOwnPr(before);
   let message: string;
   if (invocation.options.input === undefined) message = text(invocation.options.text, "text");
   else {
@@ -262,7 +269,7 @@ export async function commentOnPr(context: CliCommandContext): Promise<CliComman
       invocation.options.input,
       invocation.command,
     );
-    exactKeys(input, ["text", "comments"]);
+    exactKeys(input, ["text", "comments", "replies", "reviewHead"]);
     if (input.comments !== undefined && !Array.isArray(input.comments))
       throw new CliUsageError("comments must be an array");
     const entries: readonly unknown[] = Array.isArray(input.comments) ? input.comments : [];
@@ -273,12 +280,28 @@ export async function commentOnPr(context: CliCommandContext): Promise<CliComman
       exactKeys(comment, ["file", "line", "text"]);
       return `${text(comment.file, "file")}:${revision(comment.line, "line")}: ${text(comment.text, "comment text")}`;
     });
+    if (input.replies !== undefined) {
+      const replies = parseReviewReplies(input.replies);
+      const head = text(input.reviewHead, "reviewHead");
+      if (head !== before.pullRequest?.head)
+        throw new CliUsageError("The PR changed; reopen before replying");
+      const threads = await readNativeThreads(
+        context.capabilities.run,
+        { repo: before.pullRequest.repository, number: before.pullRequest.number },
+        before.repoPath,
+        head,
+      );
+      validateThreadReplies(replies, threads);
+      for (const reply of replies) {
+        const thread = threads.find((entry) => entry.id === reply.threadId);
+        notes.push(
+          `Reply to ${before.pullRequest.repository}#${before.pullRequest.number} thread ${reply.threadId}, root comment ${reply.commentId} (GitHub ${reply.replyTo}), ${thread?.file}${thread?.line === undefined ? " (outside current diff)" : `:${thread.line}`}: ${reply.body}`,
+        );
+      }
+    }
     if (input.text !== undefined) notes.push(text(input.text, "text"));
     message = text(notes.join(" ").replace(/\s+/gu, " "), "PR feedback");
   }
-  const service = context.service();
-  const before = await service.get(taskId);
-  requireOwnPr(before);
   if (before.stage === "completed") {
     throw new CliUsageError(
       "This task's worker has finished. Open the coordinator to arrange follow-up work; the PR comment was not sent.",
@@ -297,7 +320,10 @@ export async function commentOnPr(context: CliCommandContext): Promise<CliComman
   return { value: direction };
 }
 
-async function taskForPrNumber(context: CliCommandContext, number: number): Promise<TaskRecord> {
+async function taskForPrNumber(
+  context: CliCommandContext,
+  number: number,
+): Promise<TaskRecord | undefined> {
   const repo = await canonicalPath(context.environment.repo, "repoPath");
   const tasks = await context.service().list();
   const scoped = await Promise.all(
@@ -313,12 +339,9 @@ async function taskForPrNumber(context: CliCommandContext, number: number): Prom
         (entry.task.pullRequest?.number === number || entry.task.prReview?.ref.number === number),
     )
     .map((entry) => entry.task);
+  if (matches.length === 0) return undefined;
   if (matches.length !== 1 || matches[0] === undefined) {
-    throw new CliUsageError(
-      matches.length === 0
-        ? `No Tandem task has pull request #${number} in this project`
-        : `More than one task has pull request #${number}; open it by task id`,
-    );
+    throw new CliUsageError(`More than one task has pull request #${number}; open it by task id`);
   }
   return matches[0];
 }
@@ -327,17 +350,37 @@ export async function openView(context: CliCommandContext): Promise<CliCommandOu
   const kind = text(context.invocation.positionals[0], "view kind");
   const id = text(context.invocation.positionals[1], "view id");
   const service = context.service();
+  const numberedTask =
+    kind === "pr" && /^\d+$/u.test(id)
+      ? await taskForPrNumber(context, positiveInteger(id, "PR number"))
+      : undefined;
   let view: TerminalView;
   let repoPath: string;
   if (kind === "brief") {
     repoPath = (await service.requestBrief(id)).record.repoPath;
     await requireBriefProject(context, repoPath);
     view = { kind, requestId: id };
+  } else if (numberedTask) {
+    const task = numberedTask;
+    repoPath = task.repoPath;
+    view = { kind: "pr", taskId: task.id };
+  } else if (kind === "pr" && (id.includes("#") || /^\d+$/u.test(id))) {
+    const owned = await coordinator(context, context.environment.repo);
+    const bundle = await readNativeBundle(context.environment.home, owned.repoPath);
+    const matches = Object.values(bundle.pullRequests).filter((entry) =>
+      id.includes("#")
+        ? `${entry.header.repo}#${entry.header.number}` === id
+        : entry.header.number === positiveInteger(id, "PR number"),
+    );
+    const entry = matches[0];
+    if (matches.length !== 1 || entry === undefined)
+      throw new CliUsageError(
+        "No unique cached pull request matches this project; open by repo#number",
+      );
+    repoPath = owned.repoPath;
+    view = { kind: "pr", repo: entry.header.repo, number: entry.header.number };
   } else if (kind === "task" || kind === "pr") {
-    const task =
-      kind === "pr" && /^\d+$/u.test(id)
-        ? await taskForPrNumber(context, positiveInteger(id, "PR number"))
-        : await service.get(id);
+    const task = await service.get(id);
     if (kind === "pr" && task.pullRequest === undefined && task.kind !== "pr-review") {
       throw new CliUsageError("The task has no pull request to open");
     }

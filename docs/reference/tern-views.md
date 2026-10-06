@@ -138,7 +138,8 @@ CONTEXT = --pane ID --cwd PATH [--window KEY]
 decimal strings; cwd is that pane's absolute directory, passed as one argv element. The plugin
 shows an error without spawning when either is unavailable. No context comes from
 `TANDEM_NATIVE_CWD` or a guessed first pane. Task/brief ids contain letters, digits, `_` and `-`;
-PR ids are decimal numbers. The native file route calls `native view-file PATH` with the same
+PR routes accept a durable task id, a decimal number, or a cached `owner/repo#number`.
+The repository-qualified form can open taskless watched PRs read-only. The native file route calls `native view-file PATH` with the same
 context, for renderer registration.
 
 The optional window key is an opaque Tern control-window key, never a pane, tab or session id.
@@ -330,8 +331,24 @@ as "cannot open in a file block", even after opening them. Success therefore req
 receipt and a scoped listing proving the exact block program and launch arguments. Missing
 or conflicting evidence quarantines the opening, retaining its ticket and resources.
 A confirmed opening removes its transient ticket and receipt. No title proves ownership.
+
+Browser opens use the same private coordinator-bound intent and lock before `tern browser`
+mutates the window. A new acknowledgement and scoped listing must confirm the new block;
+failed or malformed verification retains the intent across fresh CLI invocations. An unresolved
+browser intent fences native and browser openings alike. Listings cannot correlate an earlier
+uncertain browser with its URL and picture-in-picture owner, so they never clear that fence or
+authorize another open. Panel-close verification failures likewise quarantine the close in the
+backend guard and retain resources without a second close.
+Panel close refuses detached placement even before the effect. A unique recorded coordinator
+must bind the panel's session, tab, worktree cwd and all five launch arguments, including the
+project view path; the conversation itself cannot be closed as a panel. The full program and
+argument proof runs again after the idle process read, immediately before the close mutation.
+Changed or foreign programs/arguments refuse without closing anything. The recorded binding
+remains usable when retirement has already closed the coordinator pane.
+
 Before any opening mutation, the host locks a private coordinator-bound intent under
-`<home>/native-host`. For panels, it lists the scoped session and reuses exactly one block
+`<home>/native-host`. Panels and root Board, Usage, Catch-up and PR list views list the
+scoped session inside that lock and reuse exactly one block
 with the full program and five launch arguments in the intended tab placement; duplicate
 matches refuse. A window-scoped lookup also reads the daemon-wide listing before concluding
 absence. Unresolved detached blocks or matching blocks outside the owning session/window
@@ -345,6 +362,22 @@ including failed or malformed verification reads. A later CLI/backend instance m
 retained intents and route tickets from that same exact block evidence before it can open.
 A missing receipt can be settled by the unique exact block; conflicting receipts or missing
 block evidence retain the fence and resources. Lock files remain for later callers.
+The durable fence governs native opens even within one backend instance, so exact recovery
+can settle a previous verification failure instead of being blocked by a process-local guard.
+Reused root views focus the exact existing pane without another layout opening.
+
+Return first attempts the same exact recovery. If the intent remains unprovable, it only focuses
+the exact recorded coordinator under the opening lock, preserving every view, ticket and intent.
+The CLI returns a plain warning displayed by the renderer: the user can continue in the conversation
+or use Tern's tab switcher, while new native openings remain fenced. This safe exit neither clears
+the uncertain operation nor retries its layout mutation.
+
+Task replacement and return additionally require a same-scope listing proving the replaced
+task pane is absent, with no detached ambiguity, before settling the opening intent. The intent
+keeps the replaced pane id for fresh CLI recovery; evidence for the new pane alone never settles
+retirement of its predecessor. Older task intents recover replacement metadata from the retained
+layout route, refusing missing or conflicting route evidence. Unconfirmed retirement keeps the
+intent, route, receipt and resources, without another opening mutation.
 
 All renderers use these block ids and the same five string launch arguments:
 
@@ -506,6 +539,11 @@ The active window scope is independent of the view's immutable launch window arg
 Hosting passes `keep_open=false`. Screen success callbacks invoke captured `cx:exit(0)`; nonzero
 results toast stderr and never invoke callback exit. Shared `navigation.run/back` accept an optional
 success callback. Uncertain opening or closure is quarantined without retries.
+Warnings suppress callback exit unless the result proves successful project entry (`entered: true`
+or `focused: true`) and every warning has the catch-up boundary's fixed
+`Project opened, but catch-up is unavailable: ` prefix. These informational warnings still toast
+and complete entry. Retention, mixed, unknown and malformed warnings preserve the originating pane;
+warning text alone cannot authorize callback exit without the successful-entry result.
 
 `tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger
 with the single non-fatal boundary shared by every entry path. Visible

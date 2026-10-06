@@ -1,9 +1,13 @@
 import { expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { NativeViewsReader } from "../../src/board/native-read.ts";
+import { boardView } from "../../src/board/view.ts";
 import type { CommandRunner } from "../../src/contracts.ts";
 import type { ReviewSubmission } from "../../src/pr-review/page.ts";
+import { reviewPageInput } from "../../src/pr-review/page-input.ts";
 import { reviewMarker } from "../../src/pr-review/post.ts";
+import { createPrReviewWorkflow } from "../../src/pr-review/service.ts";
 import {
   type PrReviewRound,
   type PrReviewState,
@@ -12,6 +16,8 @@ import {
 import { createTandemService } from "../../src/service/controller.ts";
 import { executeTandemAction, type TandemAction } from "../../src/session/actions.ts";
 import { tandemRequestSchema } from "../../src/session/tools.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import { state as boardState } from "../board/fixtures.ts";
 import {
   SCENARIO_HEAD,
   SCENARIO_NEXT_HEAD,
@@ -673,6 +679,537 @@ test("an accepted review with a lost response remains quarantined across restart
       expect(durable?.prReview?.rounds[0]?.review.summaryComment).toBe(submission.summary);
     } finally {
       await restarted.shutdown();
+    }
+  });
+}, 20_000);
+
+const threadReply = {
+  threadId: "thread-22",
+  commentId: "node-22",
+  replyTo: 22,
+  body: "Keep this guard, thanks.",
+};
+const replyUrl = "https://github.com/owner/repo/pull/7#discussion_r23";
+const replySubmission: ReviewSubmission = {
+  tandemPrReview: 1,
+  verdict: "comment",
+  summary: "Saved review",
+  drafts: [],
+  yours: [],
+  replies: [threadReply],
+};
+
+type ReplyCrash = "review-receipt" | "claim" | "reply-receipt";
+
+function replyBoundary(world: ScenarioWorld, lost = false) {
+  const replies: unknown[] = [];
+  let reviewPosts = 0;
+  let found = false;
+  let unreadable = false;
+  const run: CommandRunner = async (request) => {
+    if (request.argv[0] !== "gh") return world.run(request);
+    if (unreadable) return { code: 1, stdout: "", stderr: "offline" };
+    const endpoint = request.argv.find((arg) => arg.startsWith("repos/")) ?? "";
+    if (request.argv.includes("POST")) {
+      const payload: unknown = JSON.parse(request.stdin ?? "{}");
+      if (endpoint.endsWith("/reviews")) {
+        reviewPosts++;
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            html_url: "https://github.com/owner/repo/pull/7#pullrequestreview-1",
+          }),
+          stderr: "",
+        };
+      }
+      expect(
+        (await world.store.read(SCENARIO_TASK_ID))?.prReview?.rounds[0]?.replyPosts,
+      ).toMatchObject([{ index: 0, kind: "pending" }]);
+      replies.push(payload);
+      return lost
+        ? { code: 1, stdout: "", stderr: "reply response lost" }
+        : {
+            code: 0,
+            stdout: JSON.stringify({ in_reply_to_id: 22, html_url: replyUrl }),
+            stderr: "",
+          };
+    }
+    if (request.argv.includes("--slurp"))
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify([
+          found && endpoint.endsWith("/comments")
+            ? [
+                {
+                  body: `<!-- tandem-reply:${SCENARIO_TASK_ID}:0:0 -->`,
+                  in_reply_to_id: 22,
+                  html_url: replyUrl,
+                },
+              ]
+            : [],
+        ]),
+      };
+    if (request.argv[1] === "api" && request.argv[2] === "graphql")
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: SCENARIO_HEAD,
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: threadReply.threadId,
+                      path: "removed.ts",
+                      line: null,
+                      diffSide: "LEFT",
+                      isResolved: false,
+                      isOutdated: true,
+                      comments: {
+                        nodes: [
+                          {
+                            id: threadReply.commentId,
+                            databaseId: 22,
+                            author: { login: "sam" },
+                            createdAt: world.clock(),
+                            body: "Earlier guard",
+                          },
+                        ],
+                        pageInfo: { hasNextPage: false, endCursor: null },
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      };
+    if (request.argv.includes("headRefOid"))
+      return {
+        code: 0,
+        stdout: request.argv.includes("--jq")
+          ? SCENARIO_HEAD
+          : JSON.stringify({ headRefOid: SCENARIO_HEAD }),
+        stderr: "",
+      };
+    if (request.argv.includes("--json"))
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          number: 7,
+          title: "A change",
+          url: "https://github.com/owner/repo/pull/7",
+          headRefOid: SCENARIO_HEAD,
+          isDraft: false,
+          body: "Change",
+          commits: [],
+          additions: 0,
+          deletions: 0,
+          statusCheckRollup: [],
+          comments: [],
+          reviews: [],
+        }),
+      };
+    if (request.argv[2] === "diff") return { code: 0, stdout: "", stderr: "" };
+    return world.run(request);
+  };
+  return {
+    run,
+    replies,
+    reviewPosts: () => reviewPosts,
+    showMarker: () => {
+      found = true;
+    },
+    offline: () => {
+      unreadable = true;
+    },
+  };
+}
+
+function crashReplyWorkflow(world: ScenarioWorld, run: CommandRunner, crash: ReplyCrash) {
+  return createPrReviewWorkflow({
+    home: world.home,
+    run,
+    clock: world.clock,
+    projectRoots: async () => [],
+    listTasks: () => world.store.list(),
+    getTask: async (id) => {
+      const saved = await world.store.read(id);
+      if (!saved) throw new Error("Missing task");
+      return saved;
+    },
+    createTask: async () => {
+      throw new Error("Unexpected creation");
+    },
+    updatePrReview: async (task, next) => {
+      const saved = await world.store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        prReview: next,
+      }));
+      if (crash === "claim" && next.rounds[0]?.replyPosts?.[0]?.kind === "pending")
+        throw new Error("crash after reply claim");
+      return saved;
+    },
+    mutatePrReview: async (id, update) => {
+      const result = await world.store.exclusive(async (store) => {
+        const task = await store.read(id);
+        if (!task) throw new Error("Missing task");
+        const next = update(task);
+        if (crash === "reply-receipt" && next.rounds[0]?.replyPosts?.[0]?.kind === "posted")
+          throw new Error("crash before reply receipt save");
+        if (next === task.prReview) return { task, changed: false };
+        const saved = await store.update(id, task.revision, (current) => ({
+          ...current,
+          revision: current.revision + 1,
+          prReview: next,
+        }));
+        return { task: saved, changed: true };
+      });
+      if (crash === "review-receipt" && result.task.prReview?.rounds[0]?.posted)
+        throw new Error("crash after review receipt save");
+      return result;
+    },
+    runAgain: async () => undefined,
+    settle: async () => undefined,
+  });
+}
+
+for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"] as const) {
+  test(`reply warning and saved text survive reload after ${crash}, without automatic retry`, async () => {
+    await withScenario({}, async (world) => {
+      await seedReview(world);
+      const boundary = replyBoundary(world, crash === "lost-response");
+      if (crash === "lost-response") {
+        const first = reviewService(world, boundary.run);
+        try {
+          expect(await first.reviewSubmit(SCENARIO_TASK_ID, replySubmission)).toMatchObject({
+            posted: true,
+            message: expect.stringContaining("no confirmed receipt"),
+          });
+        } finally {
+          await first.shutdown();
+        }
+      } else {
+        await expect(
+          crashReplyWorkflow(world, boundary.run, crash).submit(SCENARIO_TASK_ID, replySubmission),
+        ).rejects.toThrow("crash");
+      }
+      const restarted = reviewService(world, boundary.run);
+      const before = boundary.replies.length;
+      try {
+        const saved = await restarted.get(SCENARIO_TASK_ID);
+        expect(saved.prReview?.rounds[0]?.posted).toBeDefined();
+        expect(saved.prReview?.rounds[0]?.review.replies).toEqual([threadReply]);
+        if (crash === "lost-response")
+          expect(saved.prReview?.rounds[0]?.replyPosts?.[0]).toMatchObject({
+            kind: "uncertain",
+            message: "reply response lost",
+          });
+        if (crash === "claim" || crash === "reply-receipt")
+          expect(saved.prReview?.rounds[0]?.replyPosts?.[0]?.kind).toBe("pending");
+        const show = await restarted.reviewShow(SCENARIO_TASK_ID, { page: false });
+        expect(show.text).toContain(threadReply.body);
+        expect(show.text).toContain("Tandem will not automatically retry");
+        const round = saved.prReview?.rounds[0];
+        if (!round || !saved.prReview) throw new Error("Missing round");
+        expect(reviewPageInput(saved.prReview, round, "", {}).notes.join("\n")).toContain(
+          "no confirmed receipt",
+        );
+        const nativeReader = new NativeViewsReader({
+          home: world.home,
+          clock: world.clock,
+          run: boundary.run,
+          terminal: terminalBackend(world.run),
+        });
+        const snapshot = {
+          version: 1 as const,
+          writtenAt: world.clock(),
+          board: boardView(boardState({ projects: [world.repoPath] }), world.clock()),
+          coordinators: [],
+        };
+        await nativeReader.read(snapshot, world.repoPath);
+        await nativeReader.settle();
+        const publication = await nativeReader.read(snapshot, world.repoPath);
+        const pr = publication.details.find((entry) => entry.view.kind === "pr")?.view;
+        expect(pr?.kind === "pr" ? pr.data.review?.notes.join("\n") : undefined).toContain(
+          "no confirmed receipt",
+        );
+        await nativeReader.settle();
+        expect(
+          await restarted.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true }),
+        ).toMatchObject({ posted: true, message: expect.stringContaining("no confirmed receipt") });
+        expect(boundary.replies.length).toBe(before);
+        expect(boundary.reviewPosts()).toBe(1);
+        if (before > 0) {
+          boundary.showMarker();
+          expect(
+            await restarted.reviewPost(SCENARIO_TASK_ID, { verdict: "comment", approved: true }),
+          ).toMatchObject({ message: expect.stringContaining(replyUrl) });
+          const receipt = (await restarted.get(SCENARIO_TASK_ID)).prReview?.rounds[0]
+            ?.replyPosts?.[0];
+          expect(receipt).toMatchObject({ index: 0, kind: "posted", url: replyUrl });
+          expect(
+            (await restarted.reviewShow(SCENARIO_TASK_ID, { page: false })).text,
+          ).not.toContain("no confirmed receipt");
+          expect(boundary.replies.length).toBe(before);
+        }
+      } finally {
+        await restarted.shutdown();
+      }
+    });
+  }, 20_000);
+}
+
+test("reply recovery requires exact revision and explicit duplicate warning or a checked same-PR receipt", async () => {
+  await withScenario({}, async (world) => {
+    await seedReview(world);
+    const boundary = replyBoundary(world, true);
+    const service = reviewService(world, boundary.run);
+    try {
+      await service.reviewSubmit(SCENARIO_TASK_ID, replySubmission);
+      const saved = await service.get(SCENARIO_TASK_ID);
+      const action: TandemAction = {
+        action: "review-post",
+        taskId: saved.id,
+        verdict: "comment",
+        recovery: { kind: "post-reply-again", taskRevision: saved.revision, replyIndex: 0 },
+      };
+      expect(tandemRequestSchema.safeParse({ request: action }).success).toBe(true);
+      expect((await executeTandemAction(action, service, { confirm: undefined })).approved).toBe(
+        false,
+      );
+      expect(
+        (await executeTandemAction(action, service, { confirm: async () => false })).approved,
+      ).toBe(false);
+      expect(boundary.replies).toHaveLength(1);
+      await expect(
+        service.reviewPost(saved.id, {
+          verdict: "comment",
+          approved: false,
+          recovery: { kind: "post-reply-again", taskRevision: saved.revision, replyIndex: 0 },
+        }),
+      ).rejects.toThrow("user's approval");
+      await executeTandemAction(action, service, {
+        confirm: async (_title, message) => {
+          expect(message).toContain("duplicate reply");
+          return true;
+        },
+      });
+      expect(boundary.replies).toHaveLength(2);
+      expect(boundary.replies[1]).toEqual(boundary.replies[0]);
+      await expect(
+        executeTandemAction(action, service, { confirm: undefined, confirmedInConversation: true }),
+      ).rejects.toThrow("changed since you checked it");
+      const pending = await service.get(saved.id);
+      for (const url of [
+        "https://github.com/other/repo/pull/7#discussion_r23",
+        "https://github.com/owner/repo/pull/7#pullrequestreview-1",
+      ])
+        await expect(
+          service.reviewPost(saved.id, {
+            verdict: "comment",
+            approved: true,
+            recovery: {
+              kind: "mark-reply-posted",
+              taskRevision: pending.revision,
+              replyIndex: 0,
+              url,
+            },
+          }),
+        ).rejects.toThrow("same PR");
+      boundary.offline();
+      const marked = await executeTandemAction(
+        {
+          action: "review-post",
+          taskId: saved.id,
+          verdict: "comment",
+          recovery: {
+            kind: "mark-reply-posted",
+            taskRevision: pending.revision,
+            replyIndex: 0,
+            url: replyUrl,
+          },
+        },
+        service,
+        {
+          confirm: async (_title, message) => {
+            expect(message).toContain("reply link you checked");
+            return true;
+          },
+        },
+      );
+      expect(marked.value).toMatchObject({
+        posted: true,
+        message: expect.stringContaining(replyUrl),
+      });
+      expect((await service.get(saved.id)).prReview?.rounds[0]?.replyPosts?.[0]).toMatchObject({
+        kind: "posted",
+        confirmedByUser: true,
+        url: replyUrl,
+      });
+      expect(boundary.replies).toHaveLength(2);
+    } finally {
+      await service.shutdown();
+    }
+  });
+}, 20_000);
+
+test("competing confirmed reply recovery calls claim only one POST", async () => {
+  await withScenario({}, async (world) => {
+    await seedReview(world);
+    const boundary = replyBoundary(world, true);
+    const first = reviewService(world, boundary.run);
+    await first.reviewSubmit(SCENARIO_TASK_ID, replySubmission);
+    await first.shutdown();
+    const saved = await world.store.read(SCENARIO_TASK_ID);
+    if (!saved) throw new Error("Missing saved task");
+    const ready = Promise.withResolvers<void>();
+    let heads = 0;
+    const run: CommandRunner = async (request) => {
+      if (request.argv.includes("headRefOid") && request.argv.includes("--jq")) {
+        if (++heads === 2) ready.resolve();
+        await ready.promise;
+      }
+      return boundary.run(request);
+    };
+    const a = reviewService(world, run);
+    const b = reviewService(world, run);
+    try {
+      const input = {
+        verdict: "comment" as const,
+        approved: true,
+        recovery: {
+          kind: "post-reply-again" as const,
+          taskRevision: saved.revision,
+          replyIndex: 0,
+        },
+      };
+      const results = await Promise.allSettled([
+        a.reviewPost(saved.id, input),
+        b.reviewPost(saved.id, input),
+      ]);
+      expect(heads).toBe(2);
+      expect(boundary.replies).toHaveLength(2); // Original plus one confirmed attempt.
+      expect(results.filter((result) => result.status === "rejected")).toMatchObject([
+        { reason: { name: "StaleTaskRevisionError" } },
+      ]);
+      expect(boundary.reviewPosts()).toBe(1);
+      expect((await world.store.read(saved.id))?.prReview?.rounds[0]?.replyPosts?.[0]?.kind).toBe(
+        "uncertain",
+      );
+    } finally {
+      ready.resolve();
+      await Promise.all([a.shutdown(), b.shutdown()]);
+    }
+  });
+}, 20_000);
+
+test("reply preflight failure is saved and remains visible after task reload", async () => {
+  await withScenario({}, async (world) => {
+    await seedReview(world);
+    const boundary = replyBoundary(world);
+    let heads = 0;
+    const run: CommandRunner = async (request) => {
+      if (request.argv.includes("headRefOid") && request.argv.includes("--jq") && ++heads > 1)
+        return { code: 0, stdout: SCENARIO_NEXT_HEAD, stderr: "" };
+      return boundary.run(request);
+    };
+    const first = reviewService(world, run);
+    try {
+      await first.reviewSubmit(SCENARIO_TASK_ID, replySubmission);
+    } finally {
+      await first.shutdown();
+    }
+    const restarted = reviewService(world, run);
+    try {
+      expect(
+        (await restarted.get(SCENARIO_TASK_ID)).prReview?.rounds[0]?.replyPosts?.[0],
+      ).toMatchObject({
+        index: 0,
+        kind: "failed",
+        message: `The PR moved to ${SCENARIO_NEXT_HEAD}.`,
+      });
+      expect((await restarted.reviewShow(SCENARIO_TASK_ID, { page: false })).text).toContain(
+        `The PR moved to ${SCENARIO_NEXT_HEAD}.`,
+      );
+      expect(boundary.replies).toHaveLength(0);
+    } finally {
+      await restarted.shutdown();
+    }
+  });
+}, 20_000);
+
+test("an older in-flight reply failure cannot overwrite a newer same-clock confirmed attempt", async () => {
+  await withScenario({}, async (world) => {
+    await seedReview(world);
+    const boundary = replyBoundary(world, true);
+    const firstStarted = Promise.withResolvers<void>();
+    const secondStarted = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const releaseSecond = Promise.withResolvers<void>();
+    let posts = 0;
+    const run: CommandRunner = async (request) => {
+      if (request.argv.includes("POST") && request.argv.some((arg) => arg.endsWith("/comments"))) {
+        if (++posts === 1) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else {
+          secondStarted.resolve();
+          await releaseSecond.promise;
+        }
+      }
+      return boundary.run(request);
+    };
+    const first = reviewService(world, run);
+    const recovery = reviewService(world, run);
+    const original = first.reviewSubmit(SCENARIO_TASK_ID, replySubmission);
+    const observedOriginal = original.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    let recovered: ReturnType<typeof recovery.reviewPost> | undefined;
+    try {
+      await firstStarted.promise;
+      const before = await recovery.get(SCENARIO_TASK_ID);
+      const originalClaim = before.prReview?.rounds[0]?.replyPosts?.[0];
+      expect(originalClaim?.kind).toBe("pending");
+      recovered = recovery.reviewPost(SCENARIO_TASK_ID, {
+        verdict: "comment",
+        approved: true,
+        recovery: { kind: "post-reply-again", taskRevision: before.revision, replyIndex: 0 },
+      });
+      await secondStarted.promise;
+      const newerClaim = (await recovery.get(SCENARIO_TASK_ID)).prReview?.rounds[0]
+        ?.replyPosts?.[0];
+      expect(newerClaim?.kind).toBe("pending");
+      if (originalClaim?.kind !== "pending" || newerClaim?.kind !== "pending")
+        throw new Error("Missing pending claims");
+      expect(newerClaim.attemptedAt).toBe(originalClaim.attemptedAt);
+      expect(newerClaim.attemptRevision).toBeGreaterThan(originalClaim.attemptRevision);
+      releaseFirst.resolve();
+      expect(await observedOriginal).toMatchObject({
+        message: "The saved reply attempt changed; inspect it again.",
+      });
+      expect((await recovery.get(SCENARIO_TASK_ID)).prReview?.rounds[0]?.replyPosts?.[0]).toEqual(
+        newerClaim,
+      );
+      releaseSecond.resolve();
+      await recovered;
+      expect(
+        (await recovery.get(SCENARIO_TASK_ID)).prReview?.rounds[0]?.replyPosts?.[0],
+      ).toMatchObject({ kind: "uncertain", attemptRevision: newerClaim.attemptRevision });
+    } finally {
+      releaseFirst.resolve();
+      releaseSecond.resolve();
+      await Promise.allSettled([original, ...(recovered === undefined ? [] : [recovered])]);
+      await Promise.all([first.shutdown(), recovery.shutdown()]);
     }
   });
 }, 20_000);

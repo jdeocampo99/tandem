@@ -19,7 +19,7 @@ import {
   type TernCommands,
   TernOutcomeUnknownError,
 } from "./protocol.ts";
-import { exactNativeView, withNativeOpenIntent } from "./view-intent.ts";
+import { exactNativeView, proveTaskReplacement, withNativeOpenIntent } from "./view-intent.ts";
 
 const Opened = z.object({
   blocks: z.array(z.union([Id, z.number().int().safe().positive().transform(String)])),
@@ -29,6 +29,7 @@ const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
 const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 const windowPrograms = new Set(["tandem.board", "tandem.usage", "tandem.catchup"]);
+const reusableRoots = new Set(["board", "usage", "catchup", "prs"]);
 const returnPrograms = new Set(
   [
     "panel",
@@ -65,8 +66,11 @@ export function detailForView(
   if (view.kind === "task") return bundle.tasks[view.taskId]?.detailFile;
   if (view.kind === "brief") return bundle.briefs[view.requestId]?.detailFile;
   if (view.kind === "pr")
-    return Object.values(bundle.pullRequests).find((pr) => pr.header.taskId === view.taskId)
-      ?.detailFile;
+    return Object.values(bundle.pullRequests).find((pr) =>
+      "taskId" in view
+        ? pr.header.taskId === view.taskId
+        : pr.header.repo === view.repo && pr.header.number === view.number,
+    )?.detailFile;
   return undefined;
 }
 
@@ -76,7 +80,16 @@ export function ternViewHost(
   options: {
     wait: (ms: number) => Promise<void>;
     clock: () => number;
-    guard: <T>(key: string, operation: () => Promise<T>) => Promise<T>;
+    guardOpen?: <T>(
+      key: string,
+      operation: () => Promise<T>,
+      recoveredNativeOpen?: boolean,
+    ) => Promise<T>;
+    guard: <T>(
+      key: string,
+      operation: () => Promise<T>,
+      recoveredNativeOpen?: boolean,
+    ) => Promise<T>;
   },
 ) {
   const scoped = async (input: ViewHostingInput, allowMissingOrigin = false) => {
@@ -142,25 +155,47 @@ export function ternViewHost(
       | "welcome",
     placement: "panel" | "split" | "task" | "window" | "return" | "inbox",
     path: string,
-  ) => {
+  ): Promise<{ paneId: string; project: string; warnings?: string[] }> => {
     const { ensurePrivateDirectoryTree } = await import("../../coordinator/lock.ts");
     const { nativeViewsPath } = await import("../../board/snapshot.ts");
-    const cmd = await scoped(input);
-    return options.guard(input.coordinator.paneId, async () => {
-      const indexPath = nativeViewsPath(input.home, project);
-      const args = [
-        path,
-        input.coordinator.paneId,
-        input.cwd,
-        input.origin?.windowId ?? "",
-        indexPath,
-      ];
-      return withNativeOpenIntent({ ...input, indexPath }, cmd, async (intent) => {
+    const cmd = await scoped(input, placement === "return");
+    const indexPath = nativeViewsPath(input.home, project);
+    const args = [
+      path,
+      input.coordinator.paneId,
+      input.cwd,
+      input.origin?.windowId ?? "",
+      indexPath,
+    ];
+    return withNativeOpenIntent(
+      { ...input, indexPath },
+      cmd,
+      async (intent) => {
         const reused =
-          placement === "panel" || intent.recovered
+          placement === "panel" || reusableRoots.has(kind) || intent.recovered
             ? await exactNativeView(cmd, input.cwd, input.coordinator, kind, placement, args)
             : undefined;
-        if (reused !== undefined) return { paneId: reused.block.id, project };
+        if (reused !== undefined) {
+          if (reusableRoots.has(kind)) {
+            const current = await exactNativeView(
+              cmd,
+              input.cwd,
+              input.coordinator,
+              kind,
+              placement,
+              args,
+            );
+            if (current?.block.id !== reused.block.id)
+              throw new TernOutcomeUnknownError("tern open reuse", "native view identity changed");
+            const focused = await cmd.mutate(input.cwd, ["focus", reused.block.id], BlockAck);
+            if (focused.block !== reused.block.id)
+              throw new TernOutcomeUnknownError(
+                "tern focus",
+                "acknowledgement names another block",
+              );
+          }
+          return { paneId: reused.block.id, project };
+        }
         let closeOrigin: string | undefined;
         let proveClosingOrigin: (() => Promise<void>) | undefined;
         if (
@@ -251,6 +286,7 @@ export function ternViewHost(
           coordinator: input.coordinator.paneId,
           session: Id.parse(input.coordinator.terminalSessionId),
           receipt,
+          ...(replaced === undefined ? {} : { replaced }),
         });
         // Keep the final exact-id read immediately before focus. A failed read safely
         // cancels this invocation's intent because no mutation has been attempted.
@@ -350,10 +386,37 @@ export function ternViewHost(
             "tern open",
             "native block disappeared during verification",
           );
+        await proveTaskReplacement(cmd, input.cwd, replaced);
         await intent.settle();
         return { paneId: result.paneId, project };
-      });
-    });
+      },
+      placement !== "return" || input.view.kind !== "orchestrator"
+        ? undefined
+        : async () => {
+            // Return remains a safe exit even when destructive layout recovery cannot
+            // be proved. Focus only the recorded conversation; preserve every resource.
+            await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+            const focused = await cmd.mutate(
+              input.cwd,
+              ["focus", input.coordinator.paneId],
+              BlockAck,
+            );
+            if (focused.block !== input.coordinator.paneId)
+              throw new TernOutcomeUnknownError(
+                "tern return",
+                "acknowledgement names another block",
+              );
+            return {
+              paneId: input.coordinator.paneId,
+              project,
+              warnings: [
+                "Returned to your conversation. An earlier view could not be verified, so its views and recovery record were kept. Continue here or use Tern's tab switcher; opening new native views stays paused until exact recovery evidence is available.",
+              ],
+            };
+          },
+      (operation, recovered) =>
+        (options.guardOpen ?? options.guard)(input.coordinator.paneId, operation, recovered),
+    );
   };
   const close = async (input: Parameters<TerminalBackend["closeView"]>[0], project: string) => {
     const { nativeDetailPath, nativeViewsPath } = await import("../../board/snapshot.ts");
@@ -459,41 +522,53 @@ export function ternViewHost(
         if (!Number.isSafeInteger(ownerId))
           throw new Error("Browser owner id is not exactly representable");
         await options.guard(input.coordinator.paneId, async () => {
-          const before = blocks(await cmd.ls(input.cwd));
-          await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-          const opened = await cmd.mutate(
-            input.cwd,
-            ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
-            BrowserOpened,
+          await withNativeOpenIntent(
+            { ...input, indexPath: nativeViewsPath(input.home, project) },
+            cmd,
+            async (intent) => {
+              const before = blocks(await cmd.ls(input.cwd));
+              await intent.claimBrowser({
+                url: url.href,
+                ...(input.origin?.windowId === undefined
+                  ? {}
+                  : { windowId: input.origin.windowId }),
+              });
+              await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+              intent.markMutationAttempted();
+              const opened = await cmd.mutate(
+                input.cwd,
+                ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
+                BrowserOpened,
+              );
+              const listing = await cmd.ls(input.cwd);
+              const created = blocks(listing).find((entry) => entry.block.id === opened.ok.block);
+              if (
+                listing.detached.length > 0 ||
+                !created ||
+                created.session.id !== input.coordinator.terminalSessionId ||
+                before.some((entry) => entry.block.id === opened.ok.block)
+              )
+                throw new TernOutcomeUnknownError(
+                  "tern browser",
+                  "new browser identity was not confirmed",
+                );
+              await intent.settle();
+            },
           );
-          const created = blocks(
-            await cmd.ls(input.cwd).catch((cause: unknown) => {
-              throw new TernOutcomeUnknownError("tern browser", cause);
-            }),
-          ).find((entry) => entry.block.id === opened.ok.block);
-          if (
-            !created ||
-            created.session.id !== input.coordinator.terminalSessionId ||
-            before.some((entry) => entry.block.id === opened.ok.block)
-          )
-            throw new TernOutcomeUnknownError(
-              "tern browser",
-              "new browser identity was not confirmed",
-            );
         });
         return { opened: true, warnings: [] };
       }
       if (input.view.kind === "board" && (await toggleBoard(input, project)))
         return { opened: true, warnings: [] };
       if (input.view.kind === "orchestrator" || input.view.kind === "inbox") {
-        await open(
+        const returned = await open(
           input,
           project,
           "panel",
           input.view.kind === "inbox" ? "inbox" : "return",
           nativeViewsPath(input.home, project),
         );
-        return { opened: true, warnings: [] };
+        return { opened: true, warnings: returned.warnings ?? [] };
       }
       const bundle = await readNativeBundle(input.home, project);
       const detail = detailForView(bundle, input.view);

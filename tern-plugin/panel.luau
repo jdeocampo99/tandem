@@ -1,7 +1,7 @@
 --!strict
 local files=require("./view-file")
 local nav=require("./navigation")
-type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,number:number?},pullRequest:{number:number,url:string}?}
+type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,repo:string?,number:number?},pullRequest:{number:number,url:string}?}
 type Project={repoPath:string,name:string,status:string,current:boolean,needsYou:number,shortcut:string?,offline:boolean}
 type Panel={header:{title:string,otherProjectsNeedYou:number,bellCount:number,fiveHourLabel:string,fiveHour:{remainingPercent:number|string,resetInMs:number|string}?,projects:{Project}},sections:{{title:string,count:number,rows:{Row}}},footer:string?}
 type Bundle={panel:Panel}
@@ -37,7 +37,7 @@ local function activate(state:State,cx:BlockCx,index:number)
  local target=row.target
  if target.kind=="task" and target.taskId then nav.run(state.origin,cx,{"open","task",target.taskId})
  elseif target.kind=="brief" and target.requestId then nav.run(state.origin,cx,{"open","brief",target.requestId})
- elseif target.kind=="pr" and target.number then nav.run(state.origin,cx,{"open","pr",tostring(target.number)}) end
+ elseif target.kind=="pr" and target.repo and target.number then nav.run(state.origin,cx,{"open","pr",target.repo .. "#" .. tostring(target.number)}) end
 end
 local def:BlockDef<State> ={
  init=function(cx,args,_saved)

@@ -39,6 +39,31 @@ export type PriorCommentStatus = Readonly<{
   reply?: string;
 }>;
 
+export type ReviewReply = Readonly<{
+  threadId: string;
+  commentId: string;
+  replyTo: number;
+  body: string;
+}>;
+
+export function parseReviewReplies(value: unknown): readonly ReviewReply[] {
+  return list(value, "replies").map((item, index) => {
+    const entry = requireRecord(item, `replies[${index}]`);
+    const replyTo = integer(entry.replyTo, "replyTo");
+    if (!Number.isSafeInteger(replyTo) || replyTo <= 0)
+      throw new TypeError("replyTo must be a positive safe integer");
+    for (const key of Object.keys(entry))
+      if (!["threadId", "commentId", "replyTo", "body"].includes(key))
+        throw new TypeError(`Unknown reply field ${key}`);
+    return {
+      threadId: requireText(entry.threadId, "threadId"),
+      commentId: requireText(entry.commentId, "commentId"),
+      replyTo,
+      body: requireText(entry.body, "body"),
+    };
+  });
+}
+
 /** The reviewer's structured result, checked before anything is shown or posted. */
 export type PrReview = Readonly<{
   head: string;
@@ -51,6 +76,7 @@ export type PrReview = Readonly<{
   /** Posted as the review body; the intent lens puts its whole review here. */
   summaryComment: string;
   priorComments: readonly PriorCommentStatus[];
+  replies?: readonly ReviewReply[];
 }>;
 
 export type ReviewCheck = Readonly<{
@@ -199,6 +225,7 @@ export function parsePrReview(value: unknown): PrReview {
   const verdict = optionalText(record.verdict);
   return {
     head: requireText(record.head, "review.head"),
+    ...(record.replies === undefined ? {} : { replies: parseReviewReplies(record.replies) }),
     intent: requireText(record.intent, "review.intent"),
     ...(verdict === undefined ? {} : { verdict }),
     // Rounds stored before the tour have diagram and readingOrder instead, which are ignored.

@@ -7,7 +7,7 @@ import type { ReviewSubmission } from "../../src/pr-review/page.ts";
 import { createPrReviewWorkflow } from "../../src/pr-review/service.ts";
 import { type PrReviewState, prReviewRunDiffPath } from "../../src/pr-review/state.ts";
 import { task } from "../session/fixtures.ts";
-import { fakeGh, ok } from "./fake-gh.ts";
+import { fakeGh, type GhReply, ok } from "./fake-gh.ts";
 
 const REVIEWS = "gh api --paginate --slurp repos/acme/api/pulls/7/reviews";
 const HEAD = "gh pr view 7 --repo acme/api --json headRefOid";
@@ -82,11 +82,16 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-function workflow(head: string, overrides: Partial<TaskRecord> = {}) {
+function workflow(
+  head: string,
+  overrides: Partial<TaskRecord> = {},
+  replies: Record<string, GhReply> = {},
+) {
   const gh = fakeGh({
     [REVIEWS]: ok([[]]),
     [HEAD]: ok(`${head}\n`),
     [POST]: ok({ html_url: URL }),
+    ...replies,
   });
   let record: TaskRecord = task({
     kind: "pr-review",
@@ -214,4 +219,100 @@ test("a finished question follow-up can still submit the same unchanged review r
     posted: true,
   });
   expect(posted(calls)[0]).toMatchObject({ commit_id: "abc123" });
+});
+
+test("native replies save exact identities with the submitted round and post as replies once", async () => {
+  const reply = {
+    threadId: "outdated-thread",
+    commentId: "node-22",
+    replyTo: 22,
+    body: "Keep this guard",
+  };
+  const root = {
+    id: reply.commentId,
+    databaseId: 22,
+    author: { login: "sam" },
+    createdAt: "2030-01-01",
+    body: "Guard",
+  };
+  const threads = {
+    data: {
+      repository: {
+        pullRequest: {
+          headRefOid: "abc123",
+          reviewThreads: {
+            nodes: [
+              {
+                id: reply.threadId,
+                path: "deleted.ts",
+                line: null,
+                diffSide: "LEFT",
+                isResolved: false,
+                isOutdated: true,
+                comments: { nodes: [root], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    },
+  };
+  const repliesPost = "gh api --method POST repos/acme/api/pulls/7/comments";
+  const f = workflow(
+    "abc123",
+    {},
+    {
+      "gh api graphql": ok(threads),
+      "gh api --paginate --slurp repos/acme/api/pulls/7/comments": ok([[]]),
+      [repliesPost]: (request) => {
+        expect(f.current().prReview?.rounds[0]?.posted).toBeDefined();
+        expect(f.current().prReview?.rounds[0]?.review.replies).toEqual([reply]);
+        expect(JSON.parse(request.stdin ?? "{}").in_reply_to).toBe(22);
+        return ok({
+          in_reply_to_id: 22,
+          html_url: "https://github.com/acme/api/pull/7#discussion_r23",
+        });
+      },
+    },
+  );
+  expect(
+    await f.flow.submit(
+      "task-1",
+      { ...submission, yours: [], replies: [reply] },
+      { head: "abc123", generation: 0 },
+    ),
+  ).toMatchObject({ posted: true, message: expect.stringContaining("1 reply") });
+  await expect(f.flow.submit("task-1", { ...submission, replies: [reply] })).rejects.toThrow(
+    "already posted",
+  );
+  expect(f.calls.filter((c) => c.argv.join(" ").startsWith(repliesPost))).toHaveLength(1);
+  expect(posted(f.calls)[0]?.comments).toHaveLength(1);
+});
+
+test("a forged native reply refuses before saving the round or posting", async () => {
+  const f = workflow(
+    "abc123",
+    {},
+    {
+      "gh api graphql": ok({
+        data: {
+          repository: {
+            pullRequest: {
+              headRefOid: "abc123",
+              reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          },
+        },
+      }),
+    },
+  );
+  await expect(
+    f.flow.submit("task-1", {
+      ...submission,
+      replies: [{ threadId: "missing", commentId: "node-22", replyTo: 22, body: "Hi" }],
+    }),
+  ).rejects.toThrow("selected PR thread changed");
+  expect(posted(f.calls)).toHaveLength(0);
+  expect(f.current().prReview?.rounds[0]?.review.replies).toBeUndefined();
 });

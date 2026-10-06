@@ -71,9 +71,9 @@ export type TerminalView =
   | Readonly<{
       kind: "board" | "usage" | "prs" | "catchup" | "orchestrator" | "inbox" | "task-picker";
     }>
-  | Readonly<{ kind: "task"; taskId: string }>
+  | Readonly<{ kind: "task" | "pr"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>
-  | Readonly<{ kind: "pr"; taskId: string }>;
+  | Readonly<{ kind: "pr"; repo: string; number: number }>;
 
 /** Presentation context from the initiating view; it grants no pane ownership. */
 export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
