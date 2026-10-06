@@ -6,6 +6,7 @@ import {
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
+import { nativeViewsPath } from "../../board/snapshot.ts";
 import type { CommandRunner, Endpoint, TerminalPaneLocation } from "../../contracts.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import { probeTern } from "./availability.ts";
@@ -19,20 +20,23 @@ import {
   runCommand,
 } from "./endpoints.ts";
 import {
+  BlockAck,
   blocks,
   Created,
   Id,
   isDaemonGone,
   type LocatedBlock,
+  Processes,
   type TernOptions,
   TernOutcomeUnknownError,
-  TernUnsupportedOperationError,
   ternCommands,
 } from "./protocol.ts";
+import { projectForView, ternViewHost } from "./views.ts";
 
 export type TernBackendOptions = TernOptions &
   Readonly<{
     /** Resolve only the recorded dedicated helper, including after a restart. */
+    home?: string;
     notificationEndpoint?: (target: SessionTarget) => Promise<Endpoint | undefined>;
     clock?: () => number;
     wait?: (milliseconds: number) => Promise<void>;
@@ -213,14 +217,10 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
           ),
         );
     });
+  const views = ternViewHost(commands, { clock, wait, guard });
   return {
     name: "tern",
-    openView: async ({ view }) => ({
-      opened: false,
-      warnings: [
-        `Tern ${view.kind} view is unavailable until Tandem's native views are installed.`,
-      ],
-    }),
+    openView: views.openView,
     inspect: check,
     runCommand: (target) => guard(target.endpoint.paneId, () => runCommand(commands, target)),
     sendKeys: (target) =>
@@ -458,6 +458,24 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
     },
     focusAgent: async (target) => {
       try {
+        if (target.originCoordinator && target.home) {
+          const cmd = await views.scoped({
+            coordinator: target.originCoordinator,
+            cwd: target.cwd,
+            home: target.home,
+            view: { kind: "board" },
+            ...(target.origin === undefined ? {} : { origin: target.origin }),
+          });
+          const entry = blocks(await cmd.ls(target.cwd)).find(
+            (each) => each.block.id === target.paneId,
+          );
+          if (!entry) return false;
+          const endpoint = endpointFor(target, entry);
+          await guard(endpoint.paneId, () =>
+            paneMutation(cmd, { endpoint, cwd: target.cwd }, ["focus", endpoint.paneId]),
+          );
+          return true;
+        }
         return (await focus({ endpoint: await byId(target, target.paneId), cwd: target.cwd }))
           .focused;
       } catch {
@@ -553,8 +571,17 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         throw new TernOutcomeUnknownError("tern notify", "tty write failed");
       }
     },
-    openWelcome: async () => {
-      throw new TernUnsupportedOperationError("welcome");
+    openWelcome: async (target) => {
+      if (options.home === undefined) throw new Error("Tern welcome requires a Tandem home");
+      const coordinator = await byId(target, target.paneId);
+      const project = await projectForView(options.home, coordinator);
+      await views.open(
+        { coordinator, cwd: target.cwd, home: options.home, view: { kind: "board" } },
+        project,
+        "welcome",
+        "split",
+        nativeViewsPath(options.home, project),
+      );
     },
     promptAgent: async (target) => {
       const endpoint = await byId(target, target.paneId);
@@ -565,15 +592,59 @@ export function ternBackend(run: CommandRunner, options: TernBackendOptions = {}
         `${target.text}\r`,
       ]);
     },
-    openPanel: async () => {
-      throw new TernUnsupportedOperationError("panel");
+    openPanel: async (input) => {
+      if (options.home === undefined) throw new Error("Tern panel requires a Tandem home");
+      return (
+        await views.open(
+          {
+            coordinator: input.coordinator,
+            cwd: input.cwd,
+            home: options.home,
+            view: { kind: "board" },
+          },
+          input.project,
+          "panel",
+          "panel",
+          nativeViewsPath(options.home, input.project),
+        )
+      ).paneId;
     },
-    isPanelOpen: async () => {
-      throw new TernUnsupportedOperationError("panel inspection");
+    isPanelOpen: async (input) => {
+      const entry = blocks(await commands.ls(input.cwd)).find(
+        (each) => each.block.id === input.panelPaneId,
+      );
+      return (
+        entry !== undefined &&
+        entry.session.id === input.coordinator.terminalSessionId &&
+        entry.tab.id === input.coordinator.tabId &&
+        entry.block.program === "tandem.panel" &&
+        entry.block.args?.[1] === input.coordinator.paneId
+      );
     },
-    closePanel: async () => {
-      throw new TernUnsupportedOperationError("panel close");
-    },
+    closePanel: async (target) =>
+      guard(target.panelPaneId, async () => {
+        const entry = blocks(await commands.ls(target.cwd)).find(
+          (each) => each.block.id === target.panelPaneId,
+        );
+        if (entry === undefined) return;
+        const endpoint = endpointFor(target, entry);
+        if (entry.block.program !== "tandem.panel" || entry.block.args?.[1] === undefined)
+          throw new EndpointOwnershipError(endpoint, "recorded block is not a Tandem panel");
+        const proc = await commands.read(target.cwd, ["process", endpoint.paneId], Processes);
+        if (
+          proc.pane !== endpoint.paneId ||
+          proc.child !== null ||
+          proc.foreground !== null ||
+          proc.group !== null
+        )
+          throw new EndpointBusyError(endpoint);
+        await exactPane(commands, { endpoint, cwd: target.cwd });
+        const ack = await commands.mutate(target.cwd, ["close", endpoint.paneId], BlockAck);
+        if (ack.block !== endpoint.paneId)
+          throw new TernOutcomeUnknownError("panel close", "acknowledged another block");
+        if (blocks(await commands.ls(target.cwd)).some((each) => each.block.id === endpoint.paneId))
+          throw new TernOutcomeUnknownError("panel close", "block still present");
+      }),
     fitPanel: async (target) => ({
       fittedWidth: target.fittedWidth,
       warnings: ["Tern cannot resize panes; panel width is unchanged."],

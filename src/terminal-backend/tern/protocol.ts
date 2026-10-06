@@ -8,7 +8,15 @@ import type { CommandRunner } from "../../contracts.ts";
 
 export const TERN_BINARY = "/Applications/Tern.app/Contents/MacOS/tern";
 export const Id = z.string().regex(/^[1-9]\d*$/u);
-const Block = z.object({ id: Id, title: z.string(), cwd: z.string(), live: z.boolean() });
+const Block = z.object({
+  id: Id,
+  title: z.string(),
+  cwd: z.string(),
+  live: z.boolean(),
+  cols: z.number().optional(),
+  program: z.string().optional(),
+  args: z.array(z.string()).optional(),
+});
 const Tab = z.object({ id: Id, name: z.string().nullable(), blocks: z.array(Block) });
 const Session = z.object({ id: Id, name: z.string(), tabs: z.array(Tab) });
 export const Listing = z.object({ sessions: z.array(Session), detached: z.array(z.unknown()) });

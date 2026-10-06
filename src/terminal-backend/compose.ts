@@ -80,6 +80,7 @@ export function terminalBackend(
         ? herdrBackend(run, options.herdr)
         : ternBackend(run, {
             ...options.tern,
+            ...(home === undefined ? {} : { home }),
             ...(notificationEndpoint === undefined
               ? {}
               : {

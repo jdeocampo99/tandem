@@ -276,7 +276,7 @@ plugin consent. The Tern package stays linked for later use.
 ## Native brief pane and request intake
 
 The `tandem.brief` Luau block reads a direct `BriefView` detail envelope. Launch arguments are
-`[detailPath, coordinatorCwd, originatingPaneId, windowKey?]`. It uses the shared file loader,
+`[detailPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, tandemHome]`. It uses the shared file loader,
 text fields, diff rows and comment cards. Hovering a line reveals a gutter `+`; the comment editor
 opens below that line. Comment saves a local pending card, Cancel discards the editor, and Remove
 removes a pending card. No comment drafts are written to Tandem state or restored after restart.
@@ -299,3 +299,48 @@ comments open; a successful result ends the native block. There is no automatic 
 "Tandem: New request…" focuses the ownership-proven coordinator and sends a short intake prompt
 asking what the user wants to change. The user answers in that conversation. The action rechecks
 ownership after focusing, sends nothing if focus or proof fails, and creates no task or approval.
+
+## Native hosting and renderer launch API
+
+The Tern backend opens private, unique `<home>/native-host/<uuid>.tandem-open.json`
+layout tickets with `tern open`. The window route uses `cx:new_block`; a private receipt
+records the exact resulting pane, tab and session. Tern 0.5.0 reports handled layout routes
+as "cannot open in a file block", even after opening them. Success therefore requires the
+receipt and a scoped listing proving the exact block program and launch arguments. Missing
+or conflicting evidence quarantines the opening, retaining its ticket and resources.
+A confirmed opening removes its transient ticket and receipt. No title proves ownership.
+
+All renderers use these block ids and the same five string launch arguments:
+
+| Block id | Input | Placement |
+| --- | --- | --- |
+| `tandem.panel` | Root `panel` envelope | Left of the coordinator, about 360 pixels |
+| `tandem.task` | Direct `task` envelope | Conversation area, preserving its live coordinator |
+| `tandem.brief` | Direct `brief` envelope | Beside the conversation |
+| `tandem.pr` | Direct `pr` envelope | Beside the conversation |
+| `tandem.prs` | Root `panel` envelope | Beside the conversation |
+| `tandem.board`, `tandem.usage`, `tandem.catchup` | Root `panel` envelope | Own full-window tab |
+| `tandem.welcome` | Root path (static welcome) | Beside the conversation |
+
+`args = {modelPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, tandemHome}`.
+The renderer passes its **own** `cx.pane`, plus the supplied cwd and optional window key,
+to every native CLI action. `tern-plugin/navigation.luau` provides `origin(args)`,
+`run(origin, cx, argv)`, `root(origin)` and `back(origin, cx)` without action policy or retries.
+Root inputs come from `nativeViewsPath`; detail inputs come from `nativeDetailPath`.
+Task/brief/PR `TerminalBackend.openView` calls retain their existing durable identifiers;
+board/usage/PRs/catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same
+coordinator, home, cwd and origin context.
+
+Task hosting floats and hides the conversation in its **same recorded tab**, retaining its
+exact endpoint and process. It refuses existing pictures in picture. Returning docks that
+coordinator and closes only the exact task block; it never closes or restarts the agent.
+`native view-file ROOT#orchestrator` performs that return; `navigation.back` builds it.
+`ROOT#inbox` opens Tern's inbox, and `ROOT#open-project` sends the user's project-opening
+request to the verified coordinator. Other file paths must name an already published detail
+of the selected project. The view-file handler cannot open arbitrary renderer files.
+
+Project navigation selects the published row by 1–9 or wraps prev/next, refuses stale/offline
+rows, re-proves the destination coordinator, and uses an exact-block `tern focus` session
+switch. Supplied window keys are independently scoped and must contain the originating pane.
+Without a key, the backend requires exactly one attached window and proves the origin in
+that scope. Multiple windows are refused rather than choosing one by ordering.
