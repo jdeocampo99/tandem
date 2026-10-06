@@ -134,9 +134,10 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
       run,
       service: () => {
         if (dependencies.service !== undefined) return dependencies.service;
-        created ??= (dependencies.createService ?? createTandemService)(
-          serviceOptions(located.environment),
-        );
+        created ??= (dependencies.createService ?? createTandemService)({
+          ...serviceOptions(located.environment),
+          run,
+        });
         return created;
       },
     };

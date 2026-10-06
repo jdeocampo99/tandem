@@ -1,14 +1,16 @@
 import { expect, test } from "bun:test";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NativeViewsPublisher, NativeViewsReader } from "../../../src/board/native-read.ts";
 import { readBoard } from "../../../src/board/read.ts";
 import type { BoardSnapshot } from "../../../src/board/snapshot.ts";
-import { onboardRepo } from "../../../src/config/repositories.ts";
+import { saveProjectRoots } from "../../../src/config/home-settings.ts";
+import { centralConfigPath, onboardRepo } from "../../../src/config/repositories.ts";
 import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { nativeAct } from "../../../src/native/actions.ts";
 import { publishViews } from "../../../src/native/store.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import {
@@ -31,6 +33,7 @@ import {
   isolatedRunner,
   type SeededCoordinator,
   seedCoordinator,
+  setupRunner,
   type TernWindow,
   ternNativeEnabled,
   withTernWindow,
@@ -879,4 +882,81 @@ workflow(
     });
   },
   120_000,
+);
+
+workflow(
+  "setup block: summary, customize through every step, Start saves the command, then Settings opens",
+  async () => {
+    await withTernWindow({ name: "wf-setup", driver }, async (window) => {
+      const coordinator = await seedCoordinator(window, { name: "tandem", sessionId: SESSION });
+      await onboardRepo({ repoPath: coordinator.repo, home: window.home, write: true });
+      await saveProjectRoots(window.home, [window.root]);
+      const run = setupRunner(
+        isolatedRunner(window.run, join(window.root, "setup.log")),
+        join(window.root, "setup.log"),
+      );
+      const open = async (mode: "setup" | "settings") =>
+        nativeAct(
+          JSON.stringify({
+            v: 1,
+            origin: { pane: coordinator.endpoint.paneId, cwd: coordinator.checkout },
+            action: { verb: "open", ref: { kind: "setup", mode } },
+          }),
+          {
+            cwd: coordinator.repo,
+            processEnvironment: { TANDEM_HOME: window.home, TANDEM_SESSION: SESSION },
+            run,
+            terminal: window.terminal,
+          },
+        );
+
+      expect((await open("setup")).status).toBe("done");
+      await window.until("setup summary", async () =>
+        (await window.screen()).includes("Set up Tandem"),
+      );
+      expect(await window.screen()).toContain("Needs a validation command");
+      await window.shot("setup-summary");
+
+      await sendUntil(
+        window,
+        "models step",
+        () => clickIfShown(window, "Customize"),
+        async () => (await window.screen()).includes("Use recommended") || (await window.screen()).includes("Recommended:"),
+      );
+      await window.shot("setup-models");
+      const pick = (await window.nodes()).find((node) => node.text?.endsWith(" ▾") && node.rect);
+      await window.click(pick);
+      await window.until("model picker", async () =>
+        (await window.screen()).includes("Search models"),
+      );
+      await window.shot("setup-model-picker");
+      await window.click(pick);
+
+      await window.click("2. Repositories");
+      await window.until("repositories step", async () =>
+        (await window.screen()).includes("+ Add validation command"),
+      );
+      await window.click("+ Add validation command");
+      await window.typeInto("Command", "make check");
+      await window.shot("setup-repositories");
+
+      await window.click("4. Review");
+      await window.until("review", async () => (await window.screen()).includes("Validation: make check"));
+      await window.shot("setup-review");
+      await window.click("Start");
+      await window.until("done", async () => (await window.screen()).includes("You're all set"));
+      await window.shot("setup-done");
+      const config = await readFile(await centralConfigPath(coordinator.repo, window.home), "utf8");
+      expect(config).toContain('validationCommands = ["make check"]');
+      await window.until("coordinator told", async () =>
+        (await readFile(coordinator.transcript, "utf8")).includes("Setup saved."),
+      );
+
+      await window.click("Close");
+      expect((await open("settings")).status).toBe("done");
+      await window.until("settings", async () => (await window.screen()).includes("All changes saved"));
+      await window.shot("settings");
+    });
+  },
+  180_000,
 );

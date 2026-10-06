@@ -8,7 +8,7 @@ import { discoverCoordinatorRecords } from "../../../src/coordinator/registry.ts
 import { runTerminal } from "../../../src/main.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../../src/terminal-backend/contract.ts";
-import { isolatedRunner } from "./native-window.ts";
+import { isolatedRunner, setupRunner } from "./native-window.ts";
 
 const root = process.env.TANDEM_WORKFLOW_ROOT;
 if (process.env.TANDEM_HOME === undefined || !root?.startsWith("/private/tmp/tdm-"))
@@ -31,7 +31,7 @@ const spawn: CommandRunner = async (request) => {
   ]);
   return { stdout, stderr, code };
 };
-const run = isolatedRunner(spawn, log);
+const run = setupRunner(isolatedRunner(spawn, log), log);
 const records = (await discoverCoordinatorRecords({ home })).records.map((entry) => entry.record);
 const base = terminalBackend(run, { terminal: "tern", home });
 const terminal: TerminalBackend = {
