@@ -11,8 +11,8 @@ import type {
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
 import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
-import { probeTern } from "./tern/availability.ts";
 import { type TernBackendOptions, ternBackend, ternNotificationEndpoint } from "./tern/backend.ts";
+import { probeTern } from "./tern/cli.ts";
 import { TERN_CONTEXT } from "./tern/context.ts";
 import {
   ensureTernPlugin,

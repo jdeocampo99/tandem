@@ -1,22 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
-import { EndpointBusyError, EndpointOwnershipError } from "../../adapters/primitives.ts";
+import { EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
-import type { Endpoint } from "../../contracts.ts";
-import { listCoordinatorQuarantineRecords } from "../../coordinator/quarantine.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
 import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
 import { parseBlockArgs, ViewKind } from "../../native/contract.ts";
 import type { EndpointTarget } from "../contract.ts";
-import { exactPane } from "./endpoints.ts";
-import {
-  BlockAck,
-  blocks,
-  type LocatedBlock,
-  Processes,
-  type TernCommands,
-  TernOutcomeUnknownError,
-} from "./protocol.ts";
+import { ternEndpoint } from "../identity.ts";
+import type { TernCli } from "./cli.ts";
+import { blocks, type LocatedBlock, TernOutcomeUnknownError } from "./protocol.ts";
 
 const windowKinds: readonly ViewKind[] = ["board", "usage", "catchup"];
 const detailKinds: readonly ViewKind[] = ["task", "brief", "pr"];
@@ -60,24 +52,11 @@ export async function quarantineCoordinatorProof(
 
 /** Preflight every native view before closing any part of its recorded coordinator. */
 export async function planCoordinatorViews(
-  commands: TernCommands,
+  commands: TernCli,
   home: string | undefined,
   target: EndpointTarget,
 ): Promise<() => Promise<void>> {
   if (target.endpoint.role !== "coordinator") return async () => {};
-  if (
-    home !== undefined &&
-    (await listCoordinatorQuarantineRecords(home)).some(
-      (note) =>
-        note.endpoint?.terminal === "tern" &&
-        note.endpoint.paneId === target.endpoint.paneId &&
-        note.endpoint.terminalSessionId === target.endpoint.terminalSessionId,
-    )
-  )
-    throw new TernOutcomeUnknownError(
-      "view retirement",
-      "an earlier coordinator effect is quarantined",
-    );
   const listing = await commands.ls(target.cwd);
   if (listing.detached.length > 0)
     throw new EndpointOwnershipError(
@@ -96,15 +75,15 @@ export async function planCoordinatorViews(
   if (owner === undefined)
     throw new EndpointOwnershipError(target.endpoint, "views have no unique recorded coordinator");
   const index = nativeViewsPath(home, owner.repoPath);
-  const endpointFor = (entry: LocatedBlock): Endpoint => ({
-    ...target.endpoint,
-    workspaceId: entry.tab.id,
-    tabId: entry.tab.id,
-    paneId: entry.block.id,
-  });
-  const proveIdentity = async (entry: LocatedBlock) => {
-    const endpoint = endpointFor(entry);
-    const current = await exactPane(commands, { endpoint, cwd: target.cwd });
+  const coordinator = ternEndpoint(target.endpoint);
+  const endpointFor = (entry: LocatedBlock) =>
+    ternEndpoint({
+      ...target.endpoint,
+      workspaceId: entry.tab.id,
+      tabId: entry.tab.id,
+      paneId: entry.block.id,
+    });
+  for (const entry of claims) {
     const kind = ViewKind.safeParse(entry.block.program?.slice("tandem.".length));
     const listed = parseBlockArgs(entry.block.args);
     const file = listed?.viewPath ?? "";
@@ -117,7 +96,7 @@ export async function planCoordinatorViews(
     if (
       !kind.success ||
       listed === undefined ||
-      endpoint.paneId === target.endpoint.paneId ||
+      entry.block.id === target.endpoint.paneId ||
       entry.session.id !== target.endpoint.terminalSessionId ||
       (windowKinds.includes(kind.data)
         ? entry.tab.id === target.endpoint.tabId
@@ -125,43 +104,29 @@ export async function planCoordinatorViews(
       file !== expectedFile ||
       listed.ctx.coordinator !== target.endpoint.paneId ||
       listed.ctx.cwd !== target.cwd ||
-      listed.ctx.index !== index ||
-      current.block.program !== entry.block.program ||
-      JSON.stringify(current.block.args) !== JSON.stringify(entry.block.args)
+      listed.ctx.index !== index
     )
       throw new EndpointOwnershipError(
-        endpoint,
+        endpointFor(entry),
         "pane is not an exact coordinator-owned native view",
       );
-  };
-  const prove = async (entry: LocatedBlock) => {
-    await proveIdentity(entry);
-    const proc = await commands.read(target.cwd, ["process", entry.block.id], Processes);
-    if (
-      proc.pane !== entry.block.id ||
-      proc.child !== null ||
-      proc.group !== null ||
-      proc.foreground !== null
-    )
-      throw new EndpointBusyError(endpointFor(entry));
-    await proveIdentity(entry);
-  };
-  for (const entry of claims) await prove(entry);
+    await commands.proveView({
+      endpoint: endpointFor(entry),
+      cwd: target.cwd,
+      program: entry.block.program ?? "",
+      args: entry.block.args ?? [],
+    });
+  }
   return async () => {
     try {
-      for (const entry of claims) {
-        await prove(entry);
-        const ack = await commands.mutate(target.cwd, ["close", entry.block.id], BlockAck);
-        if (ack.block !== entry.block.id)
-          throw new TernOutcomeUnknownError("view retirement", "acknowledged another block");
-        try {
-          const after = await commands.ls(target.cwd);
-          if (after.detached.length > 0 || blocks(after).some((p) => p.block.id === entry.block.id))
-            throw new Error("closed native view is still present or detached");
-        } catch (cause) {
-          throw new TernOutcomeUnknownError("view retirement verification", cause);
-        }
-      }
+      for (const entry of claims)
+        await commands.mutate({
+          verb: "close",
+          endpoint: endpointFor(entry),
+          cwd: target.cwd,
+          view: { program: entry.block.program ?? "", args: entry.block.args ?? [] },
+          owner: coordinator,
+        });
       const after = await commands.ls(target.cwd).catch((cause: unknown) => {
         throw new TernOutcomeUnknownError("view retirement verification", cause);
       });

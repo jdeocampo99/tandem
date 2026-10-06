@@ -3,7 +3,7 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { TERN_BINARY } from "../../../src/terminal-backend/tern/protocol.ts";
+import { TERN_BINARY } from "../../../src/terminal-backend/tern/cli.ts";
 
 test("Tern uses the PATH installation, app fallback, or explicitly injected binary", async () => {
   const directory = await mkdtemp(join(tmpdir(), "tandem-tern-path-"));

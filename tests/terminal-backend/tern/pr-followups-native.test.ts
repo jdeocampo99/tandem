@@ -9,7 +9,8 @@ import {
   publishNativeViews,
 } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { followupsFixture } from "../../pr-review/followups-fixture.ts";
 import { taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
@@ -173,7 +174,7 @@ printf '{"posted":true,"url":"https://github.com/owner/repo/pull/281#review-1"}'
         return { stdout, stderr, code };
       };
       const host = ternViewHost(
-        ternCommands(commandRunner, {
+        ternCli(commandRunner, {
           binary,
           environment: Object.fromEntries(
             Object.entries(env).filter(
@@ -181,7 +182,6 @@ printf '{"posted":true,"url":"https://github.com/owner/repo/pull/281#review-1"}'
             ),
           ),
         }),
-        { clock: Date.now, wait: Bun.sleep, guard: async (_key, fn) => fn() },
       );
       const input = {
         coordinator: endpoint,

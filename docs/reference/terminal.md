@@ -119,10 +119,22 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   a tab, including a retained empty session. An absent stored id permits a new session with a
   collision-safe name. Matching names never permit reuse. The alert helper is likewise reused
   only by its recorded identity in that session.
+- Every Tern effect goes through `mutate(op)` in `tern/cli.ts`, the only module that runs the
+  Tern CLI (including `tern plugin` and the readiness probe) or writes the alert helper's tty.
+  Biome forbids importing the command runner anywhere else under `tern/`. The op union is closed
+  (`focus`, `run`, `send`, `rename`, `split`, `newTab`, `newSession`, `close`, `killSession`,
+  `open`, `browser`, `notify`) and takes only a `TernEndpoint`, which `identity.ts` narrows from a
+  tag-checked endpoint. Each op rechecks the exact id, proves destructive targets idle, reads the
+  durable quarantine, spawns, then checks the acknowledged id (the receipt for `open`).
 - Failed mutation responses, malformed acknowledgements and unconfirmed verification can follow
-  a completed effect. They raise `TernOutcomeUnknownError`; the local guard blocks blind repeats
-  and durable recovery retains ownership/resources. Never infer non-commit from a nonzero exit.
-  Inspect saved state and use [central recovery](recovery.md), rather than clearing the owner.
+  a completed effect. They raise `TernOutcomeUnknownError`. For `run`, `send`, `rename`, `split`,
+  `close`, `killSession` and `notify`, `mutate` writes a durable record under
+  `<home>/tern-quarantine/` against the exact pane, and every later op on that pane, in any
+  process, refuses with `TernQuarantinedError` before spawning. Ops also refuse when the pane or
+  its owning coordinator has a coordinator quarantine note. A focus is idempotent and records
+  nothing; opens record their own outcome as a ticket, creations as their launch reservation.
+  Never infer non-commit from a nonzero exit. Inspect saved state and use
+  [central recovery](recovery.md), rather than clearing the owner.
 
 Native hosting (`tern/host.ts`) writes one durable ticket per open under a per-coordinator lock
 and reads the receipt `layout.luau` always writes. A pure `decide()` settles a ticket whose
@@ -133,7 +145,7 @@ key must contain the exact origin and coordinator; without one, exactly one atta
 required. Task replacement also proves the previous task pane absent. Browser opens keep no
 durable record: nothing can prove an uncertain one later and it is never re-invoked, so it never
 pauses other opens. Native and panel closes prove the full arguments and idle state again
-immediately before closing; failed verification quarantines the outcome. The port's
+immediately before closing; failed verification quarantines the pane durably. The port's
 `recoverViewOpens` settles decided tickets on each coordinator view publication. `tandem fix`
 lists retained opens and, with `--yes`, abandons one only after proving its coordinator exactly
 present or gone, through `retainedViewOpens`/`abandonViewOpen` (Herdr has none).

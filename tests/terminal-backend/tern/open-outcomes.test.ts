@@ -2,14 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { acquireDarwinFileLock } from "../../../src/tasks/store-lock.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import {
   NativeViewNotOpenedError,
   recoverViewOpens,
 } from "../../../src/terminal-backend/tern/host.ts";
-import {
-  TernOutcomeUnknownError,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 
 const coordinator: Endpoint = {
@@ -109,13 +107,15 @@ async function withTern(
     throw new Error(`unexpected ${verb}`);
   };
   const open = () =>
-    ternViewHost(ternCommands(run, { binary: "tern" }), {
-      clock: () => now,
-      wait: async (ms) => {
-        now += ms;
-      },
-      guard: async (_key, operation) => operation(),
-    }).open(
+    ternViewHost(
+      ternCli(run, {
+        binary: "tern",
+        clock: () => now,
+        wait: async (ms) => {
+          now += ms;
+        },
+      }),
+    ).open(
       { home, cwd: home, coordinator, view: { kind: "task", taskId: "task-new" } },
       home,
       "task",
@@ -131,7 +131,7 @@ async function withTern(
       retained: async () =>
         (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
       home,
-      tick: () => recoverViewOpens(ternCommands(run, { binary: "tern" }), home, now),
+      tick: () => recoverViewOpens(ternCli(run, { binary: "tern" }), home, now),
       advance: (ms) => {
         now += ms;
       },

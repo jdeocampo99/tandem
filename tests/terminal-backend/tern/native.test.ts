@@ -7,13 +7,8 @@ import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
-import { paneMutation } from "../../../src/terminal-backend/tern/endpoints.ts";
-import {
-  decode,
-  Listing,
-  TERN_BINARY,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { TERN_BINARY } from "../../../src/terminal-backend/tern/cli.ts";
+import { decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
 
 const nativeTest = process.env.TANDEM_TERN_NATIVE === "1" ? test : test.skip;
 
@@ -71,13 +66,12 @@ nativeTest(
         await Bun.sleep(50);
       }
       const terminal = ternBackend(run, { binary: TERN_BINARY });
-      const commands = ternCommands(run, { binary: TERN_BINARY });
       const assertCreatedContext = async (endpoint: Endpoint) => {
         const contextTarget = { endpoint, cwd: root };
         // Let the created shell expand only these synthetic identity variables into exact argv.
         // This bypasses runCommand's env injection and writes no environments to fixtures.
         const command = `${quoteShellCommand(["/bin/sh", "-c", "read -r x"])} "$TANDEM_SESSION" "$TANDEM_TERN_WORKSPACE_ID" "$TERN_PANE"`;
-        await paneMutation(commands, contextTarget, ["run", endpoint.paneId, command]);
+        await run({ argv: [TERN_BINARY, "run", endpoint.paneId, command, "--json"], cwd: root });
         const deadline = Date.now() + 5_000;
         for (;;) {
           const process = (

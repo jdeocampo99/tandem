@@ -10,7 +10,8 @@ import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { parseBlockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { blocks, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { blocks } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
@@ -153,7 +154,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         checked([process.execPath, join(checkout, "src/main.ts"), repo, "--no-attach"], repo);
       await frontDoor(a);
       const terminal = ternBackend(run, { home, environment: env });
-      const commands = ternCommands(run, { environment: env });
+      const commands = ternCli(run, { environment: env });
       const record = (await listCoordinatorRecords(home, env.TANDEM_SESSION)).find(
         (r) => r.repoPath === a,
       );

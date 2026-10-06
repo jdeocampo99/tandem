@@ -121,6 +121,37 @@
       }
     },
     {
+      "includes": ["src/terminal-backend/tern/**", "!src/terminal-backend/tern/cli.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "../../contracts.ts": {
+                    "importNames": ["CommandRunner"],
+                    "message": "Only src/terminal-backend/tern/cli.ts runs commands. Spawn Tern through ternCli and mutate."
+                  },
+                  "../../adapters/commands.ts": {
+                    "importNames": ["runCommand"],
+                    "message": "Only src/terminal-backend/tern/cli.ts runs commands. Spawn Tern through ternCli and mutate."
+                  },
+                  "node:child_process": "Only src/terminal-backend/tern/cli.ts runs commands. Spawn Tern through ternCli and mutate."
+                },
+                "patterns": [
+                  {
+                    "group": ["@oh-my-pi/**", "**/terminal-backend/herdr/**"],
+                    "message": "Use the harness and terminal ports."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": [
         "src/harness/resolve.ts",
         "tests/harness/resolve.test.ts",

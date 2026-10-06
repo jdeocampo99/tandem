@@ -1,26 +1,15 @@
 import { z } from "zod";
-import {
-  AdapterError,
-  EndpointBusyError,
-  EndpointOwnershipError,
-} from "../../adapters/primitives.ts";
+import { AdapterError, EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { type NativeNavigationModel, readNativeBundle } from "../../board/native-file.ts";
 import { nativeBriefFile } from "../../board/native-views.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
 import type { Endpoint } from "../../contracts.ts";
 import { blockArgs, type Placement, type ViewKind } from "../../native/contract.ts";
 import type { TerminalBackend } from "../contract.ts";
-import { exactPane } from "./endpoints.ts";
+import { ternEndpoint } from "../identity.ts";
+import type { TernCli } from "./cli.ts";
 import { type OpenResult, openView, withSettledOpens } from "./host.ts";
-import {
-  BlockAck,
-  blocks,
-  Id,
-  Processes,
-  type TernCommands,
-  TernOutcomeUnknownError,
-  ternCommands,
-} from "./protocol.ts";
+import { blocks, TernOutcomeUnknownError, TernQuarantinedError } from "./protocol.ts";
 
 class BrowserOpenUnconfirmedError extends AdapterError {
   constructor(cause: unknown) {
@@ -32,7 +21,6 @@ class BrowserOpenUnconfirmedError extends AdapterError {
     this.name = "BrowserOpenUnconfirmedError";
   }
 }
-const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
 export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
@@ -64,16 +52,7 @@ export function detailForView(
 }
 
 /** File routes are the sole CLI-to-block launch port. An uncertain invocation is never repeated. */
-export function ternViewHost(
-  commands: TernCommands,
-  options: {
-    wait: (ms: number) => Promise<void>;
-    clock: () => number;
-    /** Refuses an open while its coordinator pane is quarantined; opens record their own outcome. */
-    guardOpen?: <T>(key: string, operation: () => Promise<T>) => Promise<T>;
-    guard: <T>(key: string, operation: () => Promise<T>) => Promise<T>;
-  },
-) {
+export function ternViewHost(commands: TernCli) {
   const scoped = async (input: ViewHostingInput, allowMissingOrigin = false) => {
     // Luau's native layout API uses numbers. Reject ids it cannot represent exactly.
     for (const id of [
@@ -91,15 +70,10 @@ export function ternViewHost(
     const key = input.origin?.windowId;
 
     // A supplied key is scoped independently and must contain both exact panes.
-    const base = commands.request(input.cwd, []);
-    const cmd =
-      key === undefined
-        ? commands
-        : ternCommands(commands.run, {
-            binary: commands.binary,
-            windowKey: key,
-            ...(base.env === undefined ? {} : { environment: base.env }),
-          });
+    const cmd = commands.scope({
+      ...(key === undefined ? {} : { windowKey: key }),
+      home: input.home,
+    });
     if (key === undefined) {
       const clients = await cmd.read(input.cwd, ["inspect"], Clients);
       if (clients.clients.filter((client) => client.kind === "window").length !== 1)
@@ -108,7 +82,7 @@ export function ternViewHost(
           "tern open",
         );
     }
-    await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+    await cmd.exactPane({ endpoint: input.coordinator, cwd: input.cwd });
     const originId = input.origin?.paneId ?? input.coordinator.paneId;
     const listing = await cmd.ls(input.cwd);
     const origin = blocks(listing).find((entry) => entry.block.id === originId);
@@ -126,26 +100,21 @@ export function ternViewHost(
     kind: ViewKind,
     placement: Placement,
     path: string,
-  ): Promise<OpenResult> => {
-    const cmd = await scoped(input, placement === "return");
-    return (options.guardOpen ?? options.guard)(input.coordinator.paneId, () =>
-      openView(
-        cmd,
-        {
-          coordinator: input.coordinator,
-          cwd: input.cwd,
-          home: input.home,
-          ...(input.origin === undefined ? {} : { origin: input.origin }),
-          returnToConversation: placement === "return" && input.view.kind === "orchestrator",
-        },
-        project,
-        kind,
-        placement,
-        path,
-        options,
-      ),
+  ): Promise<OpenResult> =>
+    openView(
+      await scoped(input, placement === "return"),
+      {
+        coordinator: input.coordinator,
+        cwd: input.cwd,
+        home: input.home,
+        ...(input.origin === undefined ? {} : { origin: input.origin }),
+        returnToConversation: placement === "return" && input.view.kind === "orchestrator",
+      },
+      project,
+      kind,
+      placement,
+      path,
     );
-  };
   const close = async (input: Parameters<TerminalBackend["closeView"]>[0], project: string) => {
     if (input.origin.paneId === input.coordinator.paneId)
       throw new EndpointOwnershipError(
@@ -153,74 +122,32 @@ export function ternViewHost(
         "cannot retire the conversation as a brief",
       );
     const cmd = await scoped(input, true);
-    return options.guard(input.coordinator.paneId, async () => {
-      const args = blockArgs(
-        nativeDetailPath(input.home, project, nativeBriefFile(input.view.requestId)),
-        {
-          coordinator: input.coordinator.paneId,
-          cwd: input.cwd,
-          home: input.home,
-          index: nativeViewsPath(input.home, project),
-          ...(input.origin.windowId === undefined ? {} : { window: input.origin.windowId }),
-        },
-      );
-      const listing = await cmd.ls(input.cwd);
-      const entry = blocks(listing).find((each) => each.block.id === input.origin.paneId);
-      if (entry === undefined) {
-        if (listing.detached.length > 0)
-          throw new EndpointOwnershipError(
-            input.coordinator,
-            "detached panes make brief closure ambiguous",
-          );
-        return { closed: true, warnings: [] };
-      }
-      const endpoint: Endpoint = {
+    const args = blockArgs(
+      nativeDetailPath(input.home, project, nativeBriefFile(input.view.requestId)),
+      {
+        coordinator: input.coordinator.paneId,
+        cwd: input.cwd,
+        home: input.home,
+        index: nativeViewsPath(input.home, project),
+        ...(input.origin.windowId === undefined ? {} : { window: input.origin.windowId }),
+      },
+    );
+    // The listed tab places the exact pane; an absent pane still passes the quarantine read.
+    const entry = blocks(await cmd.ls(input.cwd)).find(
+      (each) => each.block.id === input.origin.paneId,
+    );
+    await cmd.mutate({
+      verb: "close",
+      endpoint: ternEndpoint({
         ...input.coordinator,
-        paneId: entry.block.id,
-        workspaceId: entry.tab.id,
-        tabId: entry.tab.id,
-      };
-      const proveIdentity = async () => {
-        const current = await exactPane(cmd, { endpoint, cwd: input.cwd });
-        if (
-          current.block.program !== "tandem.brief" ||
-          JSON.stringify(current.block.args) !== JSON.stringify(args)
-        )
-          throw new EndpointOwnershipError(
-            endpoint,
-            "origin is not this request's exact native brief",
-          );
-      };
-      const prove = async () => {
-        await proveIdentity();
-        const process = await cmd.read(input.cwd, ["process", endpoint.paneId], Processes);
-        if (
-          process.pane !== endpoint.paneId ||
-          process.child !== null ||
-          process.foreground !== null ||
-          process.group !== null
-        )
-          throw new EndpointBusyError(endpoint);
-      };
-      await prove();
-      // Identity, arguments and idle state must still hold immediately before the effect.
-      await prove();
-      await proveIdentity();
-      const ack = await cmd.mutate(input.cwd, ["close", endpoint.paneId], BlockAck);
-      if (ack.block !== endpoint.paneId)
-        throw new TernOutcomeUnknownError("brief close", "acknowledged another block");
-      try {
-        const after = await cmd.ls(input.cwd);
-        if (
-          after.detached.length > 0 ||
-          blocks(after).some((each) => each.block.id === endpoint.paneId)
-        )
-          throw new Error("closed block is still present or detached placement is ambiguous");
-      } catch (cause) {
-        throw new TernOutcomeUnknownError("brief close", cause);
-      }
-      return { closed: true, warnings: [] };
+        paneId: input.origin.paneId,
+        ...(entry === undefined ? {} : { workspaceId: entry.tab.id, tabId: entry.tab.id }),
+      }),
+      cwd: input.cwd,
+      view: { program: "tandem.brief", args },
+      owner: ternEndpoint(input.coordinator),
     });
+    return { closed: true, warnings: [] };
   };
   const toggleBoard = async (input: ViewHostingInput, project: string): Promise<boolean> => {
     const cmd = await scoped(input);
@@ -244,41 +171,30 @@ export function ternViewHost(
         const url = new URL(input.view.url);
         if (url.protocol !== "https:") throw new Error("PR links require an HTTPS URL");
         const cmd = await scoped(input);
-        const ownerId = Number(input.coordinator.paneId);
-        if (!Number.isSafeInteger(ownerId))
-          throw new Error("Browser owner id is not exactly representable");
-        await options.guard(input.coordinator.paneId, async () => {
-          await withSettledOpens(
-            cmd,
-            input.coordinator,
-            { cwd: input.cwd, home: input.home, index: nativeViewsPath(input.home, project) },
-            options.clock,
-            async () => {
-              const before = blocks(await cmd.ls(input.cwd));
-              await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
-              // Nothing can later prove or disprove a browser opening, and it is never
-              // re-invoked, so an unconfirmed one is reported once and pauses nothing.
-              try {
-                const opened = await cmd.mutate(
-                  input.cwd,
-                  ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
-                  BrowserOpened,
-                );
-                const listing = await cmd.ls(input.cwd);
-                const created = blocks(listing).find((entry) => entry.block.id === opened.ok.block);
-                if (
-                  listing.detached.length > 0 ||
-                  !created ||
-                  created.session.id !== input.coordinator.terminalSessionId ||
-                  before.some((entry) => entry.block.id === opened.ok.block)
-                )
-                  throw new Error("new browser identity was not confirmed");
-              } catch (cause) {
+        await withSettledOpens(
+          cmd,
+          input.coordinator,
+          { cwd: input.cwd, home: input.home, index: nativeViewsPath(input.home, project) },
+          async () => {
+            // Nothing can later prove or disprove a browser opening, and it is never
+            // re-invoked, so an unconfirmed one is reported once and pauses nothing.
+            try {
+              await cmd.mutate({
+                verb: "browser",
+                endpoint: ternEndpoint(input.coordinator),
+                cwd: input.cwd,
+                url,
+              });
+            } catch (cause) {
+              if (
+                cause instanceof TernOutcomeUnknownError &&
+                !(cause instanceof TernQuarantinedError)
+              )
                 throw new BrowserOpenUnconfirmedError(cause);
-              }
-            },
-          );
-        });
+              throw cause;
+            }
+          },
+        );
         return { opened: true, warnings: [] };
       }
       if (input.view.kind === "board" && (await toggleBoard(input, project)))

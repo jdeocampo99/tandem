@@ -8,11 +8,11 @@ import {
   installTerminalPlugin,
   reloadTerminalPlugin,
 } from "../../../src/terminal-backend/compose.ts";
+import { TERN_BINARY } from "../../../src/terminal-backend/tern/cli.ts";
 import {
   configureTernPluginSettings,
   ensureTernPlugin,
   reloadTernPlugin,
-  TERN_APP_BINARY,
 } from "../../../src/terminal-backend/tern/plugin.ts";
 
 const scratch = await mkdtemp("/tmp/tandem-plugin-scratch-");
@@ -57,7 +57,7 @@ test("onboarding links palette actions even when global preferences are declined
     expect(
       await ensureTernPlugin({
         ...approved,
-        binary: TERN_APP_BINARY,
+        binary: TERN_BINARY,
         cwd: "/tmp",
         directory: "/plugin with spaces",
         settingsPath: join(root, "settings.json"),
@@ -120,7 +120,7 @@ for (const selection of ["injected-path", "explicit-binary", "app-fallback"] as 
         selection === "explicit-binary"
           ? "/explicit/tern"
           : selection === "app-fallback"
-            ? TERN_APP_BINARY
+            ? TERN_BINARY
             : executable;
       expect(selected.calls.map((call) => call.argv.slice(0, 3))).toEqual([
         [expected, "plugin", "list"],

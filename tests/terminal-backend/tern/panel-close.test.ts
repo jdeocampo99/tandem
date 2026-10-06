@@ -7,7 +7,10 @@ import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { blockArgs } from "../../../src/native/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
+import {
+  TernOutcomeUnknownError,
+  TernQuarantinedError,
+} from "../../../src/terminal-backend/tern/protocol.ts";
 
 // Regressions from the #282 safety verifier's panel-probe.ts. Supply a real
 // private coordinator record so refused ownership cannot mask post-effect failures.
@@ -145,11 +148,12 @@ for (const mode of [
             leasedAt: "2030-01-02T12:00:00Z",
           },
         });
-      const terminal = ternBackend(run, {
-        binary: "tern",
-        ...(mode === "no-home" ? {} : { home }),
-      });
-      const close = () => terminal.closePanel({ sessionId: "fixture", cwd, panelPaneId: "4" });
+      // Every close is a fresh backend, as every click is a fresh process.
+      const close = () =>
+        ternBackend(run, {
+          binary: "tern",
+          ...(mode === "no-home" ? {} : { home }),
+        }).closePanel({ sessionId: "fixture", cwd, panelPaneId: "4" });
       const effectUnconfirmed = [
         "failed",
         "malformed",
@@ -158,9 +162,15 @@ for (const mode of [
       ].includes(mode);
       if (mode === "confirmed" || mode === "retired-coordinator" || mode === "missing")
         await close();
-      else if (effectUnconfirmed || mode === "detached-before-close") {
+      else if (effectUnconfirmed) {
         await expect(close()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-        await expect(close()).rejects.toThrow("quarantine");
+        // Detached placement refuses before the quarantine read; every other retry meets it.
+        await expect(close()).rejects.toBeInstanceOf(
+          mode === "detached-after-close" ? TernOutcomeUnknownError : TernQuarantinedError,
+        );
+      } else if (mode === "detached-before-close") {
+        await expect(close()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+        await expect(close()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
       } else {
         await expect(close()).rejects.toThrow();
         await expect(close()).rejects.toThrow();
