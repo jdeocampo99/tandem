@@ -23,23 +23,24 @@ local function run(cx: WindowCx, args: { string })
  if not ok then cx:toast("error", "Tandem couldn't start that action", tostring(problem)) end
 end
 
-local function command(id: string, title: string, args: { string }, keys: { string }?)
- tern.command({ id = id, title = title, keys = keys, run = function(cx) run(cx, args) end })
+local function command(id: string, title: string, args: { string }, palette: boolean?)
+ tern.command({ id = id, title = title,
+  available = if palette == false then function() return false end else nil,
+  run = function(cx) run(cx, args) end })
 end
 
 command("new-request", "Tandem: New request…", { "new-request" })
 command("open-task", "Tandem: Open task…", { "open-task" })
-command("board", "Tandem: Toggle board", { "board" }, { "cmd+shift+b" })
-command("prs", "Tandem: Show PRs", { "prs" }, { "cmd+shift+p" })
-command("usage", "Tandem: Usage", { "usage" }, { "cmd+shift+u" })
+command("board", "Tandem: Toggle board", { "board" })
+command("prs", "Tandem: Show PRs", { "prs" })
+command("usage", "Tandem: Usage", { "usage" })
 
 for number = 1, 9 do
  local value = tostring(number)
- -- Keep this registration order: settings keybinds name Tern's bind.0 through bind.10 actions.
- tern.bind("cmd+" .. value, function(cx) run(cx, { "project", value }) end)
+ command("project-" .. value, "Tandem: Project " .. value, { "project", value }, false)
 end
-tern.bind("cmd+shift+[", function(cx) run(cx, { "project", "prev" }) end)
-tern.bind("cmd+shift+]", function(cx) run(cx, { "project", "next" }) end)
+command("project-prev", "Tandem: Previous project", { "project", "prev" }, false)
+command("project-next", "Tandem: Next project", { "project", "next" }, false)
 
 tern.route.link(function(link, cx)
  local kind, id = string.match(link.url, "^tandem://([a-z]+)/([%w_-]+)$")

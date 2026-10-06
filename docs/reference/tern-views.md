@@ -126,7 +126,7 @@ tandem native pr-comment TASK_ID --text TEXT CONTEXT
 tandem native pr-comment TASK_ID --input FILE CONTEXT
 tandem native review-submit TASK_ID --input FILE CONTEXT
 tandem native restart TASK_ID CONTEXT
-tandem native steer TASK_ID --text TEXT CONTEXT
+tandem native steer --task TASK_ID --text TEXT CONTEXT
 CONTEXT = --pane ID --cwd PATH [--window KEY]
 ```
 
@@ -191,8 +191,9 @@ user text is one argv element, including spaces and newlines.
 `yours: [{ file, line, body }]`. The CLI reuses the pinned-HEAD and no-double-post checks of
 the review page; the renderer does not publish directly.
 
-`restart` names the task and goes through central recovery. `steer` also requires the user's
-direction as one `--text` argv value. Both carry the same explicit pane/cwd/window context.
+`restart` names the task and goes through central recovery. `steer` requires `--task TASK_ID` and
+the user's direction as one `--text` argv value; positional task ids are refused. Both carry
+the same explicit pane/cwd/window context.
 The action worker owns these handlers alongside brief/PR mutations and `native open`;
 renderers own collecting input, writing the action file, invoking the CLI and cleanup.
 
@@ -211,28 +212,63 @@ when no view opened. The `brief-review` fallback tells the action handler to use
 request-brief review workflow and verify that its pane opened. Callers do not create a second
 view or retry an open merely because warnings or a fallback are present.
 
-`ensureTernPlugin` checks the catalog and asks before linking a missing package. A failed or
-malformed catalog fails closed. The same consent adds explicit `settings.json` keybind overrides:
-Tern's built-in preset otherwise wins over plugin defaults for the requested shortcuts. Existing
-custom bindings, modifier aliases and sequences are preserved and reported. Changes keep other
-preferences and refuse a file changed since reading. Project actions use Tern's generated
-`plugin.tandem.bind.0` through `.10`; their registration order is part of this integration.
+`ensureTernPlugin` checks the catalog and links a missing package after ready Tern is selected.
+Choosing ready Tern is consent to link its native view package. A failed or malformed catalog fails closed. One onboarding question asks before hiding Tern's sidebar and adding
+global shortcuts. These preferences affect every Tern window. Window commands register no default
+chords, so declining leaves Tern's keys unchanged while keeping the five specified commands in the palette.
+Project commands set `available = false`: Tern 0.4.5 hides these rows but still dispatches their
+consented keybind actions, verified in an isolated control window.
+Panel renderers always provide their header buttons, independent of shortcut consent.
+
+Only absent explicit keybinds inherited from the built-in Tern preset are eligible for replacement.
+Every explicit non-Tandem binding is treated conservatively as custom, including modifier aliases,
+physical digit aliases and sequences. The native `SettingsCx.describe("keymap")` schema and an
+isolated `tmux` window confirm enum presets `tern`, `ghostty`, `kitty`, `cmux`, and `tmux`, with
+`tern` as default. Alternate presets are preserved as a whole and reported by preset name, without
+mislabeling their inherited keys as custom. Skipped explicit shortcuts are listed
+with names such as "Command+Shift+B". Project actions use stable named commands
+`plugin.tandem.project-1` through `project-9`, `project-prev` and `project-next`.
 Numeric shortcuts bind both Tern's character (`cmd+1`) and physical (`cmd+digit_1`) spellings;
 its preset defines both. Configure keys before opening the project window, or reopen a window
 after adding the mappings so it reads the settings.
-`reloadTernPlugin` refreshes an already installed package for
-`tandem update`; it never silently installs one. Onboarding retains the separate consent for
-Tern's global sidebar setting. Native renderer definitions and CLI action handlers build on this
-foundation in the subsequent stacked PRs.
+`configureTernPluginSettings({ path?, configDirectory?, approved?, confirm? })` returns
+`{ configured, skipped, notice?: true, preset?: string }`. The private `settings.json.tandem.json` version-1 record stores the
+decision, exact added key/action pairs, original keybind-table presence, and sidebar's original
+presence/value plus installed value. A decline is remembered and leaves settings byte-identical.
+An approval records changes before applying them, allowing restoration after an interrupted write.
+A failed settings write removes its unchanged record when the intended settings did not commit,
+so the next attempt cannot claim an unapplied approval. If the settings did commit before a later
+failure, the record remains available for guarded restoration. An existing approved record reports
+`configured: true` only while its recorded settings are actually present; an interrupted write
+cannot claim application on the next launch. User edits are still never reapplied.
+Both files are regular, non-symlink files written atomically with mode 0600, and stale writes are
+refused. Existing records do not reapply removed bindings or reprompt on each launch.
+`notice` is returned only for a newly saved decision: custom-key and decline notices print once.
+The decline notice explains how to reconsider: switch to Herdr, then select Tern again in setup.
+
+`restoreTernPluginSettings({ path?, configDirectory? })` returns `{ restored, preserved }`.
+It removes only recorded keys still equal to their installed action and restores the sidebar only
+while its value remains Tandem's installed value. Later user edits and unrelated preferences remain.
+After successful restoration it removes the record. An absent record performs no writes.
+`reloadTernPlugin` refreshes an already installed package for `tandem update`; it never installs one.
 
 `setup.sh` invokes `src/terminal-backend/setup.ts`, which reads the saved home terminal choice
 and runs the existing Herdr setup or the Tern installer. The terminal front door also offers
 Tern installation after project preparation saves the terminal choice and before opening a
 project window. Chat and Lavish setup use the shared coordinator host's confirmation port: after saving a Tern
 choice, `configureTerminal` awaits the injected installer outside task-store serialization before
-setup opens projects. This is separate consent for linking and shortcuts; a declined prompt keeps
-the terminal choice and reports that the integration was left unchanged.
-Both installation and update reload read `readHomeSettingsSync(home).terminal`; Herdr and homes
-without a Tern choice perform no Tern plugin or key-setting effects. Update
-reloads after successful coordinator updates, without an installation prompt. Declining plugin
-or key consent leaves the integration unchanged and prints how to add it later.
+setup opens projects. A declined global-settings prompt retains the plugin and prints how to reach
+its palette commands and panel buttons.
+Both composition helpers read `readHomeSettingsSync(home).terminal`. An explicit Herdr choice
+attempts to restore recorded Tern preferences without daemon calls; an unset choice performs no effects.
+Restoration is best-effort: invalid settings or failed cleanup warn once per config path in the
+current process, preserve the record, and never block a Herdr launch or update.
+`installTerminalPlugin(home, dependencies, readiness?: TerminalAvailability)` returns
+`Promise<boolean>` for package readiness. A supplied readiness result avoids another probe;
+otherwise it checks availability before linking or asking about global settings. Missing,
+signed-out and unknown readiness refuse installation without plugin or setting effects.
+`reloadTerminalPlugin(home, dependencies)` returns `Promise<boolean>` for whether a package reloaded.
+The two-argument callers remain valid. Update reloads after successful coordinator updates without a
+prompt. On switching to Herdr, the shared configure callback restores preferences after saving the
+choice, preserving the existing Herdr integration path. A failed Tern choice saves Herdr and skips
+plugin consent. The Tern package stays linked for later use.
