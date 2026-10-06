@@ -1012,7 +1012,9 @@ class TandemController {
         this.#prReviews.listen(assertTaskId(id), signal, reply),
       reviewEdit: (id, edits) => this.#prReviews.edit(assertTaskId(id), edits),
       reviewPost: (id, input) =>
-        this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
+        this.#deps.store.serialized(() =>
+          this.#prReviews.post(assertTaskId(id), input.verdict, input.approved),
+        ),
       reviewSubmit: (id, submission, expected) =>
         this.#deps.store.serialized(() =>
           this.#prReviews.submit(assertTaskId(id), submission, expected),
