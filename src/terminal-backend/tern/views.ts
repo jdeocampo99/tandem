@@ -102,7 +102,8 @@ export function ternViewHost(
           (entry) => entry.block.id === input.origin?.paneId,
         );
         if (
-          source?.block.program !== "tandem.task" ||
+          !source ||
+          !["tandem.task", "tandem.task-picker"].includes(source.block.program ?? "") ||
           source.block.args?.[1] !== input.coordinator.paneId ||
           source.block.args?.[4] !== input.home
         )
@@ -112,7 +113,7 @@ export function ternViewHost(
           );
       }
       const existingTasks =
-        placement === "task"
+        placement === "task" || placement === "return"
           ? blocks(await cmd.ls(input.cwd)).filter(
               (entry) =>
                 entry.tab.id === input.coordinator.tabId &&

@@ -31,14 +31,16 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
   cx:command("inbox")
   pane=origin
  elseif ticket.placement=="return" then
+  local returningTask=if ticket.replaced then cx.session:pane(tonumber(ticket.replaced)) else nil
   if source.block=="tandem.task-picker" then
+   if owner.floating and (not returningTask or returningTask.block~="tandem.task" or returningTask.tab~=owner.tab or returningTask.floating) then return {handled=true} end
    cx.layout:close(origin)
   elseif owner.floating then
    if source.block~="tandem.task" then return {handled=true} end
    if not cx.layout:dock(coordinator,origin,"right",{focus=false}) then return {handled=true} end
    cx.layout:close(origin)
   end
-  cx.layout:focus(coordinator)
+  cx.layout:focus(if source.block=="tandem.task-picker" and owner.floating then tonumber(ticket.replaced) else coordinator)
   pane=coordinator
  else
   local previous=if ticket.replaced then tonumber(ticket.replaced) else nil

@@ -152,7 +152,7 @@ type ControlNode = {
         view: { kind: "task" as const, taskId: "102" },
       };
       await host.open(input, root, "panel", "panel", index);
-      const opened = await host.open(input, root, "task", "task", file);
+      let opened = await host.open(input, root, "task", "task", file);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       expect(JSON.stringify(await tree())).toContain("round 1 of 2");
       await ctl("shot", "03-task");
@@ -193,6 +193,7 @@ type ControlNode = {
       );
       const log = await readFile(join(root, "actions.log"), "utf8");
       expect(log).toContain(`--cwd\0${root}\0`);
+      expect(log).toContain(`--home\0${env.TANDEM_HOME}\0`);
       expect(log).toContain("steer\0--task\x00102\0--text\0Try a safer close guard 😀");
       await click("Steer…");
       await ctl("type", JSON.stringify("Reject this direction"));
@@ -212,6 +213,46 @@ type ControlNode = {
       await click("Restart");
       await Bun.sleep(300);
       expect(await readFile(join(root, "actions.log"), "utf8")).toBe(before);
+      const floatingPicker = await host.open(
+        { ...input, origin: { paneId: opened.paneId, cwd: root }, view: { kind: "task-picker" } },
+        root,
+        "task-picker",
+        "split",
+        index,
+      );
+      await until(async () => JSON.stringify(await tree()).includes("Search tasks"));
+      await click("Cancel");
+      await host.open(
+        { ...input, origin: { paneId: floatingPicker.paneId, cwd: root } },
+        root,
+        "panel",
+        "return",
+        index,
+      );
+      const afterCancel = await ternCommands(commandRunner, { binary }).ls(root);
+      expect(
+        afterCancel.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === floatingPicker.paneId),
+      ).toBe(false);
+      expect(afterCancel.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === opened.paneId)).toBe(
+        true,
+      );
+      await writeFile(file, nativeViewText("task", taskScreenFixture()));
+      const previous = opened;
+      opened = await host.open(
+        { ...input, origin: { paneId: previous.paneId, cwd: root } },
+        root,
+        "task",
+        "task",
+        file,
+      );
+      const replaced = await ternCommands(commandRunner, { binary }).ls(root);
+      expect(replaced.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === previous.paneId)).toBe(
+        false,
+      );
+      expect(replaced.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === endpoint.paneId)).toBe(
+        true,
+      );
+      await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       await click("← Orchestrator");
       await until(async () =>
         (await readFile(join(root, "actions.log"), "utf8")).includes("#orchestrator"),
@@ -237,6 +278,7 @@ type ControlNode = {
       );
       await until(async () => JSON.stringify(await tree()).includes("Search tasks"));
       await ctl("type", JSON.stringify("Tern"));
+      await ctl("shot", "03-task-picker");
       await ctl("key", "enter");
       await until(async () =>
         (await readFile(join(root, "actions.log"), "utf8")).includes("native\0open\0task\x00102"),
