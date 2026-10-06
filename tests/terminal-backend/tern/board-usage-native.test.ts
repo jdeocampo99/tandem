@@ -8,6 +8,7 @@ import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
@@ -184,6 +185,34 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         if (shots) {
           await Bun.sleep(200);
           console.log(await ctl("shot", kind));
+        }
+        if (kind === "usage") {
+          const fixture = { ...nativeScreensFixture(), project };
+          const warning = "Provider limit refresh failed; last known limits may be stale";
+          const warnings = [warning];
+          const writtenAt = "2030-01-02T12:02:00Z";
+          await writeFile(
+            path,
+            nativeViewText("panel", {
+              ...fixture,
+              writtenAt,
+              warnings,
+              usage: {
+                ...fixture.usage,
+                display: usageDisplay(fixture.usage, { writtenAt, warnings }),
+              },
+            }),
+          );
+          await until(async () => (await ctl("tree")).includes(warning));
+          const stale = await ctl("tree");
+          expect(stale).toContain("62% left");
+          expect(stale).toContain("resets in 2h 14m");
+          expect(stale).toContain("Fetched at 2030-01-02 12:00:00 UTC");
+          expect(stale).toContain("View updated at 2030-01-02 12:02:00 UTC");
+          expect(stale.indexOf(warning)).toBeLessThan(stale.indexOf("cost today"));
+          if (shots) console.log(await ctl("shot", "usage-stale"));
+          await writeFile(path, nativeViewText("panel", fixture));
+          await until(async () => !(await ctl("tree")).includes(warning));
         }
         if (kind === "catchup") {
           await writeFile(fail, "fail");

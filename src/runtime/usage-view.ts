@@ -113,7 +113,7 @@ export function usageView(
     })),
     malformedEvents: input.readout.malformedEvents,
   };
-  return { ...view, display: usageDisplay(view) };
+  return { ...view, display: usageDisplay(view, { writtenAt: input.now, warnings: [] }) };
 }
 
 /** Local midnight boundaries are explicit inputs to usageView for deterministic rendering. */

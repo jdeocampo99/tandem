@@ -218,7 +218,7 @@ export function nativeScreensFixture(): NativeViews {
         },
       ],
     },
-    usage: { ...usage, display: usageDisplay(usage) },
+    usage: { ...usage, display: usageDisplay(usage, { writtenAt, warnings: [] }) },
     catchup: {
       project,
       merged: [

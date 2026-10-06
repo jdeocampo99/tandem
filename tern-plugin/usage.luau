@@ -4,9 +4,9 @@ local components = require("./components")
 local screen = require("./screen")
 local ui = tern.ui
 
-type Meter = {label: string, remaining: string, reset: string, percent: number?}
+type Meter = {label: string, remaining: string, reset: string, fetched: string, percent: number?}
 type Cost = {model: string, cost: string, percent: number}
-type Display = {accounts: {{title: string, meters: {Meter}}}, totals: {{label: string, value: string}}, todayModels: {Cost}, weekModels: {Cost}, stages: {{label: string, today: string, week: string}}, warning: string?}
+type Display = {accounts: {{title: string, meters: {Meter}}}, totals: {{label: string, value: string}}, todayModels: {Cost}, weekModels: {Cost}, stages: {{label: string, today: string, week: string}}, updated: string, limitWarnings: {string}, warning: string?}
 type Model = {usage: {display: Display}}
 type State = {view: views.View<Model>, args: {string}}
 local function parse(value: unknown): Model?
@@ -14,10 +14,12 @@ local function parse(value: unknown): Model?
  local d = value.usage.display
  if type(d.accounts) ~= "table" or type(d.totals) ~= "table" or type(d.todayModels) ~= "table" or type(d.weekModels) ~= "table" or type(d.stages) ~= "table" then return nil end
  if d.warning ~= nil and type(d.warning) ~= "string" then return nil end
+ if type(d.updated) ~= "string" or type(d.limitWarnings) ~= "table" then return nil end
+ for _, warning in d.limitWarnings do if type(warning) ~= "string" then return nil end end
  for _, a in d.accounts do
   if type(a) ~= "table" or type(a.title) ~= "string" or type(a.meters) ~= "table" then return nil end
   for _, m in a.meters do
-   if type(m) ~= "table" or type(m.label) ~= "string" or type(m.remaining) ~= "string" or type(m.reset) ~= "string" or (m.percent ~= nil and type(m.percent) ~= "number") then return nil end
+   if type(m) ~= "table" or type(m.label) ~= "string" or type(m.remaining) ~= "string" or type(m.reset) ~= "string" or type(m.fetched) ~= "string" or (m.percent ~= nil and type(m.percent) ~= "number") then return nil end
   end
  end
  for _, total in d.totals do if type(total) ~= "table" or type(total.label) ~= "string" or type(total.value) ~= "string" then return nil end end
@@ -60,12 +62,15 @@ local block: BlockDef<State> = {
     for _, meter in account.meters do
      local parts = {ui.el("div", {class="tdm-meter-head"}, {ui.el("span", {text=meter.label}), ui.el("span", {text=meter.remaining .. " · " .. meter.reset})})}
      if meter.percent then table.insert(parts, ui.meter(meter.percent / 100, {})) end
+     table.insert(parts, components.text(meter.fetched, "muted"))
      table.insert(meters, ui.el("div", {class="tdm-meter"}, parts))
     end
     table.insert(accounts, panel(account.title, meters))
    end
    if #accounts == 0 then table.insert(accounts, panel("Limits", {components.text("Provider limits unavailable", "muted")})) end
    table.insert(children, ui.el("div", {class="tdm-usage-accounts"}, accounts))
+   table.insert(children, components.text(display.updated, "muted"))
+   for _, warning in display.limitWarnings do table.insert(children, components.text(warning, "warn")) end
    local totals = {}
    for _, total in display.totals do table.insert(totals, ui.el("div", {class="tdm-usage-card"}, {ui.el("strong", {class="tdm-total", text=total.value}), ui.el("div", {class="tdm-usage-label", text=total.label})})) end
    table.insert(children, ui.el("div", {class="tdm-usage-totals"}, totals))

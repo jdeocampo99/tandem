@@ -319,6 +319,11 @@ Only that adapter imports pi-ai. Raw payloads, metadata, keys and tokens never l
 - `display?`: `UsageDisplay` from `src/runtime/usage-display.ts`, supplied by `usageView`.
   It groups account meters (5-hour before weekly), formats reset countdowns and totals, and
   supplies model/stage labels and proportional model-cost widths for the native renderer.
+  Meter `fetched` labels retain each provider sample's original `fetchedAt`; `updated` labels the
+  root snapshot's `writtenAt`. `NativeViewsReader` supplies root `warnings` as `limitWarnings`,
+  shown beside the account meters before cost totals. A failed refresh retains old quota/reset
+  data and shows the failure/staleness warning with its fetch time. Timestamps are formatted in
+  TypeScript as UTC labels; Luau draws them without computing freshness policy.
   Unknown limits and unpriced usage remain explicit. Raw totals stay available for other views.
 - `TaskCostView`: `{taskId,recorded,charges:AdditionalCharges,tokens:TokenTotals,
   quota:IncludedQuota,timing:ReceiptTiming,breakdown:RequestUsageBreakdown}` from usage-receipt.ts.

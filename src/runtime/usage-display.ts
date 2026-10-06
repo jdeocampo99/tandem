@@ -7,6 +7,7 @@ export type UsageDisplay = Readonly<{
       label: string;
       remaining: string;
       reset: string;
+      fetched: string;
       percent?: number;
     }>[];
   }>[];
@@ -14,6 +15,8 @@ export type UsageDisplay = Readonly<{
   todayModels: readonly Readonly<{ model: string; cost: string; percent: number }>[];
   weekModels: readonly Readonly<{ model: string; cost: string; percent: number }>[];
   stages: readonly Readonly<{ label: string; today: string; week: string }>[];
+  updated: string;
+  limitWarnings: readonly string[];
   warning?: string;
 }>;
 
@@ -42,7 +45,10 @@ const STAGES: Readonly<Record<string, string>> = {
 };
 
 /** Presentation values are derived here; native blocks only draw these labels and widths. */
-export function usageDisplay(view: Omit<UsageView, "display">): UsageDisplay {
+export function usageDisplay(
+  view: Omit<UsageView, "display">,
+  freshness: Readonly<{ writtenAt: string; warnings: readonly string[] }>,
+): UsageDisplay {
   const accounts = new Map<
     string,
     { title: string; meters: UsageDisplay["accounts"][number]["meters"][number][] }
@@ -69,6 +75,7 @@ export function usageDisplay(view: Omit<UsageView, "display">): UsageDisplay {
         meter.resetInMs === "unavailable"
           ? "reset unavailable"
           : `resets in ${nativeDurationLabel(meter.resetInMs)}`,
+      fetched: `Fetched at ${timestampLabel(meter.fetchedAt)}`,
       ...(meter.remainingPercent === "unavailable" ? {} : { percent: meter.remainingPercent }),
     });
   }
@@ -101,8 +108,17 @@ export function usageDisplay(view: Omit<UsageView, "display">): UsageDisplay {
       today: nativeDurationLabel(row.todayMs),
       week: nativeDurationLabel(row.weekMs),
     })),
+    updated: `View updated at ${timestampLabel(freshness.writtenAt)}`,
+    limitWarnings: [...new Set(freshness.warnings)],
     ...(view.malformedEvents === 0
       ? {}
       : { warning: `${view.malformedEvents} unreadable usage rows; totals may be incomplete` }),
   };
+}
+
+function timestampLabel(timestamp: string): string {
+  const time = Date.parse(timestamp);
+  return Number.isFinite(time)
+    ? `${new Date(time).toISOString().slice(0, 19).replace("T", " ")} UTC`
+    : "unavailable";
 }
