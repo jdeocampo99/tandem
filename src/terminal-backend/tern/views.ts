@@ -54,6 +54,19 @@ export function ternViewHost(
   },
 ) {
   const scoped = async (input: ViewHostingInput) => {
+    // Luau's native layout API uses numbers. Reject ids it cannot represent exactly.
+    for (const id of [
+      input.coordinator.paneId,
+      input.coordinator.tabId,
+      input.coordinator.terminalSessionId,
+      input.origin?.paneId ?? input.coordinator.paneId,
+    ]) {
+      if (id === undefined || !/^[1-9][0-9]*$/u.test(id) || !Number.isSafeInteger(Number(id)))
+        throw new AdapterError(
+          "Native layout requires exactly representable Tern ids",
+          "tern open",
+        );
+    }
     const key = input.origin?.windowId;
 
     // A supplied key is scoped independently and must contain both exact panes.

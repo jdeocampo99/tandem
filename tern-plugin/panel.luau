@@ -74,7 +74,7 @@ local def:BlockDef<State> ={
      el("tdp-primary",{text("●","tdp-dot tdp-" .. row.state),text(row.title,"tdp-name"),text(row.stage,"tdp-stage"),text(row.time or "","tdp-time")}),el("tdp-second",second)},"row:" .. tostring(index),row.key))
    end
   end
-  table.insert(body,text(panel.footer or "⌘⇧B board · ⌘⇧P PRs · ⌘⇧U usage","tdp-footer"))
+  if panel.footer then table.insert(body,text(panel.footer,"tdp-footer")) end
   local layer:Node?=nil
   if state.dropdown then
    local items={}

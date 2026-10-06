@@ -172,6 +172,20 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       await until(async () => JSON.stringify(await ctl("tree")).includes("+ Open another project"));
       await ctl("shot", "02-projects");
       await ctl("key", "escape");
+      const envelope = JSON.parse(await readFile(path, "utf8")) as {
+        model: Record<string, unknown>;
+      };
+      await writeFile(
+        path,
+        nativeViewText("panel", {
+          ...envelope.model,
+          panel: { ...panel, footer: undefined },
+        }),
+      );
+      await until(async () => !JSON.stringify(await ctl("tree")).includes("⌘⇧B board"));
+      const declined = JSON.stringify(await ctl("tree"));
+      expect(declined).toContain("⎇");
+      expect(declined).toContain("▦");
       const row = visit((await ctl("tree")).tree as Node[], "tdp-row")?.rect;
       if (!row) throw new Error("task row missing");
       await ctl("click", String((row[0] ?? 0) + 80), String((row[1] ?? 0) + 12));

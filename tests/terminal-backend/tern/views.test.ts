@@ -24,6 +24,7 @@ for (const mode of [
   "missing-origin",
   "unknown",
   "foreign-return",
+  "unsafe-id",
 ] as const)
   test(`native opening ${mode} retains exact identity and never falls back to a title`, async () => {
     const home = await mkdtemp("/tmp/tandem-host-test-");
@@ -125,7 +126,8 @@ for (const mode of [
     const open = () =>
       host.open(
         {
-          coordinator: endpoint,
+          coordinator:
+            mode === "unsafe-id" ? { ...endpoint, paneId: "9007199254740993" } : endpoint,
           cwd: home,
           home,
           view: { kind: "board" },
