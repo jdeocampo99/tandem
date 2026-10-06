@@ -175,7 +175,7 @@ type ControlNode = {
       await ctl("shot", "03-task-pr");
       await click("Cost");
       await until(async () => JSON.stringify(await tree()).includes("Usage receipt"));
-      expect(JSON.stringify(await tree())).toContain("unavailable");
+      expect(JSON.stringify(await tree())).toContain("Additional charges · unavailable");
       await ctl("shot", "03-task-cost");
       await click("Overview");
       await writeFile(file, nativeViewText("task", taskScreenFixture(true)));

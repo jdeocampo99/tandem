@@ -166,14 +166,18 @@ end
 local function measuredTokens(known: number, unavailable: number): string
  return if unavailable == 0 then tostring(known) elseif known == 0 then 'unavailable' else tostring(known) .. ' + unavailable'
 end
+local function measuredCharge(amount: number, unavailable: number): string
+ local known = string.format('$%.2f', amount / 1000000)
+ return if unavailable == 0 then known elseif amount == 0 then 'unavailable' else known .. ' + unavailable'
+end
 local function costNode(model: Model): Node
  local cost = model.cost
  if not cost or not cost.recorded then return text('Usage receipt unavailable. No recorded task usage yet.', 'muted') end
- local rows = { text(string.format('Additional charges · $%.2f', cost.charges.amountMicros / 1000000), 'strong') }
+ local rows = { text('Additional charges · ' .. measuredCharge(cost.charges.amountMicros, cost.charges.unavailableSamples), 'strong') }
  for _, provider in cost.breakdown.byProvider do
-  table.insert(rows, text(string.format('%s / %s · %s in · %s out · $%.2f', provider.provider, provider.model,
+  table.insert(rows, text(string.format('%s / %s · %s in · %s out · %s', provider.provider, provider.model,
    measuredTokens(provider.tokens.actualInputTokens + provider.tokens.estimatedInputTokens, provider.tokens.unavailableSamples),
-   measuredTokens(provider.tokens.actualOutputTokens + provider.tokens.estimatedOutputTokens, provider.tokens.unavailableSamples), provider.charges.amountMicros / 1000000)))
+   measuredTokens(provider.tokens.actualOutputTokens + provider.tokens.estimatedOutputTokens, provider.tokens.unavailableSamples), measuredCharge(provider.charges.amountMicros, provider.charges.unavailableSamples))))
  end
  table.insert(rows, text(string.format('Tokens · %s actual input / %s actual output · %s estimated input / %s estimated output',
   measuredTokens(cost.tokens.actualInputTokens, cost.tokens.unavailableSamples), measuredTokens(cost.tokens.actualOutputTokens, cost.tokens.unavailableSamples), measuredTokens(cost.tokens.estimatedInputTokens, cost.tokens.unavailableSamples), measuredTokens(cost.tokens.estimatedOutputTokens, cost.tokens.unavailableSamples)), 'muted'))
