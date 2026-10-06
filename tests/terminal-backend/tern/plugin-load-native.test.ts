@@ -8,7 +8,7 @@ import type { CommandRunner } from "../../../src/contracts.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_LOAD_NATIVE === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (enabled ? test : test.skip)(
   "cold host/window LOAD has headroom under CPU load and opens a real native panel",
   async () => {

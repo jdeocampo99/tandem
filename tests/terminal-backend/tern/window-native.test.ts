@@ -8,7 +8,7 @@ import {
   restoreTernPluginSettings,
 } from "../../../src/terminal-backend/tern/plugin-settings.ts";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
   text?: string | undefined;
   class?: string | undefined;

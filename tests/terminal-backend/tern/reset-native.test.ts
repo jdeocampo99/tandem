@@ -11,7 +11,7 @@ import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { blocks, Processes, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 
-const native = process.platform === "darwin" && process.env.TANDEM_TERN_RESET_NATIVE === "1";
+const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (native ? test : test.skip)(
   "isolated native reset retires all owned views and relaunches the same project",
   async () => {

@@ -13,7 +13,7 @@ import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (enabled ? test : test.skip)(
   "native board, usage and catch-up draw live files and shell out once with their exact context",
   async () => {

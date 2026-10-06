@@ -18,7 +18,7 @@ import { Created, decode, ternCommands } from "../../../src/terminal-backend/ter
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
 
-const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
+const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
   text?: string | undefined;
   class?: string | undefined;
