@@ -220,6 +220,8 @@ Pressing `Cmd+Shift+B` again from Board also closes it.
 - [Treehouse](https://github.com/kunchenguid/treehouse), which creates worktrees
 - Optional: [`gh`](https://cli.github.com/), signed in, for pull requests and PR watch
 - Optional: `lavish-axi` for presentations, `TYPESAFE_API_KEY` for Jev
+- For development: [`luau`](https://luau.org) (`brew install luau`). The Tern plugin tests run the
+  real Luau screens and fail without it; set `TANDEM_LUAU_BINARY` to use another path.
 
 Agents run with your local permissions. Tandem is not a security sandbox.
 

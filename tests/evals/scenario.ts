@@ -793,7 +793,8 @@ export async function createScenarioWorld(
     if (verb === "inspect") return ok({ clients: [{ kind: "window" }] });
     if (verb === "plugin") {
       if (argv[2] === "link") ternPluginLinks.push(argv[3] ?? "");
-      else if (argv[2] !== "list") throw new Error(`unexpected tern command ${JSON.stringify(argv)}`);
+      else if (argv[2] !== "list")
+        throw new Error(`unexpected tern command ${JSON.stringify(argv)}`);
       return ok({
         plugins:
           ternPluginLinks.length === 0

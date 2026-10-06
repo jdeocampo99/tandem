@@ -10,10 +10,7 @@ import { withPrWatches } from "../../../src/pr-watch/store.ts";
 import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import { nativeReplyLinks } from "../../../src/session/native-links.ts";
-import {
-  configureTernPluginSettings,
-  planTernPluginKeys,
-} from "../../../src/terminal-backend/tern/plugin.ts";
+import { installTerminalPlugin } from "../../../src/terminal-backend/compose.ts";
 import { content } from "../../board/fixtures.ts";
 import {
   SCENARIO_POLICY,
@@ -37,6 +34,20 @@ export type Parity = Readonly<{
 export type InventoryEntry = Readonly<{ view: string; item: string; run: () => Promise<void> }>;
 
 const PR_URL = "https://github.com/acme/app/pull/281";
+/** The keys Tandem installs into Tern's global settings once the user consents. */
+const TERN_KEYBINDS: Readonly<Record<string, string>> = {
+  "cmd+shift+b": "plugin.tandem.board",
+  "cmd+shift+p": "plugin.tandem.prs",
+  "cmd+shift+u": "plugin.tandem.usage",
+  ...Object.fromEntries(
+    Array.from({ length: 9 }, (_, index) => [
+      [`cmd+${index + 1}`, `plugin.tandem.project-${index + 1}`],
+      [`cmd+digit_${index + 1}`, `plugin.tandem.project-${index + 1}`],
+    ]).flat(),
+  ),
+  "cmd+shift+[": "plugin.tandem.project-prev",
+  "cmd+shift+]": "plugin.tandem.project-next",
+};
 const PATCH = [
   "diff --git a/src/port.ts b/src/port.ts",
   "--- a/src/port.ts",
@@ -274,10 +285,6 @@ function labels(view: Rendered): readonly string[] {
   return view.actions.map((action) => action.label);
 }
 
-function expectDrawn(view: Rendered, ...texts: readonly string[]): void {
-  for (const text of texts) expect(view.text).toContain(text);
-}
-
 function styleOf(view: Rendered, text: string): string {
   const span = view.spans.find((entry) => entry.text === text);
   if (span === undefined) throw new Error(`"${text}" is not drawn`);
@@ -407,7 +414,7 @@ export const inventory: readonly InventoryEntry[] = [
     view: "Panel",
     item: "Enter, click, j/k, arrows, Esc; task, brief and PR targets",
     run: () =>
-      withParity(async ({ host, panel, world, briefId }) => {
+      withParity(async ({ host, panel }) => {
         const row = async () =>
           (await panel.render()).spans.find(
             (span) => span.style.includes("tdp-selected") && span.style.includes("tdp-name"),
@@ -579,10 +586,7 @@ export const inventory: readonly InventoryEntry[] = [
           "Tandem: Usage",
         ]);
         const registered = new Set(commands.map((command) => `plugin.tandem.${command.id}`));
-        const installed: { keybinds: Record<string, string> } = JSON.parse(
-          planTernPluginKeys("{}").text,
-        );
-        const bound = [...new Set(Object.values(installed.keybinds))];
+        const bound = [...new Set(Object.values(TERN_KEYBINDS))];
         expect(bound.filter((id) => !registered.has(id))).toEqual([]);
         expect(
           commands.filter((command) => !command.visible).map((command) => command.title),
@@ -1491,13 +1495,23 @@ export const inventory: readonly InventoryEntry[] = [
         async ({ world }) => {
           const consent = async (directory: string, answer: boolean) => {
             const questions: string[] = [];
-            const result = await configureTernPluginSettings({
-              configDirectory: join(world.home, directory),
-              confirm: async (question) => {
-                questions.push(question);
-                return answer;
+            const printed: string[] = [];
+            // A coordinator start passes the availability it already proved, as here.
+            const ready = await installTerminalPlugin(
+              world.home,
+              {
+                run: world.run,
+                cwd: world.home,
+                binary: "tern",
+                env: { TERN_CONFIG_DIR: join(world.home, directory) },
+                confirm: async (question) => {
+                  questions.push(question);
+                  return answer;
+                },
+                print: (text) => printed.push(text),
               },
-            });
+              { status: "ready" },
+            );
             const settings: unknown = await readFile(
               join(world.home, directory, "settings.json"),
               "utf8",
@@ -1505,31 +1519,38 @@ export const inventory: readonly InventoryEntry[] = [
               (text) => JSON.parse(text),
               () => undefined,
             );
-            return { questions, configured: result.configured, settings };
+            return { ready, questions, printed, settings };
           };
           const question =
             "Hide Tern's sidebar and use Tandem's board, PR, usage and project shortcuts? These settings apply to every Tern window. Your custom shortcuts stay unchanged. Palette commands and panel buttons work either way.";
-          const installed = { ...JSON.parse(planTernPluginKeys("{}").text), tabs_autohide: true };
+          const unchanged =
+            "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To change this later, switch to Herdr and select Tern again in setup.\n";
+          const installed = { keybinds: TERN_KEYBINDS, tabs_autohide: true };
           expect(await consent("approved", true)).toEqual({
+            ready: true,
             questions: [question],
-            configured: true,
+            printed: [],
             settings: installed,
           });
           expect(await consent("approved", false)).toEqual({
+            ready: true,
             questions: [],
-            configured: true,
+            printed: [],
             settings: installed,
           });
           expect(await consent("declined", false)).toEqual({
+            ready: true,
             questions: [question],
-            configured: false,
+            printed: [unchanged],
             settings: undefined,
           });
           expect(await consent("declined", true)).toEqual({
+            ready: true,
             questions: [],
-            configured: false,
+            printed: [],
             settings: undefined,
           });
+          expect(world.ternPluginLinks()).toHaveLength(1);
         },
         { seed: false, publish: false },
       ),
