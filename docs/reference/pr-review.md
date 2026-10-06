@@ -109,8 +109,9 @@ src/service/scout-cleanup.ts (`settlePrReviewWorktree`). Scenario: tests/evals/p
   GitHub calls run outside the store lock, so a slow POST cannot block other tasks. The receipt is
   settled under a short lock on the exact posted head/generation, preserving other changes and
   newer review rounds. A competing caller cannot send another POST; it only reconciles a saved
-  pending attempt. Submission refuses a
-  head/round generation mismatch or an advanced re-review task generation before applying draft choices.
+  pending attempt. Submission refuses a head/round generation mismatch or an advanced re-review
+  task generation before applying draft choices. Only the caller that saves a new receipt sends
+  replies to addressed threads; another reconciliation retains the saved receipt/verdict/choices.
   Question follow-ups retain the same finished review round, so its unchanged binding remains valid.
   A stale pane must reopen before submitting. The HTML submission shape remains unchanged.
 - `review-edit` rewrites, re-labels, or drops comments by id, adds the user's own comments

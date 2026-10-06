@@ -202,8 +202,11 @@ ownership at click time. See [task hosting](tern-views.md#task-page-and-picker) 
   signature. Polls and panel opening never advance the visit. A first publication can fill a
   missing signature without changing its timestamp. Failed/uncertain openings remain
   unacknowledged. Dismissal records the current signature only after confirmed navigation.
-  In the current implementation, catch-up read/visit/open errors propagate to the visible
-  opening or switch caller, even after project focus succeeded; no automatic retry occurs.
+  After confirmed focus, `open-project` treats catch-up read/visit/open failures as non-fatal
+  warnings: its result stays `focused:true` and carries `warnings`, including an ambiguous-window
+  refusal. It never chooses another window or retries. Direct front-door launch/reconnect also
+  catches these errors, carrying a non-fatal notice through `panelFailure`. Native project
+  switching still propagates catch-up errors after successful focus, without undoing that focus.
 
 See [screen actions](tern-views.md#board-usage-and-catch-up-actions) for CLI subactions and
 [view models](native-views.md#board) for data and accounting contracts.

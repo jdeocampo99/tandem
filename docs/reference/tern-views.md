@@ -434,8 +434,13 @@ catch-up view opens the screen without that rule. Panel opening and polling neve
 Opening before the first publication still saves the visit timestamp. The first successful root
 publication fills its missing signature without advancing that timestamp; subsequent publications
 leave the saved baseline intact. Failed/uncertain catch-up opens leave the visit unacknowledged.
-Catch-up read, visit-record or hosting errors currently propagate to the visible opening/switch
-caller after focus; this does not undo the already focused project.
+After confirmed focus, `coordinator/open-project.ts` catches catch-up read, visit-record and
+hosting errors and returns `focused:true` with a non-fatal `warnings` entry. The service preserves
+that warning in its open-project result. An ambiguous target still refuses catch-up without
+choosing another window or acknowledging the visit. Front-door launch/reconnect also catches
+these errors, retaining successful launch and carrying the notice through `panelFailure`.
+Native project switching still propagates catch-up errors after successful focus; it neither
+retries nor undoes that focus.
 `native board catchup-dismiss` returns and records dismissal; `catchup-open-needs` returns, opens
 the first saved needs-you destination (brief, task or inbox), then records dismissal.
 
