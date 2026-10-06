@@ -1,6 +1,7 @@
 --!strict
 local views = require("./view-file")
 local components = require("./components")
+local navigation = require("./navigation")
 local screen = require("./screen")
 local ui = tern.ui
 
@@ -69,14 +70,14 @@ local block: BlockDef<State> = {
  end,
  key = function(state, key, cx)
   if key.name ~= "escape" then return false end
-  screen.back(state.args, cx, "board"); return true
+  screen.back(state.args, cx); return true
  end,
  event = function(state, ev, cx)
   if ev.ev ~= "action" then return end
-  if ev.act == "back" then screen.back(state.args, cx, "board")
+  if ev.act == "back" then screen.back(state.args, cx)
   elseif ev.act == "pr" and state.view.status == "ready" and state.view.model then
    for _, lane in state.view.model.board.lanes do for _, card in lane.cards do
-    if card.key == ev.value and card.pullRequest then screen.run(state.args, cx, {"board", "pr-link", card.key}); return end
+    if card.key == ev.value and card.pullRequest then navigation.run(navigation.origin(state.args), cx, {"board", "pr-link", card.key}); return end
    end end
   end
  end,

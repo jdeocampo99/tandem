@@ -1,21 +1,30 @@
 import { expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativeViewText } from "../../../src/board/native-views.ts";
+import { nativeViewsPath } from "../../../src/board/snapshot.ts";
+import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
+import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
 (enabled ? test : test.skip)(
   "native board, usage and catch-up draw live files and shell out once with their exact context",
   async () => {
-    const root = await mkdtemp("/tmp/tdm-screens-");
+    const root = await realpath(await mkdtemp("/tmp/tdm-screens-"));
     const plugin = join(root, "plugin");
     const config = join(root, "config");
     const control = join(root, "w.sock");
     const home = join(root, "home");
-    const path = join(home, "views.json");
+    const project = join(root, "repo");
+    const path = nativeViewsPath(home, project);
     const log = join(root, "actions.log");
+    const fail = join(root, "fail-action");
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
     const env = {
       HOME: process.env.HOME,
@@ -30,16 +39,17 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       TANDEM_HOME: home,
       STENCIL_LOG_DIR: join(root, "logs"),
     };
-    await Promise.all([mkdir(config), mkdir(home), mkdir(env.ZDOTDIR)]);
+    await Promise.all([mkdir(config), mkdir(home), mkdir(project), mkdir(env.ZDOTDIR)]);
     await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
       recursive: true,
     });
-    await writeFile(path, nativeViewText("panel", nativeScreensFixture()), { mode: 0o600 });
-    await writeFile(join(plugin, "tandem.sh"), `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\n`);
-    // Only the isolated copy gains fixture launch commands. Production block implementations stay intact.
+    await mkdir(join(home, "native-views"));
+    await writeFile(path, nativeViewText("panel", { ...nativeScreensFixture(), project }), {
+      mode: 0o600,
+    });
     await writeFile(
-      join(plugin, "window.luau"),
-      `${await readFile(join(plugin, "window.luau"), "utf8")}\n${["board", "usage", "catchup"].map((kind, i) => `tern.bind("ctrl+alt+shift+${["b", "u", "c"][i]}", function(cx)\n cx:new_block("tandem.${kind}", {${JSON.stringify(path)}, "0", ${JSON.stringify(root)}}, "tab")\nend)`).join("\n")}\n`,
+      join(plugin, "tandem.sh"),
+      `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\nif [ -f '${fail}' ]; then printf 'isolated action failure\\n' >&2; exit 1; fi\n`,
     );
     const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
       env,
@@ -48,23 +58,28 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       stderr: "ignore",
     });
     let window: ReturnType<typeof Bun.spawn> | undefined;
-    const run = async (...args: string[]) => {
-      const child = Bun.spawn([binary, ...args], {
+    const runner: CommandRunner = async (request) => {
+      const child = Bun.spawn([...request.argv], {
         env,
-        cwd: root,
+        cwd: request.cwd ?? root,
         stdout: "pipe",
         stderr: "pipe",
       });
-      const timer = setTimeout(() => child.kill(), 5000);
+      const timer = setTimeout(() => child.kill(), 6000);
       const [stdout, stderr, code] = await Promise.all([
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
         child.exited,
       ]);
       clearTimeout(timer);
-      if (code !== 0) throw new Error(`Tern ${args.join(" ")}: ${stderr}`);
-      return stdout;
+      return { stdout, stderr, code };
     };
+    const run = async (...args: string[]) => {
+      const result = await runner({ argv: [binary, ...args], cwd: project });
+      if (result.code !== 0) throw new Error(`Tern ${args.join(" ")}: ${result.stderr}`);
+      return result.stdout;
+    };
+    const backend = ternBackend(runner, { binary, home });
     const until = async (action: () => Promise<boolean>) => {
       const deadline = Date.now() + 10000;
       while (!(await action().catch(() => false))) {
@@ -84,7 +99,39 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         catalog.plugins.find((p: { id: string }) => p.id === "tandem")?.status,
         JSON.stringify(catalog),
       ).toBe("ready");
-      await run("new", "session", "native-screens-check", "--cwd", root, "--json");
+      const created = decode(
+        await run("new", "session", "native-screens-check", "--cwd", project, "--json"),
+        Created,
+        "fixture session",
+      );
+      const coordinator: Endpoint = {
+        terminal: "tern",
+        sessionId: "isolated",
+        terminalSessionId: created.session,
+        workspaceId: created.tab,
+        tabId: created.tab,
+        paneId: created.block,
+        role: "coordinator",
+        generation: 0,
+      };
+      await saveCoordinatorRecord(home, {
+        schemaVersion: 1,
+        repoPath: project,
+        endpoint: coordinator,
+        command: ["omp", "--cwd", project, "--session-dir", join(home, "conversation")],
+        harness: DEFAULT_HARNESS,
+        worktree: {
+          root: project,
+          path: project,
+          name: "coordinator",
+          baseHead: "a".repeat(40),
+          branch: "fixture",
+          leaseId: "fixture-lease",
+          leaseHolder: "fixture",
+          leasedAt: "2030-01-02T12:00:00Z",
+        },
+      });
+      const origin = { paneId: coordinator.paneId, cwd: project };
       window = Bun.spawn(
         [
           binary,
@@ -108,12 +155,20 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
       });
       const shots = process.env.TANDEM_TERN_SHOTS;
       if (shots) await mkdir(shots, { recursive: true });
-      for (const [kind, key, expected] of [
-        ["board", "b", "Ready to merge"],
-        ["usage", "u", "cost today"],
-        ["catchup", "c", "Where we left off"],
+      let actionCount = 0;
+      for (const [kind, expected] of [
+        ["board", "Ready to merge"],
+        ["usage", "cost today"],
+        ["catchup", "Where we left off"],
       ] as const) {
-        await ctl("key", `ctrl+alt+shift+${key}`);
+        expect(
+          (await backend.openView({ coordinator, cwd: project, home, origin, view: { kind } }))
+            .opened,
+        ).toBe(true);
+        const viewPane = blocks(decode(await run("ls", "--json"), Listing, "fixture listing")).find(
+          (entry) => entry.block.program === `tandem.${kind}`,
+        )?.block.id;
+        if (!viewPane) throw new Error("native view pane missing");
         await until(async () => (await ctl("tree")).includes(expected));
         const tree = await ctl("tree");
         if (kind === "board") {
@@ -130,24 +185,114 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
           await Bun.sleep(200);
           console.log(await ctl("shot", kind));
         }
+        if (kind === "catchup") await writeFile(fail, "fail");
         await ctl("key", "escape");
+        actionCount += 1;
+        await until(
+          async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
+        );
+        if (kind === "catchup") {
+          await until(async () => (await ctl("tree")).includes("isolated action failure"));
+          await Bun.sleep(100);
+          expect((await readFile(log, "utf8")).match(/--pane/g)?.length).toBe(actionCount);
+          await rm(fail);
+        }
         await until(async () =>
           (await readFile(log, "utf8")).includes(
-            kind === "catchup" ? "catchup-dismiss" : `${kind}\nback`,
+            kind === "catchup" ? "catchup-dismiss" : `${path}#orchestrator`,
           ),
         );
+        if (kind === "catchup") {
+          await writeFile(
+            path,
+            '{"version":1,"kind":"panel","revision":"broken","model":{"catchup":{"merged":[{}]}}}',
+          );
+          await until(async () => (await ctl("tree")).includes("View unavailable"));
+          expect(await ctl("tree")).toContain("Fix panel width");
+          expect(await ctl("tree")).not.toContain("Open what needs me");
+        }
+        // Real hosting proves toggle/return close only the exact view and preserve the coordinator.
+        expect(
+          (
+            await backend.openView({
+              coordinator,
+              cwd: project,
+              home,
+              origin: { paneId: viewPane, cwd: project },
+              view: { kind: kind === "board" ? "board" : "orchestrator" },
+            })
+          ).opened,
+        ).toBe(true);
+        const remaining = blocks(decode(await run("ls", "--json"), Listing, "fixture return"));
+        expect(remaining.some((entry) => entry.block.id === viewPane)).toBe(false);
+        expect(remaining.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
       }
+      await writeFile(path, nativeViewText("panel", { ...nativeScreensFixture(), project }));
+      await visitNativeProject(
+        {
+          home,
+          project,
+          now: new Date(Date.now() - 2 * 3600000).toISOString(),
+          signature: "before-changes",
+        },
+        async () => {
+          throw new Error("First visit cannot show catch-up");
+        },
+      );
+      expect(
+        (
+          await backend.openView({
+            coordinator,
+            cwd: project,
+            home,
+            origin,
+            view: { kind: "catchup", automatic: true },
+          })
+        ).opened,
+      ).toBe(true);
+      await until(async () => (await ctl("tree")).includes("Where we left off"));
+      const catchupPane = blocks(
+        decode(await run("ls", "--json"), Listing, "automatic catch-up"),
+      ).find((entry) => entry.block.program === "tandem.catchup")?.block.id;
+      if (!catchupPane) throw new Error("Automatic catch-up did not create its view");
+      expect(
+        (
+          await backend.openView({
+            coordinator,
+            cwd: project,
+            home,
+            origin: { paneId: catchupPane, cwd: project },
+            view: { kind: "orchestrator" },
+          })
+        ).opened,
+      ).toBe(true);
+      expect(
+        (
+          await backend.openView({
+            coordinator,
+            cwd: project,
+            home,
+            origin,
+            view: { kind: "catchup", automatic: true },
+          })
+        ).opened,
+      ).toBe(false);
+      expect(
+        blocks(decode(await run("ls", "--json"), Listing, "quiet reopen")).some(
+          (entry) => entry.block.program === "tandem.catchup",
+        ),
+      ).toBe(false);
+      const browser = await backend.openView({
+        coordinator,
+        cwd: project,
+        home,
+        origin,
+        view: { kind: "browser", url: "https://example.invalid/pull/281" },
+      });
+      expect(browser.opened).toBe(true);
       const actions = await readFile(log, "utf8");
       expect(actions.match(/--pane/g)?.length).toBe(3);
-      expect(actions).toContain(`--cwd\n${root}`);
-      // Malformed publication keeps the last good model visible while disabling its actions.
-      await writeFile(
-        path,
-        '{"version":1,"kind":"panel","revision":"broken","model":{"catchup":{"merged":[{}]}}}',
-      );
-      await until(async () => (await ctl("tree")).includes("View unavailable"));
-      expect(await ctl("tree")).toContain("Fix panel width");
-      expect(await ctl("tree")).not.toContain("Open what needs me");
+      expect(actions).toContain(`--cwd\n${project}`);
     } catch (error) {
       console.error(await readFile(join(root, "window.log"), "utf8").catch(() => ""));
       throw error;

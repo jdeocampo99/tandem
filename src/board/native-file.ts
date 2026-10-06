@@ -6,6 +6,7 @@ import { nativeViewsPath } from "./snapshot.ts";
 const navigationModel = z.object({
   version: z.literal(1),
   project: z.string(),
+  changeSignature: z.string().min(1).optional(),
   writtenAt: z.string(),
   tasks: z.record(z.object({ detailFile: z.string() })),
   briefs: z.record(z.object({ detailFile: z.string() })),

@@ -13,8 +13,8 @@ function M.run(origin: Origin, cx: BlockCx, args: {string})
  table.insert(argv,"--cwd"); table.insert(argv,origin.cwd)
  if origin.window~="" then table.insert(argv,"--window"); table.insert(argv,origin.window) end
  local ok,problem=pcall(function()
-  tern.process.run(argv,{cwd="."},function(result,callbackCx)
-   if result.status~=0 and callbackCx then callbackCx:toast("error","Tandem couldn't run that action",result.stderr) end
+  tern.process.run(argv,{cwd="."},function(result)
+   if result.status~=0 then cx:toast("error","Tandem couldn't run that action",result.stderr) end
   end)
  end)
  if not ok then cx:toast("error","Tandem couldn't start that action",tostring(problem)) end

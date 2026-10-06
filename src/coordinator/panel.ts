@@ -70,6 +70,13 @@ export async function openPanelBeside(
         panelPaneId: recorded,
       }))
     ) {
+      if (terminal.name === "tern")
+        await terminal.openView({
+          coordinator: record.endpoint,
+          cwd: record.worktree.path,
+          home,
+          view: { kind: "catchup", automatic: true },
+        });
       return undefined;
     }
     const panelPaneId = await terminal.openPanel({
@@ -78,6 +85,13 @@ export async function openPanelBeside(
       project: record.repoPath,
     });
     await savePanelPaneId(home, record, panelPaneId);
+    if (terminal.name === "tern")
+      await terminal.openView({
+        coordinator: record.endpoint,
+        cwd: record.worktree.path,
+        home,
+        view: { kind: "catchup", automatic: true },
+      });
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);

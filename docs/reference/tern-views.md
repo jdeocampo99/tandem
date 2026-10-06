@@ -319,3 +319,23 @@ rows, re-proves the destination coordinator, and uses an exact-block `tern focus
 switch. Supplied window keys are independently scoped and must contain the originating pane.
 Without a key, the backend requires exactly one attached window and proves the origin in
 that scope. Multiple windows are refused rather than choosing one by ordering.
+
+
+## Board, usage and catch-up actions
+
+Board and usage are full-window tabs with Escape and “← Orchestrator” returns. Returning proves
+this coordinator's exact block program, root/detail path and launch arguments, closes only that
+screen and focuses the preserved coordinator. Invoking board from its own block toggles it closed.
+
+Catch-up uses `view:{kind:"catchup",automatic:true}` on project opening/reconnect/switching.
+The host reads the root signature and the Tandem-owned visit record, then applies
+`shouldAutoShowCatchUp`. An explicit `view:{kind:"catchup"}` opens the screen without that rule.
+`native board catchup-dismiss` returns and records dismissal; `catchup-open-needs` returns, opens
+the first saved needs-you destination (brief, task or inbox), then records dismissal.
+
+`native board pr-link CARD_KEY` and `merged-link URL` resolve only PR identities present in the
+originating project's current root model. `openView({view:{kind:"browser",url}})` requires HTTPS
+and uses Tern's browser API with the exact coordinator as owner. The new browser block must be
+confirmed in that coordinator's recorded session. Uncertain mutations are never repeated.
+All callbacks carry the screen's own decimal pane, absolute coordinator cwd and optional window key.
+Nonzero CLI results show stderr in a toast; exit zero includes cancellation.

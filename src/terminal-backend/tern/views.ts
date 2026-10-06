@@ -5,9 +5,11 @@ import { z } from "zod";
 import { AdapterError, EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { type NativeNavigationModel, readNativeBundle } from "../../board/native-file.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
+import { isNotFoundError } from "../../config/storage.ts";
 import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
+import { visitNativeProject } from "../../memory/native-visits.ts";
 import type { TerminalBackend } from "../contract.ts";
 import { exactPane, paneMutation } from "./endpoints.ts";
 import { blocks, Id, type TernCommands, TernOutcomeUnknownError } from "./protocol.ts";
@@ -17,6 +19,7 @@ const Opened = z.object({
   discarded: z.boolean(),
 });
 const Receipt = z.object({ paneId: Id, tabId: Id, sessionId: Id });
+const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 export type ViewHostingInput = Parameters<TerminalBackend["openView"]>[0];
 
@@ -94,6 +97,31 @@ export function ternViewHost(
   ) => {
     const cmd = await scoped(input);
     return options.guard(input.coordinator.paneId, async () => {
+      if (placement === "return") {
+        const source = blocks(await cmd.ls(input.cwd)).find(
+          (entry) => entry.block.id === (input.origin?.paneId ?? input.coordinator.paneId),
+        );
+        const root = nativeViewsPath(input.home, project);
+        const ownedRoot = source?.block.args?.[0] === root;
+        const ownedTask =
+          source?.block.program === "tandem.task" &&
+          source.block.args?.[0]?.startsWith(`${root.slice(0, -5)}/task-`);
+        if (
+          source?.block.id !== input.coordinator.paneId &&
+          (!source ||
+            !["tandem.board", "tandem.usage", "tandem.catchup", "tandem.task"].includes(
+              source.block.program ?? "",
+            ) ||
+            source.block.args?.[1] !== input.coordinator.paneId ||
+            source.block.args?.[2] !== input.cwd ||
+            source.block.args?.[4] !== input.home ||
+            (!ownedRoot && !ownedTask))
+        )
+          throw new EndpointOwnershipError(
+            input.coordinator,
+            "return requires this coordinator's exact native view",
+          );
+      }
       const directory = join(input.home, "native-host");
       await ensurePrivateDirectoryTree(directory, "native route directory");
       const token = randomUUID();
@@ -186,6 +214,68 @@ export function ternViewHost(
     scoped,
     openView: async (input: ViewHostingInput) => {
       const project = await projectForView(input.home, input.coordinator);
+      if (input.view.kind === "catchup" && input.view.automatic) {
+        let bundle: NativeNavigationModel;
+        try {
+          bundle = await readNativeBundle(input.home, project);
+        } catch (error) {
+          if (isNotFoundError(error)) return { opened: false, warnings: [] };
+          throw error;
+        }
+        if (!bundle.changeSignature) return { opened: false, warnings: [] };
+        const shown = await visitNativeProject(
+          {
+            home: input.home,
+            project,
+            now: new Date(options.clock()).toISOString(),
+            signature: bundle.changeSignature,
+          },
+          async () => {
+            await open(input, project, "catchup", "window", nativeViewsPath(input.home, project));
+          },
+        );
+        return { opened: shown, warnings: [] };
+      }
+      if (input.view.kind === "browser") {
+        const url = new URL(input.view.url);
+        if (url.protocol !== "https:") throw new Error("PR links require an HTTPS URL");
+        const cmd = await scoped(input);
+        const ownerId = Number(input.coordinator.paneId);
+        if (!Number.isSafeInteger(ownerId))
+          throw new Error("Browser owner id is not exactly representable");
+        await options.guard(input.coordinator.paneId, async () => {
+          const before = blocks(await cmd.ls(input.cwd));
+          await exactPane(cmd, { endpoint: input.coordinator, cwd: input.cwd });
+          const opened = await cmd.mutate(
+            input.cwd,
+            ["browser", JSON.stringify({ op: "open", owner: ownerId, url: url.href })],
+            BrowserOpened,
+          );
+          const created = blocks(await cmd.ls(input.cwd)).find(
+            (entry) => entry.block.id === opened.ok.block,
+          );
+          if (
+            !created ||
+            created.session.id !== input.coordinator.terminalSessionId ||
+            before.some((entry) => entry.block.id === opened.ok.block)
+          )
+            throw new TernOutcomeUnknownError(
+              "tern browser",
+              "new browser identity was not confirmed",
+            );
+        });
+        return { opened: true, warnings: [] };
+      }
+      if (input.view.kind === "board") {
+        const cmd = await scoped(input);
+        const source = blocks(await cmd.ls(input.cwd)).find(
+          (entry) => entry.block.id === input.origin?.paneId,
+        );
+        if (source?.block.program === "tandem.board") {
+          await open(input, project, "panel", "return", nativeViewsPath(input.home, project));
+          return { opened: true, warnings: [] };
+        }
+      }
       if (input.view.kind === "orchestrator" || input.view.kind === "inbox") {
         await open(
           input,

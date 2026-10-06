@@ -28,9 +28,12 @@ function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
   cx:command("inbox")
   pane=origin
  elseif ticket.placement=="return" then
-  if source.block~="tandem.task" or not owner.floating then return {handled=true} end
-  if not cx.layout:dock(coordinator,origin,"right",{focus=false}) then return {handled=true} end
-  cx.layout:close(origin)
+  if source.block=="tandem.task" then
+   if not owner.floating or not cx.layout:dock(coordinator,origin,"right",{focus=false}) then return {handled=true} end
+   cx.layout:close(origin)
+  elseif source.block=="tandem.board" or source.block=="tandem.usage" or source.block=="tandem.catchup" then
+   cx.layout:close(origin)
+  elseif origin~=coordinator then return {handled=true} end
   cx.layout:focus(coordinator)
   pane=coordinator
  else

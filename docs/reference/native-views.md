@@ -290,7 +290,8 @@ the last successful in-process cache and add a warning. Views never make network
 Schema: `src/board/native.ts`, `NativeBoardView`; builder `nativeBoardView`.
 `{viewOnly:true,returnLabel,lanes:{title,count,cards:NativeBoardCard[]}[]}`.
 Lane titles, in order: Working, Needs you, In review, Ready to merge.
-A card extends `NativePanelRow` with `{harness?,branch?,costMicros?,unpricedSamples,stuck}`.
+A card extends `NativePanelRow` with `{harness?,harnessGlyph?,branch?,costMicros?,costLabel?,unpricedSamples,stuck}`.
+The TypeScript builder supplies the harness glyph and cost label, retaining unknown pricing.
 A blocked review stays in In review with a stuck flag. Fixing findings stays in Working.
 No drag, mutation or merge action is supplied by this model.
 
@@ -310,6 +311,10 @@ Only that adapter imports pi-ai. Raw payloads, metadata, keys and tokens never l
 - `byModel`: `{provider,model,today:UsageTotals,week:UsageTotals}[]`.
 - `byStage`: `{stage:RequestWorkKind,todayMs,weekMs}[]`.
 - `malformedEvents`: unreadable usage-row count.
+- `display?`: `UsageDisplay` from `src/runtime/usage-display.ts`, supplied by `usageView`.
+  It groups account meters (5-hour before weekly), formats reset countdowns and totals, and
+  supplies model/stage labels and proportional model-cost widths for the native renderer.
+  Unknown limits and unpriced usage remain explicit. Raw totals stay available for other views.
 - `TaskCostView`: `{taskId,recorded,charges:AdditionalCharges,tokens:TokenTotals,
   quota:IncludedQuota,timing:ReceiptTiming,breakdown:RequestUsageBreakdown}` from usage-receipt.ts.
   Unrecorded task cost has `recorded:false`; no task intake is invented.
@@ -333,4 +338,8 @@ The host calls `shouldAutoShowCatchUp({now,lastOpenedAt?,previousSignature?,curr
 It returns true only at **1+ hour** away, with a known previous visit/signature and a different
 meaningful signature. Unknown visits, invalid dates, repaint/timer changes and unchanged work
 never auto-show. The host owns visit/dismiss tracking and invokes this pure rule on project open;
-this data slice does not write visit state or display the card itself.
+`src/memory/native-visits.ts` stores the last visit/signature and explicit dismissal in private,
+locked, atomically replaced `<home>/native-visits/<repositoryKey>.json` files. Project opening,
+reconnecting and switching invoke the rule once; polling never changes visits. A failed opening
+does not acknowledge the visit. First visits and unchanged work remain quiet. Dismiss and
+Open what needs me acknowledge the current signature only after confirmed navigation.

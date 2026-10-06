@@ -45,6 +45,17 @@ export async function nativeProject(context: NativeRendererContext) {
     home: context.environment.home,
   });
   if (!focused) throw new Error("Tern could not focus the exact project coordinator");
+  await context.capabilities.terminal.openView({
+    coordinator: destination.endpoint,
+    cwd: destination.worktree.path,
+    home: context.environment.home,
+    origin: {
+      ...context.origin,
+      paneId: destination.endpoint.paneId,
+      cwd: destination.worktree.path,
+    },
+    view: { kind: "catchup", automatic: true },
+  });
   return { value: { focused: true, project: project.repoPath } };
 }
 

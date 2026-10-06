@@ -76,8 +76,8 @@ local block: BlockDef<State> = {
   end
   return {main=ui.col({ui.el("div", {class="tdm-usage-screen"}, children)})}
  end,
- key = function(state, key, cx) if key.name ~= "escape" then return false end screen.back(state.args, cx, "usage"); return true end,
- event = function(state, ev, cx) if ev.ev == "action" and ev.act == "back" then screen.back(state.args, cx, "usage") end end,
+ key = function(state, key, cx) if key.name ~= "escape" then return false end screen.back(state.args, cx); return true end,
+ event = function(state, ev, cx) if ev.ev == "action" and ev.act == "back" then screen.back(state.args, cx) end end,
  save = function(state) return {args=state.args} end,
 }
 return block

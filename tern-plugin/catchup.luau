@@ -1,6 +1,7 @@
 --!strict
 local views = require("./view-file")
 local components = require("./components")
+local navigation = require("./navigation")
 local screen = require("./screen")
 local ui = tern.ui
 
@@ -33,7 +34,7 @@ local block: BlockDef<State> = {
   if state.view.model then
    local c = state.view.model.catchup
    local merged, needs, blocked, left = {}, {}, {}, {}
-   for _, pr in c.merged do table.insert(merged, components.button("#" .. pr.number .. " " .. pr.title .. " ↗", "merged=" .. tostring(pr.number), "success")) end
+   for _, pr in c.merged do table.insert(merged, components.button("#" .. pr.number .. " " .. pr.title .. " ↗", "merged=" .. pr.url, "success")) end
    for _, row in c.needsYou do table.insert(needs, components.text(row.name .. ": " .. row.text)) end
    for _, row in c.blocked do table.insert(blocked, components.text(row.name .. ": " .. row.reason)) end
    for _, row in c.whereWeLeftOff do table.insert(left, ui.el("div", {class="tdm-usage-card"}, {ui.el("strong", {text="Workstream: " .. row.workstream}), ui.md(row.text)})) end
@@ -47,13 +48,13 @@ local block: BlockDef<State> = {
   table.insert(children, ui.el("div", {class="tdm-catchup-actions"}, buttons))
   return {main=ui.col({ui.el("div", {class="tdm-catchup-screen"}, children)})}
  end,
- key = function(state, key, cx) if key.name ~= "escape" then return false end screen.run(state.args, cx, {"board", "catchup-dismiss"}); return true end,
+ key = function(state, key, cx) if key.name ~= "escape" then return false end navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"}); return true end,
  event = function(state, ev, cx)
   if ev.ev ~= "action" then return end
-  if ev.act == "dismiss" then screen.run(state.args, cx, {"board", "catchup-dismiss"})
+  if ev.act == "dismiss" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"})
   elseif state.view.status == "ready" then
-   if ev.act == "open-needs" then screen.run(state.args, cx, {"board", "catchup-open-needs"})
-   elseif ev.act == "merged" then screen.run(state.args, cx, {"board", "merged-link", ev.value}) end
+   if ev.act == "open-needs" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-open-needs"})
+   elseif ev.act == "merged" then navigation.run(navigation.origin(state.args), cx, {"board", "merged-link", ev.value}) end
   end
  end,
  save = function(state) return {args=state.args} end,
