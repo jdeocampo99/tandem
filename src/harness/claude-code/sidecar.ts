@@ -39,11 +39,15 @@ export function parseSidecarArgs(argv: readonly string[]): SidecarArgs {
   return { sessionId };
 }
 
-async function answers(socket: string): Promise<boolean> {
+async function answers(socket: string, signal?: AbortSignal): Promise<boolean> {
   try {
-    await fetch("http://sidecar/health", { unix: socket });
+    await fetch("http://sidecar/health", {
+      unix: socket,
+      ...(signal === undefined ? {} : { signal }),
+    });
     return true;
   } catch {
+    signal?.throwIfAborted();
     return false;
   }
 }
@@ -63,10 +67,17 @@ function exists(path: string): boolean {
  * stopping; it gets a moment to let go, and if it never does, this sidecar refuses to start
  * rather than run a second session owner.
  */
-export async function claimSocket(socket: string, waitMs = CLAIM_WAIT_MS): Promise<void> {
+export async function claimSocket(
+  socket: string,
+  waitMs = CLAIM_WAIT_MS,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
   const deadline = performance.now() + waitMs;
   while (exists(socket)) {
-    if (!(await answers(socket))) {
+    const alive = await answers(socket, signal);
+    signal?.throwIfAborted();
+    if (!alive) {
       unlinkSync(socket);
       return;
     }
@@ -169,6 +180,9 @@ const timers: SessionDeps["timers"] = {
  * `shutdown` event, then stops listening, removes its socket, and shuts the session down.
  */
 async function main(): Promise<void> {
+  // Initialization can await a worker job or a replaced socket while Claude Code exits.
+  const parent = process.ppid;
+  if (parent <= 1) throw new Error("Claude Code's parent process exited before sidecar startup");
   // Stdout carries only protocol lines; anything else the core prints goes to stderr.
   console.log = console.error;
   const args = parseSidecarArgs(process.argv.slice(2));
@@ -183,35 +197,58 @@ async function main(): Promise<void> {
     confirm: (title, message) => hooks.confirm(title, message),
     startsWithPrompt: jobPath !== undefined,
   });
-  const binding: SessionBinding =
-    jobPath === undefined
-      ? claudeCodeCoordinator(pane, {
-          timers,
-          logError: (message, error) => console.error(`${message}: ${errorMessage(error)}`),
-          cwd,
-          sessionId: args.sessionId,
-        })
-      : await openClaudeCodeWorker(pane, jobPath, process.env, timers);
-
-  mkdirSync(join(home, "sidecars"), { recursive: true, mode: 0o700 });
-  await claimSocket(socket);
+  const startup = new AbortController();
+  let binding: SessionBinding | undefined;
+  let server: Bun.Server<undefined> | undefined;
+  let listening: number | undefined;
   let stopping: Promise<void> | undefined;
   const stop = (): Promise<void> => {
     stopping ??= (async () => {
+      clearInterval(parentTimer);
+      startup.abort();
       hooks.denyAll();
-      await server.stop(true);
+      await server?.stop(true);
       // A replacement may already listen at this path; only this sidecar's own socket is removed.
-      if (statSync(socket, { throwIfNoEntry: false })?.ino === listening) unlinkSync(socket);
+      if (listening !== undefined && statSync(socket, { throwIfNoEntry: false })?.ino === listening)
+        unlinkSync(socket);
       try {
-        await binding.shutdown();
+        await binding?.shutdown();
       } finally {
         process.exit(0);
       }
     })();
     return stopping;
   };
+  // Watch before worker initialization or a health response can hold startup indefinitely.
+  const parentTimer = setInterval(() => {
+    if (process.ppid !== parent) void stop();
+  }, PARENT_POLL_MS).unref();
+  // The service loads OMP's SDK, whose postmortem module exits on these signals before this
+  // sidecar could remove its socket, so the sidecar takes them over.
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) process.removeAllListeners(signal);
+  process.on("SIGTERM", () => void stop());
+  process.on("SIGHUP", () => void stop());
 
-  const server = Bun.serve({
+  try {
+    binding =
+      jobPath === undefined
+        ? claudeCodeCoordinator(pane, {
+            timers,
+            logError: (message, error) => console.error(`${message}: ${errorMessage(error)}`),
+            cwd,
+            sessionId: args.sessionId,
+          })
+        : await openClaudeCodeWorker(pane, jobPath, process.env, timers);
+    mkdirSync(join(home, "sidecars"), { recursive: true, mode: 0o700 });
+    await claimSocket(socket, CLAIM_WAIT_MS, startup.signal);
+  } catch (error) {
+    if (stopping === undefined) throw error;
+    await stopping;
+    return;
+  }
+
+  const session = binding;
+  server = Bun.serve({
     unix: socket,
     async fetch(request) {
       const path = new URL(request.url).pathname;
@@ -230,30 +267,24 @@ async function main(): Promise<void> {
           setTimeout(() => void stop(), 0);
           return Response.json({ type: "done" });
         }
-        return Response.json(await hooks.start(() => binding.handle(event)));
+        return Response.json(await hooks.start(() => session.handle(event)));
       } catch (error) {
         return Response.json({ type: "refused", reason: errorMessage(error) }, { status: 500 });
       }
     },
   });
-  const listening = statSync(socket).ino;
-
-  // The service loads OMP's SDK, whose postmortem module exits on these signals before this
-  // sidecar could remove its socket, so the sidecar takes them over.
-  for (const signal of ["SIGTERM", "SIGHUP"] as const) process.removeAllListeners(signal);
-  process.on("SIGTERM", () => void stop());
-  process.on("SIGHUP", () => void stop());
+  listening = statSync(socket).ino;
   // `$.process.spawn` closes stdin from the start, so a dead Claude Code shows only as a new parent.
-  const parent = process.ppid;
-  setInterval(() => {
-    if (process.ppid !== parent) void stop();
-  }, PARENT_POLL_MS).unref();
+  if (process.ppid !== parent) {
+    await stop();
+    return;
+  }
   writeLine({
     type: "ready",
     protocol: SIDECAR_PROTOCOL_VERSION,
     socket,
     pid: process.pid,
-    tools: binding.tools,
+    tools: session.tools,
   });
 }
 
