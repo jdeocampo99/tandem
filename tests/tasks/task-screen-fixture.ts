@@ -211,7 +211,6 @@ export function taskScreenPublication(project: string, review = false): NativeVi
         }
       : {}),
     taskId: "102",
-    now: "2030-01-02T03:16:05.000Z",
     cached: {
       repo: "owner/repo",
       number: 281,
