@@ -299,6 +299,18 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         await mkdir(shots, { recursive: true });
         await ctl("shot", "brief-comment");
       }
+      await clickText("Overall comment (optional)");
+      await ctl("type", JSON.stringify("Please keep Herdr as an option."));
+      await writeFile(
+        path,
+        JSON.stringify({ version: 999, kind: "brief", revision: "bad", model }),
+      );
+      await until(async () =>
+        (await tree()).some((each) => each.text?.startsWith("Brief unavailable. Actions") === true),
+      );
+      expect((await tree()).some((each) => each.text === "Approve")).toBe(false);
+      await publish("fixture-2");
+      await until(async () => (await tree()).some((each) => each.text === "Approve"));
       // A newer model cannot quietly move the pending comment or approval intent to rev 3.
       await publish("fixture-3", {
         ...model,
@@ -333,9 +345,10 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       );
       expect(JSON.parse(await readFile(join(root, "received.json"), "utf8"))).toEqual({
         ...model.approval,
+        text: "Please keep Herdr as an option.",
         comments: [
           {
-            line: model.lines.find((each) => each.kind !== "heading")?.id,
+            lineId: model.lines.find((each) => each.kind !== "heading")?.id,
             text: "Keep Herdr tests unchanged too.",
           },
         ],
