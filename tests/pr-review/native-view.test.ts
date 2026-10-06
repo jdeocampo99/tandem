@@ -1,9 +1,17 @@
 import { expect, test } from "bun:test";
+import { readFile, stat } from "node:fs/promises";
+import { NativeViewsReader } from "../../src/board/native-read.ts";
+import { nativePrFile } from "../../src/board/native-views.ts";
+import { nativeDetailPath, writeNativeViews } from "../../src/board/snapshot.ts";
+import { boardView } from "../../src/board/view.ts";
 import {
   type CachedPullRequest,
   prMarkdownBlocks,
   prPaneView,
 } from "../../src/pr-review/native-view.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import { state } from "../board/fixtures.ts";
+import { withScenario } from "../evals/scenario.ts";
 
 const now = "2030-01-01T12:00:00Z";
 const cached: CachedPullRequest = {
@@ -71,7 +79,7 @@ const cached: CachedPullRequest = {
 };
 
 test("native PR diff anchors both sides and replies while retaining outdated threads", () => {
-  const view = prPaneView({ cached, now });
+  const view = prPaneView({ cached });
   expect(view.header).toMatchObject({
     unresolved: 2,
     firstThreadId: "left",
@@ -82,11 +90,10 @@ test("native PR diff anchors both sides and replies while retaining outdated thr
   expect(view.files[0]?.rows[2]?.threads[0]?.comments).toHaveLength(2);
   expect(view.unanchoredThreads[0]?.id).toBe("outdated");
   expect(view.tour[0]?.stops[0]?.rowIds).toEqual(["src/a.ts:2"]);
-  expect(view.checks[0]).toMatchObject({ elapsedMs: 77000 });
+  expect(view.checks[0]).toMatchObject({ startedAtMs: Date.parse("2030-01-01T11:58:43Z") });
   expect(view.checks[1]).toMatchObject({ duration: "9s" });
-  expect(prPaneView({ cached, now: "2030-01-01T13:00:00Z" }).checks[0]).toMatchObject({
-    elapsedMs: 3677000,
-  });
+  expect(view).not.toHaveProperty("clockAt");
+  expect(view.checks[0]).not.toHaveProperty("elapsedMs");
   expect(view.commentDestination).toBe("worker");
 });
 
@@ -112,7 +119,7 @@ test("PRs without a tour hide its tab and reviews carry the commit and posted bi
       },
     ],
   };
-  const view = prPaneView({ cached: { ...cached, tour: [] }, now, review });
+  const view = prPaneView({ cached: { ...cached, tour: [] }, review });
   expect(view.tabs).toEqual(["Description", "Diff"]);
   expect(view.commentDestination).toBe("review");
   expect(view.review).toEqual(review);
@@ -133,12 +140,70 @@ test("PR Markdown blocks preserve blank lines inside a fence and separate headin
   ]);
 });
 
-test("completed CI does not rewrite the PR view for clock ticks alone", () => {
-  const complete = {
-    ...cached,
-    checks: cached.checks.filter((check) => check.state !== "running"),
-  };
-  expect(prPaneView({ cached: complete, now: "2030-01-01T13:00:00Z" })).toEqual(
-    prPaneView({ cached: complete, now }),
-  );
+test("publication clock advances leave running CI detail bytes, inode and mtime unchanged", async () => {
+  await withScenario({}, async (world) => {
+    const reader = new NativeViewsReader({
+      home: world.home,
+      clock: world.clock,
+      run: world.run,
+      terminal: terminalBackend(world.run),
+    });
+    const file = nativePrFile(cached.repo, cached.number);
+    const path = nativeDetailPath(world.home, world.repoPath, file);
+    const publish = async (pr: CachedPullRequest) => {
+      const publication = await reader.read(
+        {
+          version: 1,
+          writtenAt: world.clock(),
+          board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+          coordinators: [],
+        },
+        world.repoPath,
+      );
+      const model = prPaneView({ cached: pr });
+      await writeNativeViews(world.home, {
+        bundle: {
+          ...publication.bundle,
+          pullRequests: {
+            [`${pr.repo}#${pr.number}`]: {
+              header: model.header,
+              readAt: model.readAt,
+              detailFile: file,
+            },
+          },
+        },
+        details: [{ file, view: { version: 1, project: world.repoPath, kind: "pr", data: model } }],
+      });
+    };
+    try {
+      await publish(cached);
+      const before = await readFile(path, "utf8");
+      const metadata = await stat(path);
+      world.advanceClock(60);
+      await publish(cached);
+      expect(await readFile(path, "utf8")).toBe(before);
+      expect((await stat(path)).ino).toBe(metadata.ino);
+      expect((await stat(path)).mtimeMs).toBe(metadata.mtimeMs);
+      const complete: CachedPullRequest = {
+        ...cached,
+        checks: cached.checks.map((check) =>
+          check.state === "running"
+            ? { ...check, state: "passed", completedAt: "2030-01-01T12:01:00Z" }
+            : check,
+        ),
+      };
+      await publish(complete);
+      expect(await readFile(path, "utf8")).not.toBe(before);
+      expect((await stat(path)).ino).not.toBe(metadata.ino);
+      const completedBytes = await readFile(path, "utf8");
+      const completedMetadata = await stat(path);
+      world.advanceClock(60);
+      await publish(complete);
+      expect(await readFile(path, "utf8")).toBe(completedBytes);
+      expect((await stat(path)).ino).toBe(completedMetadata.ino);
+      expect((await stat(path)).mtimeMs).toBe(completedMetadata.mtimeMs);
+    } finally {
+      await reader.settle();
+    }
+  });
 });

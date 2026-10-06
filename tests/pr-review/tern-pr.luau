@@ -6,13 +6,54 @@ local fields = require('./text-field')
 local model = models.parse(tern.json.decode(tern.fs.read('fixture.json')).model)
 assert(model ~= nil)
 assert(models.parse({header={}}) == nil)
+local function elapsed(node: Node): Node?
+ if node.k == 'elapsed' then return node end
+ for _, child in node.c or {} do
+  local found = elapsed(child)
+  if found then return found end
+ end
+ return nil
+end
+local timerModel = table.clone(model)
+timerModel.checks = {{name='live CI',state='running',startedAtMs=(os.time()-120)*1000}}
+local timerState = content.create()
+local firstTimer = elapsed(content.view(timerState,timerModel,true).main)
+assert(firstTimer ~= nil and firstTimer.p ~= nil and firstTimer.p.age >= 120000)
+timerState.clock -= 3000
+local laterTimer = elapsed(content.view(timerState,timerModel,true).main)
+assert(laterTimer ~= nil and laterTimer.p ~= nil and laterTimer.p.age >= firstTimer.p.age + 3000)
+assert(firstTimer.p.format == 'clock' and firstTimer.p.key == 'timer1')
+local taskPath = tern.fs.read('task-path.txt')
+local index = models.parseIndex({pullRequests={target={header=model.header,detailFile='pr-fixture.json'}}})
+assert(index ~= nil)
+assert(models.parseIndex({pullRequests={bad={header={taskId=42},detailFile='pr-fixture.json'}}}) == nil)
+local otherHeader = table.clone(model.header)
+otherHeader.taskId = 'another-task'; otherHeader.repo = 'another/app'
+index.pullRequests.other = {header=otherHeader,detailFile='pr-other.json'}
+assert(models.taskDetailPath(taskPath, 'another-missing-task', index) == nil)
+assert(models.taskDetailPath('task-task-98.json', 'task-98', index) == nil)
+assert(models.taskDetailPath(taskPath, 'task-98', index) == string.gsub(taskPath, 'task%-task%-98%.json$', 'pr-fixture.json'))
+local related = models.forTask(taskPath, 'task-98', index)
+assert(related ~= nil and related.status == 'ready' and related.model.header.taskId == 'task-98')
+local embedded = content.create(); embedded.tab = 'Diff'
+assert(content.view(embedded, related.model, true, 'main.task.pr').main ~= nil)
+index.pullRequests.duplicate = index.pullRequests.target
+assert(models.forTask(taskPath, 'task-98', index) == nil)
+index.pullRequests.duplicate = nil
+index.pullRequests.target.detailFile = '../pr-fixture.json'
+assert(models.forTask(taskPath, 'task-98', index) == nil)
+index.pullRequests.target.detailFile = 'pr-fixture.json'
+related.model.header.taskId = 'wrong-task'
+tern.fs.write('pr-fixture.json',tern.json.encode({version=1,kind='pr',revision='changed-task',model=related.model}))
+local mismatch = models.forTask(taskPath, 'task-98', index)
+assert(mismatch ~= nil and mismatch.status == 'unavailable' and mismatch.model == nil)
 local state = content.create()
 local view = content.view(state, model, true)
 assert(view.main ~= nil)
 local calls = {}
 local frames = {}
-local cx = {pane=1,render=function() end,frame=function(_,ops) table.insert(frames,ops) end,open=function(_,url) table.insert(calls,{url=url}) end}
-local invoke = function(verb,id,payload,done) table.insert(calls,{verb=verb,id=id,payload=payload}); if done then done() end end
+local cx = {pane=1,render=function() end,frame=function(_,ops) table.insert(frames,ops) end,open=function(_,url) table.insert(calls,{url=url}) end,toast=function() end}
+local invoke = function(verb,id,payload,done) table.insert(calls,{verb=verb,id=id,payload=payload}); if done then done({status=0,stdout='{"posted":true}',stderr=''}) end end
 assert(content.event(state,model,true,{ev='action',act='pr-tab',value='Diff'},cx,invoke))
 assert(state.tab == 'Diff')
 local beforeFocus = #frames
@@ -55,4 +96,4 @@ model.review.generation=2
 assert(not content.ready(state,model,true))
 content.event(state,model,true,{ev='action',act='pr-post'},cx,invoke)
 assert(#calls == 2)
-tern.fs.write('results.json',tern.json.encode({comment=true,review=true,stale=true}))
+tern.fs.write('results.json',tern.json.encode({comment=true,review=true,stale=true,reuse=true}))

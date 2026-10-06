@@ -266,12 +266,13 @@ The existing HTML review page and native view share `parsePatch` in `src/pr-revi
 - `header`: `{repo,number,title,url,head,draft,next,taskId?,commits,additions,deletions,
   unresolved,firstThreadId?}`. `next` comes from the saved PR-watch note, with a draft fallback.
 - `readAt`: timestamp of the last complete cached GitHub read.
-- `clockAt`: timestamp used to sample running-check ages for this publication. With no running checks
-  it stays at `readAt`, preserving unchanged view bytes between clock ticks.
 - `tabs`: Description, optional Tour, Diff. Tour appears only with chapters.
 - `checks`: `{name,state:"passed"|"running"|"failed"|"pending",startedAt?,completedAt?,
-  logUrl?,duration?,elapsedMs?}[]`. TypeScript computes completed durations and running ages
-  from the publication clock. Renderers advance `elapsedMs` locally between publications.
+  logUrl?,duration?,startedAtMs?}[]`. TypeScript computes completed durations and a stable epoch
+  millisecond timestamp from a running check's `startedAt`. There is no sampled publication clock
+  or running age in the model. Renderers initialize Tern's `elapsed` node from that start timestamp;
+  Tern ticks the element without Lua timer renders or detail-file updates. A clock-only publication
+  leaves running and completed CI detail bytes, inode and modification time unchanged.
 - `description`: `{markdown,blocks:string[],conversation:PrComment[]}` for top-level comments/reviews.
   Markdown blocks retain fenced-code blank lines; each block becomes one native Markdown node.
 - `tour`: `{title,why,stops:(TourStopInput & {rowIds:string[]})[]}[]`. `rowIds` selects the

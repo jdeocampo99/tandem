@@ -1459,6 +1459,18 @@ test("Show PRs opens the indexed durable task in the originating project without
       (await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps)).exitCode,
     ).toBe(1);
     expect(f.opened).toHaveLength(1);
+    // Ownership is proved before reading the cache, even with a valid locating pane/cwd.
+    f.deps.terminal = {
+      ...f.deps.terminal,
+      inspect: async () => {
+        throw new Error("Cannot prove coordinator ownership");
+      },
+    };
+    await writeFile(path, "{broken");
+    const refused = await runTerminal(["native", "prs", "--pane", "101", "--cwd", f.clean], f.deps);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.error?.message).toContain("Cannot prove coordinator ownership");
+    expect(f.opened).toHaveLength(1);
   } finally {
     await f.close();
   }
