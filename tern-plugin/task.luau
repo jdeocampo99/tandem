@@ -225,7 +225,10 @@ local function body(state: State, model: Model): Node
   for _, line in brief.model.lines do table.insert(rows, ui.el('div', { key = line.id, class = 'tt-brief-line' }, { text(tostring(line.number), 'muted'), if line.kind == 'heading' then text(line.text, 'strong') else ui.md(line.text), text(if line.isNew then 'NEW' else '', 'accent') })) end
   return ui.col(rows)
  elseif state.tab == 'Diff' or state.tab == 'PR' then
-  if state.pr and state.pr.model then return prContent.view(state.prContent, state.pr.model, prReady(state), 'main.content').main end
+  if state.pr and state.pr.model then
+   local content = prContent.view(state.prContent, state.pr.model, prReady(state), 'main.content')
+   return ui.col({ content.main, content.dock })
+  end
   return ui.col({ text(if model.pullRequest then 'Open the PR pane to read the description, diff and review threads.' else 'No pull request is available yet.', 'muted'),
    if model.pullRequest then button('Open PR #' .. model.pullRequest.number, 'open-pr') else text('The branch is ' .. (model.header.branch or 'unavailable'), 'muted') })
  elseif state.tab == 'Cost' then return costNode(model) end
@@ -328,7 +331,7 @@ local block: BlockDef<State> = {
  end,
  event = function(state, ev, cx)
   if (state.tab == 'Diff' or state.tab == 'PR') and not state.editing and state.pr and state.pr.model and prContent.event(state.prContent, state.pr.model, prReady(state), ev, cx, invokePr(state, cx)) then cx:render(); return end
-  if ev.ev == 'focus' then state.editing = string.find(ev.id, 'worker%-message$') ~= nil; cx:frame({ { 'focus', ev.id } }); return end
+  if ev.ev == 'focus' then state.editing = string.find(ev.id, 'worker%-message$') ~= nil; return end
   if ev.ev ~= 'action' then return end
   local action = ev.act .. (if ev.value and ev.value ~= '' then '=' .. ev.value else '')
   local tab = string.match(action, '^tab=(.+)$')

@@ -62,7 +62,7 @@ local block: BlockDef<State> = {
   return { main = ui.el('div', { class = 'tt-picker' }, rows) }
  end,
  event = function(state, event, cx)
-  if event.ev == 'focus' then cx:frame({ { 'focus', event.id } }); return end
+  if event.ev == 'focus' then return end
   if event.ev == 'action' and event.act == 'cancel' then navigation.back(state.origin, cx); return end
   if event.ev == 'action' and event.act == 'open' and event.value then open(state, cx, event.value) end
  end,
