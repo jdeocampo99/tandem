@@ -18,7 +18,7 @@ export const ternSettingsSchema = z
   .object({
     keybinds: z.record(z.union([z.string(), z.array(z.string())])).optional(),
     tabs_autohide: z.boolean().optional(),
-    keymap: z.string().optional(),
+    keymap: z.enum(["tern", "ghostty", "kitty", "cmux", "tmux"]).optional(),
   })
   .passthrough();
 
@@ -42,8 +42,11 @@ export function planTernPluginKeys(raw: string): Readonly<{
   changed: boolean;
   skipped: readonly string[];
   added: readonly string[];
+  preset?: string;
 }> {
   const settings = ternSettingsSchema.parse(JSON.parse(raw));
+  if (settings.keymap !== undefined && settings.keymap !== "tern")
+    return { text: raw, changed: false, skipped: [], added: [], preset: settings.keymap };
   const keybinds = { ...settings.keybinds };
   const skipped: string[] = [];
   const added: string[] = [];
@@ -59,10 +62,6 @@ export function planTernPluginKeys(raw: string): Readonly<{
       continue;
     }
     if (keybinds[key] === action) continue;
-    if (settings.keymap !== undefined && settings.keymap !== "tern") {
-      skipped.push(key);
-      continue;
-    }
     keybinds[key] = action;
     added.push(key);
     changed = true;

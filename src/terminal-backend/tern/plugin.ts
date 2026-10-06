@@ -76,28 +76,45 @@ async function configureSettings(deps: TernPluginDependencies): Promise<void> {
       : { configDirectory: deps.env.TERN_CONFIG_DIR }),
     ...(deps.confirm === undefined ? {} : { confirm: deps.confirm }),
   });
+  if (!result.notice) return;
+  if (result.preset)
+    deps.print?.(
+      `Tandem kept Tern's ${result.preset} keymap preset; Tandem shortcuts were not added.\n`,
+    );
   if (result.skipped.length > 0)
     deps.print?.(
       `Tandem kept your custom Tern shortcuts: ${describeTernPluginKeys(result.skipped)}.\n`,
     );
   if (!result.configured)
     deps.print?.(
-      "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons.\n",
+      "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To change this later, switch to Herdr and select Tern again in setup.\n",
     );
 }
 
-/** Leaving Tern removes only recorded settings that still have Tandem's installed values. */
+const restorationWarnings = new Set<string>();
+
+/** Preference cleanup is best-effort: it must never prevent using the selected Herdr terminal. */
 export async function restoreTernPluginPreferences(deps: TernPluginDependencies): Promise<void> {
-  const result = await restoreTernPluginSettings({
-    ...(deps.settingsPath === undefined ? {} : { path: deps.settingsPath }),
-    ...(deps.env?.TERN_CONFIG_DIR === undefined
-      ? {}
-      : { configDirectory: deps.env.TERN_CONFIG_DIR }),
-  });
-  if (result.restored.length > 0)
-    deps.print?.("Restored Tern's previous sidebar and Tandem shortcuts.\n");
-  if (result.preserved.length > 0)
-    deps.print?.("Kept Tern settings you changed after Tandem setup.\n");
+  try {
+    const result = await restoreTernPluginSettings({
+      ...(deps.settingsPath === undefined ? {} : { path: deps.settingsPath }),
+      ...(deps.env?.TERN_CONFIG_DIR === undefined
+        ? {}
+        : { configDirectory: deps.env.TERN_CONFIG_DIR }),
+    });
+    if (result.restored.length > 0)
+      deps.print?.("Restored Tern's previous sidebar and Tandem shortcuts.\n");
+    if (result.preserved.length > 0)
+      deps.print?.("Kept Tern settings you changed after Tandem setup.\n");
+  } catch (error) {
+    const key = deps.settingsPath ?? deps.env?.TERN_CONFIG_DIR ?? "default";
+    if (restorationWarnings.has(key)) return;
+    restorationWarnings.add(key);
+    const message = error instanceof Error ? error.message : String(error);
+    const warning = `Tandem couldn't restore Tern preferences; Herdr will still open. Fix Tern's settings and try again: ${message}\n`;
+    if (deps.print) deps.print(warning);
+    else process.stderr.write(warning);
+  }
 }
 
 /** Update reloads an already installed integration. It never installs one without consent. */

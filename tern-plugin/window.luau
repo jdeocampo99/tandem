@@ -23,8 +23,10 @@ local function run(cx: WindowCx, args: { string })
  if not ok then cx:toast("error", "Tandem couldn't start that action", tostring(problem)) end
 end
 
-local function command(id: string, title: string, args: { string })
- tern.command({ id = id, title = title, run = function(cx) run(cx, args) end })
+local function command(id: string, title: string, args: { string }, palette: boolean?)
+ tern.command({ id = id, title = title,
+  available = if palette == false then function() return false end else nil,
+  run = function(cx) run(cx, args) end })
 end
 
 command("new-request", "Tandem: New request…", { "new-request" })
@@ -35,10 +37,10 @@ command("usage", "Tandem: Usage", { "usage" })
 
 for number = 1, 9 do
  local value = tostring(number)
- command("project-" .. value, "Tandem: Project " .. value, { "project", value })
+ command("project-" .. value, "Tandem: Project " .. value, { "project", value }, false)
 end
-command("project-prev", "Tandem: Previous project", { "project", "prev" })
-command("project-next", "Tandem: Next project", { "project", "next" })
+command("project-prev", "Tandem: Previous project", { "project", "prev" }, false)
+command("project-next", "Tandem: Next project", { "project", "next" }, false)
 
 tern.route.link(function(link, cx)
  local kind, id = string.match(link.url, "^tandem://([a-z]+)/([%w_-]+)$")

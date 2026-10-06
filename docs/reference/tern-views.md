@@ -212,27 +212,39 @@ when no view opened. The `brief-review` fallback tells the action handler to use
 request-brief review workflow and verify that its pane opened. Callers do not create a second
 view or retry an open merely because warnings or a fallback are present.
 
-`ensureTernPlugin` checks the catalog and links a missing package after Tern is selected. A failed or
-malformed catalog fails closed. One onboarding question asks before hiding Tern's sidebar and adding
+`ensureTernPlugin` checks the catalog and links a missing package after ready Tern is selected.
+Choosing ready Tern is consent to link its native view package. A failed or malformed catalog fails closed. One onboarding question asks before hiding Tern's sidebar and adding
 global shortcuts. These preferences affect every Tern window. Window commands register no default
-chords, so declining leaves Tern's keys unchanged while keeping every command in the palette.
+chords, so declining leaves Tern's keys unchanged while keeping the five specified commands in the palette.
+Project commands set `available = false`: Tern 0.4.5 hides these rows but still dispatches their
+consented keybind actions, verified in an isolated control window.
 Panel renderers always provide their header buttons, independent of shortcut consent.
 
 Only absent explicit keybinds inherited from the built-in Tern preset are eligible for replacement.
 Every explicit non-Tandem binding is treated conservatively as custom, including modifier aliases,
-physical digit aliases and sequences. Alternate keymaps are preserved. Skipped shortcuts are listed
+physical digit aliases and sequences. The native `SettingsCx.describe("keymap")` schema and an
+isolated `tmux` window confirm enum presets `tern`, `ghostty`, `kitty`, `cmux`, and `tmux`, with
+`tern` as default. Alternate presets are preserved as a whole and reported by preset name, without
+mislabeling their inherited keys as custom. Skipped explicit shortcuts are listed
 with names such as "Command+Shift+B". Project actions use stable named commands
 `plugin.tandem.project-1` through `project-9`, `project-prev` and `project-next`.
 Numeric shortcuts bind both Tern's character (`cmd+1`) and physical (`cmd+digit_1`) spellings;
 its preset defines both. Configure keys before opening the project window, or reopen a window
 after adding the mappings so it reads the settings.
 `configureTernPluginSettings({ path?, configDirectory?, approved?, confirm? })` returns
-`{ configured, skipped }`. The private `settings.json.tandem.json` version-1 record stores the
+`{ configured, skipped, notice?: true, preset?: string }`. The private `settings.json.tandem.json` version-1 record stores the
 decision, exact added key/action pairs, original keybind-table presence, and sidebar's original
 presence/value plus installed value. A decline is remembered and leaves settings byte-identical.
 An approval records changes before applying them, allowing restoration after an interrupted write.
+A failed settings write removes its unchanged record when the intended settings did not commit,
+so the next attempt cannot claim an unapplied approval. If the settings did commit before a later
+failure, the record remains available for guarded restoration. An existing approved record reports
+`configured: true` only while its recorded settings are actually present; an interrupted write
+cannot claim application on the next launch. User edits are still never reapplied.
 Both files are regular, non-symlink files written atomically with mode 0600, and stale writes are
 refused. Existing records do not reapply removed bindings or reprompt on each launch.
+`notice` is returned only for a newly saved decision: custom-key and decline notices print once.
+The decline notice explains how to reconsider: switch to Herdr, then select Tern again in setup.
 
 `restoreTernPluginSettings({ path?, configDirectory? })` returns `{ restored, preserved }`.
 It removes only recorded keys still equal to their installed action and restores the sidebar only
@@ -248,7 +260,9 @@ choice, `configureTerminal` awaits the injected installer outside task-store ser
 setup opens projects. A declined global-settings prompt retains the plugin and prints how to reach
 its palette commands and panel buttons.
 Both composition helpers read `readHomeSettingsSync(home).terminal`. An explicit Herdr choice
-restores recorded Tern preferences without daemon calls; an unset choice performs no effects.
+attempts to restore recorded Tern preferences without daemon calls; an unset choice performs no effects.
+Restoration is best-effort: invalid settings or failed cleanup warn once per config path in the
+current process, preserve the record, and never block a Herdr launch or update.
 `installTerminalPlugin(home, dependencies, readiness?: TerminalAvailability)` returns
 `Promise<boolean>` for package readiness. A supplied readiness result avoids another probe;
 otherwise it checks availability before linking or asking about global settings. Missing,

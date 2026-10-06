@@ -82,17 +82,28 @@ async function replacePreferenceFile(
 /** One decision controls both global preferences. Record changes before applying them for recovery. */
 export async function configureTernPluginSettings(
   input: TernPluginSettingsInput,
-): Promise<Readonly<{ configured: boolean; skipped: readonly string[] }>> {
+  effects: Readonly<{ replaceFile: typeof replacePreferenceFile }> = {
+    replaceFile: replacePreferenceFile,
+  },
+): Promise<
+  Readonly<{ configured: boolean; skipped: readonly string[]; notice?: true; preset?: string }>
+> {
   const path = settingsPath(input);
   const recordPath = `${path}.tandem.json`;
   const raw = await readPreferenceFile(path);
   const plan = planTernPluginKeys(raw.text);
   const prior = await readPreferenceFile(recordPath);
-  if (prior.exists)
+  if (prior.exists) {
+    const record = recordSchema.parse(JSON.parse(prior.text));
+    const current = ternSettingsSchema.parse(JSON.parse(raw.text));
     return {
-      configured: recordSchema.parse(JSON.parse(prior.text)).approved,
+      configured:
+        record.approved &&
+        record.keys.every(({ key, installed }) => current.keybinds?.[key] === installed) &&
+        (!record.sidebar || current.tabs_autohide === record.sidebar.installed),
       skipped: plan.skipped,
     };
+  }
   const settings = ternSettingsSchema.parse(JSON.parse(plan.text));
   const sidebar = settings.tabs_autohide !== true;
   if (!plan.changed && !sidebar) return { configured: true, skipped: plan.skipped };
@@ -117,12 +128,29 @@ export async function configureTernPluginSettings(
   const current = await readPreferenceFile(path);
   if (current.text !== raw.text || current.exists !== raw.exists)
     throw new Error("Tern settings changed while configuring preferences");
-  await replacePreferenceFile(recordPath, prior, `${JSON.stringify(record, null, 2)}\n`);
+  const recordText = `${JSON.stringify(record, null, 2)}\n`;
+  await effects.replaceFile(recordPath, prior, recordText);
   if (approved) {
     if (sidebar) settings.tabs_autohide = true;
-    await replacePreferenceFile(path, raw, `${JSON.stringify(settings, null, 2)}\n`);
+    const installedText = `${JSON.stringify(settings, null, 2)}\n`;
+    try {
+      await effects.replaceFile(path, raw, installedText);
+    } catch (error) {
+      // Retain recovery ownership if the settings committed before an uncertain failure.
+      const applied = await readPreferenceFile(path);
+      if (applied.text !== installedText) {
+        const saved = await readPreferenceFile(recordPath);
+        if (saved.exists && saved.text === recordText) await rm(recordPath);
+      }
+      throw error;
+    }
   }
-  return { configured: approved, skipped: plan.skipped };
+  return {
+    configured: approved,
+    skipped: plan.skipped,
+    notice: true,
+    ...(plan.preset ? { preset: plan.preset } : {}),
+  };
 }
 
 /** Restore only values still equal to Tandem's recorded values, preserving subsequent user edits. */

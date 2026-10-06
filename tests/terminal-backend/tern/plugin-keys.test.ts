@@ -153,6 +153,8 @@ test("an alternate keymap and explicit custom bindings are never overridden", ()
   const alternate = planTernPluginKeys('{"keymap":"tmux"}');
   expect(alternate.changed).toBe(false);
   expect(alternate.added).toEqual([]);
+  expect(alternate.skipped).toEqual([]);
+  expect(alternate.preset).toBe("tmux");
   const explicit = planTernPluginKeys('{"keybinds":{"cmd+shift+p":"palette"}}');
   expect(explicit.skipped).toEqual(["cmd+shift+p"]);
   expect(JSON.parse(explicit.text).keybinds["cmd+shift+p"]).toBe("palette");
@@ -162,4 +164,74 @@ test("an alternate keymap and explicit custom bindings are never overridden", ()
   );
   expect(mixedAliases.skipped).toEqual(["cmd+1", "cmd+digit_1"]);
   expect(JSON.parse(mixedAliases.text).keybinds["cmd+digit_1"]).toBe("my-custom-project");
+});
+
+test("a settings-write failure removes its consent record so the next attempt really applies", async () => {
+  const root = await mkdtemp("/tmp/tandem-keys-failure-");
+  const path = join(root, "settings.json");
+  const original = '{"tabs_autohide":false}';
+  try {
+    await writeFile(path, original);
+    await expect(
+      configureTernPluginSettings(
+        { path, approved: true },
+        {
+          replaceFile: async (destination, _before, text) => {
+            if (destination === path) throw new Error("settings disk write failed");
+            await writeFile(destination, text, { flag: "wx", mode: 0o600 });
+          },
+        },
+      ),
+    ).rejects.toThrow("settings disk write failed");
+    expect(await readFile(path, "utf8")).toBe(original);
+    expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(false);
+    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(true);
+    expect(JSON.parse(await readFile(path, "utf8")).keybinds["cmd+shift+b"]).toBe(
+      "plugin.tandem.board",
+    );
+    expect(JSON.parse(await readFile(path, "utf8")).tabs_autohide).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a committed write with a later failure retains the exact record for restoration", async () => {
+  const root = await mkdtemp("/tmp/tandem-keys-uncertain-");
+  const path = join(root, "settings.json");
+  try {
+    await writeFile(path, '{"tabs_autohide":false}');
+    await expect(
+      configureTernPluginSettings(
+        { path, approved: true },
+        {
+          replaceFile: async (destination, _before, text) => {
+            await writeFile(destination, text, { mode: 0o600 });
+            if (destination === path) throw new Error("post-commit cleanup failed");
+          },
+        },
+      ),
+    ).rejects.toThrow("post-commit cleanup failed");
+    expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(true);
+    await restoreTernPluginSettings({ path });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ tabs_autohide: false });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an interrupted pre-settings write never reports the saved approval as applied", async () => {
+  const root = await mkdtemp("/tmp/tandem-keys-interrupted-");
+  const path = join(root, "settings.json");
+  try {
+    await writeFile(path, '{"tabs_autohide":false}');
+    await configureTernPluginSettings({ path, approved: true });
+    // The receipt is durable but its settings were never committed, as after abrupt termination.
+    await writeFile(path, '{"tabs_autohide":false}');
+    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(false);
+    expect(await readFile(path, "utf8")).toBe('{"tabs_autohide":false}');
+    await restoreTernPluginSettings({ path });
+    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
