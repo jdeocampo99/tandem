@@ -327,7 +327,7 @@ export type TandemServiceOptions = Readonly<{
   }>;
   /** Callback runs under coordinator launch-lock then task-store serialization; it must not reacquire the launch lock. */
   readonly refreshSource?: () => Promise<SourceRefreshResult>;
-  /** Coordinator host offers separate plugin consent after a Tern choice is saved. */
+  /** After a saved choice, configure Tern preferences or restore them for an explicit Herdr choice. */
   readonly installTerminalPlugin?: (readiness: TerminalAvailability) => Promise<boolean>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
@@ -1171,7 +1171,7 @@ class TandemController {
       return { requested, terminal, ...(reason === undefined ? {} : { reason }) };
     });
     if (
-      selected.terminal === "tern" &&
+      (requested === "herdr" || selected.terminal === "tern") &&
       this.#deps.installTerminalPlugin !== undefined &&
       !(await this.#deps.installTerminalPlugin(available))
     ) {
