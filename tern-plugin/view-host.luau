@@ -2,83 +2,158 @@
 -- Only immutable backend-authored opening tickets can reach the native layout API.
 local M = {}
 local kinds = { panel=true, task=true, brief=true, pr=true, prs=true, board=true, usage=true, catchup=true, welcome=true, ["task-picker"]=true }
-function M.open(req: OpenRequest, cx: WindowCx): RouteDecision?
- if not string.match(req.path, "/native%-host/[%w%-]+%.tandem%-open%.json$") then return nil end
- local ok, ticket = pcall(function() return tern.json.decode(tern.fs.read(req.path, 16384)) end)
+-- Every window callback has a 50 ms budget. Yield between native calls, and use only the
+-- fresh WindowCx supplied to that callback. Never keep a context after its handler returns.
+local function call<T>(operation: (WindowCx) -> T): T
+ return coroutine.yield(operation)
+end
+local function host(path: string)
+ local ok, ticket = pcall(function() return tern.json.decode(tern.fs.read(path, 16384)) end)
  if not ok or type(ticket) ~= "table" or ticket.version ~= 1 or not kinds[ticket.kind]
   or type(ticket.args) ~= "table" or #ticket.args ~= 5 or type(ticket.receipt) ~= "string"
   or not string.match(ticket.receipt, "/native%-host/[%w%-]+%.receipt%.json$") then
-  cx:toast("error", "Tandem view did not open", "Invalid opening ticket")
-  return {handled=true}
+  error("Invalid opening ticket")
  end
  local coordinator = tonumber(ticket.coordinator)
  local origin = tonumber(ticket.origin)
- local owner = if coordinator then cx.session:pane(coordinator) else nil
- local source = if origin then cx.session:pane(origin) else nil
+ local owner = if coordinator then call(function(cx) return cx.session:pane(coordinator) end) else nil
+ local source = if origin then call(function(cx) return cx.session:pane(origin) end) else nil
  if not owner or not source or not owner.tab or not source.tab then
-  cx:toast("error", "Tandem view did not open", "Exact originating panes disappeared")
-  return {handled=true}
+  error("Exact originating panes disappeared")
  end
  local session = tonumber(ticket.session)
  local same, sameOrigin = false, false
- for _, tab in cx.session:tabs() do
+ for _, tab in call(function(cx) return cx.session:tabs() end) do
   if tab.id == owner.tab and tab.session == session then same=true end
   if tab.id == source.tab and tab.session == session then sameOrigin=true end
  end
- if not same or not sameOrigin then return {handled=true} end
+ if not same or not sameOrigin then error("Exact originating session changed") end
+ local originClosed=false
+ local ownerFloating=owner.floating==true
+ -- Recheck both exact panes in the live session immediately before each layout effect.
+ local function effect<T>(operation: (WindowCx) -> T): T
+  return call(function(cx)
+   local liveOwner = cx.session:pane(coordinator)
+   local liveSource = if origin==coordinator then liveOwner else cx.session:pane(origin)
+   if not liveOwner or liveOwner.tab~=owner.tab or liveOwner.block~=owner.block
+    or (liveOwner.floating==true)~=ownerFloating then error("Exact coordinator changed") end
+   if originClosed then
+    if liveSource then error("Closed originating pane reappeared") end
+   elseif not liveSource or liveSource.tab~=source.tab or liveSource.block~=source.block
+    or (origin~=coordinator and (liveSource.floating==true)~=(source.floating==true)) then error("Exact originating pane changed") end
+   return operation(cx)
+  end)
+ end
  local pane: number?
  local previous=if ticket.replaced then tonumber(ticket.replaced) else nil
  if ticket.placement=="inbox" then
-  cx:command("inbox")
+  effect(function(cx) cx:command("inbox") end)
   pane=origin
  elseif ticket.placement=="return" then
   if source.block=="tandem.task-picker" then
-   local old=if previous then cx.session:pane(previous) else nil
-   local layout=cx.session:layout(owner.tab)
+   local old=if previous then call(function(cx) return cx.session:pane(previous) end) else nil
+   local layout=call(function(cx) return cx.session:layout(owner.tab) end)
    if owner.floating and (not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
-    or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator) then return {handled=true} end
-   cx.layout:close(origin)
+    or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator) then error("Task picker layout changed") end
+   effect(function(cx) cx.layout:close(origin); originClosed=true end)
   elseif owner.floating then
-   local old=if previous then cx.session:pane(previous) else nil
-   local layout=cx.session:layout(owner.tab)
+   local old=if previous then call(function(cx) return cx.session:pane(previous) end) else nil
+   local layout=call(function(cx) return cx.session:layout(owner.tab) end)
    if not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating
-    or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator then return {handled=true} end
-   if not cx.layout:dock(coordinator,previous,"right",{focus=false}) then return {handled=true} end
-   cx.layout:close(previous)
+    or not layout or #layout.floats~=1 or layout.floats[1].pane~=coordinator then error("Task return layout changed") end
+   if not effect(function(cx)
+    local current=cx.session:layout(owner.tab)
+    if not current or #current.floats~=1 or current.floats[1].pane~=coordinator then error("Task return layout changed") end
+    local docked=cx.layout:dock(coordinator,previous,"right",{focus=false})
+    if docked then ownerFloating=false end
+    return docked
+   end) then error("Coordinator could not dock") end
+   effect(function(cx)
+    local current=cx.session:pane(previous)
+    if not current or current.block~="tandem.task" or current.tab~=owner.tab or current.floating then error("Task identity changed") end
+    cx.layout:close(previous)
+    if previous==origin then originClosed=true end
+   end)
   end
   if ticket.closeOrigin then
    if tonumber(ticket.closeOrigin)~=origin or
-    (source.block~="tandem.board" and source.block~="tandem.usage" and source.block~="tandem.catchup") then return {handled=true} end
-   cx.layout:close(origin)
+    (source.block~="tandem.board" and source.block~="tandem.usage" and source.block~="tandem.catchup") then error("Return origin identity changed") end
+   effect(function(cx) cx.layout:close(origin); originClosed=true end)
   end
-  cx.layout:focus(if source.block=="tandem.task-picker" and owner.floating then tonumber(ticket.replaced) else coordinator)
+  -- The origin may have just been closed by this ticket; focus only the exact coordinator.
+  effect(function(cx)
+   local target=if source.block=="tandem.task-picker" and owner.floating then previous else coordinator
+   if target~=coordinator then
+    local old=cx.session:pane(target)
+    if not old or old.block~="tandem.task" or old.tab~=owner.tab or old.floating then error("Task return target changed") end
+   end
+   cx.layout:focus(target)
+  end)
   pane=coordinator
  else
   if ticket.placement=="task" then
-   local layout=cx.session:layout(owner.tab)
-   if not layout then return {handled=true} end
+   local layout=call(function(cx) return cx.session:layout(owner.tab) end)
+   if not layout then error("Task layout disappeared") end
    if owner.floating then
-    local old=if previous then cx.session:pane(previous) else nil
+    local old=if previous then call(function(cx) return cx.session:pane(previous) end) else nil
     if #layout.floats~=1 or layout.floats[1].pane~=coordinator or not old
-     or old.tab~=owner.tab or old.block~="tandem.task" or old.floating then return {handled=true} end
-   elseif #layout.floats>0 or previous then return {handled=true} end
+     or old.tab~=owner.tab or old.block~="tandem.task" or old.floating then error("Task replacement layout changed") end
+   elseif #layout.floats>0 or previous then error("Unrelated floating layout") end
   end
-  cx.layout:focus(if ticket.placement=="task" and owner.floating then previous else coordinator)
-  pane=cx:new_block("tandem." .. ticket.kind,ticket.args,if ticket.placement=="window" then "tab" else "beside",{focus=ticket.placement~="panel",keep_open=false})
-  if not pane then return {handled=true} end
+  pane=effect(function(cx)
+   -- Creation uses the currently focused host. Keep focus and creation in one callback so
+   -- navigation between timer stages cannot redirect a block into an unrelated project.
+   cx.layout:focus(if ticket.placement=="task" and owner.floating then previous else coordinator)
+   return cx:new_block("tandem." .. ticket.kind,ticket.args,if ticket.placement=="window" then "tab" else "beside",{focus=ticket.placement~="panel",keep_open=false})
+  end)
+  if not pane then error("Native block could not open") end
   if ticket.placement=="panel" then
-   if not cx.layout:move(pane,coordinator,"left",{focus=false}) then return {handled=true} end
-   cx.layout:resize(pane,"right",45-math.floor((ticket.columns or 90)/2))
-   cx.layout:focus(coordinator)
+   if not effect(function(cx) return cx.layout:move(pane,coordinator,"left",{focus=false}) end) then error("Panel could not move") end
+   effect(function(cx) cx.layout:resize(pane,"right",45-math.floor((ticket.columns or 90)/2)) end)
+   effect(function(cx) cx.layout:focus(coordinator) end)
   elseif ticket.placement=="task" then
-   if not cx.layout:float(coordinator,pane,"br",{focus=false}) then return {handled=true} end
-   if previous then cx.layout:close(previous) end
-   cx:command("pip_stash_all")
-   cx.layout:focus(pane)
+   if not effect(function(cx)
+    local current=cx.session:layout(owner.tab)
+    if not current or #current.floats~=(if ownerFloating then 1 else 0)
+     or (ownerFloating and current.floats[1].pane~=coordinator) then error("Task floating layout changed") end
+    local floated=cx.layout:float(coordinator,pane,"br",{focus=false})
+    if floated then ownerFloating=true end
+    return floated
+   end) then error("Coordinator could not float") end
+   if previous then effect(function(cx)
+    local current=cx.session:pane(previous)
+    if not current or current.block~="tandem.task" or current.tab~=owner.tab or current.floating then error("Task identity changed") end
+    cx.layout:close(previous)
+    if previous==origin then originClosed=true end
+   end) end
+   effect(function(cx) cx:command("pip_stash_all") end)
+   effect(function(cx) cx.layout:focus(pane) end)
   end
  end
- local tab=if pane then cx.session:tab_of(pane) else nil
+ local tab=if pane then call(function(cx) return cx.session:tab_of(pane) end) else nil
  if pane and tab then tern.fs.write(ticket.receipt,tern.json.encode({paneId=string.format("%.0f",pane),tabId=string.format("%.0f",tab),sessionId=ticket.session})) end
+end
+
+function M.open(req: OpenRequest, _cx: WindowCx): RouteDecision?
+ if not string.match(req.path, "/native%-host/[%w%-]+%.tandem%-open%.json$") then return nil end
+ local thread=coroutine.create(function() host(req.path) end)
+ local function advance(value)
+  local ok, operation=coroutine.resume(thread,value)
+  if not ok then error(operation) end
+  if coroutine.status(thread)=="dead" then return end
+  tern.timer(1,function(cx)
+   if not cx then return end
+   local ran, problem=pcall(function() advance(operation(cx)) end)
+   if not ran then cx:toast("error","Tandem view did not open",tostring(problem)) end
+  end)
+ end
+ -- Consume the private ticket before any file read or native layout work. Each callback
+ -- is invoked once; failures leave the backend's immutable ticket and intent quarantined.
+ tern.timer(1,function(cx)
+  if not cx then return end
+  local ok, problem=pcall(function() advance(nil) end)
+  if not ok then cx:toast("error","Tandem view did not open",tostring(problem)) end
+ end)
  return {handled=true}
 end
 return M
