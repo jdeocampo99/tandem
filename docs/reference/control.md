@@ -132,3 +132,60 @@ lives in `approvalPrompt` in src/session/actions.ts.
   other failures exit `1`.
 - Extension-side consent (live TUI confirmation) is in
   [OMP extension](omp-extension.md#tool-and-command-contract).
+
+## Native view actions
+
+Every native click invokes `tandem native COMMAND`. The view never edits durable state. The same
+commands are also available in the advanced action CLI (`bun src/cli.ts`).
+Every native command requires exact decimal `--pane` and absolute originating-pane `--cwd`;
+missing or invalid context is refused before handler effects. Shared non-native callers retain
+optional origin fields. `--window` is an optional opaque control window key.
+Unreadable records and sessions whose pane listing fails are non-matches; they do not disable a
+different matching project. When no readable/live candidate matches, the command refuses clearly.
+
+- The native boundary also registers `board`, `prs`, `usage`, `new-request`, `open-task`,
+  `project 1..9|prev|next`, and `view-file PATH`. Each dispatches once through the typed
+  `nativeRendererHandlers` registration in `src/terminal/native-renderers.ts`. Until its renderer
+  is installed, it exits nonzero with `not implemented yet`, without opening a view or starting
+  a service. Renderer implementations receive the resolved project environment, required origin,
+  normalized command input, lazy service, and existing capabilities. Relative view-file paths
+  resolve against the explicit originating pane cwd, never the plugin's process cwd. Installing
+  a renderer replaces its one registration entry; the native dispatcher stays unchanged.
+
+- `open task|brief|pr ID` validates the durable task or request, proves its running coordinator,
+  and asks `TerminalBackend.openView` to replace the main area (task) or open a split (brief/PR).
+  For `pr`, ID is the linked task id (including a `pr-review` task) or a PR number. A number
+  resolves only within the selected project and is refused when ambiguous. Herdr opens briefs through the
+  existing review workflow and returns explicit warnings for unsupported native task/PR views.
+  Native open requires `--pane PANE_ID` (the exact decimal integer pane id) and `--cwd PATH`
+  (the absolute originating pane cwd). `--window WINDOW_KEY` is optional and carries an opaque
+  Tern control window key, never a pane/tab/session id. Without a known window key, the backend
+  must derive the unique owning control window from the exact pane or refuse ambiguous mutation.
+  Missing or invalid pane/cwd is refused; inherited process cwd never substitutes for it.
+  The pane and cwd must select exactly one recorded project/session before the scoped service is
+  created. Context never grants ownership; the coordinator is proven separately. The backend
+  receives that origin and must honor the supplied window/pane or return a refusal, rather than
+  opening in an unrelated window.
+  Successful opens exit 0; refusal or failure exits nonzero with the reason on stderr. Opens are
+  attempted once, with no automatic retry.
+- Brief comment, request-changes, and approval use the revision-bound paths in
+  [request-briefs.md](request-briefs.md#native-brief-feedback).
+  These actions and opening a brief also require its canonical repository path to match the
+  explicitly selected project; a request id never bypasses project scope.
+- `pr-comment TASK_ID --text TEXT` sends an in-scope fix request to the implementation task's
+  worker through `steer`. Only a task with an open or draft Tandem PR accepts it. It never posts a
+  GitHub comment, changes scope approval, publishes, or merges. `--input FILE` instead of `--text`
+  accepts optional `text` and `comments: [{file, line, text}]`; anchors stay in the worker message.
+  Comments are joined into one direction under the existing steering bounds. For a ready task
+  whose worker finished, steer uses evidence invalidation and the existing redirect/reconcile
+  path to start a new implementation generation in the same retained worktree. A completed task
+  with no such path is refused before a direction is saved. If recovery cannot start the fix,
+  the native command reports that feedback was saved and states the blocker; it never reports
+  silent delivery to a finished worker.
+- `restart TASK_ID` uses central recovery; `steer --task TASK_ID --text TEXT` uses the existing
+  message path. These actions do not implement a second recovery or messaging mechanism.
+- `review-submit TASK_ID --input FILE` parses the same `ReviewSubmission` as the review page,
+  then calls the existing submit service. The click is confirmation; pinned-head refusal and
+  duplicate-post prevention remain in that service. Plain comments never become submissions.
+- The native action namespace does not expose publication or merge commands. Publishing, merging,
+  deployment, and destructive operations retain their separate conversation approvals.

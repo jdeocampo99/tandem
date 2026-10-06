@@ -16,6 +16,8 @@ import {
   projectRequestBriefPane,
   type RequestReviewPaneDependencies,
 } from "../../src/requests/review-pane.ts";
+import { createRequestBriefStore } from "../../src/requests/store.ts";
+import { RequestBriefWorkflow } from "../../src/requests/workflow.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { type ScenarioWorld, withScenario } from "../evals/scenario.ts";
 
@@ -336,5 +338,43 @@ test("the pane shows the brief with glow when it is installed, and plain text ot
     expect(viewer).toContain(Bun.which("glow") ?? "cat");
     expect(viewer.at(-1)).toBe(opened.renderedPath);
     expect(paneRun?.at(-1)).toBe(quoteShellCommand(viewer));
+  });
+});
+
+test("a delayed request-changes click preserves the newer brief pane, while current feedback closes its own pane", async () => {
+  await withScenario({}, async (world) => {
+    const workflow = new RequestBriefWorkflow({
+      ...dependencies(world),
+      store: createRequestBriefStore({
+        home: world.home,
+        clock: () => NOW,
+        idFactory: () => "req-feedback",
+      }),
+      listTasks: async () => [],
+      pauseTask: async () => {
+        throw new Error("No tasks should be paused by feedback");
+      },
+      checkLanguage: async () => [],
+    });
+    const first = await workflow.draft({
+      repoPath: world.repoPath,
+      content: content(),
+      reviewPane: true,
+    });
+    const revised = await workflow.draft({
+      repoPath: world.repoPath,
+      requestId: first.record.id,
+      content: content({ goal: "The newly revised request" }),
+      reviewPane: true,
+    });
+    const delayed = await workflow.closeReview(first.record.id, first.record.draft.revision);
+    expect(delayed.record.reviewPane?.status).toBe("open");
+    expect(delayed.record.reviewPane?.renderedRevision).toBe(revised.record.draft.revision);
+    expect(world.trace().some((event) => event.action === "herdr pane close")).toBe(false);
+    const current = await workflow.closeReview(first.record.id, revised.record.draft.revision);
+    expect(current.record.reviewPane?.status).toBe("closed");
+    expect(current.record.draft.content.goal).toBe("The newly revised request");
+    expect(current.record.approval).toBeUndefined();
+    expect((await workflow.read(first.record.id)).record.reviewPane?.status).toBe("closed");
   });
 });

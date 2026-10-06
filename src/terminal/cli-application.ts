@@ -28,9 +28,13 @@ import {
   type WatchControl,
 } from "./cli-process.ts";
 
+import { resolveViewActionEnvironment } from "./cli-view-context.ts";
+import type { NativeRendererHandlers } from "./native-renderers.ts";
+
 const DEFAULT_COORDINATOR_SESSION = "tandem";
 
 export type CliDependencies = Readonly<{
+  readonly nativeRendererHandlers?: Partial<NativeRendererHandlers>;
   readonly cwd?: string;
   readonly processEnvironment?: TandemEnvironmentSource;
   readonly run?: CommandRunner;
@@ -110,7 +114,7 @@ function serviceOptions(environment: TandemBoundaryEnvironment): TandemServiceOp
   };
 }
 
-const HELP_TEXT = `Tandem coordinator\n\nUsage: bun src/cli.ts [command] [options]\n\nCommands:\n  launch       Launch the OMP coordinator in the owned Herdr context\n  restart      Restart one managed worker task without changing its identity\n  models       List available OMP models and saved global role choices\n  configure-models  Validate and save global role choices (requires --input FILE --yes)\n  configure-merging  Save how PR watch merges this project's pull requests (requires --input FILE --yes)\n  doctor       Check model, Herdr, policy, and coordinator files without mutating\n  setup        Propose or write Tandem-owned per-repository policy (requires --yes)\n  onboard      Inspect Tandem-owned policy and validation surfaces\n  create       Create a scout or implementation task\n  list/status   List durable tasks\n  show         Show one durable task\n  inspect     Inspect durable task, jobs, panes, artifacts, leases, and PR state\n  delivery-preflight  Check exact reviewed HEAD and publication readiness\n  messages     Inspect steer/answer delivery and blocker questions\n  steer        Queue a concise user direction for a task\n  answer       Answer the task's current needs-decision question\n  approve      Approve implementation scope (requires --yes)\n  tick/watch  Advance bounded scheduler work\n  pause/resume/cancel  Control owned task work\n  present/feedback/presentations  Route and inspect visual work\n  pr describe/publish/merge  Record or publish reviewed PR work\n  cleanup      Release owned resources; --discard requires --yes\n\nSafety options:\n  --yes        Explicit human automation consent for approval-bearing commands\n  --json       Emit one JSON result for automation\n  --headless   Use a named headless Herdr server\n  --no-attach  Do not launch a GUI; use headless Herdr\n`;
+const HELP_TEXT = `Tandem coordinator\n\nUsage: bun src/cli.ts [command] [options]\n\nCommands:\n  launch       Launch the OMP coordinator in the owned Herdr context\n  open task|brief|pr ID  Open a native view or the existing brief review pane\n  brief-comment / brief-request-changes ID --input FILE  Send revision-bound feedback\n  brief-approve ID --input FILE  Approve the displayed revision and both digests\n  pr-comment TASK --text TEXT  Send a local PR fix request to its worker\n  review-submit TASK --input FILE  Submit a pinned review from the native view\n  restart      Restart one managed worker task without changing its identity\n  models       List available OMP models and saved global role choices\n  configure-models  Validate and save global role choices (requires --input FILE --yes)\n  configure-merging  Save how PR watch merges this project's pull requests (requires --input FILE --yes)\n  doctor       Check model, Herdr, policy, and coordinator files without mutating\n  setup        Propose or write Tandem-owned per-repository policy (requires --yes)\n  onboard      Inspect Tandem-owned policy and validation surfaces\n  create       Create a scout or implementation task\n  list/status   List durable tasks\n  show         Show one durable task\n  inspect     Inspect durable task, jobs, panes, artifacts, leases, and PR state\n  delivery-preflight  Check exact reviewed HEAD and publication readiness\n  messages     Inspect steer/answer delivery and blocker questions\n  steer        Queue a concise user direction for a task\n  answer       Answer the task's current needs-decision question\n  approve      Approve implementation scope (requires --yes)\n  tick/watch  Advance bounded scheduler work\n  pause/resume/cancel  Control owned task work\n  present/feedback/presentations  Route and inspect visual work\n  pr describe/publish/merge  Record or publish reviewed PR work\n  cleanup      Release owned resources; --discard requires --yes\n\nSafety options:\n  --yes        Explicit human automation consent for approval-bearing commands\n  --json       Emit one JSON result for automation\n  --headless   Use a named headless Herdr server\n  --no-attach  Do not launch a GUI; use headless Herdr\n`;
 
 export type CliApplication = Readonly<{
   readonly invoke: (invocation: CliInvocation, signal?: AbortSignal) => Promise<CliResult>;
@@ -124,9 +128,11 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
   let activeWatch: WatchControl | undefined;
   let shutdownPromise: Promise<void> | undefined;
   const run = dependencies.run ?? runCommand;
-  const capabilities: CliCapabilities = {
+  const capabilities: Omit<CliCapabilities, "terminal"> = {
+    ...(dependencies.nativeRendererHandlers === undefined
+      ? {}
+      : { nativeRendererHandlers: dependencies.nativeRendererHandlers }),
     run,
-    terminal: dependencies.terminal ?? terminalBackend(run),
     statPath: dependencies.statPath ?? defaultStatPath,
     startPersistent: dependencies.startPersistent ?? defaultStartPersistent,
     runInteractive: dependencies.runInteractive ?? defaultRunInteractive,
@@ -148,7 +154,9 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
 
   const invoke = async (invocation: CliInvocation, signal?: AbortSignal): Promise<CliResult> => {
     if (invocation.options.help) return { command: invocation.command, value: HELP_TEXT };
-    const environment = resolveEnvironment(invocation, dependencies);
+    const boundary = resolveEnvironment(invocation, dependencies);
+    const terminal = dependencies.terminal ?? terminalBackend(run, { home: boundary.home });
+    const environment = await resolveViewActionEnvironment(boundary, invocation, terminal);
     return runCliCommand({
       invocation,
       environment,
@@ -156,7 +164,7 @@ export function createCliApplication(dependencies: CliDependencies = {}): CliApp
       signal,
       capabilities: {
         ...capabilities,
-        terminal: dependencies.terminal ?? terminalBackend(run, { home: environment.home }),
+        terminal,
       },
     });
   };
