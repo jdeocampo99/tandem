@@ -1299,6 +1299,10 @@ test("one registered renderer receives normalized input and the explicit project
       { argv: ["open-task"], input: { kind: "open-task" } },
       { argv: ["project", "3"], input: { kind: "project", target: 3 } },
       {
+        argv: ["project", "repo:/fixture/tenth"],
+        input: { kind: "project", target: { repoPath: "/fixture/tenth" } },
+      },
+      {
         argv: ["view-file", "my view.tandem-view.json"],
         input: { kind: "view-file", path: join(f.clean, "my view.tandem-view.json") },
       },
@@ -1586,13 +1590,28 @@ test("native navigation selects published projects and details, refusing stale o
     ).toBe(0);
     expect(f.opened).toEqual([{ kind: "catchup" }, { kind: "brief", requestId: f.record.id }]);
     expect((await action("view-file", join(f.root, "foreign.json"))).exitCode).not.toBe(0);
+    const tenth = [
+      ...Array.from({ length: 9 }, (_, index) => ({
+        terminal: "tern",
+        repoPath: `/fixture/${index}`,
+        current: false,
+        offline: true,
+      })),
+      ...model.projects,
+    ];
+    await publish({ ...model, projects: tenth });
+    expect((await action("project", `repo:${f.repo}`)).exitCode).toBe(0);
+    await publish({ ...model, projects: [...tenth].reverse() });
+    expect((await action("project", `repo:${f.repo}`)).exitCode).toBe(0);
+    expect((await action("project", "repo:/foreign/project")).exitCode).not.toBe(0);
+    expect(focused).toHaveLength(3);
     await publish({ ...model, writtenAt: "2000-01-01T00:00:00Z" });
     expect((await action("project", "1")).exitCode).not.toBe(0);
     await publish({ ...model, projects: [{ ...model.projects[0], current: false }] });
     expect((await action("project", "prev")).exitCode).not.toBe(0);
     await publish({ ...model, projects: [{ ...model.projects[0], offline: true }] });
     expect((await action("project", "1")).exitCode).not.toBe(0);
-    expect(focused).toHaveLength(1);
+    expect(focused).toHaveLength(3);
     expect(f.opened).toHaveLength(2);
   } finally {
     await f.close();

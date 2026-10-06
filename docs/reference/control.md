@@ -144,7 +144,7 @@ Unreadable records and sessions whose pane listing fails are non-matches; they d
 different matching project. When no readable/live candidate matches, the command refuses clearly.
 
 - The native boundary also registers `board`, `prs`, `usage`, `new-request`, `open-task`,
-  `project 1..9|prev|next`, and `view-file PATH`. Each dispatches once through the typed
+  `project 1..9|prev|next|repo:ABSOLUTE_PATH`, and `view-file PATH`. Each dispatches once through the typed
   `nativeRendererHandlers` registration in `src/terminal/native-renderers.ts`. Until its renderer
   is installed, it exits nonzero with `not implemented yet`, without opening a view or starting
   a service. Renderer implementations receive the resolved project environment, required origin,
@@ -198,3 +198,8 @@ different matching project. When no readable/live candidate matches, the command
   submissions never choose either path. See [uncertain review recovery](pr-review.md#recovering-an-uncertain-post).
 - The native action namespace does not expose publication or merge commands. Publishing, merging,
   deployment, and destructive operations retain their separate conversation approvals.
+
+Native window lifecycle also invokes `project entry|away|visible` with the same required origin.
+These presentation-only actions prove the exact recorded project session; helper entry focuses
+the recorded coordinator and reads its alert cursor, and project entry applies the non-fatal
+catch-up rule. See [native visibility and alert semantics](tern-views.md).

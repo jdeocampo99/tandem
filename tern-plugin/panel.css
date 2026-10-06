@@ -146,6 +146,7 @@
   padding: 10px;
 }
 .tdp-dropdown {
+  pointer-events: auto;
   position: absolute;
   top: 46px;
   left: 8px;

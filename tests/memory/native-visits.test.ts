@@ -7,6 +7,7 @@ import { repositoryKey } from "../../src/config/repositories.ts";
 import {
   dismissNativeCatchUp,
   maybeShowCatchUp,
+  recordNativeVisibility,
   visitNativeProject,
 } from "../../src/memory/native-visits.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
@@ -138,6 +139,71 @@ test("the project trigger stays quiet without a publication and preserves visits
     expect(saved.previousSignature).toBe("before");
     expect(saved.lastOpenedAt).toBe(before.now);
     expect(attempts).toBe(1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("long foreground work then an immediate return stays quiet; one hour away shows changed work", async () => {
+  const home = await mkdtemp("/tmp/tdm-visibility-");
+  const input = {
+    home,
+    project: "/fixture/project",
+    now: "2030-01-02T09:00:00Z",
+    signature: "start",
+  };
+  let shows = 0;
+  const show = async () => {
+    shows++;
+  };
+  try {
+    await visitNativeProject(input, show);
+    await recordNativeVisibility({ ...input, now: "2030-01-02T11:00:00Z", signature: "working" });
+    expect(
+      await visitNativeProject(
+        { ...input, now: "2030-01-02T11:00:05Z", signature: "immediate-change" },
+        show,
+      ),
+    ).toBe(false);
+    await recordNativeVisibility({
+      ...input,
+      now: "2030-01-02T11:01:00Z",
+      signature: "visible-change",
+    });
+    expect(
+      await visitNativeProject(
+        { ...input, now: "2030-01-02T12:01:00Z", signature: "away-change" },
+        show,
+      ),
+    ).toBe(true);
+    expect(shows).toBe(1);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("old opening-only records have no known last-visible time and stay quiet", async () => {
+  const home = await mkdtemp("/tmp/tdm-visibility-");
+  const project = "/fixture/project";
+  try {
+    await mkdir(join(home, "native-visits"));
+    await writeFile(
+      join(home, "native-visits", `${repositoryKey(project)}.json`),
+      JSON.stringify({
+        version: 1,
+        project,
+        lastOpenedAt: "2030-01-02T09:00:00Z",
+        previousSignature: "old",
+      }),
+    );
+    expect(
+      await visitNativeProject(
+        { home, project, now: "2030-01-02T12:00:00Z", signature: "new" },
+        async () => {
+          throw new Error("must stay quiet");
+        },
+      ),
+    ).toBe(false);
   } finally {
     await rm(home, { recursive: true, force: true });
   }

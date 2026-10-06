@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { type CliInvocation, CliUsageError, pathText, text } from "./cli-arguments.ts";
 import type { CliCommandContext, CliCommandOutcome } from "./cli-commands.ts";
 import { validateNativeContext, viewOriginFrom } from "./cli-view-context.ts";
@@ -19,7 +19,17 @@ export type NativeRendererCommand =
 
 export type NativeRendererInput =
   | Readonly<{ kind: "board" | "prs" | "usage" | "new-request" | "open-task" }>
-  | Readonly<{ kind: "project"; target: number | "prev" | "next" }>
+  | Readonly<{
+      kind: "project";
+      target:
+        | number
+        | "prev"
+        | "next"
+        | "entry"
+        | "away"
+        | "visible"
+        | Readonly<{ repoPath: string }>;
+    }>
   | Readonly<{ kind: "view-file"; path: string }>;
 
 export type NativeRendererContext = Omit<CliCommandContext, "invocation"> &
@@ -79,9 +89,20 @@ function rendererInput(
   const kind = invocation.command;
   if (kind === "project") {
     const target = text(invocation.positionals[0], "project target");
-    if (target === "prev" || target === "next") return { kind, target };
+    if (
+      target === "prev" ||
+      target === "next" ||
+      target === "entry" ||
+      target === "away" ||
+      target === "visible"
+    )
+      return { kind, target };
+    if (target.startsWith("repo:") && isAbsolute(target.slice(5)))
+      return { kind, target: { repoPath: target.slice(5) } };
     if (!/^[1-9]$/u.test(target)) {
-      throw new CliUsageError("native project requires 1..9, prev, or next");
+      throw new CliUsageError(
+        "native project requires 1..9, prev, next, repo:ABSOLUTE_PATH, entry, away, or visible",
+      );
     }
     return { kind, target: Number(target) };
   }

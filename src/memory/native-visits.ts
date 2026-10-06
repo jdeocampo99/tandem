@@ -14,6 +14,7 @@ const visit = z.object({
   version: z.literal(1),
   project: z.string(),
   lastOpenedAt: z.string().datetime(),
+  lastVisibleAt: z.string().datetime().optional(),
   previousSignature: z.string().min(1).optional(),
   dismissedSignature: z.string().optional(),
 });
@@ -122,7 +123,9 @@ export async function visitNativeProject(
         ...(previous === undefined
           ? {}
           : {
-              lastOpenedAt: previous.lastOpenedAt,
+              ...(previous.lastVisibleAt === undefined
+                ? {}
+                : { lastVisibleAt: previous.lastVisibleAt }),
               ...(previous.previousSignature === undefined
                 ? {}
                 : { previousSignature: previous.previousSignature }),
@@ -137,6 +140,7 @@ export async function visitNativeProject(
       version: 1,
       project: input.project,
       lastOpenedAt: input.now,
+      lastVisibleAt: input.now,
       ...(signature === undefined ? {} : { previousSignature: signature }),
     };
   });
@@ -162,7 +166,25 @@ export async function dismissNativeCatchUp(input: NativeVisitInput): Promise<voi
     version: 1,
     project: input.project,
     lastOpenedAt: input.now,
+    lastVisibleAt: input.now,
     previousSignature: input.signature,
     dismissedSignature: input.signature,
+  }));
+}
+
+/** Foreground heartbeats and departure capture the latest visible signature, never open a view. */
+export async function recordNativeVisibility(
+  input: Omit<NativeVisitInput, "signature"> & Readonly<{ signature?: string }>,
+): Promise<void> {
+  await updateVisit(input, async (previous) => ({
+    version: 1,
+    project: input.project,
+    lastOpenedAt: previous?.lastOpenedAt ?? input.now,
+    lastVisibleAt: input.now,
+    ...(input.signature === undefined
+      ? previous?.previousSignature === undefined
+        ? {}
+        : { previousSignature: previous.previousSignature }
+      : { previousSignature: input.signature }),
   }));
 }
