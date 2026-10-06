@@ -41,7 +41,7 @@ local def:BlockDef<State> ={
    el("tdp-switch",name,"projects"),
    el("tdp-limit",{text(limit,"tdp-dim"),el("tdp-meter",{tern.ui.node("el",{class="tdp-meter-fill",grow=if meter and type(meter.remainingPercent)=="number" then 100-meter.remainingPercent else 0}),tern.ui.node("el",{grow=if meter and type(meter.remainingPercent)=="number" then meter.remainingPercent else 100})})},"usage"),
    el("tdp-icon",{text("🔔︎ " .. tostring(header.bellCount))},"inbox"),
-   el("tdp-icon",{text("⎇")},"prs"),el("tdp-icon",{text("▦")},"board")})
+   el("tdp-icon",{text("⎇")},"prs"),el("tdp-icon",{text("▦")},"board"),el("tdp-icon",{text("⚙")},"settings")})
   local body={head}
   if state.file.status~="ready" then table.insert(body,text("View unavailable · actions paused","tdp-unavailable")) end
   local index=0
@@ -90,7 +90,8 @@ local def:BlockDef<State> ={
   local project=string.match(command,"^project:repo:(/.*)$")
   if project then rt.act(cx,state.origin,{verb="project",target={repoPath=project}}); state.dropdown=false
   elseif command=="open-project" then rt.act(cx,state.origin,{verb="open-project"})
-  elseif command=="inbox" or command=="prs" or command=="board" or command=="usage" then rt.act(cx,state.origin,{verb="open",ref={kind=command}}) end
+  elseif command=="inbox" or command=="prs" or command=="board" or command=="usage" then rt.act(cx,state.origin,{verb="open",ref={kind=command}})
+  elseif command=="settings" then rt.act(cx,state.origin,{verb="open",ref={kind="setup",mode="settings"}}) end
  end,
 }
 return def

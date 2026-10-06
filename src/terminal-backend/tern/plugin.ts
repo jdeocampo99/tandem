@@ -47,6 +47,7 @@ const TERN_PLUGIN_KEYS: Readonly<Record<string, string>> = {
   "cmd+shift+b": "plugin.tandem.board",
   "cmd+shift+p": "plugin.tandem.prs",
   "cmd+shift+u": "plugin.tandem.usage",
+  "cmd+shift+,": "plugin.tandem.settings",
   ...Object.fromEntries(
     Array.from({ length: 9 }, (_, index) => [
       [`cmd+${index + 1}`, `plugin.tandem.project-${index + 1}`],

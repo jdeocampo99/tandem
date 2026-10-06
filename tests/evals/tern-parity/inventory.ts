@@ -36,6 +36,7 @@ const TERN_KEYBINDS: Readonly<Record<string, string>> = {
   "cmd+shift+b": "plugin.tandem.board",
   "cmd+shift+p": "plugin.tandem.prs",
   "cmd+shift+u": "plugin.tandem.usage",
+  "cmd+shift+,": "plugin.tandem.settings",
   ...Object.fromEntries(
     Array.from({ length: 9 }, (_, index) => [
       [`cmd+${index + 1}`, `plugin.tandem.project-${index + 1}`],
@@ -325,14 +326,16 @@ export const inventory: readonly InventoryEntry[] = [
           "🔔︎ 0",
           "⎇",
           "▦",
+          "⚙",
           "Needs you · 2",
         ]);
-        expect(labels(view).slice(0, 5)).toEqual([
+        expect(labels(view).slice(0, 6)).toEqual([
           "tandem ▾ 1",
           "5h unavailable",
           "🔔︎ 0",
           "⎇",
           "▦",
+          "⚙",
         ]);
         await panel.click("▦");
         expect(host.screen(host.pane("board")).pane).toBeGreaterThan(0);
@@ -482,6 +485,7 @@ export const inventory: readonly InventoryEntry[] = [
             "🔔︎ 0",
             "⎇",
             "▦",
+            "⚙",
             "Needs you · 0",
             "Running · 0",
             "Ready · 0",

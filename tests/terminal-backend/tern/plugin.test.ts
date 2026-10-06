@@ -93,6 +93,7 @@ test("first-time setup links and configures Tern before its config directory exi
     const applied = JSON.parse(await readFile(join(config, "settings.json"), "utf8"));
     expect(applied.tabs_autohide).toBe(true);
     expect(applied.keybinds["cmd+shift+b"]).toBe("plugin.tandem.board");
+    expect(applied.keybinds["cmd+shift+,"]).toBe("plugin.tandem.settings");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

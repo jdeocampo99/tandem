@@ -164,6 +164,7 @@ test("every view the store writes draws through its real screen", async () => {
     "🔔︎ 0",
     "⎇",
     "▦",
+    "⚙",
     "Needs you · 0",
     "Running · 1",
     "●",
@@ -262,7 +263,7 @@ test("a model that cannot draw keeps the last good one and shows the unavailable
   const unavailable = "View unavailable · actions paused";
   const [good, broken, older, torn, newStore, missing] = (panel ?? []).map(strings);
   expect(good).not.toContain(unavailable);
-  expect(broken).toEqual([...(good ?? []).slice(0, 5), unavailable, ...(good ?? []).slice(5)]);
+  expect(broken).toEqual([...(good ?? []).slice(0, 6), unavailable, ...(good ?? []).slice(6)]);
   // An older `seq` from the same store never replaces what is shown.
   expect(older).toEqual(broken);
   expect(torn).toEqual(broken);
