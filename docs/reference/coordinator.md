@@ -6,7 +6,8 @@ one coordinator per repository, and what `update`, `reset`, and `reset --hard` p
 Code: src/main.ts, src/terminal/arguments.ts, src/terminal/launch.ts, src/terminal/hard-reset.ts,
 src/config/environment.ts, src/coordinator/launch.ts, src/coordinator/ownership.ts,
 src/coordinator/registry.ts, src/coordinator/record.ts, src/coordinator/lock.ts,
-src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/workspace.ts,
+src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/quarantine.ts,
+src/coordinator/workspace.ts,
 src/coordinator/restart.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
 src/coordinator/renest.ts, src/harness/contract.ts (the launch port), src/harness/resolve.ts,
 src/harness/omp/launch.ts, src/harness/claude-code/launch.ts.
@@ -325,6 +326,9 @@ decides from that evidence alone:
   before retirement, lease acquisition or owner replacement, even when the old pane or tab is gone.
   The parallel-coordinator setting does not bypass it. The refusal names the note and `tandem fix`;
   fix reports the quarantined coordinator and retains its lease instead of retrying its effects.
+  The shared fence lives in `quarantine.ts`; lease acquisition/reuse and release, registry writes
+  and removal, ownership lookup and workspace retirement enforce it themselves. Startup rollback
+  therefore retains the exact lease even if the quarantined conversation tab has disappeared.
 - A previous lease that cannot be released becomes a quarantine note rather than blocking launch.
   No coordinator lease is left untracked, and the user is never locked out of their coordinator.
 

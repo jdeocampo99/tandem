@@ -3,11 +3,9 @@ import { basename } from "node:path";
 import { EndpointBusyError, EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
 import type { Endpoint } from "../../contracts.ts";
+import { listCoordinatorQuarantineRecords } from "../../coordinator/quarantine.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
-import {
-  listCoordinatorQuarantineRecords,
-  quarantineCoordinatorLease,
-} from "../../coordinator/resources.ts";
+import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
 import type { EndpointTarget } from "../contract.ts";
 import { exactPane } from "./endpoints.ts";
 import {

@@ -29,6 +29,12 @@ import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
 import { findRunningCoordinator } from "./ownership.ts";
 import {
+  type CoordinatorQuarantineRecord,
+  coordinatorQuarantineDirectory,
+  isCoordinatorEffectQuarantine,
+  listCoordinatorQuarantineRecords,
+} from "./quarantine.ts";
+import {
   COORDINATOR_LEASE_HOLDER_PREFIX,
   canonicalHome,
   canonicalPath,
@@ -42,12 +48,8 @@ import {
 import {
   applyCoordinatorReplacement,
   type CoordinatorCheckoutObservation,
-  type CoordinatorQuarantineRecord,
-  coordinatorQuarantineDirectory,
   decideCoordinatorLeaseSettlement,
-  isCoordinatorEffectQuarantine,
   judgeCoordinatorCheckout,
-  listCoordinatorQuarantineRecords,
   observeCoordinatorCheckout,
   quarantineCoordinatorLease,
   readCoordinatorLeasePresence,
@@ -893,7 +895,11 @@ async function applyLeaseItem(
   }
   let released: Awaited<ReturnType<typeof releaseCoordinatorLease>>;
   try {
-    released = await releaseCoordinatorLease(input.run, { repoPath: item.repoPath, lease });
+    released = await releaseCoordinatorLease(input.run, {
+      home: input.home,
+      repoPath: item.repoPath,
+      lease,
+    });
   } catch (error) {
     if (!(error instanceof WorktreeInUseError)) throw error;
     return { item, outcome: "retained", reason: error.message };

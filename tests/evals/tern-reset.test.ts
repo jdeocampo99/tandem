@@ -2,13 +2,162 @@ import { expect, test } from "bun:test";
 import { nativeDetailPath, nativeViewsPath } from "../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../src/contracts.ts";
 import { launchCoordinator, launchCoordinatorUnlocked } from "../../src/coordinator/launch.ts";
+import { listCoordinatorQuarantineRecords } from "../../src/coordinator/quarantine.ts";
 import { reconcileTandemResources } from "../../src/coordinator/reconcile.ts";
-import { listCoordinatorRecords } from "../../src/coordinator/registry.ts";
+import {
+  listCoordinatorRecords,
+  removeCoordinatorRecord,
+  saveCoordinatorRecord,
+} from "../../src/coordinator/registry.ts";
 import { resetCoordinators } from "../../src/coordinator/reset.ts";
-import { listCoordinatorQuarantineRecords } from "../../src/coordinator/resources.ts";
+import {
+  acquireCoordinatorLease,
+  applyCoordinatorReplacement,
+  releaseCoordinatorLease,
+} from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "./scenario.ts";
+
+test("startup rollback retains a quarantined coordinator lease after its conversation tab disappears", async () => {
+  await withScenario({ terminal: "tern", retainEmptyTernSessions: true }, async (world) => {
+    let usagePaneId: string | undefined;
+    let removedTab = false;
+    const run: CommandRunner = async (request) => {
+      // Ownership verification runs after startup saves the new coordinator record.
+      const [owner] = await listCoordinatorRecords(world.home, world.sessionId);
+      if (owner !== undefined && usagePaneId === undefined) {
+        if (owner.endpoint.terminalSessionId === undefined) throw new Error("missing Tern session");
+        usagePaneId = "9903";
+        const index = nativeViewsPath(world.home, world.repoPath);
+        world.openPane({
+          paneId: usagePaneId,
+          cwd: owner.worktree.path,
+          terminalSessionId: owner.endpoint.terminalSessionId,
+          blockProgram: "tandem.usage",
+          blockArgs: [index, owner.endpoint.paneId, owner.worktree.path, "", index],
+        });
+      }
+      const result = await world.run(request);
+      if (
+        owner !== undefined &&
+        request.argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts")
+      )
+        return { ...result, stdout: "[]" }; // Stable native leader disagreement writes quarantine.
+      return result;
+    };
+    const terminal = terminalBackend(run, { home: world.home, terminal: "tern" });
+    const startupTerminal = {
+      ...terminal,
+      inspect: async (target: Parameters<typeof terminal.inspect>[0]) => {
+        try {
+          return await terminal.inspect(target);
+        } catch (error) {
+          // The native proof has durably quarantined the recorded owner. Its tab
+          // disappears before startup sees the failure and starts rollback.
+          const [owner] = await listCoordinatorRecords(world.home, world.sessionId);
+          if (
+            owner !== undefined &&
+            (await listCoordinatorQuarantineRecords(world.home)).length > 0
+          ) {
+            world.removePane(owner.endpoint.paneId);
+            removedTab = true;
+          }
+          throw error;
+        }
+      },
+    };
+    await expect(
+      launchCoordinator(
+        {
+          cwd: world.repoPath,
+          repo: world.repoPath,
+          home: world.home,
+          poolRoot: world.poolRoot,
+          sessionId: world.sessionId,
+          model: undefined,
+          continueSession: false,
+          headless: true,
+          noAttach: true,
+        },
+        {
+          run,
+          terminal: startupTerminal,
+          startPersistent: async () => undefined,
+          runInteractive: async () => {
+            throw new Error("interactive launch forbidden");
+          },
+          sleep: async () => {},
+          processEnvironment: {},
+        },
+      ),
+    ).rejects.toThrow("disagree");
+    expect(removedTab).toBe(true);
+    const [owner] = await listCoordinatorRecords(world.home, world.sessionId);
+    if (owner === undefined || usagePaneId === undefined)
+      throw new Error("missing startup owner or Usage view");
+    const notes = await listCoordinatorQuarantineRecords(world.home);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.lease).toEqual(owner.worktree);
+    expect(notes[0]?.endpoint).toEqual(owner.endpoint);
+    expect(world.paneIsPresent(owner.endpoint.paneId)).toBe(false);
+    expect(world.paneIsPresent(usagePaneId)).toBe(true);
+    const before = (await world.snapshot()).resources;
+    expect(before.retained).toContain(`lease:${owner.worktree.leaseId}`);
+    expect(before.released).not.toContain(`lease:${owner.worktree.leaseId}`);
+    expect(world.trace().some((event) => event.action === "treehouse return")).toBe(false);
+    // Call the mutation owners directly, without any launch or retirement preflight.
+    for (const attempt of [
+      () =>
+        releaseCoordinatorLease(run, {
+          home: world.home,
+          repoPath: world.repoPath,
+          lease: owner.worktree,
+        }),
+      () =>
+        acquireCoordinatorLease(run, world.home, {
+          repo: world.repoPath,
+          root: world.poolRoot,
+          tandemId: owner.worktree.leaseHolder,
+          taskName: owner.worktree.name,
+          sourceHead: owner.worktree.baseHead,
+        }),
+      () =>
+        applyCoordinatorReplacement({
+          run,
+          home: world.home,
+          sessionId: world.sessionId,
+          repoPath: world.repoPath,
+          decision: { kind: "reuse", lease: owner.worktree, reason: "clean matching lease" },
+          clock: world.clock,
+          newId: () => "unexpected-note",
+        }),
+      () =>
+        saveCoordinatorRecord(world.home, {
+          ...owner,
+          endpoint: { ...owner.endpoint, paneId: "replacement" },
+        }),
+      () => removeCoordinatorRecord(world.home, world.sessionId, world.repoPath),
+    ]) {
+      await expect(attempt()).rejects.toThrow("quarantine");
+      expect(await listCoordinatorRecords(world.home, world.sessionId)).toEqual([owner]);
+      expect(await listCoordinatorQuarantineRecords(world.home)).toEqual(notes);
+      expect((await world.snapshot()).resources).toEqual(before);
+    }
+    const fix = await reconcileTandemResources({
+      run,
+      terminal: terminalBackend(run, { home: world.home, terminal: "tern" }),
+      home: world.home,
+      poolRoot: world.poolRoot,
+      repoPaths: [world.repoPath],
+      apply: true,
+    });
+    expect(fix.quarantined.some((entry) => entry.kind === "coordinator")).toBe(true);
+    expect(await listCoordinatorRecords(world.home, world.sessionId)).toEqual([owner]);
+    expect(await listCoordinatorQuarantineRecords(world.home)).toEqual(notes);
+    expect((await world.snapshot()).resources).toEqual(before);
+  });
+});
 
 for (const mode of [
   "reset-relaunch",

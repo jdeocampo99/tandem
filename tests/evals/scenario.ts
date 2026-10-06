@@ -15,7 +15,7 @@ import type {
   TaskRecord,
   WorktreeLease,
 } from "../../src/contracts.ts";
-import { COORDINATOR_QUARANTINE_DIRECTORY } from "../../src/coordinator/resources.ts";
+import { COORDINATOR_QUARANTINE_DIRECTORY } from "../../src/coordinator/quarantine.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import type {
   DurableJob,

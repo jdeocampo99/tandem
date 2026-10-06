@@ -9,6 +9,7 @@ import type {
   TerminalBackend,
 } from "../terminal-backend/contract.ts";
 import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
+import { assertCoordinatorEffectsSettled } from "./quarantine.ts";
 import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
@@ -190,6 +191,7 @@ async function findOwnedCoordinator(
   if (pathIsWithin(repoPath, home)) {
     throw new Error("Tandem home must remain outside the target repository");
   }
+  await assertCoordinatorEffectsSettled(home, repoPath);
   const path = recordPath(home, sessionId, repoPath);
   const record = await readCoordinatorRecord(path);
   if (record === undefined) return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);

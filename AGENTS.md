@@ -19,7 +19,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | --- | --- |
 | `tandem` terminal command, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts), per-command handlers in [terminal/cli-commands.ts](src/terminal/cli-commands.ts) |
-| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `exclusivity.ts`, `reconcile.ts` |
+| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `quarantine.ts`, `exclusivity.ts`, `reconcile.ts` |
 | The Tandem coordinator (Tandem's own chat), `open-project`, the welcome popup | [coordinator/tandem-checkout.ts](src/coordinator/tandem-checkout.ts), [coordinator/open-project.ts](src/coordinator/open-project.ts), [terminal/welcome.ts](src/terminal/welcome.ts), [herdr-plugin/](herdr-plugin/) |
 | First-time setup in chat: checklist, tool check, finding repos by name | [onboarding/](src/onboarding/): `checklist.ts` (pure), `tools.ts`; [repos/locate.ts](src/repos/locate.ts) (`findCheckoutsByName`, `projectRoots`) |
 | The setup page (first-time setup in Lavish), `setup-page` / `apply-setup` | [onboarding/](src/onboarding/): `setup-view.ts` (pure view model), `setup-answer.ts` (pure answer parsing, checks, recap), `setup-render.ts` + `setup-page.html`, `setup-page.ts` (effects: build, open, listen, apply); listener in [session/onboarding-guide.ts](src/session/onboarding-guide.ts) |
