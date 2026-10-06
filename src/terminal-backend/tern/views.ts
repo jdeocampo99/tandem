@@ -128,7 +128,17 @@ export function ternViewHost(
   const open = async (
     input: ViewHostingInput,
     project: string,
-    kind: "panel" | "task" | "brief" | "pr" | "prs" | "board" | "usage" | "catchup" | "welcome",
+    kind:
+      | "panel"
+      | "task"
+      | "task-picker"
+      | "brief"
+      | "pr"
+      | "prs"
+      | "board"
+      | "usage"
+      | "catchup"
+      | "welcome",
     placement: "panel" | "split" | "task" | "window" | "return" | "inbox",
     path: string,
   ) => {
