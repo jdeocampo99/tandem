@@ -38,6 +38,7 @@ const reviewed = task({
 function dependencies(
   openNativePage: PrReviewDependencies["openNativePage"],
 ): PrReviewDependencies {
+  let record = reviewed;
   const unexpected = async (): Promise<never> => {
     throw new Error("Unexpected effect");
   };
@@ -47,9 +48,23 @@ function dependencies(
     run: unexpected,
     projectRoots: unexpected,
     listTasks: unexpected,
-    getTask: async () => reviewed,
+    getTask: async () => record,
     createTask: unexpected,
     updatePrReview: unexpected,
+    mutatePrReview: async (taskId, update) => {
+      if (taskId !== record.id) throw new Error(`Task ${taskId} was not found`);
+      const next = update(record);
+      const changed = next !== record.prReview;
+      if (changed) {
+        record = {
+          ...record,
+          revision: record.revision + 1,
+          updatedAt: reviewed.updatedAt,
+          prReview: next,
+        };
+      }
+      return { task: record, changed };
+    },
     runAgain: unexpected,
     settle: unexpected,
     ...(openNativePage === undefined ? {} : { openNativePage }),
