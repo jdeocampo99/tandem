@@ -72,7 +72,10 @@ local block: BlockDef<State> = {
    for _, pr in s.index.model.pullRequests do table.insert(entries, pr) end
    table.sort(entries, function(a, b) return a.header.number < b.header.number end)
    local pr = entries[tonumber(ev.value) or 0]
-   if pr and pr.header.taskId then invoke(s, cx)("open", "pr", pr.header.taskId); s.switcher = false end
+   if pr and pr.header.taskId then
+    invoke(s, cx)("open", "pr", pr.header.taskId, function() cx:exit(0) end)
+    s.switcher = false
+   end
    return
   end
   if s.view.model then content.event(s.content, s.view.model, s.view.status == "ready", ev, cx, invoke(s, cx)) end
