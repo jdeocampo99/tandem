@@ -348,6 +348,8 @@ The optional strip is rendered inside the PR header. `pr-diff.luau` exports `cre
 `view`, `rows`, `jump`, `event`, and `key`; both modules use `pr-model.luau` wire types.
 Include `pr.css` with the foundation stylesheet. The pane uses Tern's native surface scrolling
 for wheel and keyboard input; the review dock remains visible while the content scrolls.
+PR line numbers use muted text color rather than element opacity, avoiding a compositing
+target per visible gutter in Tern 0.5.0. The shared diff-row renderer stays unchanged.
 
 PR and brief callers transport UTF-8 JSON on stdin through `native-input.sh`. The shared
 `src/terminal/native-input.ts` helper writes one exclusive 0600 file in a private unique

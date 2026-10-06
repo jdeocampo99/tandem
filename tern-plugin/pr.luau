@@ -16,7 +16,7 @@ local function parseIndex(value: unknown): Index?
 end
 local function invoke(s: State, cx: BlockCx): content.Invoke
  return function(verb, id, payload, done)
-  if not s.cwd or string.sub(s.cwd, 1, 1) ~= "/" then cx:toast("error", "Tandem couldn't run that action", "The originating absolute cwd is required."); s.content.diff.busy = false; return end
+  if not s.cwd or string.sub(s.cwd, 1, 1) ~= "/" or string.sub(s.home, 1, 1) ~= "/" then cx:toast("error", "Tandem couldn't run that action", "The originating absolute cwd and native index path are required."); s.content.diff.busy = false; return end
   local json = verb == "pr-comment" or verb == "review-submit"
   local argv = {"/bin/sh", if json then "native-input.sh" else "tandem.sh"}
   if not json then table.insert(argv, "native") end

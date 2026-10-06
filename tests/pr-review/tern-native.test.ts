@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { nativeViewText } from "../../src/board/native-views.ts";
 import { prPaneView } from "../../src/pr-review/native-view.ts";
 
-const TERN_APP_BINARY = "/Applications/Tern.app/Contents/MacOS/tern";
+const TERN_BINARY = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_TEST === "1";
 
@@ -83,14 +83,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         }),
       ),
     );
-    const daemon = Bun.spawn([TERN_APP_BINARY, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
+    const daemon = Bun.spawn([TERN_BINARY, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
       env,
       cwd: root,
       stdout: "ignore",
       stderr: "pipe",
     });
     const run = async (...args: string[]) => {
-      const child = Bun.spawn([TERN_APP_BINARY, ...args], {
+      const child = Bun.spawn([TERN_BINARY, ...args], {
         env,
         cwd: root,
         stdout: "pipe",
