@@ -344,7 +344,9 @@ It returns true only at **1+ hour** away, with a known previous visit/signature 
 meaningful signature. Unknown visits, invalid dates, repaint/timer changes and unchanged work
 never auto-show. The host owns visit/dismiss tracking and invokes this pure rule on project open;
 `src/memory/native-visits.ts` stores the last visit/signature and explicit dismissal in private,
-locked, atomically replaced `<home>/native-visits/<repositoryKey>.json` files. Project opening,
-reconnecting and switching invoke the rule once; polling never changes visits. A failed opening
-does not acknowledge the visit. First visits and unchanged work remain quiet. Dismiss and
+locked, atomically replaced `<home>/native-visits/<repositoryKey>.json` files. Its exported
+`maybeShowCatchUp` is called after visible project opening, reconnecting and confirmed switching;
+background `--no-attach` launch defers to the caller's focus hook. Panel opening and polling never
+change visits. A failed opening does not acknowledge the visit. First visits and unchanged work
+remain quiet. Dismiss and
 Open what needs me acknowledge the current signature only after confirmed navigation.

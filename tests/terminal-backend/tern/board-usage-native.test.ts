@@ -7,7 +7,7 @@ import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
@@ -240,15 +240,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         },
       );
       expect(
-        (
-          await backend.openView({
-            coordinator,
-            cwd: project,
-            home,
-            origin,
-            view: { kind: "catchup", automatic: true },
-          })
-        ).opened,
+        await maybeShowCatchUp(backend, {
+          home,
+          record: { repoPath: project, endpoint: coordinator, worktree: { path: project } },
+        }),
       ).toBe(true);
       await until(async () => (await ctl("tree")).includes("Where we left off"));
       const catchupPane = blocks(
@@ -267,15 +262,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE_
         ).opened,
       ).toBe(true);
       expect(
-        (
-          await backend.openView({
-            coordinator,
-            cwd: project,
-            home,
-            origin,
-            view: { kind: "catchup", automatic: true },
-          })
-        ).opened,
+        await maybeShowCatchUp(backend, {
+          home,
+          record: { repoPath: project, endpoint: coordinator, worktree: { path: project } },
+        }),
       ).toBe(false);
       expect(
         blocks(decode(await run("ls", "--json"), Listing, "quiet reopen")).some(

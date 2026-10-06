@@ -156,7 +156,7 @@ test("an unreadable panel file counts as no recorded panel", async () => {
   }
 });
 
-test("opening or reconnecting a Tern project checks catch-up without replacing its retained panel", async () => {
+test("reopening a retained Tern panel leaves project navigation to the caller", async () => {
   const { root, home, record } = await fixture();
   try {
     const calls: TerminalView[] = [];
@@ -177,10 +177,7 @@ test("opening or reconnecting a Tern project checks catch-up without replacing i
     expect(await openPanelBeside(terminal, home, record)).toBeUndefined();
     expect(await openPanelBeside(terminal, home, record)).toBeUndefined();
     expect(panels).toBe(1);
-    expect(calls).toEqual([
-      { kind: "catchup", automatic: true },
-      { kind: "catchup", automatic: true },
-    ]);
+    expect(calls).toEqual([]);
     expect(await readPanelPaneId(home, record)).toBe("202");
   } finally {
     await rm(root, { recursive: true, force: true });

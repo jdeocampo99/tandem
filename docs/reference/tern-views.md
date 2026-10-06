@@ -332,9 +332,12 @@ Board and usage are full-window tabs with Escape and “← Orchestrator” retu
 this coordinator's exact block program, root/detail path and launch arguments, closes only that
 screen and focuses the preserved coordinator. Invoking board from its own block toggles it closed.
 
-Catch-up uses `view:{kind:"catchup",automatic:true}` on project opening/reconnect/switching.
-The host reads the root signature and the Tandem-owned visit record, then applies
-`shouldAutoShowCatchUp`. An explicit `view:{kind:"catchup"}` opens the screen without that rule.
+`maybeShowCatchUp` in `src/memory/native-visits.ts` owns the project-visit trigger. Visible front-door
+launches/reconnects, `coordinator/open-project.ts` after confirmed focus, and the project-switch
+handler invoke it. Background `--no-attach` launches defer the visit to the caller's focus hook.
+The function reads the root signature and the Tandem-owned visit record, applies
+`shouldAutoShowCatchUp`, then opens `view:{kind:"catchup"}` through the hosting port. An explicit
+catch-up view opens the screen without that rule. Panel opening and polling never record visits.
 `native board catchup-dismiss` returns and records dismissal; `catchup-open-needs` returns, opens
 the first saved needs-you destination (brief, task or inbox), then records dismissal.
 

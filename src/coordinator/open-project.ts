@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { CommandRequest, CommandRunner } from "../contracts.ts";
+import { maybeShowCatchUp } from "../memory/native-visits.ts";
 import { terminalContext } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { assertTerminalEndpoint } from "../terminal-backend/identity.ts";
@@ -73,5 +74,6 @@ export async function openProject(
     cwd: input.repoPath,
     workspaceId: record.endpoint.workspaceId,
   });
+  if (focus.focused) await maybeShowCatchUp(terminal, { home: input.home, record });
   return { focused: focus.focused };
 }

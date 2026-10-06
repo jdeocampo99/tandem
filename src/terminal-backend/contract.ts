@@ -68,8 +68,7 @@ export type FocusResult =
 /** A durable identity to show. The CLI validates it before asking a backend to present it. */
 export type TerminalView =
   | Readonly<{ kind: "browser"; url: string }>
-  | Readonly<{ kind: "catchup"; automatic?: boolean }>
-  | Readonly<{ kind: "board" | "usage" | "prs" | "orchestrator" | "inbox" }>
+  | Readonly<{ kind: "board" | "usage" | "catchup" | "prs" | "orchestrator" | "inbox" }>
   | Readonly<{ kind: "task"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>
   | Readonly<{ kind: "pr"; taskId: string }>;

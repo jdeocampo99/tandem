@@ -13,6 +13,7 @@ import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
+import { visitNativeProject } from "../../src/memory/native-visits.ts";
 import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
@@ -1346,6 +1347,7 @@ test("native navigation selects published projects and details, refusing stale o
       version: 1,
       project: f.repo,
       writtenAt: new Date().toISOString(),
+      changeSignature: "changed-work",
       tasks: {},
       briefs: { [f.record.id]: { detailFile: "brief-native.json" } },
       pullRequests: {},
@@ -1361,6 +1363,15 @@ test("native navigation selects published projects and details, refusing stale o
     };
     const publish = (data: unknown) => writeFile(path, nativeViewText("panel", data));
     await publish(model);
+    await visitNativeProject(
+      {
+        home: f.home,
+        project: f.repo,
+        signature: "earlier-work",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+      },
+      async () => {},
+    );
     const action = (...args: string[]) =>
       runTerminal(["native", ...args, "--pane", "101", "--cwd", f.clean], f.deps);
     expect((await action("project", "next")).exitCode).toBe(0);
@@ -1373,10 +1384,7 @@ test("native navigation selects published projects and details, refusing stale o
         )
       ).exitCode,
     ).toBe(0);
-    expect(f.opened).toEqual([
-      { kind: "catchup", automatic: true },
-      { kind: "brief", requestId: f.record.id },
-    ]);
+    expect(f.opened).toEqual([{ kind: "catchup" }, { kind: "brief", requestId: f.record.id }]);
     expect((await action("view-file", join(f.root, "foreign.json"))).exitCode).not.toBe(0);
     await publish({ ...model, writtenAt: "2000-01-01T00:00:00Z" });
     expect((await action("project", "1")).exitCode).not.toBe(0);

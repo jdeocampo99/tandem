@@ -1,6 +1,7 @@
 import { readNativeBundle } from "../board/native-file.ts";
 import { nativeDetailPath, nativeViewsPath } from "../board/snapshot.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
+import { maybeShowCatchUp } from "../memory/native-visits.ts";
 import type { NativeRendererContext } from "./native-renderers.ts";
 
 async function owner(
@@ -48,16 +49,10 @@ export async function nativeProject(context: NativeRendererContext) {
     home: context.environment.home,
   });
   if (!focused) throw new Error("Tern could not focus the exact project coordinator");
-  await context.capabilities.terminal.openView({
-    coordinator: destination.endpoint,
-    cwd: destination.worktree.path,
+  await maybeShowCatchUp(context.capabilities.terminal, {
     home: context.environment.home,
-    origin: {
-      ...context.origin,
-      paneId: destination.endpoint.paneId,
-      cwd: destination.worktree.path,
-    },
-    view: { kind: "catchup", automatic: true },
+    record: destination,
+    ...(context.origin.windowId === undefined ? {} : { windowId: context.origin.windowId }),
   });
   return { value: { focused: true, project: project.repoPath } };
 }

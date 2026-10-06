@@ -5,11 +5,9 @@ import { z } from "zod";
 import { AdapterError, EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { type NativeNavigationModel, readNativeBundle } from "../../board/native-file.ts";
 import { nativeDetailPath, nativeViewsPath } from "../../board/snapshot.ts";
-import { isNotFoundError } from "../../config/storage.ts";
 import type { Endpoint } from "../../contracts.ts";
 import { ensurePrivateDirectoryTree } from "../../coordinator/lock.ts";
 import { listCoordinatorRecords } from "../../coordinator/registry.ts";
-import { visitNativeProject } from "../../memory/native-visits.ts";
 import type { TerminalBackend } from "../contract.ts";
 import { exactPane, paneMutation } from "./endpoints.ts";
 import { blocks, Id, type TernCommands, TernOutcomeUnknownError } from "./protocol.ts";
@@ -231,28 +229,6 @@ export function ternViewHost(
     scoped,
     openView: async (input: ViewHostingInput) => {
       const project = await projectForView(input.home, input.coordinator);
-      if (input.view.kind === "catchup" && input.view.automatic) {
-        let bundle: NativeNavigationModel;
-        try {
-          bundle = await readNativeBundle(input.home, project);
-        } catch (error) {
-          if (isNotFoundError(error)) return { opened: false, warnings: [] };
-          throw error;
-        }
-        if (!bundle.changeSignature) return { opened: false, warnings: [] };
-        const shown = await visitNativeProject(
-          {
-            home: input.home,
-            project,
-            now: new Date(options.clock()).toISOString(),
-            signature: bundle.changeSignature,
-          },
-          async () => {
-            await open(input, project, "catchup", "window", nativeViewsPath(input.home, project));
-          },
-        );
-        return { opened: shown, warnings: [] };
-      }
       if (input.view.kind === "browser") {
         const url = new URL(input.view.url);
         if (url.protocol !== "https:") throw new Error("PR links require an HTTPS URL");
