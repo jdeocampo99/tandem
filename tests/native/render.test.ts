@@ -12,7 +12,7 @@ import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
 const PLUGIN = fileURLToPath(new URL("../../tern-plugin/", import.meta.url));
 const DRIVER = fileURLToPath(new URL("./render.luau", import.meta.url));
-const PARITY_HOST = fileURLToPath(new URL("../evals/tern-parity/host.luau", import.meta.url));
+const JSON_CODEC = fileURLToPath(new URL("../evals/tern-parity/json.luau", import.meta.url));
 
 type Node = Readonly<{ k: string; p?: Record<string, unknown>; c?: readonly Node[] | object }>;
 type Drawn = Readonly<{ title?: string; tree?: Record<string, Node>; error?: string }>;
@@ -109,10 +109,7 @@ async function render(cases: readonly Case[]): Promise<Drawn[][]> {
   for (const name of await readdir(PLUGIN))
     if (name.endsWith(".luau"))
       modules[`./${name.slice(0, -5)}`] = await readFile(join(PLUGIN, name), "utf8");
-  // The parity stand-in's JSON codec is the one these screens are already checked against.
-  const host = await readFile(PARITY_HOST, "utf8");
-  const codec = host.slice(host.indexOf("local json = {}"), host.indexOf("-- Window model."));
-  const source = `${codec}\nlocal MODULES = ${lua(modules)}\nlocal CASES = ${lua(cases)}\n${await readFile(DRIVER, "utf8")}`;
+  const source = `${await readFile(JSON_CODEC, "utf8")}\nlocal MODULES = ${lua(modules)}\nlocal CASES = ${lua(cases)}\n${await readFile(DRIVER, "utf8")}`;
   const script = join(home, "render.luau");
   await Bun.write(script, source);
   const child = Bun.spawn([luauBinary(), script], { stdout: "pipe", stderr: "pipe" });
@@ -201,7 +198,7 @@ test("every view the store writes draws through its real screen", async () => {
 test("a model that cannot draw keeps the last good one and shows the unavailable state", async () => {
   const index = files.index.path;
   const realModel = files.index.file.model;
-  const [panel, fresh, task, brief, pr] = await render([
+  const [panel, fresh, wrongKind, task, brief, pr] = await render([
     {
       block: "panel",
       args: args(index),
@@ -220,6 +217,20 @@ test("a model that cannot draw keeps the last good one and shows the unavailable
       steps: [
         { [index]: rewrite("index", { panel: [] }) },
         { [index]: rewrite("index", realModel, 2) },
+      ],
+    },
+    {
+      block: "panel",
+      args: args(index),
+      steps: [
+        { [index]: files.index.text },
+        {
+          [index]: JSON.stringify({
+            ...files.index.file,
+            kind: "task",
+            seq: files.index.file.seq + 1,
+          }),
+        },
       ],
     },
     {
@@ -261,6 +272,9 @@ test("a model that cannot draw keeps the last good one and shows the unavailable
   const [never, recovered] = (fresh ?? []).map(strings);
   expect(never).toEqual(["Waiting for Tandem's project snapshot…"]);
   expect(recovered).toEqual(good);
+
+  // A newer file of another kind is not this block's view, however well its model draws.
+  expect((wrongKind ?? []).map(strings)).toEqual([good ?? [], broken ?? []]);
 
   const [taskBroken, taskGood] = task ?? [];
   expect(strings(taskBroken ?? {})).toEqual([

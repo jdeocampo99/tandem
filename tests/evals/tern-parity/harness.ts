@@ -15,6 +15,7 @@ import type { ScenarioTernProject, ScenarioWorld } from "../scenario.ts";
 
 const PLUGIN = fileURLToPath(new URL("../../../tern-plugin/", import.meta.url));
 const HOST = fileURLToPath(new URL("./host.luau", import.meta.url));
+const JSON_CODEC = fileURLToPath(new URL("./json.luau", import.meta.url));
 const FIRST_LUAU_PANE = 20001;
 const FIRST_LUAU_TAB = 30001;
 /** Staged route and launch timers use 1 ms; anything due this soon belongs to the current gesture. */
@@ -327,7 +328,7 @@ export class TernParityHost {
         modules: `local MODULES={${sources.join(",\n")}}\n`,
         entries: [manifest.host, manifest.window].map(moduleName),
       },
-      await readFile(HOST, "utf8"),
+      `${await readFile(JSON_CODEC, "utf8")}\n${await readFile(HOST, "utf8")}`,
       await mkdtemp("/tmp/tandem-parity-"),
     );
     world.routeTernOpen((path) => host.#route(path));

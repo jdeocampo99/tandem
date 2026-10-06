@@ -28,7 +28,8 @@ with the same basename have different directories. The directory holds:
 One lock per project (`state.lock`) serializes `views/` and `state.json` across coordinator and
 CLI processes; `withProjectLock` is the only way to change `state.json`. Staged opens keep their
 own per-coordinator lock in `open/`, because an open holds it while Tern applies the layout, and
-publication must not wait for that.
+publication must not wait for that. For the same reason a project visit decides under the lock, opens
+catch-up outside it, and records the visit under it again.
 
 The project's coordinator is the single writer of full publications, scheduled by the existing
 `writeBoardSnapshot` service operation, only for a Tern backend. `NativeViewsPublisher`

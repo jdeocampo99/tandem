@@ -1,6 +1,6 @@
 --!nocheck
--- Runs the production plugin's blocks against files Tandem wrote. The test prepends `json`,
--- MODULES (every tern-plugin/*.luau source) and CASES. Each case mounts one block in its own
+-- Runs the production plugin's blocks against files Tandem wrote. The test prepends the parity
+-- stand-ins' json.luau, MODULES (every tern-plugin/*.luau source) and CASES. Each case mounts one block in its own
 -- pane; each step replaces files, fires the pending timers once and draws the block.
 
 local ui = {}

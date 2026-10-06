@@ -78,33 +78,30 @@ async function updateVisit(
   });
 }
 
-/** Invoke only on a project visit, never on a view poll. Failed/uncertain opens stay unacknowledged. */
+/**
+ * Invoke only on a project visit, never on a view poll. Failed/uncertain opens stay unacknowledged.
+ * The catch-up open runs between two lock holds: it takes seconds, and publication shares the lock.
+ */
 export async function visitNativeProject(
   input: Omit<NativeVisitInput, "signature"> & Readonly<{ signature?: string }>,
   show: () => Promise<void>,
 ): Promise<boolean> {
-  let shown = false;
+  let shouldShow = false;
   await updateVisit(input, async (previous) => {
-    const shouldShow =
+    shouldShow =
       input.signature !== undefined &&
       shouldAutoShowCatchUp({
         now: input.now,
         currentSignature: input.signature,
-        ...(previous === undefined
+        ...(previous?.lastVisibleAt === undefined ? {} : { lastVisibleAt: previous.lastVisibleAt }),
+        ...(previous?.previousSignature === undefined
           ? {}
-          : {
-              ...(previous.lastVisibleAt === undefined
-                ? {}
-                : { lastVisibleAt: previous.lastVisibleAt }),
-              ...(previous.previousSignature === undefined
-                ? {}
-                : { previousSignature: previous.previousSignature }),
-            }),
+          : { previousSignature: previous.previousSignature }),
       });
-    if (shouldShow) {
-      await show();
-      shown = true;
-    }
+    return undefined;
+  });
+  if (shouldShow) await show();
+  await updateVisit(input, async (previous) => {
     const signature = input.signature ?? previous?.previousSignature;
     return {
       lastOpenedAt: input.now,
@@ -112,7 +109,7 @@ export async function visitNativeProject(
       ...(signature === undefined ? {} : { previousSignature: signature }),
     };
   });
-  return shown;
+  return shouldShow;
 }
 
 /** First publication fills a known visit's missing baseline without changing its timestamp. */
