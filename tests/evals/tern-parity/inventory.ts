@@ -1012,8 +1012,18 @@ export const inventory: readonly InventoryEntry[] = [
         expect(labels(after).filter((label) => !["×", "+", "Remove"].includes(label))).toEqual([]);
         await brief.click("×");
         await panel.click(/^● Add dark mode/);
-        const reopened = await host.screen(host.pane("brief")).render();
-        expect(reopened.text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
+        const reopened = host.screen(host.pane("brief"));
+        expect((await reopened.render()).text[0]).toBe("Brief · Request brief · rev 2 · 1 changes");
+        await host.corruptBriefView(briefId);
+        await host.refresh();
+        const unavailable = await reopened.render();
+        expect(unavailable.text).toContain(
+          "Brief unavailable. Actions are disabled until the view file recovers.",
+        );
+        expect(labels(unavailable)).not.toContain("Approve");
+        expect(labels(unavailable).filter((label) => label.startsWith("Request changes"))).toEqual(
+          [],
+        );
       }),
   },
   {

@@ -252,6 +252,9 @@ async function listFiles(directory: string, pattern: RegExp): Promise<string[]> 
   }
 }
 
+/** The view whose saved detail a block reads: a task page by task id, a brief by brief id. */
+export type DetailView = Readonly<{ task: string } | { brief: string }>;
+
 export type CliRun = Readonly<{
   argv: readonly string[];
   exitCode: number;
@@ -410,17 +413,21 @@ export class TernParityHost {
 
   /** A task page's published detail stops parsing. */
   async corruptTaskView(taskId: string): Promise<void> {
-    await writeFile(this.#detail(`task-${taskId}.json`), "{broken");
+    await writeFile(this.#detail({ task: taskId }), "{broken");
+  }
+
+  /** A brief's published detail stops parsing. */
+  async corruptBriefView(briefId: string): Promise<void> {
+    await writeFile(this.#detail({ brief: briefId }), "{broken");
   }
 
   /** A task page's or brief's detail is not published yet. */
-  async unpublishDetail(view: Readonly<{ task: string } | { brief: string }>): Promise<void> {
-    await rm(this.#detail("task" in view ? `task-${view.task}.json` : `brief-${view.brief}.json`), {
-      force: true,
-    });
+  async unpublishDetail(view: DetailView): Promise<void> {
+    await rm(this.#detail(view), { force: true });
   }
 
-  #detail(file: string): string {
+  #detail(view: DetailView): string {
+    const file = "task" in view ? `task-${view.task}.json` : `brief-${view.brief}.json`;
     return nativeDetailPath(this.world.home, this.project.repoPath, file);
   }
 
