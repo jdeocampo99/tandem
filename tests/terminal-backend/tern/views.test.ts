@@ -24,6 +24,10 @@ for (const mode of [
   "success",
   "brief-success",
   "brief-unknown",
+  "pr-success",
+  "pr-unknown",
+  "prs-success",
+  "task-picker-success",
   "verification-failed",
   "verification-malformed",
   "relaunch-success",
@@ -49,6 +53,15 @@ for (const mode of [
   test(`native opening ${mode} retains exact identity and never falls back to a title`, async () => {
     const home = await mkdtemp("/tmp/tandem-host-test-");
     const modelPath = nativeViewsPath(home, home);
+    const splitKind = mode.startsWith("brief-")
+      ? "brief"
+      : mode.startsWith("pr-")
+        ? "pr"
+        : mode === "prs-success"
+          ? "prs"
+          : mode === "task-picker-success"
+            ? "task-picker"
+            : undefined;
     let created = false;
     let effects = 0;
     let now = 0;
@@ -124,8 +137,8 @@ for (const mode of [
                                   ? "tandem.task"
                                   : mode === "wrong-kind"
                                     ? "unrelated.panel"
-                                    : mode.startsWith("brief-")
-                                      ? "tandem.brief"
+                                    : splitKind !== undefined
+                                      ? `tandem.${splitKind}`
                                       : "tandem.panel",
                               args: [
                                 modelPath,
@@ -232,6 +245,7 @@ for (const mode of [
           ![
             "unknown",
             "brief-unknown",
+            "pr-unknown",
             "relaunch-missing-receipt",
             "relaunch-no-exact-pane",
             "relaunch-legacy-ticket",
@@ -276,8 +290,8 @@ for (const mode of [
               : {}),
         },
         home,
-        mode.startsWith("brief-") ? "brief" : "panel",
-        mode.startsWith("brief-") ? "split" : mode === "foreign-return" ? "return" : "panel",
+        splitKind ?? "panel",
+        splitKind !== undefined ? "split" : mode === "foreign-return" ? "return" : "panel",
         modelPath,
       );
     try {
@@ -365,7 +379,7 @@ for (const mode of [
           expect(await first.openPanel(input)).toBe("4");
           expect(effects).toBe(before);
         }
-      } else if (mode === "success" || mode === "brief-success") {
+      } else if (mode === "success" || (splitKind !== undefined && mode.endsWith("-success"))) {
         const expected = {
           paneId: "4",
           project: home,
@@ -390,6 +404,7 @@ for (const mode of [
           [
             "unknown",
             "brief-unknown",
+            "pr-unknown",
             "wrong-kind",
             "verification-failed",
             "verification-malformed",

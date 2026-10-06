@@ -381,7 +381,8 @@ are quarantined. Automatic request projection uses the existing `reviewPane` rec
 for the native split; a manual native action does not register a Markdown projection.
 Brief projection writes its detail before opening, so a new request need not wait for the
 background index publication. Native brief opens derive the stable detail filename and reuse
-exactly one matching split across revisions, without running a pager.
+exactly one matching split across revisions, without running a pager. The same exact-evidence
+reuse applies to PR, PR-list and task-picker splits; repeating an open creates no duplicate.
 
 The host explicitly launches renderer blocks and task replacements with `keep_open=false`.
 Tern's default is `keep_open=false`; with `keep_open=true`, `cx:exit(0)` leaves the exited pane.

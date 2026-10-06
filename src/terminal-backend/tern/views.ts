@@ -174,7 +174,7 @@ export function ternViewHost(
       });
       return withNativeOpenIntent({ ...input, indexPath }, cmd, async (intent) => {
         const reused =
-          placement === "panel" || (kind === "brief" && placement === "split") || intent.recovered
+          placement === "panel" || placement === "split" || intent.recovered
             ? await exactNativeView(cmd, input.cwd, input.coordinator, kind, placement, args)
             : undefined;
         if (reused !== undefined) return resultFor(reused);
