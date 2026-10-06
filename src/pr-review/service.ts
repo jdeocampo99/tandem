@@ -77,6 +77,9 @@ export type PostPrReviewResult = Readonly<{
   url?: string;
 }>;
 
+/** The finished review round the native pane displayed when the user clicked Submit. */
+export type ReviewSubmissionBinding = Readonly<{ head: string; generation: number }>;
+
 /** What the review workflow needs from the task service; everything else it does itself. */
 export type PrReviewDependencies = Readonly<{
   home: string;
@@ -257,8 +260,21 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
    * posts without asking again; it still pins to the reviewed commit and refuses if the PR moved.
    * Nothing is saved unless the post lands, so a refused submission can be sent again.
    */
-  async function submit(taskId: string, submission: ReviewSubmission): Promise<PostPrReviewResult> {
+  async function submit(
+    taskId: string,
+    submission: ReviewSubmission,
+    expected?: ReviewSubmissionBinding,
+  ): Promise<PostPrReviewResult> {
     const { task, state, round } = await reviewed(taskId);
+    if (
+      expected !== undefined &&
+      (round.head !== expected.head ||
+        round.generation !== expected.generation ||
+        // Question follow-ups retain the same finished review; a re-review replaces it.
+        (state.mode !== "question" && task.generation !== expected.generation))
+    ) {
+      throw new Error("The displayed PR review is stale; reopen the pane before submitting.");
+    }
     if (round.posted !== undefined) {
       throw new Error(`This review was already posted at ${round.posted.url}.`);
     }
