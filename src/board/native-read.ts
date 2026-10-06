@@ -7,6 +7,7 @@ import { nativeCatchUpView } from "../memory/native-view.ts";
 import { listWorkstreams, memoryPath, memoryRoot } from "../memory/store.ts";
 import { catchUpView, recentWork } from "../memory/workstream.ts";
 import { type CachedPullRequest, type PrPaneView, prPaneView } from "../pr-review/native-view.ts";
+import { uncertainPostMessage } from "../pr-review/render.ts";
 import { latestRound, prReviewRunDiffPath } from "../pr-review/state.ts";
 import { readNativePullRequest } from "../pr-watch/native-cache.ts";
 import { withPrWatches } from "../pr-watch/store.ts";
@@ -232,7 +233,10 @@ export class NativeViewsReader {
             summary: round.review.summaryComment,
             drafts: round.review.comments,
             concerns: round.review.concerns,
-            notes: round.notes,
+            notes:
+              round.pendingPost === undefined
+                ? round.notes
+                : [uncertainPostMessage(cached.url), ...round.notes],
             ...(round.review.verdict === undefined ? {} : { verdict: round.review.verdict }),
           };
         } catch {

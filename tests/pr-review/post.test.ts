@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { beforeEach, expect, test } from "bun:test";
 import type { CommandRequest } from "../../src/contracts.ts";
 import { postReview, reviewMarker, reviewRequestBody } from "../../src/pr-review/post.ts";
 import type { PrReview } from "../../src/pr-review/review.ts";
@@ -28,6 +28,13 @@ const review: PrReview = {
 };
 const marker = reviewMarker("task-1", 0);
 const input = { ref: REF, review, verdict: "request-changes" as const, marker, cwd: "/tmp" };
+const saved: string[] = [];
+beforeEach(() => {
+  saved.length = 0;
+});
+async function beforePost(): Promise<void> {
+  saved.push(marker);
+}
 
 function posts(calls: readonly CommandRequest[]): number {
   return calls.filter((call) => call.argv.join(" ").startsWith(POST)).length;
@@ -50,19 +57,21 @@ test("posts once when the PR is still at the reviewed commit", async () => {
     [HEAD]: ok("abc123\n"),
     [POST]: ok({ html_url: "https://github.com/acme/api/pull/7#pullrequestreview-1" }),
   });
-  expect(await postReview(run, input)).toEqual({
+  expect(await postReview(run, input, beforePost)).toEqual({
     kind: "posted",
     url: "https://github.com/acme/api/pull/7#pullrequestreview-1",
   });
   expect(posts(calls)).toBe(1);
+  expect(saved).toEqual([marker]);
   const sent = calls.find((call) => call.argv.join(" ").startsWith(POST));
   expect(JSON.parse(sent?.stdin ?? "{}").commit_id).toBe("abc123");
 });
 
 test("refuses to post when the author pushed since the review", async () => {
   const { run, calls } = fakeGh({ [REVIEWS]: ok([[]]), [HEAD]: ok("def456\n") });
-  expect(await postReview(run, input)).toEqual({ kind: "moved", head: "def456" });
+  expect(await postReview(run, input, beforePost)).toEqual({ kind: "moved", head: "def456" });
   expect(posts(calls)).toBe(0);
+  expect(saved).toEqual([]);
 });
 
 test("a retry after an uncertain failure finds the landed review instead of posting twice", async () => {
@@ -76,22 +85,74 @@ test("a retry after an uncertain failure finds the landed review instead of post
       return failed("connection reset");
     },
   });
-  expect(await postReview(run, input)).toEqual({ kind: "posted", url: "https://github.com/r/1" });
-  expect(await postReview(run, input)).toEqual({
+  expect(await postReview(run, input, beforePost)).toEqual({
+    kind: "posted",
+    url: "https://github.com/r/1",
+  });
+  expect(await postReview(run, input, beforePost)).toEqual({
     kind: "already-posted",
     url: "https://github.com/r/1",
   });
   expect(posts(calls)).toBe(1);
 });
 
-test("a failure that did not land reports GitHub's reason", async () => {
+test("a POST failure without a marker retains an uncertain outcome and GitHub's reason", async () => {
   const { run } = fakeGh({
     [REVIEWS]: ok([[]]),
     [HEAD]: ok("abc123\n"),
     [POST]: failed("Unprocessable Entity: line must be part of the diff\n"),
   });
-  expect(await postReview(run, input)).toEqual({
-    kind: "failed",
+  expect(await postReview(run, input, beforePost)).toEqual({
+    kind: "uncertain",
     message: "Unprocessable Entity: line must be part of the diff",
   });
+});
+
+for (const unreadable of ["markers", "head", "malformed-markers"]) {
+  test(`an unreadable ${unreadable} refuses before recording or posting a submission`, async () => {
+    const { run, calls } = fakeGh({
+      [REVIEWS]:
+        unreadable === "markers"
+          ? failed("offline")
+          : unreadable === "malformed-markers"
+            ? ok({})
+            : ok([[]]),
+      [HEAD]: unreadable === "head" ? failed("offline") : ok("abc123\n"),
+      [POST]: ok({ html_url: "https://github.com/r/1" }),
+    });
+    expect(await postReview(run, input, beforePost)).toMatchObject({
+      kind: "failed",
+      message: expect.stringContaining("Cannot read"),
+    });
+    expect(posts(calls)).toBe(0);
+    expect(saved).toEqual([]);
+  });
+}
+
+test("a lost response followed by unreadable markers is uncertain even though GitHub accepted the POST", async () => {
+  let landed = false;
+  const { run, calls } = fakeGh({
+    [REVIEWS]: () => (landed ? failed("offline") : ok([[]])),
+    [HEAD]: ok("abc123\n"),
+    [POST]: () => {
+      expect(saved).toEqual([marker]);
+      landed = true;
+      throw new Error("response lost");
+    },
+  });
+  expect(await postReview(run, input, beforePost)).toMatchObject({
+    kind: "uncertain",
+    message: expect.stringContaining("Cannot read GitHub review markers"),
+  });
+  expect(posts(calls)).toBe(1);
+});
+
+test("a failed submission save prevents the posting effect", async () => {
+  const { run, calls } = fakeGh({ [REVIEWS]: ok([[]]), [HEAD]: ok("abc123\n") });
+  await expect(
+    postReview(run, input, async () => {
+      throw new Error("disk full");
+    }),
+  ).rejects.toThrow("disk full");
+  expect(posts(calls)).toBe(0);
 });

@@ -1,5 +1,10 @@
 import type { PrReviewRound, PrReviewState } from "./state.ts";
 
+/** An uncertain submission needs the user's inspection and explicit choice before another POST. */
+export function uncertainPostMessage(prUrl: string, detail?: string): string {
+  return `GitHub may or may not have received this review; check the PR: ${prUrl}. Ask Tandem to post the saved review again (which may duplicate it), or mark it as posted with the review link you checked. Both require your confirmation.${detail === undefined ? "" : ` ${detail}`}`;
+}
+
 /** Small reviews read fine in chat; anything with a tour or many comments gets the page. */
 export function wantsPage(round: PrReviewRound): boolean {
   return round.review.tour.length > 0 || round.review.comments.length > 5;
@@ -14,6 +19,7 @@ export function renderReviewText(state: PrReviewState, round: PrReviewRound): st
     "What it does and why",
     review.intent,
   ];
+  if (round.pendingPost !== undefined) lines.unshift(uncertainPostMessage(state.url), "");
   if (review.verdict !== undefined) lines.push("", `Verdict: ${review.verdict}`);
   if (review.tour.length > 0) {
     lines.push("", "Code tour");

@@ -191,7 +191,14 @@ user text is one argv element, including spaces and newlines.
 `review-submit` uses the existing `ReviewSubmission` object from `src/pr-review/page.ts`:
 `tandemPrReview: 1`, `verdict: "comment" | "approve" | "request-changes"`, `summary`,
 `drafts: [{ id, decision: "post" | "drop" | "undecided", body? }]`, and
-`yours: [{ file, line, body }]`. The CLI reuses the pinned-HEAD and no-double-post checks of
+`yours: [{ file, line, body }]`, plus required native fields `reviewHead` and `reviewGeneration`.
+Copy those two fields from the displayed `PrPaneView.review.head` and `.generation`; generation
+is a nonnegative safe integer, including zero. Keep the bindings frozen with the user's choices.
+Missing/invalid bindings are refused. The service checks both against the latest authoritative
+round and checks the re-review task generation inside submission serialization before applying choices or
+posting, so stale pane choices cannot become a review of a newer round even when draft ids repeat.
+Question follow-ups retain their finished review round and its binding. The HTML page's
+`ReviewSubmission` shape stays unchanged. The CLI reuses the pinned-HEAD and no-double-post checks of
 the review page; the renderer does not publish directly.
 
 `restart` names the task and goes through central recovery. `steer` requires `--task TASK_ID` and
