@@ -47,6 +47,19 @@ of abstraction per function, reuse before adding, plain names, comments that exp
 **reviewers grade against the identical text**. A project that has its own conventions can turn these
 off with `standards = "none"`.
 
+### Quick tasks
+
+Some changes need no planning: a label, a typo, a flag. Choose **Tandem: Quick task…** in Tern's
+command palette, or run `tandem quick "Rename the Save button to Save draft"` in the project, and
+**what you type is the approved scope**. There is no interview and no brief, and no model ever
+decides on its own that something is quick; only you do. The task still gets your project's
+checks, an independent review and a draft PR, and nothing is published until you say so.
+
+If the worker finds the change is bigger than it looked, it stops before touching anything and
+asks once: **Proceed**, **Convert to request** (back to the usual interview, starting from what it
+found) or **Cancel**. Quick tasks carry a `QUICK` badge in the panel and board, and their task
+page and pull request quote what you approved.
+
 ### Playbooks
 
 Every coding task follows a playbook for its kind of work, so **good practice happens by default on
@@ -180,6 +193,8 @@ palette. Setup preserves custom keys; use the palette if a shortcut is already a
   **Tandem: Open task…** in the command palette and search by title, id or stage. The task page
   shows its to-dos, brief, progress, diff, PR and cost. Send the worker guidance from the page,
   or restart a stuck task. Click **← Orchestrator** to return to the conversation.
+- **Quick task:** choose **Tandem: Quick task…** in the command palette, describe a small change
+  in a sentence or two and press **Start** or `Cmd+Enter`. `Esc` closes it.
 - **Board:** use the panel's Board button, choose **Tandem: Toggle board** in Tern's command
   palette, or press `Cmd+Shift+B` if setup installed it. Working, Needs you, In review and
   Ready to merge lanes show each task's branch, model, cost and PR link.
@@ -308,6 +323,7 @@ folder reopens Tandem's chat and every saved project with its previous chat.
 | `tandem report` | A page in Lavish showing where each task's time and money went and what held it up (`--since DATE` to narrow it) |
 | `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
 | `tandem memory [NAME]` | This project's workstreams; with a name, its catch-up and where its notes file is |
+| `tandem quick TEXT` | Start a quick task in this project: your text is the approved scope, with no interview (needs the project's chat open) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Clean up leftovers from a crash or failed launch, including paused Tern views and panes Tandem stopped touching (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |

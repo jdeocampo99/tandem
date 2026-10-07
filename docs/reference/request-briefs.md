@@ -54,6 +54,9 @@ src/native/actions.ts, tern-plugin/brief.luau
   and approval are refused, and its owned review pane is retired. The record and history stay.
 - Brief approval is agreement only; scope approval, publish, merge, deploy, and destructive actions
   stay separate.
+- A [quick task](task-lifecycle.md#quick-tasks) has no brief: its approval is recorded on the task
+  itself (`quick`), and it never joins the project's open request. Converting one to a request
+  hands its words to the coordinator, which starts a brief the usual way.
 
 ## Review pane
 

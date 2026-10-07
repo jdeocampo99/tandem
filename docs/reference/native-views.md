@@ -50,7 +50,7 @@ dependency, so these tests never skip.
 | View file envelope and models | `ViewFile` and `VIEW_MODELS`; written only by `publishViews` in `store.ts` | `rt.watch` checks the envelope; screens read model fields by name | `tests/native/render.test.ts` (T1): every view the store writes draws through its real screen, and a model that cannot draw keeps the last good one. `tests/native/store.test.ts`: undrawable models are refused and `seq` is committed before a file carries it |
 | Block arguments | `blockArgs` and `parseBlockArgs` | `rt.origin(args)` keeps `args[2]` opaque; screens watch `args[1]` and `args[3]` | `tests/native/actions.test.ts`: an echoed context that `blockArgs` did not write is refused. The parity harness sends every click through the real `tandem native act` |
 | Action input and outcome | `ActionEnvelope`, `Outcome` and `NOTICE_CODES` | `rt.act` builds one table per verb and toasts by `notice.code` | `tests/native/actions.test.ts` (T2): every click in every rendered view sends an envelope the contract accepts |
-| Block and link names | `VIEW_KINDS`, `LINK_KINDS` and `nativeLink` | `host.luau` registrations, `plugin.toml` blocks and the `window.luau` link pattern | `tests/native/routes.test.ts` (T3): manifest, registrations and `VIEW_KINDS` name the same views, and every `nativeLink` output routes to an accepted `open` |
+| Block and link names | `VIEW_KINDS`, `LINK_KINDS`, `nativeLink` and `nativeAnswerLink` | `host.luau` registrations, `plugin.toml` blocks and the `window.luau` link pattern | `tests/native/routes.test.ts` (T3): manifest, registrations and `VIEW_KINDS` name the same views, and every `nativeLink` output routes to an accepted `open`, every `nativeAnswerLink` to an accepted `quick-answer` |
 | Open ticket and receipt | `Ticket` and `Receipt`; lifecycle in `host.ts` | `layout.luau` reads ticket fields by name and writes the receipt | `tests/native/layout.test.ts` (T4): `layout.luau` runs TypeScript-built tickets and `decide()` gives every receipt the table's answer. `tests/native/decide.test.ts` covers the state machine |
 
 `tests/evals/tern-parity.test.ts` drives every view through the real screens, with
@@ -73,8 +73,10 @@ with the same basename have different directories. The directory holds:
 - `views/index.json`, the index every screen without a detail file watches
   (`viewIndexPath(home, canonicalRepoPath)`).
 - `views/task-<encodedTaskId>.json`, `views/brief-<encodedRequestId>.json`,
-  `views/pr-<encodedOwnerRepo>-<number>.json` and `views/setup-<mode>.json`, the detail files
-  (`viewDetailPath(home, canonicalRepoPath, detailFile)`). Identifiers use `encodeURIComponent`,
+  `views/pr-<encodedOwnerRepo>-<number>.json`, `views/setup-<mode>.json` and
+  `views/quick-task-composer.json` (`QUICK_TASK_FILE`), the detail files
+  (`viewDetailPath(home, canonicalRepoPath, detailFile)`). Setup and composer files are written on
+  their own and never pruned by a full publication. Identifiers use `encodeURIComponent`,
   so each filename is one path segment. PR filenames include the repository.
 - `state.json`: the store's `epoch` and `seq`, the alert cursors (`board/native-alerts.ts`), the
   visit record (`memory/native-visits.ts`) and `published`, what the last full publication showed.
@@ -142,11 +144,12 @@ read never means zero usage or passing CI.
 Every file in `views/` is one `ViewFile` (`src/native/contract.ts`):
 
 ```ts
-{ v: 1, kind: "index" | "task" | "brief" | "pr" | "setup", epoch: string, seq: number, model: Model }
+{ v: 1, kind: "index" | "task" | "brief" | "pr" | "setup" | "quick-task", epoch: string, seq: number, model: Model }
 ```
 
-The index has `kind:"index"` and `model:NativeViews`. Detail kinds are `task`, `brief`, `pr` and
-`setup`, with `model:TaskPageView`, `model:BriefView`, `model:PrPaneView` and `model:SetupView`.
+The index has `kind:"index"` and `model:NativeViews`. Detail kinds are `task`, `brief`, `pr`,
+`setup` and `quick-task`, with `model:TaskPageView`, `model:BriefView`, `model:PrPaneView`,
+`model:SetupView` and `model:QuickTaskView`.
 `VIEW_MODELS` holds one zod
 schema per kind, covering what the screens draw. `publishViews` refuses a model that fails it
 before writing anything. Luau JSON reads `null` as absent, so optional fields accept either. A
@@ -246,10 +249,11 @@ interpolated into a shell command, and no input file is written.
 recorded coordinator session must list the pane. It then dispatches its verb table to the
 existing services and prints the outcome. The verbs are `open`, `open-project`, `project`,
 `visit`, `restart`, `steer`, `brief-approve`, `brief-request-changes`, `pr-comment`,
-`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link` and
-`setup-save`. `open` takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`,
-`orchestrator`, `inbox`, `task-picker`, `new-request` or `{kind:"setup", mode:"setup"|"settings"}`
-with an optional `section` (`models`, `repositories` or `bug-reports`).
+`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link`,
+`setup-save`, `quick-start` and `quick-answer`. `open` takes a `ref` naming a task, brief, PR,
+`board`, `usage`, `prs`, `orchestrator`, `inbox`, `task-picker`, `new-request`, `quick-task` or
+`{kind:"setup", mode:"setup"|"settings"}` with an optional `section` (`models`, `repositories` or
+`bug-reports`).
 
 `done` means the click did what it asked. `kept` means part of it did not happen, typically a
 view that could not be closed or proved, and the originating view stays. `refused` means Tandem
@@ -311,7 +315,10 @@ pinned-HEAD and no-double-post checks of the review page, and the renderer does 
 directly.
 
 `restart` names the task and goes through central recovery. `steer` names the task and carries
-the user's direction as `text`. Renderers only collect input and call `rt.act`.
+the user's direction as `text`. `quick-start` carries the composer's `text` exactly as typed (at
+most 16,000 characters on the wire; the CLI applies the quick task limits). `quick-answer`
+carries `taskId`, `questionId` and `choice` (`proceed`, `convert` or `cancel`) from an answer
+link. Renderers only collect input and call `rt.act`.
 
 ## No retries
 
@@ -422,6 +429,7 @@ block: Show PRs opens the project's first cached `tandem.pr` instead.
 | `tandem.welcome` | Root index (static welcome) | Beside the conversation |
 | `tandem.setup` | Setup detail, `setup-setup.json` | Beside the conversation |
 | `tandem.setup` (settings) | Setup detail, `setup-settings.json` | Own full-window tab |
+| `tandem.quick-task` | Composer detail, `quick-task-composer.json` | Beside the conversation |
 
 Task, brief and PR `views.open` calls keep their durable identifiers. Board, usage, PRs and
 catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same coordinator, home, cwd
@@ -490,8 +498,8 @@ ownership.
 
 ## Views
 
-The package registers Panel, Welcome, Task, Task picker, Brief, PR, Board, Usage, Catch-up and
-Setup.
+The package registers Panel, Welcome, Task, Task picker, Brief, PR, Board, Usage, Catch-up, Setup
+and Quick task.
 The authoritative, readonly TypeScript model schema is `NativeViews` in
 `src/board/native-views.ts`, with the domain schemas linked below. Every field is JSON, including
 timeline events and cost receipts. No Maps, Sets, undefined values, credential data, provider raw
@@ -611,6 +619,7 @@ NativePanelRow = {
   stage: string, time?: string, model?: string, detail: string, secondary: string,
   target: {kind:"task",taskId:string} | {kind:"brief",requestId:string} |
           {kind:"pr",repo:string,number:number} | {kind:"none"},
+  badge?: "QUICK", // the user started this task as a quick task
   pullRequest?: {repo:string,number:number,url:string,draft:boolean}
 }
 ```
@@ -705,6 +714,9 @@ file envelope.
   evidence.
 - `cost?`: `TaskCostView`, described under [usage](#usage).
 - `stuck?`: `{reason,actions:["restart","steer"]}` only for blocked tasks.
+- `scope?`: `{label,text,note?}` only for a [quick task](task-lifecycle.md#quick-tasks): the
+  heading `Approved scope (quick task, HH:MM)`, the user's text verbatim, and a note when they chose
+  Proceed on its scope question. The page shows it below the header.
 - `message`: `{placeholder,model?}`. Actions go through normal task controls and central recovery.
 
 ### Task picker
@@ -727,6 +739,11 @@ mode. Herdr output and model reply text stay unchanged. `nativeLink` writes
 `tandem://task/ID`, `tandem://brief/ID` and `tandem://pr/NUMBER`. `window.luau`'s link route turns
 each into an `open` from the focused pane and cwd, and the CLI rechecks project and ownership at
 click time.
+
+When the reply names a task whose open question is a quick task's scope question, the row also
+carries its three answers, `Proceed`, `Convert to request` and `Cancel`, written by
+`nativeAnswerLink` as `tandem://answer/TASK/QUESTION/CHOICE`. The link route sends `quick-answer`
+from the focused pane; the CLI answers only while that exact question is still asked.
 
 ### Brief pane
 
@@ -981,6 +998,24 @@ actions:["open-needs-you","dismiss"]}`. Project merges include tasks without a w
 `shouldAutoShowCatchUp({now,lastVisibleAt?,previousSignature?,currentSignature})` returns true
 only at **1+ hour** since last visibility, with a known baseline and signature and a different
 meaningful signature. Invalid dates, repaint and timer changes, and unchanged work stay quiet.
+
+### Quick task composer
+
+"Tandem: Quick task…" in the palette sends `open` with `ref:{kind:"quick-task"}`. The CLI proves
+the running Tern coordinator, publishes `QuickTaskView` (`src/tasks/quick.ts`) as
+`quick-task-composer.json` under the project lock, and opens `tandem.quick-task` beside the
+conversation, reusing an open one. The model names the project (`repo`), the branch its pull
+request targets (`origin/HEAD` of the coordinator checkout, or "default branch" when unreadable),
+the placeholder `Describe the change` and the text limits.
+
+The block shows "Small, well-defined changes. No interview.", one multi-line field, the
+`<repo> · <branch>` chip and `Start  ⌘↵`. The chip only displays: the project is the one the
+origin proves, and starting in another project means opening its coordinator first. Start is
+disabled until the text has at least the model's characters and words; ⌘↵ or the button sends
+`quick-start` with the text, Enter adds a line and Escape or × closes the block. A refused start
+keeps the text and toasts the reason under "Quick task didn't start"; a started one closes the
+block. The text is transient and never saved. No shortcut is bound: Tandem's shortcuts are added
+only once, at the user's consent, and a new one would reach only new consents.
 
 ### Setup and settings
 

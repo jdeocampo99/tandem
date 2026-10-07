@@ -68,6 +68,9 @@ src/terminal/cli-arguments.ts, src/cli.ts
 - Product choices, ambiguous evidence, scope changes, credentials, and approval-bearing,
   destructive, publishing, merging, or deployment decisions stay with the user. The coordinator
   never infers consent.
+- A quick task's scope question takes only `Proceed`, `Convert to request` or `Cancel`, always the
+  user's own choice, from chat or its answer links; anything else is refused and the question stays
+  open. See [quick tasks](task-lifecycle.md#quick-tasks) for what each does.
 
 ## Message receipts
 
@@ -124,6 +127,9 @@ lives in `approvalPrompt` in src/session/actions.ts.
   `pr draft`, `pr publish`, `pr merge`/`merge`, and `cleanup --discard`. Safe cleanup does not.
 - `steer`, `answer`, and `messages` are not approval-bearing and get no extra consent prompt. All
   approval, exact-HEAD, publish, merge, and destructive-cleanup safeguards still apply.
+- `tandem quick TEXT` (the front door, not the advanced CLI) takes no `--yes`: typing the command
+  with its text is the user's approval of that text, like Start in the composer. It refuses a
+  shell inside a Tandem worker and needs the project's coordinator running.
 - Parsing never executes or mutates anything; approval checks run after it. `--supersedes` is a
   CLI-only convenience.
 - Plain output is a summary; `--json` prints the raw value with no `.value` wrapper. `watch`
@@ -149,7 +155,8 @@ The outcome's `status` is `done` (the click did what it asked), `kept` (part of 
 happen and the originating view stays) or `refused` (Tandem refused it or it failed; nothing to
 undo). An optional `notice: {code, text}` explains it. The closed codes are `failed`,
 `view-kept`, `catch-up-unavailable`, `brief-warning`, `brief-left-open`, `review-posted`,
-`review-unconfirmed` and `feedback-saved`; `rt.luau` maps each to one toast title. No action is
+`review-unconfirmed`, `feedback-saved`, `setup-incomplete` and `quick-warning`; `rt.luau` maps
+each to one toast title. No action is
 retried, and a `kept` outcome never invites a repeat.
 
 `src/native/actions.ts` dispatches one handler per verb:
@@ -207,6 +214,15 @@ retried, and a `kept` outcome never invites a repeat.
   submissions never choose either path. See [uncertain review recovery](pr-review.md#recovering-an-uncertain-post).
 - `catchup-dismiss` and `catchup-open-needs` leave the catch-up view; `board-link {cardKey}` and
   `merged-link {url}` open only PR URLs the project published.
+- `open {ref:{kind:"quick-task"}}` opens the quick task composer. `quick-start {text}` is its
+  Start: the proved click is the user's approval of exactly that text, like `brief-approve`, so it
+  takes no second confirmation. It checks the text without a model, proves the project's
+  coordinator, starts the task through the same code as `tandem quick`, and tells the coordinator
+  in fixed words; if that last step fails the outcome is `done` with `quick-warning`, never an
+  invitation to start again. `quick-answer {taskId, questionId, choice}` answers a quick task's
+  open scope question with `proceed`, `convert` or `cancel` through the ordinary `answer` path,
+  only for a task in the selected project and only while that question is still asked. See
+  [quick tasks](task-lifecycle.md#quick-tasks).
 - The native action namespace does not expose publication or merge commands. Publishing, merging,
   deployment, and destructive operations retain their separate conversation approvals.
 

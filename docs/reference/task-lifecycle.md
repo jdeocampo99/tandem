@@ -2,7 +2,7 @@
 
 Task stages, approvals, fix rounds, post-research continuation, child terminals, and Herdr status.
 
-Code: src/tasks/lifecycle.ts, src/tasks/required-stages.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
+Code: src/tasks/lifecycle.ts, src/tasks/required-stages.ts, src/tasks/quick.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
 src/tasks/trace.ts, src/tasks/research-continuation.ts,
 src/tasks/research-continuation-classifier.ts, src/session/research-follow-up.ts,
 src/service/source.ts, src/terminal-backend/herdr/, src/session/worker.ts, src/session/worker-steering.ts,
@@ -21,11 +21,66 @@ src/harness/omp/terminal-extension.ts
   with `scopeApproved: false`; only an explicit `approve` approves it. If scout delegation is
   blocked, the coordinator discloses the blocker; direct research needs explicit user authorization.
 
+- A [quick task](#quick-tasks) is the one implementation that starts approved: the user's own
+  Start click or `tandem quick` command is its approval.
 - The CLI's `create --input` file has exactly `repoPath`, `kind`, `objective`,
   `acceptanceCriteria`, and `surfaces`.
 - Ordinary worker briefs fail closed above 64 KiB of UTF-8 (`MAX_ORDINARY_BRIEF_BYTES` in
   src/instructions.ts) with an error asking to shorten them; they are never silently truncated.
   A draw brief keeps its own 32,000-character bound.
+
+## Quick tasks
+
+A fast lane for a clear, small change, with no interview and no brief. **No model ever decides
+that a request is quick. Only the user does, through the quick task composer or `tandem quick`.**
+Code: src/tasks/quick.ts (pure decisions), `startQuickTask` in src/service/controller.ts and
+src/service/quick-start.ts (the one start path both entry points share).
+
+- **Entry points.** The palette's "Tandem: Quick task…" opens the native composer
+  ([native-views.md](native-views.md#quick-task-composer)); its Start sends `quick-start` through
+  the click transport, whose origin proof names the project. `tandem quick TEXT` does the same from
+  a shell inside the project; it needs that project's coordinator running and refuses a shell that
+  carries a worker's `TANDEM_WORKER_JOB_PATH`. The coordinator's `tandem` tool has no action that
+  reaches either, so a model cannot start or approve a quick task.
+- **Checks, without a model.** `checkQuickText` trims the text and refuses fewer than 15
+  characters or 3 words with "Describe the change in a sentence or two.", and more than 4,000
+  characters as a request. The composer mirrors the same limits to keep Start disabled.
+- **Approval provenance.** The task records `quick: {kind: "quick-task", text, textDigest,
+  approvedAt, via: "native" | "cli"}`: the typed text verbatim, its sha256, when, and how. The
+  store refuses a record whose digest does not match its text, and only implementation tasks may
+  carry it. The approval is task-level rather than a request brief: a brief needs a model-written
+  summary, joins plain-language checks, and waits in Needs you for its own approval, none of which
+  a quick task has. The timeline records `quick-approved` (with `via` and `textDigest`) in the
+  creating write.
+- **Task.** `objective` is the text, `title` its first line cut to 60 characters, no acceptance
+  criteria, surfaces `*` (every pinned validation command applies) and no request: a quick task
+  never joins the project's open request. It is created through the ordinary `create` path and
+  approved through the ordinary `approve` path, so source checks, dispatch, [required
+  stages](#required-stages), validation, review, the draft PR and the user's approval before
+  publishing are unchanged. The playbook classifier still picks its playbook.
+- **The coordinator** gets one fixed chat message: `Quick task started` / `<task id> · <title>` /
+  `Scope approved <HH:MM>`. If it cannot be told, the task still runs and the outcome says so.
+- **One scope question.** The implementer's brief says the objective is the user's approved words
+  and that, before changing any file, it may stop once when the request clearly exceeds a small
+  change (many files across areas, or an open design decision). It submits `needs-decision` with
+  `scopeExceeded: {files, areas, decision?, plan}` and no question text; Tandem renders the
+  question (`quickScopeLines`):
+  `<task id> · Scope exceeds quick task` / `Affects <N> files across <areas>.` /
+  `Open decision: <decision>.` (only when given) / `No changes made.` / `Proposed: <plan>.`
+  The report is rejected while the worktree has changes. The job carries `quickScope:
+  "may-ask" | "spent"`; once asked, `quick.scopeQuestionId` is recorded and a second
+  `scopeExceeded` is refused at the worker and, if one arrives anyway, stored as an ordinary
+  question. The task blocks with the question, so it is a Needs you question that notifies, not a
+  silent block.
+- **Answers.** Only `Proceed`, `Convert to request` or `Cancel` (labels or `proceed`, `convert`,
+  `cancel`) are accepted, through the ordinary `answer` path or the chat's answer links:
+  - Proceed records `quick.scopeExtendedAt` (timeline `quick-scope-extended`), answers the worker
+    with a fixed instruction to go ahead and not ask again, and resumes it. The review brief,
+    task page and PR body show the stretched scope.
+  - Convert to request clears the question, gives the coordinator a notification with the user's
+    words and the worker's findings, and cancels the task through the ordinary cancel path. The
+    coordinator then runs the usual research, interview and brief.
+  - Cancel clears the question and cancels the task through the ordinary cancel path.
 
 ## Stages
 
@@ -106,8 +161,9 @@ decides them; the lifecycle and the review stage read the record and never re-de
 - The task store derives events by comparing the record before and after each write
   (`timelineEventsForChange`): `created`, `stage-changed`, `blocked` (with the block kind) and
   `unblocked`, `fix-round`, `finding-raised` and `finding-settled`, `question-asked` and
-  `question-answered`, and `steered`. Central recovery adds `restarted` in the write that spends the
-  restart.
+  `question-answered`, `steered`, and for [quick tasks](#quick-tasks) `quick-approved` (in the
+  creating write) and `quick-scope-extended` (when the user answers Proceed). Central recovery adds
+  `restarted` in the write that spends the restart.
 - `admission-waiting` records why a queued task was not admitted, with a closed `reason`
   (`ADMISSION_WAIT_REASONS`): `worktree-disk-space` (pool free space below the minimum for a new
   worktree), `worktree-capacity-unknown` (free space could not be checked, or pool maintenance

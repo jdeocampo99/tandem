@@ -109,6 +109,10 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   `unknown-impact`. Outside a focused fix round, anything but `contained` requires reading the cumulative diff and callers in full.
 - `REVIEW_BRIEF_LIMITS` bounds the brief. Blocker identities and status are never elided; any elision
   is stated with a pointer to the durable record.
+- A [quick task](task-lifecycle.md#quick-tasks)'s approved scope carries an `approval:` line: the
+  objective is the user's own text, approved as typed (time and digest), and, after Proceed, that
+  the user approved work beyond a small change along the plan in its scope question, which "User
+  decisions" also shows.
 - "User decisions" pairs earlier worker questions with the user's answers. `appendAnswer` clears
   `task.communication.question`, so the question survives as an acknowledged, non-surfacing
   notification under the id the answer's `replyTo` names. A listed decision is settled, and a
