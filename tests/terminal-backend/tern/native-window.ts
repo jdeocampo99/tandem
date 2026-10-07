@@ -143,6 +143,87 @@ export function setupRunner(run: CommandRunner, log: string): CommandRunner {
   };
 }
 
+export type TernWindowLaunch = Readonly<{
+  binary: string;
+  control: string;
+  /** Window arguments after `--control <socket>`, such as `--dir` and `--out`. */
+  args: readonly string[];
+  /** The isolated environment; its `TERN_CONFIG_DIR` holds the window's settings. */
+  env: Readonly<Record<string, string | undefined>>;
+  cwd: string;
+  /** Where the window's stderr goes; discarded when absent. */
+  log?: string;
+}>;
+
+/**
+ * Starts an isolated control window, waits for its control socket and signs it in to Tern's
+ * closed-beta gate, which otherwise covers every pane and plugin view. Auto update is switched off
+ * in the window's settings first because Tern's update check, about 20 s after launch, signs the
+ * stand-in account back out. The window runs Tern.app's own binary: one started through a PATH
+ * symlink never answers `ctl account`.
+ *
+ * Tern runs plugin timers on the window's frames, and macOS stops drawing a window that is hidden
+ * or covered, as a test window usually is while someone works. Tandem's staged opens advance one
+ * timer at a time, so they stall there. Every control command wakes the window, so the window is
+ * asked for its stats until it exits.
+ */
+export async function launchTernWindow(launch: TernWindowLaunch): Promise<Bun.Subprocess> {
+  const config = launch.env.TERN_CONFIG_DIR;
+  if (config === undefined) throw new Error("an isolated Tern window needs TERN_CONFIG_DIR");
+  await mkdir(config, { recursive: true });
+  const path = join(config, "settings.json");
+  const text = await readFile(path, "utf8").catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "{}";
+    throw error;
+  });
+  const settings = z.record(z.string(), z.unknown()).parse(JSON.parse(text));
+  await writeFile(path, JSON.stringify({ ...settings, auto_update: false }));
+  const binary = await realpath(launch.binary);
+  const window = Bun.spawn([binary, "--control", launch.control, ...launch.args], {
+    env: launch.env,
+    cwd: launch.cwd,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: launch.log === undefined ? "ignore" : Bun.file(launch.log),
+  });
+  const ctl = async (...args: string[]) => {
+    const child = Bun.spawn([binary, "ctl", "--control", launch.control, ...args], {
+      env: launch.env,
+      cwd: launch.cwd,
+      stdout: "ignore",
+      stderr: "pipe",
+      timeout: 15_000,
+    });
+    const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    return { code, stderr };
+  };
+  const deadline = Date.now() + 20_000;
+  while ((await ctl("state")).code !== 0) {
+    if (window.exitCode !== null || Date.now() > deadline) {
+      window.kill("SIGKILL");
+      throw new Error(`Tern window on ${launch.control} did not start`);
+    }
+    await Bun.sleep(100);
+  }
+  const signIn = await ctl("account", "signed-in");
+  if (signIn.code !== 0) {
+    window.kill("SIGKILL");
+    throw new Error(`tern ctl account signed-in: ${signIn.stderr}`);
+  }
+  void (async () => {
+    // Teardown may remove the window's root before it exits, and then no command can start.
+    while (
+      window.exitCode === null &&
+      (await ctl("stats").then(
+        () => true,
+        () => false,
+      ))
+    )
+      await Bun.sleep(10);
+  })();
+  return window;
+}
+
 /**
  * Starts an isolated Tern daemon and control window with a private config dir, plugin copy and
  * Tandem home, runs `body`, then quits the window and stops the daemon, also on failure.
@@ -291,17 +372,14 @@ export async function withTernWindow(
       async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
     );
     await tern("plugin", "link", plugin, "--json");
-    window = Bun.spawn([binary, "--control", control, "--dir", root, "--out", shots], {
+    window = await launchTernWindow({
+      binary,
+      control,
+      args: ["--dir", root, "--out", shots],
       env,
       cwd: root,
-      stdout: "ignore",
-      stderr: Bun.file(join(root, "window.log")),
+      log: join(root, "window.log"),
     });
-    await until("Tern window", async () => {
-      await ctl("state");
-      return true;
-    });
-    await ctl("account", "signed-in");
     const [width, height] = options.size ?? [1500, 950];
     await ctl("size", String(width), String(height));
     // Known product gap: `ctl state` answers before the plugin host is ready, and a route opened

@@ -7,7 +7,7 @@ import {
   configureTernPluginSettings,
   restoreTernPluginSettings,
 } from "../../../src/terminal-backend/tern/plugin.ts";
-import { recordedActions, recordingCli } from "./native-window.ts";
+import { launchTernWindow, recordedActions, recordingCli } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -57,7 +57,8 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       `${await readFile(join(plugin, "window.luau"), "utf8")}\ntern.on("window_start", function()\n tern.timer(50, function(cx)\n  if not cx then return end\n  tern.fs.write("${join(root, "schema.json")}", tern.json.encode({description=cx.settings:describe("keymap"), keymap=cx.settings:get("keymap")}))\n end)\nend)\n`,
     );
     const prefs = join(config, "settings.json");
-    const original = '{"keybinds":{"cmd+shift+b":"palette"}}';
+    // Starting a test window turns auto update off in these settings, so the user's own carry it.
+    const original = '{"keybinds":{"cmd+shift+b":"palette"},"auto_update":false}';
     await writeFile(prefs, original);
     await configureTernPluginSettings({ path: prefs, approved: false });
     const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
@@ -66,7 +67,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       stdout: "ignore",
       stderr: "ignore",
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const run = async (...args: string[]) => {
       const child = Bun.spawn([binary, ...args], {
         env,
@@ -92,16 +93,15 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       }
     };
     const open = async () => {
-      window = Bun.spawn([binary, "--control", control, "--dir", root], {
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root],
         env,
         cwd: root,
-        stdout: "ignore",
-        stderr: Bun.file(join(root, "window.log")),
+        log: join(root, "window.log"),
       });
-      await until(async () => {
-        await run("ctl", "--control", control, "state");
-        return await Bun.file(join(root, "schema.json")).exists();
-      });
+      await until(() => Bun.file(join(root, "schema.json")).exists());
       await Bun.sleep(300);
     };
     const close = async () => {

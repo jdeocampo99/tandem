@@ -14,6 +14,7 @@ import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks } from "../../../src/terminal-backend/tern/protocol.ts";
 import { openFiles, publishFixture } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { launchTernWindow } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -105,26 +106,20 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(
         async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
       );
       await checked([binary, "plugin", "link", join(checkout, "tern-plugin"), "--json"]);
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        {
-          cwd: root,
-          env,
-          stdout: "ignore",
-          stderr: Bun.file(join(root, "window.log")),
-        },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
       const repos: string[] = [];
       for (const name of ["repo-a", "repo-b", "repo-c"]) {
         const repo = join(root, name);

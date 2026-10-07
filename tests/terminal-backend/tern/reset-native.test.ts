@@ -12,6 +12,7 @@ import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, Processes } from "../../../src/terminal-backend/tern/protocol.ts";
 import { publishFixture } from "../../native/view-files.ts";
 import { viewsOf } from "../views.ts";
+import { launchTernWindow } from "./native-window.ts";
 
 const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (native ? test : test.skip)(
@@ -85,7 +86,6 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
     };
     const ctl = (...args: string[]) => checked([binary, "ctl", "--control", control, ...args]);
     const shot = async (name: string) => {
-      await ctl("account", "signed-in");
       await Bun.sleep(300);
       await ctl("shot", name);
     };
@@ -138,21 +138,20 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(
         async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
       );
       await checked([binary, "plugin", "link", join(checkout, "tern-plugin"), "--json"]);
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        { cwd: root, env, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
       const terminal = ternBackend(run, { home, environment: env });
       const commands = ternCli(run, { environment: env });
       // Reproduce B independently of any native views: exec between Tern's process

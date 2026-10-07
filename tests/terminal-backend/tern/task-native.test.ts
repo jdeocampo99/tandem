@@ -12,7 +12,7 @@ import { blocks, Created, decode } from "../../../src/terminal-backend/tern/prot
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { openFiles } from "../../native/view-files.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
-import { recordedActions, recordingCli } from "./native-window.ts";
+import { launchTernWindow, recordedActions, recordingCli } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -96,7 +96,7 @@ type ControlNode = {
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const ctl = (...args: string[]) => run("ctl", "--control", control, ...args);
     const tree = async () => JSON.parse(await ctl("tree")) as { tree: ControlNode[] };
     const nodes = (rows: ControlNode[]): ControlNode[] =>
@@ -128,15 +128,13 @@ type ControlNode = {
         role: "coordinator",
         generation: 0,
       };
-      window = Bun.spawn([binary, "--control", control, "--out", root, "--dir", root], {
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--out", root, "--dir", root],
         env,
         cwd: root,
-        stdout: "ignore",
-        stderr: Bun.file(join(root, "window.log")),
-      });
-      await until(async () => {
-        await ctl("state");
-        return true;
+        log: join(root, "window.log"),
       });
       await ctl("size", "1500", "950");
       const commandRunner: CommandRunner = async (request) => {

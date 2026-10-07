@@ -105,7 +105,10 @@ export const Ticket = z
     session: PaneId,
     owner: TicketOwner,
     receipt: AbsolutePath,
+    /** The task block this open retires; it must be gone once the open settles. */
     replaced: PaneId.optional(),
+    /** The task block a return from the task picker focuses again and keeps. */
+    returnTo: PaneId.optional(),
     closeOrigin: PaneId.optional(),
     expiresAt: z.number().int().positive().optional(),
   })

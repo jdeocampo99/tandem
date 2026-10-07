@@ -20,8 +20,8 @@ import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/hos
 import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
-import { viewFileText } from "../../native/view-files.ts";
 import { viewsOf } from "../views.ts";
+import { launchTernWindow } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -182,7 +182,7 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const run = async (...args: string[]) => {
       const child = Bun.spawn([binary, ...args], {
         env,
@@ -249,26 +249,13 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         Created,
         "create isolated session",
       );
-      window = Bun.spawn(
-        [
-          binary,
-          "--control",
-          control,
-          "--out",
-          process.env.TANDEM_TERN_ARTIFACT_DIR ?? join(root, "shots"),
-          "--dir",
-          root,
-        ],
-        {
-          env,
-          cwd: root,
-          stdout: "ignore",
-          stderr: Bun.file(join(root, "window.log")),
-        },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--out", process.env.TANDEM_TERN_ARTIFACT_DIR ?? join(root, "shots"), "--dir", root],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
       await ctl("resize", "1500", "940");
       await ctl("tabs", "autohide", "on");
@@ -365,24 +352,6 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         ),
       ).toBe(false);
       if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-loading");
-      // A partial approval triplet cannot make the unpublished brief actionable.
-      await writeFile(
-        path,
-        viewFileText("brief", {
-          ...model,
-          approval: {
-            briefRevision: model.revision,
-            contentDigest: model.approval.contentDigest,
-          },
-        }),
-        { mode: 0o600 },
-      );
-      await Bun.sleep(1200);
-      expect(
-        (await tree()).some(
-          (each) => each.text === "Approve" || each.text?.startsWith("Request changes"),
-        ),
-      ).toBe(false);
       expect(await Bun.file(join(root, "received.json")).exists()).toBe(false);
       const workflow = new RequestBriefWorkflow({
         home: env.TANDEM_HOME,

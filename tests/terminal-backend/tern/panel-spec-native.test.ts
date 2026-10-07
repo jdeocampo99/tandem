@@ -18,7 +18,7 @@ import {
 import { state } from "../../board/fixtures.ts";
 import { publishFixture, republishIndex } from "../../native/view-files.ts";
 import { policy } from "../../session/fixtures.ts";
-import { recordedActions } from "./native-window.ts";
+import { launchTernWindow, recordedActions } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -111,7 +111,7 @@ const tree = z.object({ tree: z.array(node) });
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(
         async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
@@ -209,15 +209,14 @@ const tree = z.object({ tree: z.array(node) });
           warnings: [],
         });
       }
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", first.repo, "--out", join(root, "shots")],
-        { env, cwd: root, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", first.repo, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
       await Bun.sleep(500);
       const firstPanel = await terminal.openPanel({
         coordinator: first.endpoint,

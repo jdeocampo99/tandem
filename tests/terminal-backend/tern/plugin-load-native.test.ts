@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { publishFixture } from "../../native/view-files.ts";
+import { launchTernWindow } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -96,22 +97,21 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(async () => {
         await checked("ls", "--json");
         return true;
       });
       await checked("plugin", "link", plugin, "--json");
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        { cwd: root, env, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
       const samples: { host: number[]; window: number[] } = { host: [], window: [] };
       for (let sample = 0; sample < 50; sample++) {
         if (sample > 0) {
@@ -171,15 +171,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await ctl("quit");
       if (window.exitCode === null) window.kill();
       await window.exited;
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        { cwd: root, env, stdout: "ignore", stderr: Bun.file(join(root, "proof-window.log")) },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "proof-window.log"),
       });
-      await ctl("account", "signed-in");
       const terminal = ternBackend(run, { home, environment: env });
       const coordinator = (
         await terminal.createWorkspace({

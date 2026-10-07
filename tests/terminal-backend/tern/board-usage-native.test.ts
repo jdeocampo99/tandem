@@ -15,7 +15,7 @@ import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/
 import { publishFixture } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { viewsOf } from "../views.ts";
-import { recordedActions } from "./native-window.ts";
+import { launchTernWindow, recordedActions } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (enabled ? test : test.skip)(
@@ -59,7 +59,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       stdout: "ignore",
       stderr: "ignore",
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const runner: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
         env,
@@ -90,6 +90,9 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       }
     };
     const ctl = (...args: string[]) => run("ctl", "--control", control, ...args);
+    // The window records visits as panes gain focus; only the screens' own actions are counted.
+    const clicks = async () =>
+      (await recordedActions(log)).filter(({ action }) => action.verb !== "visit");
     try {
       await until(async () => {
         await run("ls", "--json");
@@ -134,26 +137,13 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         },
       });
       const origin = { paneId: coordinator.paneId, cwd: project };
-      window = Bun.spawn(
-        [
-          binary,
-          "--control",
-          control,
-          "--dir",
-          root,
-          "--out",
-          process.env.TANDEM_TERN_SHOTS ?? join(root, "shots"),
-        ],
-        {
-          env,
-          cwd: root,
-          stdout: "ignore",
-          stderr: Bun.file(join(root, "window.log")),
-        },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", process.env.TANDEM_TERN_SHOTS ?? join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
       // An open fired during the window's startup tick either opens or fails cleanly with
       // nothing changed; it never pauses the opens below.
@@ -225,10 +215,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           await writeFile(fail, "fail");
           await ctl("key", "escape");
           actionCount += 1;
-          await until(async () => (await recordedActions(log)).length === actionCount);
+          await until(async () => (await clicks()).length === actionCount);
           await until(async () => (await ctl("tree")).includes("isolated action failure"));
           await Bun.sleep(100);
-          expect((await recordedActions(log)).length).toBe(actionCount);
+          expect((await clicks()).length).toBe(actionCount);
           expect(
             blocks(decode(await run("ls", "--json"), Listing, "failed action")).some(
               (entry) => entry.block.id === viewPane,
@@ -246,7 +236,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         // A status-0 shell action exits its own block; the guarded backend return is proven separately.
         await ctl("key", "escape");
         actionCount += 1;
-        await until(async () => (await recordedActions(log)).length === actionCount);
+        await until(async () => (await clicks()).length === actionCount);
         await until(
           async () =>
             !blocks(decode(await run("ls", "--json"), Listing, "callback exit")).some(
@@ -347,7 +337,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         view: { kind: "browser", url: "https://example.invalid/pull/281" },
       });
       expect(browser.opened).toBe(true);
-      const actions = await recordedActions(log);
+      const actions = await clicks();
       expect(actions).toHaveLength(actionCount);
       for (const { origin } of actions)
         expect("ctx" in origin && parseBlockContext(origin.ctx)).toMatchObject({
