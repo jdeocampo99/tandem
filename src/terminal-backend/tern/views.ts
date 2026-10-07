@@ -241,7 +241,7 @@ export function ternViewHost(commands: TernCli) {
     scoped,
     proveView,
     isView: async (input: Parameters<ViewsCapability["isView"]>[0]) =>
-      proveView(input, await projectForView(input.home, input.coordinator)),
+      proveView(input, await projectForView(input.home, input.coordinator, input.cwd)),
     close,
     toggleBoard,
     closeView: async (input: Parameters<ViewsCapability["close"]>[0]) =>
