@@ -942,7 +942,8 @@ rule.
 `visit` with `event` `entry`, `away` or `visible` is the window's focus lifecycle, carrying the
 exact originating pane, cwd and window. `window.luau` queues focus departures and entries in FIFO
 order and sends a `visible` heartbeat every minute for the currently selected pane. Each
-continuation sends at most one queued job. The CLI proves the running coordinator and the
+continuation sends at most one queued job, and drops a job whose pane has closed since it was
+queued, such as a task page left by `← Orchestrator`. The CLI proves the running coordinator and the
 originating pane in its recorded Tern session before writing presentation state. TypeScript skips
 heartbeats unless the saved last-visible time advances by at least one minute, including across
 windows. Focus and away transitions can update sooner. Duplicate values skip the atomic write,

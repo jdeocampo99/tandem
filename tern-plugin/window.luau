@@ -90,12 +90,14 @@ local head, tail = 1, 0
 local function enqueue(origin: Origin, event: string)
  tail += 1; queue[tail] = {origin = origin, event = event}
 end
-local function drain(_cx: WindowCx)
+local function drain(cx: WindowCx)
  if busy or head > tail then return end
- busy = true
  local job = queue[head]
  queue[head] = nil; head += 1
  if head > tail then head, tail = 1, 0 end
+ -- A closed pane (a task page left by ← Orchestrator) can no longer prove its project.
+ if not cx.session:pane(job.origin.pane) then drain(cx); return end
+ busy = true
  -- A fresh origin per job: the transport's busy flag must not hold back the FIFO.
  local origin = {pane = job.origin.pane, cwd = job.origin.cwd, window = job.origin.window, busy = false}
  act(origin, {verb = "visit", event = job.event}, function(callbackCx)
