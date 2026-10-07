@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { maybeShowCatchUp } from "../../../src/memory/native-visits.ts";
 import { parseBlockContext } from "../../../src/native/contract.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
+import { recordVisit, viewIndexPath } from "../../../src/native/store.ts";
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
@@ -297,17 +297,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       const afterToggle = blocks(decode(await run("ls", "--json"), Listing, "toggle close"));
       expect(afterToggle.some((entry) => entry.block.id === toggled)).toBe(false);
       expect(afterToggle.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
-      await visitNativeProject(
-        {
-          home,
-          project,
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-          signature: "before-changes",
-        },
-        async () => {
+      await recordVisit(home, project, {
+        kind: "entry",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        signature: "before-changes",
+        showCatchUp: async () => {
           throw new Error("First visit cannot show catch-up");
         },
-      );
+      });
       expect(
         await maybeShowCatchUp(backend, {
           home,

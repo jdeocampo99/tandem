@@ -3,14 +3,13 @@ import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { NativeAlerts, nativeAlertCounts } from "../../../src/board/native-alerts.ts";
+import { NativeAlerts } from "../../../src/board/native-alerts.ts";
 import { boardView } from "../../../src/board/view.ts";
 import { repositoryKey } from "../../../src/config/repositories.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
+import { nativeAlertCounts, recordVisit, viewIndexPath } from "../../../src/native/store.ts";
 import { createTaskStore } from "../../../src/tasks/store.ts";
 import {
   ternBackend,
@@ -392,15 +391,12 @@ const tree = z.object({ tree: z.array(node) });
         }),
       ).toBe(true);
       // The production catch-up boundary preserves entry and surfaces a warning in the native panel.
-      await visitNativeProject(
-        {
-          home,
-          project: tenth.repo,
-          signature: "before",
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-        },
-        async () => {},
-      );
+      await recordVisit(home, tenth.repo, {
+        kind: "entry",
+        signature: "before",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        showCatchUp: async () => {},
+      });
       const visitPath = join(home, "native-visits", `${repositoryKey(tenth.repo)}.json`);
       const visit = await readFile(visitPath, "utf8");
       const destinationPath = viewIndexPath(home, tenth.repo);

@@ -9,8 +9,7 @@ import { saveProjectRoots } from "../../../src/config/home-settings.ts";
 import { centralConfigPath, onboardRepo } from "../../../src/config/repositories.ts";
 import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { publishViews } from "../../../src/native/store.ts";
+import { publishViews, recordVisit } from "../../../src/native/store.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import {
   readRuntimeState,
@@ -784,17 +783,14 @@ workflow(
         reported = latest;
         return settled;
       });
-      await visitNativeProject(
-        {
-          home: window.home,
-          project: project.repo,
-          now: new Date(Date.now() - 2 * 3_600_000).toISOString(),
-          signature: "before-you-left",
-        },
-        async () => {
+      await recordVisit(window.home, project.repo, {
+        kind: "entry",
+        now: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+        signature: "before-you-left",
+        showCatchUp: async () => {
           throw new Error("The earlier visit cannot show catch-up");
         },
-      );
+      });
       await focusConversation();
       // Entering the project is the only trigger; the catch-up must appear on its own.
       await escapeFullWindowView(

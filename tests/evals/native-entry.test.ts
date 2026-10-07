@@ -2,18 +2,22 @@ import { expect, test } from "bun:test";
 import { lstat, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { NativeAlerts, nativeAlertCounts } from "../../src/board/native-alerts.ts";
+import { NativeAlerts } from "../../src/board/native-alerts.ts";
 import { boardView } from "../../src/board/view.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
-import { visitNativeProject } from "../../src/memory/native-visits.ts";
 import { Outcome } from "../../src/native/contract.ts";
-import { projectStoreDirectory, readProjectState, viewIndexPath } from "../../src/native/store.ts";
+import {
+  nativeAlertCounts,
+  projectStoreDirectory,
+  recordVisit,
+  viewIndexPath,
+} from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
 import { state } from "../board/fixtures.ts";
-import { publishFixture } from "../native/view-files.ts";
+import { publishFixture, savedState } from "../native/view-files.ts";
 import { viewsWith } from "../terminal-backend/views.ts";
 import { withScenario } from "./scenario.ts";
 
@@ -52,12 +56,12 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
       await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
       await publishFixture(world.home, world.repoPath, { changeSignature: "after" });
       const baseline = {
-        home: world.home,
-        project: world.repoPath,
+        kind: "entry" as const,
         signature: "before",
         now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        showCatchUp: async () => {},
       };
-      await visitNativeProject(baseline, async () => {});
+      await recordVisit(world.home, world.repoPath, baseline);
       const focused: string[] = [];
       let opens = 0;
       const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
@@ -148,14 +152,15 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
       expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(
         failure === "focus" || failure === "helper-moved" ? 1 : 0,
       );
-      const visit = (await readProjectState(world.home, world.repoPath))?.visit;
+      const visit = (await savedState(world.home, world.repoPath))?.visit;
       expect(visit?.previousSignature).toBe(failure === "none" ? "after" : "before");
       if (failure === "none") {
         const lastVisibleAt = new Date(Date.now() - 120_000).toISOString();
-        await visitNativeProject(
-          { ...baseline, signature: "after", now: lastVisibleAt },
-          async () => {},
-        );
+        await recordVisit(world.home, world.repoPath, {
+          ...baseline,
+          signature: "after",
+          now: lastVisibleAt,
+        });
         const path = join(projectStoreDirectory(world.home, world.repoPath), "state.json");
         let saved = await readFile(path, "utf8");
         let inode = (await lstat(path)).ino;
