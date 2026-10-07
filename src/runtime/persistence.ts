@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { IdFactory } from "../contracts.ts";
 import type { TaskStore } from "../tasks/store.ts";
@@ -90,6 +90,23 @@ export async function writeTextAtomically(path: string, value: string): Promise<
   try {
     await writeFile(temporary, value, { encoding: "utf8", flag: "wx", mode: 0o600 });
     await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
+/** Like writeTextAtomically, but never replaces: fails with EEXIST when anything is at `path`. */
+export async function writeNewTextAtomically(path: string, value: string): Promise<void> {
+  if (typeof value !== "string" || value.includes("\0")) {
+    throw new TypeError("text value must be a string without NUL characters");
+  }
+  const destination = absolutePath(path, "destination path");
+  await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+  const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, value, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    // link() refuses an existing name, so the whole file appears at once or not at all.
+    await link(temporary, destination);
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined);
   }

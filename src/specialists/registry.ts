@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -46,29 +47,45 @@ export type SpecialistRegistry = Readonly<{
   readonly entries: readonly SpecialistEntry[];
   /** Every problem, including files hidden by a higher-precedence file and files with no valid name. */
   readonly problems: readonly SpecialistProblem[];
+  /** Every file with a valid name in both folders, winners and hidden ones, repository first. */
+  readonly files: readonly SpecialistFile[];
+}>;
+
+/** One file with a valid name in either folder, whether it wins its name or is hidden. */
+export type SpecialistFile = Readonly<{
+  readonly origin: FileOrigin;
+  readonly name: string;
+  readonly path: string;
+  readonly result: SpecialistCheck;
+  /** Of the bytes read; absent when the file was not read whole (too large, not a file, outside the folder). */
+  readonly revision?: string;
 }>;
 
 type FileOrigin = "repository" | "home";
-type FileRead = Readonly<{
-  readonly stem: string;
-  readonly path: string;
-  readonly result: SpecialistCheck;
-}>;
 type FolderRead = Readonly<{
-  readonly files: readonly FileRead[];
+  readonly files: readonly SpecialistFile[];
   readonly problems: readonly SpecialistProblem[];
 }>;
 
 const REPOSITORY_FOLDER = join(".tandem", "specialists");
-const HOME_FOLDER = "specialists";
 /** Tandem's own fix-round checklist; a file can't take its name. */
-const RESERVED_NAME = "fix-round";
+export const RESERVED_SPECIALIST_NAME = "fix-round";
+
+/** `<tandemHome>/specialists`: the user's own specialists, which only home-files.ts writes. */
+export function homeSpecialistFolder(tandemHome: string): string {
+  return join(tandemHome, "specialists");
+}
+
+/** The only revision function: the registry computes it, the writer and sharing compare it. */
+export function specialistFileRevision(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
 
 /** Reads both folders and merges them over the built-ins. A missing folder is empty, not a problem. */
 export async function loadSpecialists(search: SpecialistSearch): Promise<SpecialistRegistry> {
   const folders = {
     repository: join(search.repositoryCheckout, REPOSITORY_FOLDER),
-    home: join(search.tandemHome, HOME_FOLDER),
+    home: homeSpecialistFolder(search.tandemHome),
   };
   const [repository, home] = await Promise.all([
     readFolder(folders.repository, "repository", search.repositoryCheckout),
@@ -90,6 +107,7 @@ export async function loadSpecialists(search: SpecialistSearch): Promise<Special
     folders,
     entries: merged.entries,
     problems: [...repository.problems, ...home.problems, ...merged.problems, ...capacity],
+    files: [...repository.files, ...home.files],
   };
 }
 
@@ -144,23 +162,20 @@ function usable(entry: SpecialistEntry): Specialist {
 
 /** Pure: per name, the first of repository > home > built-in decides; broken files block their name. */
 function mergeByPrecedence(
-  repository: readonly FileRead[],
-  home: readonly FileRead[],
-): Omit<SpecialistRegistry, "folders"> {
+  repository: readonly SpecialistFile[],
+  home: readonly SpecialistFile[],
+): Omit<SpecialistRegistry, "folders" | "files"> {
   const names = new Set([
     ...BUILT_IN_SPECIALISTS.map((specialist) => specialist.name),
-    ...repository.map((file) => file.stem),
-    ...home.map((file) => file.stem),
+    ...repository.map((file) => file.name),
+    ...home.map((file) => file.name),
   ]);
   const entries: SpecialistEntry[] = [];
   for (const name of [...names].sort()) {
-    const layers: readonly Readonly<{ origin: SpecialistOrigin; file?: FileRead }>[] = [
-      ...repository
-        .filter((file) => file.stem === name)
-        .map((file) => ({ origin: "repository" as const, file })),
-      ...home
-        .filter((file) => file.stem === name)
-        .map((file) => ({ origin: "home" as const, file })),
+    const layers: readonly Readonly<{ origin: SpecialistOrigin; file?: SpecialistFile }>[] = [
+      ...[...repository, ...home]
+        .filter((file) => file.name === name)
+        .map((file) => ({ origin: file.origin, file })),
       ...BUILT_IN_SPECIALISTS.filter((specialist) => specialist.name === name).map(() => ({
         origin: "built-in" as const,
       })),
@@ -174,7 +189,7 @@ function mergeByPrecedence(
       continue;
     }
     const { file } = winner;
-    const origin = winner.origin === "home" ? "home" : "repository";
+    const { origin } = file;
     entries.push(
       file.result.valid
         ? { status: "ready", specialist: file.result.specialist, replaces }
@@ -225,27 +240,27 @@ async function readFolder(
       };
     }
   }
-  const files: FileRead[] = [];
+  const files: SpecialistFile[] = [];
   const problems: SpecialistProblem[] = [];
   for (const dirent of listing.sort((left, right) => left.name.localeCompare(right.name))) {
     if (!dirent.name.endsWith(".md")) continue;
-    const stem = dirent.name.slice(0, -".md".length);
+    const name = dirent.name.slice(0, -".md".length);
     const path = join(folder, dirent.name);
-    if (!SPECIALIST_NAME_PATTERN.test(stem)) {
+    if (!SPECIALIST_NAME_PATTERN.test(name)) {
       problems.push({
         path,
-        problem: `"${stem}" is not a specialist name; use lowercase letters, digits, and hyphens`,
+        problem: `"${name}" is not a specialist name; use lowercase letters, digits, and hyphens`,
       });
       continue;
     }
-    if (stem === RESERVED_NAME) {
+    if (name === RESERVED_SPECIALIST_NAME) {
       problems.push({
         path,
-        problem: `${RESERVED_NAME} is Tandem's own fix-round checklist; rename the file`,
+        problem: `${RESERVED_SPECIALIST_NAME} is Tandem's own fix-round checklist; rename the file`,
       });
       continue;
     }
-    files.push({ stem, path, result: await readSpecialistFile(folder, path, stem, origin) });
+    files.push({ origin, name, path, ...(await readSpecialistFile(folder, path, name, origin)) });
   }
   return { files, problems };
 }
@@ -255,29 +270,32 @@ async function readSpecialistFile(
   path: string,
   stem: string,
   origin: FileOrigin,
-): Promise<SpecialistCheck> {
+): Promise<Readonly<{ result: SpecialistCheck; revision?: string }>> {
+  const broken = (defect: string) => ({ result: { valid: false as const, defect } });
   try {
     if (!isContainedPath(await realpath(folder), await realpath(path))) {
-      return { valid: false, defect: "points outside .tandem/specialists" };
+      return broken("points outside .tandem/specialists");
     }
     const info = await stat(path);
-    if (!info.isFile()) return { valid: false, defect: "is not a regular file" };
+    if (!info.isFile()) return broken("is not a regular file");
     if (info.size > MAX_SPECIALIST_BYTES) {
-      return {
-        valid: false,
-        defect: `is ${info.size} bytes; a specialist file is at most ${MAX_SPECIALIST_BYTES}`,
-      };
+      return broken(`is ${info.size} bytes; a specialist file is at most ${MAX_SPECIALIST_BYTES}`);
     }
-    const result = readSpecialistMarkdown(await readFile(path, "utf8"), { origin, path });
+    const bytes = await readFile(path);
+    const revision = specialistFileRevision(bytes);
+    const result = readSpecialistMarkdown(bytes.toString("utf8"), { origin, path });
     if (result.valid && result.specialist.name !== stem) {
       return {
-        valid: false,
-        defect: `names itself "${result.specialist.name}"; the name must match the file name "${stem}"`,
+        result: {
+          valid: false,
+          defect: `names itself "${result.specialist.name}"; the name must match the file name "${stem}"`,
+        },
+        revision,
       };
     }
-    return result;
+    return { result, revision };
   } catch (error) {
-    return { valid: false, defect: `can't be read: ${message(error)}` };
+    return broken(`can't be read: ${message(error)}`);
   }
 }
 

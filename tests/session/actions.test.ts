@@ -1914,6 +1914,14 @@ test("the specialists action lists without asking and keeps the table's line bre
       },
     ],
     problems: [{ path: `${repository}/seo.md`, problem: 'line 3: unknown key "model"' }],
+    files: [
+      {
+        origin: "repository",
+        name: "seo",
+        path: `${repository}/seo.md`,
+        result: { valid: false, defect: 'line 3: unknown key "model"' },
+      },
+    ],
   };
   const asked: string[] = [];
   const service = {
