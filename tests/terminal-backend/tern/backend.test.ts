@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { basename } from "node:path";
 import { EndpointOwnershipError } from "../../../src/adapters/primitives.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
 import { assertStoppedCoordinatorShell } from "../../../src/coordinator/ownership.ts";
@@ -202,7 +203,7 @@ test("a relaunched backend reuses the exact session from durable coordinator, ta
   });
 });
 
-test("an absent stored session creates a new session without adopting a matching name", async () => {
+test("a new session takes the project's folder name, and an absent stored session never adopts it", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const calls: CommandRequest[] = [];
     const run: CommandRunner = async (request) => {
@@ -219,6 +220,7 @@ test("an absent stored session creates a new session without adopting a matching
     const first = await ternBackend(run).createWorkspace(target);
     const name = calls.find((request) => request.argv[1] === "new")?.argv[3];
     if (name === undefined) throw new Error("missing native session name");
+    expect(name).toBe(basename(world.repoPath));
     await ternBackend(run).close({ endpoint: first.endpoint, cwd: world.repoPath });
     const impostor = decode(
       (

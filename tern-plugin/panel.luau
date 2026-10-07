@@ -1,7 +1,7 @@
 --!strict
 local rt=require("./rt")
 type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,repo:string?,number:number?},pullRequest:{number:number,url:string}?}
-type State={file:rt.Watch,origin:rt.Origin,dropdown:boolean,selected:number}
+type State={file:rt.Watch,origin:rt.Origin,dropdown:boolean,selected:number,quit:string?}
 local function el(class:string,children:{Node},action:string?,key:string?):Node
  return tern.ui.node("el",{class=class,key=key,actions=if action then {click=action} else nil},children)
 end
@@ -41,7 +41,7 @@ local def:BlockDef<State> ={
    el("tdp-switch",name,"projects"),
    el("tdp-limit",{text(limit,"tdp-dim"),el("tdp-meter",{tern.ui.node("el",{class="tdp-meter-fill",grow=if meter and type(meter.remainingPercent)=="number" then 100-meter.remainingPercent else 0}),tern.ui.node("el",{grow=if meter and type(meter.remainingPercent)=="number" then meter.remainingPercent else 100})})},"usage"),
    el("tdp-icon",{text("🔔︎ " .. tostring(header.bellCount))},"inbox"),
-   el("tdp-icon",{text("⎇")},"prs"),el("tdp-icon",{text("▦")},"board"),el("tdp-icon",{text("⚙")},"settings")})
+   el("tdp-icon",{text("⎇")},"prs"),el("tdp-icon",{text("▦")},"board"),el("tdp-icon",{text("⚙")},"settings"),el("tdp-icon",{text("⏻")},"quit")})
   local body={head}
   if state.file.status~="ready" then table.insert(body,text("View unavailable · actions paused","tdp-unavailable")) end
   local index=0
@@ -57,7 +57,11 @@ local def:BlockDef<State> ={
   end
   if panel.footer then table.insert(body,text(panel.footer,"tdp-footer")) end
   local layer:Node?=nil
-  if state.dropdown then
+  if state.quit then
+   layer=el("tdp-dropdown tdp-quit",{
+    text(state.quit,"tdp-quit-question"),
+    el("tdp-quit-actions",{el("tdp-quit-button",{text("Cancel")},"quit-cancel"),el("tdp-quit-button tdp-quit-go",{text("Quit anyway")},"quit-confirm")})})
+  elseif state.dropdown then
    local items={}
    for number,project in header.projects do
     local cells={text(if project.current then "✓" else " ","tdp-check"),el("tdp-project-copy",{text(project.name,"tdp-project-name"),text(project.status,"tdp-dim")})}
@@ -72,7 +76,7 @@ local def:BlockDef<State> ={
   return {main=tern.ui.col({el("tdp-panel",body)}),layer=if layer then tern.ui.col({layer}) else nil}
  end,
  key=function(state,key,cx)
-  if key.name=="escape" then state.dropdown=false; return true end
+  if key.name=="escape" then state.dropdown=false; state.quit=nil; return true end
   if key.name=="down" or key.name=="j" then state.selected=math.min(#rows(state),state.selected+1); return true end
   if key.name=="up" or key.name=="k" then state.selected=math.max(1,state.selected-1); return true end
   if key.name=="enter" then activate(state,cx,state.selected); return true end
@@ -82,6 +86,7 @@ local def:BlockDef<State> ={
   if event.ev~="action" then return end
   local command=event.act or ""
   if command=="projects" then state.dropdown=not state.dropdown; return end
+  if command=="quit-cancel" then state.quit=nil; return end
   if state.file.status~="ready" then return end
   local index=string.match(command,"^row:(%d+)$")
   if index then state.selected=tonumber(index); activate(state,cx,state.selected); return end
@@ -91,7 +96,13 @@ local def:BlockDef<State> ={
   if project then rt.act(cx,state.origin,{verb="project",target={repoPath=project}}); state.dropdown=false
   elseif command=="open-project" then rt.act(cx,state.origin,{verb="open-project"})
   elseif command=="inbox" or command=="prs" or command=="board" or command=="usage" then rt.act(cx,state.origin,{verb="open",ref={kind=command}})
-  elseif command=="settings" then rt.act(cx,state.origin,{verb="open",ref={kind="setup",mode="settings"}}) end
+  elseif command=="settings" then rt.act(cx,state.origin,{verb="open",ref={kind="setup",mode="settings"}})
+  elseif command=="quit" then
+   -- Quit asks first when tasks are working: the answer is this block's own layer, not a toast.
+   rt.act(cx,state.origin,{verb="quit",confirmed=false},function(outcome,resultCx)
+    if outcome and outcome.status=="confirm" and outcome.notice then state.quit=outcome.notice.text; (resultCx::BlockCx):render() end
+   end)
+  elseif command=="quit-confirm" then state.quit=nil; rt.act(cx,state.origin,{verb="quit",confirmed=true}) end
  end,
 }
 return def

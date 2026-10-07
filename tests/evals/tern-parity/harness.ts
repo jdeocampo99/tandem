@@ -273,6 +273,8 @@ export class TernParityHost {
   readonly project: ScenarioTernProject;
   readonly events: HostEvent[] = [];
   readonly cli: CliRun[] = [];
+  /** The argv of every detached `tandem quit` a click started; each runs inline against the world. */
+  readonly quits: (readonly string[])[] = [];
   /** When set, `tern open` returns as Tern does but the route never reaches the plugin. */
   dropRoutes = false;
   /** When set, `tern browser` opens the browser but its reply never reaches Tandem. */
@@ -594,6 +596,10 @@ export class TernParityHost {
     const { world } = this;
     const stdout: string[] = [];
     const stderr: string[] = [];
+    const terminal = terminalBackend(this.#run, {
+      home: world.home,
+      tern: { clock: this.#clock },
+    });
     const { exitCode } = await runTerminal(rest, {
       cwd: PLUGIN,
       processEnvironment: {
@@ -603,7 +609,20 @@ export class TernParityHost {
         TANDEM_PROJECT_ROOTS: dirname(world.repoPath),
       },
       run: this.#run,
-      terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
+      terminal,
+      startQuit: async (request) => {
+        this.quits.push(request.argv);
+        const [, , ...argv] = request.argv;
+        const quit = await runTerminal(argv, {
+          cwd: request.cwd,
+          processEnvironment: {},
+          run: this.#run,
+          terminal,
+          stdout: () => undefined,
+          stderr: () => undefined,
+        });
+        return { pid: 0, exited: Promise.resolve(quit.exitCode) };
+      },
       createService: (options) =>
         createTandemService({
           ...options,

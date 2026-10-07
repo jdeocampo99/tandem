@@ -37,7 +37,7 @@ for _,def in definitions do assert(type(def.init)=='function' and type(def.view)
 assert(count==10)
 count=0
 for _,def in commands do assert(type(def.run)=='function'); count+=1 end
-assert(count==19 and commands['new-request'] and commands['project-next'] and commands['settings'])
+assert(count==21 and commands['new-request'] and commands['project-next'] and commands['settings'] and commands['quit'] and commands['quit-anyway'])
 loading=false
 assert(openRoute({path='/unrelated.txt'}, {})==nil and next(imports)==nil)
 local cx={token='state'}

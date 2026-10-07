@@ -199,3 +199,26 @@
   color: #87909e;
   font-size: 10px;
 }
+.tdp-quit-question {
+  padding: 8px 8px 10px;
+  line-height: 1.4;
+}
+.tdp-quit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 4px 4px;
+}
+.tdp-quit-button {
+  padding: 6px 10px;
+  border: 1px solid #ffffff28;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.tdp-quit-button:hover {
+  background: #ffffff0c;
+}
+.tdp-quit-go {
+  color: #f1aa55;
+  border-color: #f1aa5566;
+}

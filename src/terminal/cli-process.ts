@@ -1,3 +1,4 @@
+import { closeSync, openSync } from "node:fs";
 import { lstat } from "node:fs/promises";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 
@@ -17,6 +18,8 @@ export type StartPersistent = (
     readonly argv: readonly string[];
     readonly cwd: string;
     readonly env?: Readonly<Record<string, string>>;
+    /** A file that receives the child's output; without it the output is dropped. */
+    readonly log?: string;
   }>,
 ) => Promise<PersistentProcess | undefined>;
 
@@ -61,20 +64,27 @@ export async function defaultStatPath(path: string): Promise<PathStat> {
 }
 
 export const defaultStartPersistent: StartPersistent = async (request) => {
-  const child = Bun.spawn({
-    cmd: [...request.argv],
-    cwd: request.cwd,
-    ...(request.env === undefined
-      ? {}
-      : { env: { ...mergeInheritedEnvironment({}, request.env) } }),
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-    detached: true,
-  });
-  // Bun keeps the parent alive until a spawned child exits; the server must outlive the launcher.
-  child.unref();
-  return { pid: child.pid, exited: child.exited };
+  // One descriptor for both streams keeps their writes in order; two opens would overwrite each other.
+  const log = request.log === undefined ? undefined : openSync(request.log, "w", 0o600);
+  const output = log ?? "ignore";
+  try {
+    const child = Bun.spawn({
+      cmd: [...request.argv],
+      cwd: request.cwd,
+      ...(request.env === undefined
+        ? {}
+        : { env: { ...mergeInheritedEnvironment({}, request.env) } }),
+      stdin: "ignore",
+      stdout: output,
+      stderr: output,
+      detached: true,
+    });
+    // Bun keeps the parent alive until a spawned child exits; the server must outlive the launcher.
+    child.unref();
+    return { pid: child.pid, exited: child.exited };
+  } finally {
+    if (log !== undefined) closeSync(log);
+  }
 };
 
 export const defaultRunInteractive: RunInteractive = async (request) => {

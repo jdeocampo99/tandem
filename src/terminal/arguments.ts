@@ -7,6 +7,7 @@ export type TerminalCommand =
   | "update"
   | "fix"
   | "reset"
+  | "quit"
   | "config"
   | "configure"
   | "memory"
@@ -53,6 +54,7 @@ export type TerminalRunResult = Readonly<{
     | "memory"
     | "fixed"
     | "reset"
+    | "quit"
     | "panel"
     | "welcome"
     | "cancelled"
@@ -91,6 +93,7 @@ const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   update: "update",
   fix: "fix",
   reset: "reset",
+  quit: "quit",
   config: "config",
   configure: "configure",
   memory: "memory",
@@ -143,6 +146,7 @@ const ALLOWED: Readonly<
   update: { flags: ["fresh", "headless", "noAttach"], maxPaths: 0 },
   fix: { flags: ["yes", "json", "verbose", "freeSuperseded"], maxPaths: 0 },
   reset: { flags: ["yes", "hard", "headless", "noAttach"], maxPaths: 0 },
+  quit: { flags: ["yes"], maxPaths: 0 },
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
   memory: { flags: ["json"], maxPaths: 1 },

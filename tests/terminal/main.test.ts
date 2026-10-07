@@ -2020,3 +2020,10 @@ test("fix re-nests task workspaces without asking, and says so in text and JSON"
   ]);
   await rm(root, { recursive: true, force: true });
 });
+
+test("quit takes only --yes and no paths", () => {
+  expect(parseTerminalArgs(["quit"])).toMatchObject({ command: "quit", yes: false, paths: [] });
+  expect(parseTerminalArgs(["quit", "--yes"])).toMatchObject({ command: "quit", yes: true });
+  expect(() => parseTerminalArgs(["quit", "--hard"])).toThrow("tandem quit does not accept --hard");
+  expect(() => parseTerminalArgs(["quit", "/repo"])).toThrow("tandem quit takes no arguments");
+});

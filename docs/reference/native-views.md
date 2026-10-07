@@ -234,7 +234,7 @@ Every click, key and window command reaches Tandem through one transport, `rt.ac
 
 ```text
 { v: 1, origin: { pane, ctx } | { pane, cwd, window? }, action: { verb, ... } }
-→ { status: "done" | "kept" | "refused", notice?: { code, text } }
+→ { status: "done" | "kept" | "refused" | "confirm", notice?: { code, text } }
 ```
 
 A block's origin is its exact pane id and the `ctx` it was launched with. A window command's
@@ -246,14 +246,17 @@ interpolated into a shell command, and no input file is written.
 recorded coordinator session must list the pane. It then dispatches its verb table to the
 existing services and prints the outcome. The verbs are `open`, `open-project`, `project`,
 `visit`, `restart`, `steer`, `brief-approve`, `brief-request-changes`, `pr-comment`,
-`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link` and
-`setup-save`. `open` takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`,
+`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link`,
+`setup-save` and `quit`. `open` takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`,
 `orchestrator`, `inbox`, `task-picker`, `new-request` or `{kind:"setup", mode:"setup"|"settings"}`
 with an optional `section` (`models`, `repositories` or `bug-reports`).
 
 `done` means the click did what it asked. `kept` means part of it did not happen, typically a
 view that could not be closed or proved, and the originating view stays. `refused` means Tandem
-refused the click or it failed. The notice says why, and the user may try again.
+refused the click or it failed. The notice says why, and the user may try again. `confirm` means
+nothing happened yet: the notice (code `quit-confirm`) is a question, and `rt.act` shows no toast
+for it. The screen that asked puts the question to the person and, on a yes, sends the same action
+again with `confirmed: true`.
 
 `rt.act` holds one action per origin at a time and toasts by `notice.code`. Each code has one
 title and level in `rt.luau`. `failed` and unknown codes take the asking screen's title. A
@@ -312,6 +315,9 @@ directly.
 
 `restart` names the task and goes through central recovery. `steer` names the task and carries
 the user's direction as `text`. Renderers only collect input and call `rt.act`.
+
+`quit` carries `confirmed: boolean`. It is the only verb whose work outlives its click, so see
+[Quit](#quit).
 
 ## No retries
 
@@ -571,11 +577,15 @@ not terminal identifiers.
 ### Panel and project switcher
 
 The panel header shows `tandem ▾`, the count of other projects that need you, the 5-hour meter
-and label, the bell count, and PRs, Board and Settings (⚙) buttons. The panel always shows the PRs,
+and label, the bell count, and PRs, Board, Settings (⚙) and Quit (⏻) buttons. The panel always shows the PRs,
 Board, Settings and usage buttons, whatever the user decided about shortcuts. Rows open their
 task, brief or PR target through `open`. The Settings button opens `ref:{kind:"setup",
 mode:"settings"}`. The bell opens Tern's inbox through `open` with `ref:{kind:"inbox"}` and
 marks alerts read.
+
+The Quit button sends `quit` with `confirmed:false`. A `confirm` outcome opens a layer over the
+header with the question and **Cancel** and **Quit anyway**; Cancel, `Esc` and a refused click
+change nothing, and Quit anyway sends `quit` with `confirmed:true`.
 
 The project dropdown targets each online row by `project` with `target:{repoPath}`, including
 rows after nine and after order changes. The CLI resolves the unique published identity, checks
@@ -1025,6 +1035,32 @@ failed steps. The coordinator then receives those steps instead.
 
 Settings is reached from the palette ("Tandem: Settings", "Tandem: Change models", "Tandem: Add or
 edit repositories"), `cmd+shift+,` (`plugin.tandem.settings`) and the panel header.
+
+### Quit
+
+The panel's ⏻ button and the palette's "Tandem: Quit" send `{verb:"quit", confirmed:false}`; the
+CLI's `tandem quit` runs the same code. The handler (`quit` in `src/native/actions.ts`) reads
+what a quit would stop (`readQuitPlan`, [coordinator.md](coordinator.md#tandem-quit)). While a
+task has a live worker, validation or review and `confirmed` is false, it changes nothing and
+answers `confirm` with notice code `quit-confirm` and the question.
+
+- **Panel:** the answer is a layer over the header (`tdp-quit`) with **Cancel** and **Quit anyway**.
+  Quit anyway sends `confirmed:true`; Cancel and `Esc` send nothing.
+- **Palette:** Tern has no modal. `window.luau` toasts the question and makes the hidden command
+  "Tandem: Quit anyway" available for 60 seconds. Running it sends `confirmed:true`; ignoring it
+  changes nothing.
+
+Quitting closes the very session the click came from, so the click's own process cannot do it.
+Once answered (or when nothing is working), the handler starts a detached process
+(`startQuit`, default `defaultStartPersistent` with its own session) that runs `tandem quit --yes
+--home HOME --session SESSION` and writes its output to `<home>/quit.log`, then returns `done`.
+Nothing that happens to the pane afterwards can interrupt it. A start that reports no process is
+`refused`.
+
+Palette commands: "Tandem: New request…", "Open task…", "Toggle board", "Show PRs", "Usage",
+"Settings", "Change models", "Add or edit repositories" and "Quit". The project commands and "Quit
+anyway" are hidden. Tests: `tests/evals/quit.test.ts` (handler, detach request, same path) and the
+"Quit" rows of `tests/evals/tern-parity/inventory.ts` (real Luau, real CLI).
 
 ## Window callbacks
 

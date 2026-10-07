@@ -1,14 +1,19 @@
 import { expect } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Endpoint } from "../../../src/contracts.ts";
 import { type PrReviewRound, prReviewRunDiffPath } from "../../../src/pr-review/state.ts";
 import { withPrWatches } from "../../../src/pr-watch/store.ts";
 import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
+import type { DurableJob } from "../../../src/runtime/schema.ts";
 import { nativeReplyLinks } from "../../../src/session/native-links.ts";
 import { content } from "../../board/fixtures.ts";
 import {
+  SCENARIO_NOW,
   SCENARIO_POLICY,
+  SCENARIO_TASK_ID,
   type ScenarioPullRequest,
   type ScenarioTernProject,
   type ScenarioWorld,
@@ -289,6 +294,57 @@ export async function withParity(
   });
 }
 
+const QUESTION =
+  "1 task is working: Port the board. Quit anyway? They restart where they can next time you run tandem.";
+
+/** A validation running in a pane of the coordinator's own Tern session; returns its pane id. */
+async function workingTask(world: ScenarioWorld, project: ScenarioTernProject): Promise<string> {
+  const lease = await world.grantLease({ name: "scenario-task", holder: "scenario-holder" });
+  const paneId = "8001";
+  const endpoint: Endpoint = {
+    ...world.openPane({ paneId, cwd: lease.path, anchor: project.coordinator }),
+    ...(project.coordinator.terminalSessionId === undefined
+      ? {}
+      : { terminalSessionId: project.coordinator.terminalSessionId }),
+    role: "reviewer",
+  };
+  const jobPath = join(lease.path, "validation", "job.json");
+  await mkdir(join(lease.path, "validation"), { recursive: true });
+  world.replaceForeground(paneId, [
+    "bun",
+    fileURLToPath(new URL("../../../src/validation-worker.ts", import.meta.url)),
+    jobPath,
+  ]);
+  const job: DurableJob = {
+    schemaVersion: 1,
+    id: "job-1",
+    taskId: SCENARIO_TASK_ID,
+    generation: 0,
+    role: "validation",
+    kind: "validation",
+    cwd: lease.path,
+    jobPath,
+    resultPath: join(lease.path, "validation", "result.json"),
+    attempt: 1,
+    phase: "running",
+    launchAttempted: true,
+    createdAt: SCENARIO_NOW,
+    endpoint,
+  };
+  await seedScenarioTask(world, {
+    kind: "implementation",
+    title: "Port the board",
+    stage: "validating",
+    worktree: lease,
+    endpoints: [endpoint],
+  });
+  await seedScenarioRuntime(
+    world,
+    scenarioRuntimeTask({ worktree: lease, endpoints: [endpoint], jobs: [job] }),
+  );
+  return paneId;
+}
+
 async function otherProject(parity: Parity, name = "api"): Promise<ScenarioTernProject> {
   const { world, host } = parity;
   const other = await seedTernProject(world, {
@@ -358,7 +414,7 @@ export const inventory: readonly InventoryEntry[] = [
         await host.publish();
         await host.refresh();
         const view = await panel.render();
-        expect(view.text.slice(0, 8)).toEqual([
+        expect(view.text.slice(0, 9)).toEqual([
           "tandem ▾",
           "1",
           "5h unavailable",
@@ -366,15 +422,17 @@ export const inventory: readonly InventoryEntry[] = [
           "⎇",
           "▦",
           "⚙",
+          "⏻",
           "Needs you · 2",
         ]);
-        expect(labels(view).slice(0, 6)).toEqual([
+        expect(labels(view).slice(0, 7)).toEqual([
           "tandem ▾ 1",
           "5h unavailable",
           "🔔︎ 0",
           "⎇",
           "▦",
           "⚙",
+          "⏻",
         ]);
         await panel.click("▦");
         expect(host.screen(host.pane("board")).pane).toBeGreaterThan(0);
@@ -397,7 +455,7 @@ export const inventory: readonly InventoryEntry[] = [
     run: () =>
       withParity(async ({ host, panel }) => {
         const view = await panel.render();
-        expect(view.text.slice(6)).toEqual([
+        expect(view.text.slice(7)).toEqual([
           "Needs you · 2",
           "●",
           "Add dark mode",
@@ -525,6 +583,7 @@ export const inventory: readonly InventoryEntry[] = [
             "⎇",
             "▦",
             "⚙",
+            "⏻",
             "Needs you · 0",
             "Running · 0",
             "Ready · 0",
@@ -609,7 +668,7 @@ export const inventory: readonly InventoryEntry[] = [
   },
   {
     view: "Keys and palette",
-    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; eight palette commands; project commands hidden",
+    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; nine palette commands; project commands hidden",
     run: () =>
       withParity(async (parity) => {
         const { host, world } = parity;
@@ -628,6 +687,7 @@ export const inventory: readonly InventoryEntry[] = [
           "Tandem: Settings",
           "Tandem: Change models",
           "Tandem: Add or edit repositories",
+          "Tandem: Quit",
         ]);
         const registered = new Set(commands.map((command) => `plugin.tandem.${command.id}`));
         const bound = [...new Set(Object.values(TERN_KEYBINDS))];
@@ -638,6 +698,7 @@ export const inventory: readonly InventoryEntry[] = [
           ...Array.from({ length: 9 }, (_, index) => `Tandem: Project ${index + 1}`),
           "Tandem: Previous project",
           "Tandem: Next project",
+          "Tandem: Quit anyway",
         ]);
         await host.focus(101);
         await host.command("board");
@@ -669,6 +730,74 @@ export const inventory: readonly InventoryEntry[] = [
         await host.refresh();
         expect((await settings.render()).text).toContain("+ Add repository");
       }),
+  },
+  {
+    view: "Quit",
+    item: "Palette Quit with nothing running hands one detached tandem quit the whole session",
+    run: () =>
+      withParity(
+        async ({ host, world, project }) => {
+          await host.focus(Number(project.coordinator.paneId));
+          await host.command("quit");
+          expect(host.quits.map((argv) => argv.slice(2))).toEqual([
+            ["quit", "--yes", "--home", world.home, "--session", world.sessionId],
+          ]);
+          expect(world.paneIsPresent(project.coordinator.paneId)).toBe(false);
+          expect(world.paneIsPresent(project.helper.paneId)).toBe(false);
+        },
+        { seed: false },
+      ),
+  },
+  {
+    view: "Quit",
+    item: "Panel ⏻ asks in its own layer while a task works; Cancel changes nothing, Quit anyway quits",
+    run: () =>
+      withParity(
+        async ({ host, panel, world, project }) => {
+          const worker = await workingTask(world, project);
+          await host.publish();
+          await host.refresh();
+          await panel.click("⏻");
+          const asked = await panel.render();
+          expect(asked.text).toContain(QUESTION);
+          expect(labels(asked)).toEqual(expect.arrayContaining(["Cancel", "Quit anyway"]));
+          expect(await illegible(panel)).toEqual([]);
+          expect(host.quits).toEqual([]);
+          await panel.click("Cancel");
+          expect((await panel.render()).text).not.toContain(QUESTION);
+          expect(host.quits).toEqual([]);
+          await panel.click("⏻");
+          await panel.click("Quit anyway");
+          expect(host.quits).toHaveLength(1);
+          expect(world.paneIsPresent(project.coordinator.paneId)).toBe(false);
+          expect(world.paneIsPresent(worker)).toBe(false);
+        },
+        { seed: false },
+      ),
+  },
+  {
+    view: "Quit",
+    item: "Palette Quit asks in a toast while a task works; Quit anyway exists only then and quits",
+    run: () =>
+      withParity(
+        async ({ host, world, project }) => {
+          const worker = await workingTask(world, project);
+          await host.focus(Number(project.coordinator.paneId));
+          const anyway = async () =>
+            (await host.commands()).find((command) => command.id === "quit-anyway")?.visible;
+          expect(await anyway()).toBe(false);
+          const mark = host.events.length;
+          await host.command("quit");
+          expect(host.toasts(mark).map((toast) => toast.title)).toContain(QUESTION);
+          expect(host.quits).toEqual([]);
+          expect(await anyway()).toBe(true);
+          await host.command("quit-anyway");
+          expect(host.quits).toHaveLength(1);
+          expect(world.paneIsPresent(project.coordinator.paneId)).toBe(false);
+          expect(world.paneIsPresent(worker)).toBe(false);
+        },
+        { seed: false },
+      ),
   },
   {
     view: "Links",

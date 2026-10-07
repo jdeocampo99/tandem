@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { basename } from "node:path";
 import type { z } from "zod";
 import {
@@ -332,17 +331,14 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
           // Never look up the old project by name; only the stored exact session id is reused.
           created = await cli.mutate({ verb: "newTab", cwd: target.cwd, session: storedSession });
         } else {
-          const suffix = createHash("sha256")
-            .update(`${target.sessionId}\0${target.cwd}`)
-            .digest("hex")
-            .slice(0, 12);
-          const baseName = `tandem-${basename(target.cwd)}-${suffix}`;
+          // The worktree folder carries the project's name, which is what the user sees.
+          const baseName = basename(target.cwd);
           let name = baseName;
-          let collision = 0;
+          let collision = 1;
           // Names prevent collisions only. Never adopt a pane or an empty retained session by title.
           while (existing.sessions.some((entry) => entry.name === name)) {
             collision += 1;
-            name = `${baseName}-${collision}`;
+            name = `${baseName} ${collision}`;
           }
           created = await cli.mutate({ verb: "newSession", cwd: target.cwd, name });
         }
