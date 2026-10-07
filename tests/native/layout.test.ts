@@ -45,6 +45,7 @@ const TICKETS: Record<string, Ticket> = {
   "panel/return": ticket("panel", "return", ctx.index),
   "panel/return-board": ticket("panel", "return", ctx.index, { origin: "30", closeOrigin: "30" }),
   "panel/return-task": ticket("panel", "return", ctx.index, { origin: "40", replaced: "40" }),
+  "panel/return-picker": ticket("panel", "return", ctx.index, { origin: "50", returnTo: "40" }),
   "panel/inbox": ticket("panel", "inbox", ctx.index),
 };
 const SWEEP = [
@@ -55,6 +56,7 @@ const SWEEP = [
   "task/task-replace",
   "panel/return-board",
   "panel/return-task",
+  "panel/return-picker",
   "panel/inbox",
 ];
 

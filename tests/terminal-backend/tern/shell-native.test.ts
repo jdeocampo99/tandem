@@ -4,6 +4,7 @@ import { quoteShellArgument } from "../../../src/adapters/commands.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { TERN_BINARY } from "../../../src/terminal-backend/tern/cli.ts";
+import { launchTernWindow } from "./native-window.ts";
 
 const nativeTest = process.env.TANDEM_TERN_NATIVE === "1" ? test : test.skip;
 
@@ -65,7 +66,7 @@ for (const { startupDelay, attachedWindow } of [
           stderr: "ignore",
         },
       );
-      let window: ReturnType<typeof Bun.spawn> | undefined;
+      let window: Bun.Subprocess | undefined;
       const control = `${root}/w.sock`;
       try {
         const deadline = Date.now() + 10_000;
@@ -81,23 +82,14 @@ for (const { startupDelay, attachedWindow } of [
           role: "coordinator",
           generation: 0,
         });
-        if (attachedWindow) {
-          window = Bun.spawn([TERN_BINARY, "--control", control, "--dir", root], {
-            cwd: root,
+        if (attachedWindow)
+          window = await launchTernWindow({
+            binary: TERN_BINARY,
+            control,
+            args: ["--dir", root],
             env: environment,
-            stdin: "ignore",
-            stdout: "ignore",
-            stderr: "ignore",
+            cwd: root,
           });
-          const deadline = Date.now() + 10_000;
-          while (
-            (await run({ argv: [TERN_BINARY, "ctl", "--control", control, "state"], cwd: root }))
-              .code !== 0
-          ) {
-            if (Date.now() >= deadline) throw new Error("isolated control window did not start");
-            await Bun.sleep(50);
-          }
-        }
         const endpoints: Endpoint[] = [];
         for (let index = 0; index < 20; index += 1) {
           const tab = await terminal.createWorkspace({

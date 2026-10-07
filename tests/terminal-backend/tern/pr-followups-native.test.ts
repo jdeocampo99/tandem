@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativePrFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { ActionEnvelope } from "../../../src/native/contract.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { followupsFixture } from "../../pr-review/followups-fixture.ts";
 import { taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
+import { launchTernWindow, recordedActions } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -113,7 +113,7 @@ printf '{"status":"done","notice":{"code":"review-posted","text":"https://github
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const ctl = (...args: string[]) => run("ctl", "--control", control, ...args);
     const tree = async () => JSON.parse(await ctl("tree")) as { tree: ControlNode[] };
     const nodes = (rows: ControlNode[]): ControlNode[] =>
@@ -145,15 +145,13 @@ printf '{"status":"done","notice":{"code":"review-posted","text":"https://github
         role: "coordinator",
         generation: 0,
       };
-      window = Bun.spawn([binary, "--control", control, "--out", root, "--dir", root], {
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--out", root, "--dir", root],
         env,
         cwd: root,
-        stdout: "ignore",
-        stderr: Bun.file(join(root, "window.log")),
-      });
-      await until(async () => {
-        await ctl("state");
-        return true;
+        log: join(root, "window.log"),
       });
       await ctl("size", "1500", "950");
       const commandRunner: CommandRunner = async (request) => {
@@ -219,9 +217,15 @@ printf '{"status":"done","notice":{"code":"review-posted","text":"https://github
           return false;
         }
       });
-      const line = (await readFile(join(root, "actions.jsonl"), "utf8")).trim();
-      const sent = ActionEnvelope.parse(JSON.parse(line)).action;
-      if (sent.verb !== "review-submit") throw new Error(`Post sent ${sent.verb}`);
+      // The window records visits as panes gain focus; only the clicks are under test.
+      const clicks = async () =>
+        (await recordedActions(join(root, "actions.jsonl"))).filter(
+          ({ action }) => action.verb !== "visit",
+        );
+      const posted = await clicks();
+      expect(posted).toHaveLength(1);
+      const sent = posted[0]?.action;
+      if (sent?.verb !== "review-submit") throw new Error(`Post sent ${sent?.verb}`);
       expect(sent.submission.yours).toEqual([]);
       expect(sent.submission.replies).toEqual([
         {
@@ -261,7 +265,7 @@ printf '{"status":"done","notice":{"code":"review-posted","text":"https://github
       await click("#282 ▾");
       await until(async () => JSON.stringify(await tree()).includes("#282 Watched external PR"));
       await ctl("shot", "05-pr-taskless-switcher");
-      expect((await readFile(join(root, "actions.jsonl"), "utf8")).trim()).toBe(line);
+      expect(await clicks()).toEqual(posted);
       console.log(`Native PR followups proof: ${root}`);
     } finally {
       if (window) {

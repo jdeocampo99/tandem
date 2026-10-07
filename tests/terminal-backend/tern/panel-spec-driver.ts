@@ -1,16 +1,14 @@
 // Native fixture boundary: real pane/session inspection and focus, synthetic coordinator process.
 // Invoked only by the private copy of tandem.sh in panel-spec-native.test.ts.
-import { readFile, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { z } from "zod";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { viewFileText } from "../../native/view-files.ts";
+import { republishIndex } from "../../native/view-files.ts";
 import { viewsOf } from "../views.ts";
 
 const home = process.env.TANDEM_HOME;
@@ -70,22 +68,11 @@ const outcome = await runTerminal(process.argv.slice(2), {
   input: Readable.from([envelope]),
 });
 for (const record of records) {
-  const path = viewIndexPath(home, record.repoPath);
-  const envelope = z
-    .object({ model: z.record(z.unknown()) })
-    .parse(JSON.parse(await readFile(path, "utf8")));
-  const panel = z
-    .object({ header: z.record(z.unknown()) })
-    .passthrough()
-    .parse(envelope.model.panel);
   const count = await nativeAlertCounts(home, record.repoPath);
-  await writeFile(
-    path,
-    viewFileText("index", {
-      ...envelope.model,
-      writtenAt: new Date().toISOString(),
-      panel: { ...panel, header: { ...panel.header, bellCount: count.unread } },
-    }),
-  );
+  await republishIndex(home, record.repoPath, (bundle) => ({
+    ...bundle,
+    writtenAt: new Date().toISOString(),
+    panel: { ...bundle.panel, header: { ...bundle.panel.header, bellCount: count.unread } },
+  }));
 }
 process.exit(outcome.exitCode);

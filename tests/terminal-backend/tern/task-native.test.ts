@@ -6,12 +6,13 @@ import { nativeTaskFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { blockArgs, parseBlockContext } from "../../../src/native/contract.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
+import type { TaskPageView } from "../../../src/tasks/page-view.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
-import { openFiles, viewFileText } from "../../native/view-files.ts";
+import { openFiles } from "../../native/view-files.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
-import { recordedActions, recordingCli } from "./native-window.ts";
+import { launchTernWindow, recordedActions, recordingCli } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -51,6 +52,21 @@ type ControlNode = {
     );
     const publication = taskScreenPublication(root);
     await publishViews(env.TANDEM_HOME, publication.bundle.project, async () => publication);
+    /** The review-state publication with task 102's detail replaced by `data`. */
+    const publishTask = (data: TaskPageView) =>
+      publishViews(env.TANDEM_HOME, root, async () => {
+        const review = taskScreenPublication(root, true);
+        return {
+          ...review,
+          details: [
+            {
+              file: nativeTaskFile("102"),
+              view: { version: 1, project: root, kind: "task", data },
+            },
+            ...review.details.filter((detail) => detail.file !== nativeTaskFile("102")),
+          ],
+        };
+      });
     const file = viewDetailPath(env.TANDEM_HOME, root, nativeTaskFile("102"));
     const index = viewIndexPath(env.TANDEM_HOME, root);
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
@@ -80,7 +96,7 @@ type ControlNode = {
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const ctl = (...args: string[]) => run("ctl", "--control", control, ...args);
     const tree = async () => JSON.parse(await ctl("tree")) as { tree: ControlNode[] };
     const nodes = (rows: ControlNode[]): ControlNode[] =>
@@ -112,15 +128,13 @@ type ControlNode = {
         role: "coordinator",
         generation: 0,
       };
-      window = Bun.spawn([binary, "--control", control, "--out", root, "--dir", root], {
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--out", root, "--dir", root],
         env,
         cwd: root,
-        stdout: "ignore",
-        stderr: Bun.file(join(root, "window.log")),
-      });
-      await until(async () => {
-        await ctl("state");
-        return true;
+        log: join(root, "window.log"),
       });
       await ctl("size", "1500", "950");
       const commandRunner: CommandRunner = async (request) => {
@@ -202,7 +216,7 @@ type ControlNode = {
       expect(JSON.stringify(await tree())).toContain("Additional charges · unavailable");
       await ctl("shot", "03-task-cost");
       await click("Overview");
-      await writeFile(file, viewFileText("task", taskScreenFixture(true)));
+      await publishTask(taskScreenFixture(true));
       await until(async () => JSON.stringify(await tree()).includes("Restart"));
       await ctl("shot", "03b-task-stuck");
       await click("Restart");
@@ -265,7 +279,7 @@ type ControlNode = {
       expect(afterCancel.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === opened.paneId)).toBe(
         true,
       );
-      await writeFile(file, viewFileText("task", taskScreenFixture()));
+      await publishTask(taskScreenFixture());
       const previous = opened;
       opened = await host.open(
         { ...input, origin: { paneId: previous.paneId, cwd: root } },

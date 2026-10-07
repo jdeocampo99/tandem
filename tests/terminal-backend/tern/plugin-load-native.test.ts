@@ -3,9 +3,9 @@ import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CommandRunner } from "../../../src/contracts.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { viewFileText } from "../../native/view-files.ts";
+import { publishFixture } from "../../native/view-files.ts";
+import { launchTernWindow } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -97,22 +97,21 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(async () => {
         await checked("ls", "--json");
         return true;
       });
       await checked("plugin", "link", plugin, "--json");
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        { cwd: root, env, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
       const samples: { host: number[]; window: number[] } = { host: [], window: [] };
       for (let sample = 0; sample < 50; sample++) {
         if (sample > 0) {
@@ -172,15 +171,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await ctl("quit");
       if (window.exitCode === null) window.kill();
       await window.exited;
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        { cwd: root, env, stdout: "ignore", stderr: Bun.file(join(root, "proof-window.log")) },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "proof-window.log"),
       });
-      await ctl("account", "signed-in");
       const terminal = ternBackend(run, { home, environment: env });
       const coordinator = (
         await terminal.createWorkspace({
@@ -197,22 +195,15 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         workspaceId: coordinator.workspaceId,
       });
       await until(async () => (await ctl("tree")).includes("coordinator · tandem"));
-      await mkdir(join(home, "native-views"));
       const panel = panelFixture(root);
-      await writeFile(
-        viewIndexPath(home, root),
-        viewFileText("index", {
-          version: 1,
-          project: root,
-          writtenAt: new Date().toISOString(),
-          panel,
-          projects: panel.header.projects,
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          warnings: [],
-        }),
-      );
+      await publishFixture(home, root, {
+        panel,
+        projects: panel.header.projects,
+        tasks: {},
+        briefs: {},
+        pullRequests: {},
+        warnings: [],
+      });
       const opened = await terminal.openPanel({ coordinator, cwd: root, project: root });
       await writeFile(join(root, "panel-open.json"), JSON.stringify(opened));
       await writeFile(join(root, "panel-list.json"), await checked("ls", "--json"));

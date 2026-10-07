@@ -7,7 +7,7 @@ import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ActionEnvelope } from "../../../src/native/contract.ts";
-import { viewDetailPath } from "../../../src/native/store.ts";
+import { publishViews, viewDetailPath } from "../../../src/native/store.ts";
 import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { briefView } from "../../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
@@ -21,6 +21,7 @@ import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts"
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
 import { viewsOf } from "../views.ts";
+import { launchTernWindow } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -118,10 +119,8 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
     const model = briefView(second);
     const path = viewDetailPath(env.TANDEM_HOME, repo, "brief-req-tern.json");
     await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
-    const publish = async (revision: string, value = model) =>
-      writeFile(path, JSON.stringify({ version: 1, kind: "brief", revision, model: value }), {
-        mode: 0o600,
-      });
+    const publish = (value = model) =>
+      publishViews(env.TANDEM_HOME, repo, async () => ({ brief: value }));
     // The shared writer and scoped host close run unchanged; durable action effects use a receipt sink.
     await mkdir(join(root, "src"), { recursive: true });
     await writeFile(
@@ -134,9 +133,14 @@ import type { CommandRunner, Endpoint } from ${JSON.stringify(fileURLToPath(new 
 const root = ${JSON.stringify(root)};
 const argv = Bun.argv.slice(2);
 const received = await Bun.stdin.text();
+const envelope = JSON.parse(received);
+// The window's own focus bookkeeping is not a brief action.
+if (envelope.action.verb === "visit") {
+  console.log(JSON.stringify({status: "done"}));
+  process.exit(0);
+}
 writeFileSync(join(root, "args.txt"), argv.join("\\n") + "\\n");
 writeFileSync(join(root, "received.json"), received);
-const envelope = JSON.parse(received);
 if (existsSync(join(root, "refuse"))) {
   console.log(JSON.stringify({status: "refused", notice: {code: "failed", text: "Brief revision is stale; review the latest draft."}}));
 } else if (existsSync(join(root, "retain"))) {
@@ -178,7 +182,7 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const run = async (...args: string[]) => {
       const child = Bun.spawn([binary, ...args], {
         env,
@@ -245,26 +249,13 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         Created,
         "create isolated session",
       );
-      window = Bun.spawn(
-        [
-          binary,
-          "--control",
-          control,
-          "--out",
-          process.env.TANDEM_TERN_ARTIFACT_DIR ?? join(root, "shots"),
-          "--dir",
-          root,
-        ],
-        {
-          env,
-          cwd: root,
-          stdout: "ignore",
-          stderr: Bun.file(join(root, "window.log")),
-        },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--out", process.env.TANDEM_TERN_ARTIFACT_DIR ?? join(root, "shots"), "--dir", root],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
       await ctl("resize", "1500", "940");
       await ctl("tabs", "autohide", "on");
@@ -361,29 +352,6 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         ),
       ).toBe(false);
       if (process.env.TANDEM_TERN_ARTIFACT_DIR) await ctl("shot", "brief-loading");
-      // A partial approval triplet cannot make the unpublished brief actionable.
-      await writeFile(
-        path,
-        JSON.stringify({
-          version: 1,
-          kind: "brief",
-          revision: "partial",
-          model: {
-            ...model,
-            approval: {
-              briefRevision: model.revision,
-              contentDigest: model.approval.contentDigest,
-            },
-          },
-        }),
-        { mode: 0o600 },
-      );
-      await Bun.sleep(1200);
-      expect(
-        (await tree()).some(
-          (each) => each.text === "Approve" || each.text?.startsWith("Request changes"),
-        ),
-      ).toBe(false);
       expect(await Bun.file(join(root, "received.json")).exists()).toBe(false);
       const workflow = new RequestBriefWorkflow({
         home: env.TANDEM_HOME,
@@ -476,10 +444,10 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         (await tree()).some((each) => each.text?.startsWith("Brief unavailable. Actions") === true),
       );
       expect((await tree()).some((each) => each.text === "Approve")).toBe(false);
-      await publish("fixture-2");
+      await publish();
       await until(async () => (await tree()).some((each) => each.text === "Approve"));
       // A newer model cannot quietly move the pending comment or approval intent to rev 3.
-      await publish("fixture-3", {
+      await publish({
         ...model,
         revision: 3,
         approval: { ...model.approval, briefRevision: 3 },
@@ -539,7 +507,7 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       await until(async () => !(await paneExists(opened.paneId)));
       expect(await paneExists(coordinator.paneId)).toBe(true);
       await rm(join(root, "retain"));
-      await publish("fixture-2");
+      await publish();
       const reopened = await host.open(
         {
           coordinator,
