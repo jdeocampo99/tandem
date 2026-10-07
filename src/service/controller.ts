@@ -185,7 +185,11 @@ import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findin
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { isActiveTask, transitionTask } from "../tasks/lifecycle.ts";
-import { decideRequiredStages, pullRequestPublished } from "../tasks/required-stages.ts";
+import {
+  decideRequiredStages,
+  policyStageFacts,
+  pullRequestPublished,
+} from "../tasks/required-stages.ts";
 import {
   DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS,
   type ResearchContinuationClassifier,
@@ -337,6 +341,8 @@ export type FoundRepo = NamedCheckout & Readonly<{ readonly setUp: boolean }>;
 export type SetupCommandEdits = Readonly<{
   readonly validationCommands?: readonly string[] | undefined;
   readonly setupCommands?: readonly string[] | undefined;
+  /** The user chose no checks: tasks skip validation and are labeled unvalidated. */
+  readonly noChecks?: boolean | undefined;
 }>;
 
 export type TandemService = Readonly<{
@@ -697,7 +703,9 @@ class TandemController {
         const onboarded = await this.setupOnboard(path, false);
         return {
           validationCommands: onboarded.validationCommands.map((command) => command.name),
-          scriptCommands: onboarded.discovery.commands,
+          noChecks: onboarded.noChecks,
+          discoveredCommands: onboarded.discovery.commands,
+          sources: onboarded.discovery.sources,
           setupCommands: onboarded.setupCommands.map((command) => command.name),
           ...(onboarded.discovery.lockfile === undefined
             ? {}
@@ -711,12 +719,14 @@ class TandemController {
         this.setupOnboard(path, true, {
           validationCommands: repo.validationCommands,
           setupCommands: repo.setupCommands,
+          noChecks: repo.noChecks,
         }),
       updateRepoCommands: async (path, commands) =>
         saveRepositoryCommands({
           repoPath: (await this.setupTarget(path)).repoPath,
           home: deps.home,
           validationCommands: readTextList(commands.validationCommands, "validationCommands"),
+          noChecks: commands.noChecks,
           ...(commands.setupCommands === undefined
             ? {}
             : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
@@ -1138,6 +1148,7 @@ class TandemController {
       ...(commands.setupCommands === undefined
         ? {}
         : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
+      ...(commands.noChecks === true ? { noChecks: true } : {}),
       ...(checkoutPath === undefined ? {} : { checkoutPath }),
     });
   }
@@ -1158,6 +1169,7 @@ class TandemController {
       ...(commands.setupCommands === undefined
         ? {}
         : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
+      ...(commands.noChecks === true ? { noChecks: true } : {}),
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }
@@ -1441,6 +1453,7 @@ class TandemController {
                 requiredStages: decideRequiredStages({
                   briefSkipsReview: brief !== undefined && briefSkipsReview(brief),
                   pullRequestPublished: false,
+                  ...policyStageFacts({ policy }),
                 }),
               }
             : {}),
@@ -1530,7 +1543,8 @@ class TandemController {
 
   /**
    * The target repository's own saved policy and guidance. Implementation there needs validation
-   * commands; when none are saved, the user's answer from the brief supplies them.
+   * commands or its saved "no checks"; when neither is saved, the user's answer from the brief
+   * supplies them.
    */
   private async targetPolicy(
     input: CreateTaskRequest,
@@ -1541,7 +1555,11 @@ class TandemController {
       input.validationCommands === undefined
         ? saved.config
         : parsePolicyOverride({ validationCommands: input.validationCommands }, saved.config);
-    if (input.kind === "implementation" && config.validationCommands.length === 0) {
+    if (
+      input.kind === "implementation" &&
+      config.validationCommands.length === 0 &&
+      config.validation !== "none"
+    ) {
       throw new Error(
         `${target.repo} has no saved validation commands. Ask the user how to check work there (for example "bun test"), add their answer to the brief's automated checks, and create again with it as validationCommands.`,
       );
@@ -2456,6 +2474,7 @@ class TandemController {
       const requiredStages = decideRequiredStages({
         briefSkipsReview: briefSkips,
         pullRequestPublished: pullRequestPublished(task),
+        ...policyStageFacts(task),
       });
       const recorded = task.requiredStages;
       if (

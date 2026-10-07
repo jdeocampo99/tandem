@@ -232,6 +232,28 @@ test("the brief states that implementer assertions are not proof and reviewers k
   expect(rendered).toContain("is not proof");
   expect(rendered).toContain("full read access to the worktree at the exact HEAD");
   expect(rendered).toContain("Applicable principles (mandatory");
+  expect(rendered).not.toContain("Unvalidated");
+});
+
+test("a project that chose no checks tells the reviewer no automated checks ran", () => {
+  const noChecks: ResolvedPolicy = {
+    ...policy,
+    config: { ...policy.config, validationCommands: [], validation: "none" },
+  };
+  const rendered = renderReviewBrief(
+    buildReviewBrief({
+      task: task({ policy: noChecks, validationEvidence: [] }),
+      head: HEAD,
+      lens: "review",
+      observations: observations(),
+    }),
+  );
+  expect(rendered).toContain(
+    "- Unvalidated: no validation commands configured. No automated checks ran on this change",
+  );
+  expect(rendered).toContain(
+    "validation commands: none (unvalidated: no validation commands configured)",
+  );
 });
 
 test("a first review round reports contained impact and no incremental diff", () => {

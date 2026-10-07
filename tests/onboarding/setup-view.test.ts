@@ -46,7 +46,9 @@ const input: SetupViewInput = {
       setUp: false,
       details: {
         validationCommands: ["bun run check", "bun run test"],
-        scriptCommands: ["bun run check", "bun run typecheck", "bun run test"],
+        noChecks: false,
+        discoveredCommands: ["bun run check", "bun run typecheck", "bun run test"],
+        sources: ["package.json scripts"],
         setupCommands: ["bun install --frozen-lockfile"],
         lockfile: "bun.lock",
       },
@@ -176,12 +178,43 @@ test("a repository with nothing to suggest or detect names no source", () => {
       {
         path: "/Users/me/code/plain",
         setUp: false,
-        details: { validationCommands: ["make check"], scriptCommands: [], setupCommands: [] },
+        details: {
+          validationCommands: ["make check"],
+          noChecks: false,
+          discoveredCommands: [],
+          sources: [],
+          setupCommands: [],
+        },
       },
     ],
   });
   expect(view.candidates[0]?.suggestions).toEqual([]);
   expect(view.candidates[0]?.detectedFrom).toBeUndefined();
+});
+
+test("ecosystem checks are offered as suggestions named by their files, and no checks is shown", () => {
+  const view = buildSetupView({
+    ...input,
+    repos: [
+      {
+        path: "/Users/me/code/svc",
+        setUp: true,
+        details: {
+          validationCommands: [],
+          noChecks: true,
+          discoveredCommands: ["go vet ./...", "go test ./...", "make test"],
+          sources: ["go.mod", "Makefile"],
+          setupCommands: [],
+        },
+      },
+    ],
+  });
+  expect(view.repos[0]).toMatchObject({
+    validationCommands: [],
+    noChecks: true,
+    suggestions: ["go vet ./...", "go test ./...", "make test"],
+    detectedFrom: "go.mod and Makefile",
+  });
 });
 
 const flagship: ModelRecord = {

@@ -1323,6 +1323,7 @@ function followUpOn(
     requiredStages: decideRequiredStages({
       briefSkipsReview: false,
       pullRequestPublished: pullRequestPublished(task),
+      unvalidated: false,
     }),
   }),
 ): TaskRecord {
@@ -1382,6 +1383,35 @@ test("a new implementation task requires validation and review; research require
       "2026-09-15T00:00:00.000Z",
     ).requiredStages,
   ).toEqual({ validation: true, review: false });
+});
+
+test("a project that chose no checks skips validation, still reviews, and is ready unvalidated", () => {
+  const noChecks: ResolvedPolicy = {
+    ...policy,
+    config: { ...policy.config, validationCommands: [], validation: "none" },
+  };
+  let task = createTask({ ...implementationInput, policy: noChecks }, "2026-09-15T00:00:00.000Z");
+  expect(task.requiredStages).toEqual({ validation: false, review: true });
+  expect(task.policy.config.validation).toBe("none");
+  task = transitionTask(task, { type: "approve" }, context());
+  task = transitionTask(
+    task,
+    { type: "start", worktree, endpoints: [endpoint(task.generation)] },
+    context(),
+  );
+  task = transitionTask(
+    task,
+    { type: "implementation-complete", head: "head-1", generation: task.generation },
+    context(),
+  );
+  expect(task.stage).toBe("reviewing");
+  task = transitionTask(task, { type: "record-review", review: review("review") }, context());
+  task = transitionTask(task, { type: "finish-review", head: "head-1", generation: 0 }, context());
+  expect(task.stage).toBe("ready");
+  expect(task.validationEvidence).toEqual([]);
+  const ready = task.notifications.at(-1)?.message ?? "";
+  expect(ready).toContain("Unvalidated: no validation commands configured");
+  expect(ready).not.toContain("final acceptance manifest");
 });
 
 test("a merge must land the pull request at the reviewed head", () => {

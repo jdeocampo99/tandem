@@ -134,3 +134,34 @@ test("a blocked task exposes a plain reason and recovery actions while refusing 
     taskPageView({ ...input, inspection: { ...input.inspection, generation: 2 } }),
   ).toThrow("match");
 });
+
+test("a project that chose no checks shows its skipped validation as unvalidated", () => {
+  const base = task({ stage: "reviewing" });
+  const record: TaskRecord = {
+    ...base,
+    policy: {
+      ...base.policy,
+      config: { ...base.policy.config, validationCommands: [], validation: "none" },
+    },
+    requiredStages: { validation: false, review: true },
+  };
+  const view = taskPageView({
+    task: record,
+    inspection: inspection(record),
+    timeline: events,
+    unreadableEvents: 0,
+    now,
+  });
+  expect(view.stageTrack.find((step) => step.stage === "validating")).toMatchObject({
+    label: "Unvalidated",
+    state: "skipped",
+  });
+  const checked = taskPageView({
+    task: base,
+    inspection: inspection(base),
+    timeline: events,
+    unreadableEvents: 0,
+    now,
+  });
+  expect(checked.stageTrack.find((step) => step.stage === "validating")?.label).toBe("Validate");
+});

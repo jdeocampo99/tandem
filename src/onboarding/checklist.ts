@@ -33,7 +33,7 @@ const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
   "self-improvement":
     "Tandem asked about looking into its own problems; when they answer, call self-improvement with off, fix, or report.",
   repositories:
-    "Ask which repositories to set up. For each: find-repo with the name or path (with several matches, ask which). Say in two lines which checks and install step it found; ask them to confirm or change those. Then setup with their answers, pr-watch-merging with how pull requests merge, and open-project.",
+    "Ask which repositories to set up. For each: find-repo with the name or path (with several matches, ask which). Say in two lines which checks and install step it found, and any suggested checks; ask them to confirm or change those. With no checks, ask for theirs; only if they say they want none, setup with noChecks, and say tasks there will be marked unvalidated. Then setup with their answers, pr-watch-merging with how pull requests merge, and open-project.",
 };
 
 const SETUP_BLOCK_GUIDANCE =

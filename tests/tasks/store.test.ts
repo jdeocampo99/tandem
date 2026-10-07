@@ -983,6 +983,31 @@ test("a record pinned with standards none keeps it and its digest across reloads
   });
 });
 
+test("a record pinned with no checks keeps the choice and its digest across reloads", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const noChecks = {
+      ...input.policy,
+      config: { ...input.policy.config, validationCommands: [], validation: "none" as const },
+    };
+    const created = await store.create({ ...input, id: "no-checks", policy: noChecks });
+    const reloaded = await store.read(created.id);
+    if (reloaded === undefined) throw new Error("the record did not reload");
+    expect(reloaded.policy.config.validation).toBe("none");
+    expect(policyIdentity(reloaded.policy)).toBe(policyIdentity(created.policy));
+
+    // The choice beside a validation command is corrupt, never a quiet pass.
+    rewritePayload(directory, created.id, (payload) => {
+      const policyValue = payload.policy as Record<string, Record<string, unknown>>;
+      policyValue.config = {
+        ...policyValue.config,
+        validationCommands: [{ name: "check", argv: ["make"], surfaces: [], timeoutMs: 1 }],
+      };
+    });
+    await expect(store.read(created.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
 test("a deep review level from before levels were cut to two loads as standard", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);

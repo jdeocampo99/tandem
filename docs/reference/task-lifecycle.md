@@ -52,11 +52,15 @@ decides them; the lifecycle and the review stage read the record and never re-de
 | --- | --- | --- |
 | Normal new task | ✓ | ✓ |
 | Brief approved with `skipReview` | ✓ | ✗ |
+| Project chose [no checks](policy.md#no-checks) (with or without `skipReview`, PR open or not) | ✗ | ✓ |
 | Steering a task whose PR is open (not a draft) | ✗ | ✗ |
 
-- Recorded at creation (from the brief the task runs under), again on every `steer` with a new
-  direction (from the brief and the PR's state at that moment), and again on the governed tasks
-  when a brief is approved.
+- Recorded at creation (from the brief the task runs under and its pinned policy), again on every
+  `steer` with a new direction (from the brief and the PR's state at that moment), and again on
+  the governed tasks when a brief is approved.
+- No checks always keeps review, so a task with no checks never reaches `ready` ungated, including
+  a follow-up on its published PR, which may have no CI of its own. Its task
+  page shows the skipped validation step as "Unvalidated", not as passed.
 - `implementation-complete` goes to `validating` when validation is required (or straight to
   `reviewing` when every check already passed at that HEAD). With nothing required it goes
   straight to `ready`, recording `reviewSkippedHead` at that HEAD.
@@ -65,7 +69,8 @@ decides them; the lifecycle and the review stage read the record and never re-de
 - Tandem always pushes, once the required stages pass: a draft through its refresh, a published PR
   by pushing the ready HEAD to the task branch without forcing (see
   [delivery.md](delivery.md#follow-ups-on-an-open-pr)). Agents commit; they don't push.
-- Records saved before required stages existed derive them from their own PR state when read; on
+- Records saved before required stages existed derive them from their own PR state and pinned
+  policy when read; on
   its next tick the service records them on active tasks, including the brief's `skipReview`.
 - [Publish now](delivery.md#publish-now-user-skips-review) is not a required-stages choice: it is a
   user action that cuts a running task short.

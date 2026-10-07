@@ -33,6 +33,7 @@ const POLICY_KEYS: Readonly<Record<string, true>> = {
   instructions: true,
   instructionFiles: true,
   validationCommands: true,
+  validation: true,
   setupCommands: true,
   maxWorkers: true,
   maxFixRounds: true,
@@ -238,6 +239,7 @@ export function copyPolicy(policy: PolicyBase): RepoPolicy {
       surfaces: [...command.surfaces],
       timeoutMs: command.timeoutMs,
     })),
+    ...(policy.validation === undefined ? {} : { validation: policy.validation }),
     setupCommands: policy.setupCommands.map((command) => ({
       name: command.name,
       argv: [...command.argv],
@@ -290,6 +292,7 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
         base.validationCommands,
       )
     : [...base.validationCommands];
+  const validation = readValidationChoice(input, base, validationCommands);
   const setupCommands = hasKey(input, "setupCommands")
     ? readSetupCommands(input.setupCommands, base.setupCommands)
     : [...base.setupCommands];
@@ -305,10 +308,31 @@ export function parsePolicyOverride(input: unknown, base: PolicyBase): RepoPolic
     instructions,
     instructionFiles,
     validationCommands,
+    ...(validation === undefined ? {} : { validation }),
     setupCommands,
     maxFixRounds,
     ...(standards === undefined ? {} : { standards }),
   };
+}
+
+/**
+ * `validation = "none"` is the user's "no checks", and holds only while no validation command is
+ * configured: one layer setting both is refused, and commands a later layer adds replace an
+ * inherited "none".
+ */
+function readValidationChoice(
+  input: Readonly<Record<string, unknown>>,
+  base: PolicyBase,
+  validationCommands: readonly ValidationCommand[],
+): "none" | undefined {
+  if (!hasKey(input, "validation")) {
+    return validationCommands.length === 0 ? base.validation : undefined;
+  }
+  if (input.validation !== "none") throw new TypeError('validation must be "none" when set');
+  if (validationCommands.length > 0) {
+    throw new TypeError('validation = "none" means no checks; remove the validationCommands');
+  }
+  return "none";
 }
 
 function readStandards(value: unknown): "none" | undefined {

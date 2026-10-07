@@ -15,7 +15,7 @@ type Role = {
 type ModelInfo = {selector: string, harness: string, name: string, provider: string, thinking: {string}, priceLevel: string?}
 type Harness = {id: string, name: string, unavailable: string?}
 type RepoInfo = {
- name: string, path: string, shownPath: string, setUp: boolean, validationCommands: {string},
+ name: string, path: string, shownPath: string, setUp: boolean, validationCommands: {string}, noChecks: boolean,
  setupCommands: {string}, suggestions: {string}, detectedFrom: string?, inspectionError: string?,
 }
 type View = {
@@ -24,9 +24,10 @@ type View = {
  section: string?,
 }
 
+-- noChecks is the deliberate "no checks": tasks skip validation and are marked unvalidated.
 type Repo = {
  path: string, name: string, shownPath: string, setUp: boolean, detectedFrom: string?, inspectionError: string?,
- validation: {fields.Field}, setup: {fields.Field}, suggestions: {string},
+ validation: {fields.Field}, setup: {fields.Field}, suggestions: {string}, noChecks: boolean,
 }
 type Draft = {mode: string, models: {[string]: Choice}, repos: {Repo}, selfImprovement: string}
 type State = {
@@ -45,6 +46,7 @@ local STEPS = {
  {id = "models", label = "Models"}, {id = "repos", label = "Repositories"},
  {id = "self", label = "Bug reports"}, {id = "review", label = "Review"},
 }
+local NO_CHECKS_RECAP = "No checks, so tasks are marked unvalidated"
 local SHORTCUTS = {{"Board", "⌘⇧B"}, {"Pull requests", "⌘⇧P"}, {"Usage", "⌘⇧U"}, {"Settings", "⌘⇧,"}}
 
 local function trim(text: string): string
@@ -134,7 +136,7 @@ local function repoFrom(info: RepoInfo): Repo
  return {
   path = info.path, name = info.name, shownPath = info.shownPath, setUp = info.setUp,
   detectedFrom = info.detectedFrom, inspectionError = info.inspectionError,
-  validation = validation, setup = setup, suggestions = info.suggestions,
+  validation = validation, setup = setup, suggestions = info.suggestions, noChecks = info.noChecks,
  }
 end
 
@@ -164,6 +166,7 @@ local function copyDraft(draft: Draft): Draft
    path = repo.path, name = repo.name, shownPath = repo.shownPath, setUp = repo.setUp,
    detectedFrom = repo.detectedFrom, inspectionError = repo.inspectionError,
    validation = copyFields(repo.validation), setup = copyFields(repo.setup), suggestions = repo.suggestions,
+   noChecks = repo.noChecks,
   })
  end
  return {mode = draft.mode, models = models, repos = repos, selfImprovement = draft.selfImprovement}
@@ -178,7 +181,7 @@ local function signature(model: View, draft: Draft): string
  end
  for _, repo in draft.repos do
   table.insert(parts, repo.path)
-  table.insert(parts, table.concat(texts(repo.validation), "\30"))
+  table.insert(parts, if repo.noChecks then "no checks" else table.concat(texts(repo.validation), "\30"))
   table.insert(parts, table.concat(texts(repo.setup), "\30"))
  end
  return table.concat(parts, "\31")
@@ -193,7 +196,8 @@ local function answer(model: View, draft: Draft): {[string]: unknown}
  local repositories = {}
  for _, repo in draft.repos do
   table.insert(repositories, {
-   path = repo.path, validationCommands = tern.json.array(texts(repo.validation)), setupCommands = tern.json.array(texts(repo.setup)),
+   path = repo.path, validationCommands = tern.json.array(if repo.noChecks then {} else texts(repo.validation)),
+   noChecks = repo.noChecks, setupCommands = tern.json.array(texts(repo.setup)),
   })
  end
  return {tandemSetup = 1, mode = draft.mode, models = models, repositories = tern.json.array(repositories), selfImprovement = draft.selfImprovement}
@@ -206,9 +210,9 @@ local function blocker(model: View, draft: Draft): string?
  if draft.mode == "setup" and #draft.repos == 0 then return "Add a repository to start." end
  local names = {}
  for _, repo in draft.repos do
-  if filled(repo.validation) == 0 then table.insert(names, repo.name) end
+  if not repo.noChecks and filled(repo.validation) == 0 then table.insert(names, repo.name) end
  end
- if #names > 0 then return table.concat(names, " and ") .. (if #names > 1 then " need" else " needs") .. " a validation command." end
+ if #names > 0 then return table.concat(names, " and ") .. (if #names > 1 then " need" else " needs") .. " a validation command, or choose No checks." end
  return nil
 end
 
@@ -324,9 +328,11 @@ local function repoRecap(draft: Draft, detailed: boolean): Node
   if detailed then
    local validation, setup = texts(repo.validation), texts(repo.setup)
    value = box("setup-recap-lines", {
-    leaf("setup-muted", "Validation: " .. (if #validation > 0 then table.concat(validation, ", ") else "none")),
+    leaf(if repo.noChecks then "setup-warn" else "setup-muted", "Validation: " .. (if repo.noChecks then NO_CHECKS_RECAP elseif #validation > 0 then table.concat(validation, ", ") else "none")),
     leaf("setup-muted", "Setup: " .. (if #setup > 0 then table.concat(setup, ", ") else "none")),
    })
+  elseif repo.noChecks then
+   value = leaf("setup-warn", NO_CHECKS_RECAP)
   elseif filled(repo.validation) > 0 then
    value = leaf("setup-muted", "Validates with " .. table.concat(texts(repo.validation), ", "))
   else
@@ -472,6 +478,19 @@ local function addPane(state: State, model: View, draft: Draft): {Node}
  return body
 end
 
+-- The deliberate "no checks" choice, as a radio like the bug-report options. Adding a command or a
+-- suggestion turns it off again.
+local function noChecksOption(repo: Repo): Node
+ local on = repo.noChecks
+ return box(if on then "setup-option setup-option-on" else "setup-option", {
+  mark(if on then "setup-radio setup-radio-on" else "setup-radio", "nochecks"),
+  box("setup-option-text", {
+   leaf("setup-strong", "No checks (tasks will be marked unvalidated)", "nochecks"),
+   leaf("setup-muted", "Tasks skip validation and finish on review alone. Every result says it is unvalidated.", "nochecks"),
+  }),
+ }, "nochecks", "nochecks")
+end
+
 local function repoPane(state: State, index: number, repo: Repo): {Node}
  local head: {Node} = {box("setup-detail-id", {leaf("setup-detail-title", repo.name), leaf("setup-muted setup-path", repo.shownPath)})}
  if not repo.setUp then table.insert(head, leaf("setup-remove", "Remove", "remove")) end
@@ -484,12 +503,17 @@ local function repoPane(state: State, index: number, repo: Repo): {Node}
  local validation: {Node} = {
   leaf("setup-label", "Validation commands"),
   leaf("setup-help", "Tandem runs these to test every change. A change is ready only when all of them pass."),
-  commandList(state, index, repo, "validation", "+ Add validation command", "Required. Without one, no change in this repository can be marked ready."),
  }
+ if repo.noChecks then
+  table.insert(validation, leaf("setup-warn setup-cmd-empty", "No checks: changes here are never tested, and every task is marked unvalidated."))
+ else
+  table.insert(validation, commandList(state, index, repo, "validation", "+ Add validation command", "Add one, or choose No checks below. Without either, no change in this repository can be marked ready."))
+ end
  if #chips > 0 then
-  table.insert(chips, 1, leaf("setup-muted", "Suggested from package.json"))
+  table.insert(chips, 1, leaf("setup-muted", "Suggested from " .. (repo.detectedFrom or "this repository")))
   table.insert(validation, box("setup-suggest", chips))
  end
+ table.insert(validation, noChecksOption(repo))
  local body: {Node} = {
   box("setup-detail-head", head),
   box("setup-field", validation),
@@ -511,7 +535,8 @@ local function reposPane(state: State, model: View, draft: Draft): Node
  for index, repo in draft.repos do
   local count = filled(repo.validation)
   local action = "repo=" .. index
-  local status = if count == 0 then leaf("setup-item-status setup-warn", "Needs a validation command", action)
+  local status = if repo.noChecks then leaf("setup-item-status setup-warn", "No checks · unvalidated", action)
+   elseif count == 0 then leaf("setup-item-status setup-warn", "Needs a validation command", action)
    else leaf("setup-item-status setup-muted", count .. (if count == 1 then " validation command" else " validation commands"), action)
   local on = not adding and state.selected == index
   table.insert(items, box(if on then "setup-item setup-item-on" else "setup-item", {leaf("setup-strong", repo.name, action), status}, "repo-" .. index, action))
@@ -683,6 +708,7 @@ local function editCommands(state: State, draft: Draft, cx: BlockCx, name: strin
  if not repo then return end
  if name == "cmd-add" then
   local list = if value == "validation" then repo.validation else repo.setup
+  if value == "validation" then repo.noChecks = false end
   local field = fields.create()
   table.insert(list, field)
   local key = string.format("cmd-%s-%d-%d", value, state.selected, #list)
@@ -697,7 +723,13 @@ local function editCommands(state: State, draft: Draft, cx: BlockCx, name: strin
   reflow(state)
  elseif name == "suggest" then
   local suggestion = repo.suggestions[tonumber(value) or 0]
-  if suggestion then table.insert(repo.validation, fields.create(suggestion)) end
+  if suggestion then
+   table.insert(repo.validation, fields.create(suggestion))
+   repo.noChecks = false
+  end
+  reflow(state)
+ elseif name == "nochecks" then
+  repo.noChecks = not repo.noChecks
   reflow(state)
  end
 end
@@ -814,7 +846,7 @@ local block: BlockDef<State> = {
     state.selected, state.adding = math.max(1, math.min(state.selected, #draft.repos)), false
    end
    reflow(state)
-  elseif name == "cmd-add" or name == "rm" or name == "suggest" then editCommands(state, draft, cx, name, value)
+  elseif name == "cmd-add" or name == "rm" or name == "suggest" or name == "nochecks" then editCommands(state, draft, cx, name, value)
   elseif name == "self" then draft.selfImprovement = value
   elseif name == "discard" then
    local saved = state.saved

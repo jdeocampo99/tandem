@@ -33,6 +33,8 @@ import {
   type FinalRequirement,
   finalAcceptanceStatus,
   isPinnedEvidence,
+  isUnvalidatedPolicy,
+  UNVALIDATED_LABEL,
 } from "./acceptance.ts";
 import {
   failedChecks,
@@ -41,7 +43,7 @@ import {
   ledgerSuggestions,
   recordReviewFindings,
 } from "./findings.ts";
-import { decideRequiredStages, requiredStagesOf } from "./required-stages.ts";
+import { decideRequiredStages, policyStageFacts, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel } from "./review-levels.ts";
 import { checkSkillInvocations } from "./skill-invocation.ts";
@@ -737,7 +739,10 @@ function reviewSummary(task: TaskRecord): string {
  * manifest is satisfied for the delivered code and policy. It never implies delivery.
  */
 function readySummary(task: TaskRecord, head: string): string {
-  const ready = `Ready: task ${task.id} passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}. Ready is not publication, merge, or deploy approval; each remains explicit.`;
+  const passed = isUnvalidatedPolicy(task.policy.config)
+    ? `passed review at the ${recordedReviewLevel(task).level} review level at HEAD ${head}. ${UNVALIDATED_LABEL}: no automated checks ran, so tell the user this work is reviewed but unvalidated.`
+    : `passed review at the ${recordedReviewLevel(task).level} review level and the final acceptance manifest at HEAD ${head}.`;
+  const ready = `Ready: task ${task.id} ${passed} Ready is not publication, merge, or deploy approval; each remains explicit.`;
   const knownIssues = ledgerSuggestions(task.findingLedger ?? [], recordedReviewLevel(task).level);
   if (knownIssues.length === 0) return ready;
   return [
@@ -804,6 +809,7 @@ function cloneResolvedPolicy(policy: TaskRecord["policy"]): TaskRecord["policy"]
         surfaces: [...command.surfaces],
         timeoutMs: command.timeoutMs,
       })),
+      ...(policy.config.validation === undefined ? {} : { validation: policy.config.validation }),
       setupCommands: policy.config.setupCommands.map((command) => ({
         name: command.name,
         argv: [...command.argv],
@@ -865,7 +871,11 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
       ? {
           requiredStages: {
             ...(input.requiredStages ??
-              decideRequiredStages({ briefSkipsReview: false, pullRequestPublished: false })),
+              decideRequiredStages({
+                briefSkipsReview: false,
+                pullRequestPublished: false,
+                ...policyStageFacts(input),
+              })),
           },
         }
       : {}),

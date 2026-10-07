@@ -486,6 +486,7 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
     expect(proposal.approvalRequired).toBe(true);
     expect(proposal.discovery).toEqual({
       commands: ["pnpm run lint", "pnpm run test", "pnpm run build"],
+      sources: ["package.json scripts"],
       lockfile: "pnpm-lock.yaml",
     });
     const install = ["/bin/sh", "-c", "pnpm install --frozen-lockfile"];

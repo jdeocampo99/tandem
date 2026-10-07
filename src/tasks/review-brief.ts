@@ -9,7 +9,7 @@ import type {
 } from "../contracts.ts";
 import { CODE_STANDARD_NAMES, MANUAL_VERIFICATION_REVIEWER } from "../instructions.ts";
 import type { EscalationReason, FinalAcceptanceStatus, FinalRequirement } from "./acceptance.ts";
-import { finalAcceptanceStatus, isPinnedEvidence } from "./acceptance.ts";
+import { finalAcceptanceStatus, isPinnedEvidence, UNVALIDATED_LABEL } from "./acceptance.ts";
 import {
   describeFindingEntry,
   fixRoundBudget,
@@ -425,7 +425,9 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       ),
       configuration: [
         `maxFixRounds=${task.policy.config.maxFixRounds}`,
-        `validation commands: ${task.policy.config.validationCommands.map((command) => command.name).join(", ")}`,
+        acceptance.unvalidated
+          ? `validation commands: none (${UNVALIDATED_LABEL.toLowerCase()})`
+          : `validation commands: ${task.policy.config.validationCommands.map((command) => command.name).join(", ")}`,
       ],
     },
     diffs,
@@ -568,6 +570,11 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
       : ["- Review the cumulative diff and the affected callers in full for this round."]),
     "",
     "## Evidence",
+    ...(acceptance.unvalidated
+      ? [
+          `- ${UNVALIDATED_LABEL}. No automated checks ran on this change and none will: this project chose no checks. Nothing here was tested, so your review is the only gate; check behavior by reading the code with that in mind.`,
+        ]
+      : []),
     `- final acceptance manifest satisfied: ${acceptance.satisfied}`,
     `- outstanding manifest items: ${outstanding.length === 0 ? "none" : outstanding.join("; ")}`,
     `- review lenses still pending: ${acceptance.pendingLenses.length === 0 ? "none" : acceptance.pendingLenses.join(", ")}`,

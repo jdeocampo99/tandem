@@ -54,7 +54,8 @@ Scenario: tests/evals/cross-repo-scenarios.test.ts.
   install commands, and writes the target's central Tandem settings once after approval. This
   setup-only path does not require opening the checkout as the coordinator's source.
 - Ordinary task creation does not silently onboard a foreign checkout or modify its settings.
-  Implementation there needs validation commands. When the target has none saved, `create` fails
+  Implementation there needs validation commands, or the target's saved
+  [no checks](policy.md#no-checks). When the target has neither, `create` fails
   with a question for the user; their answer goes into the brief's automated checks and comes back
   as `validationCommands`, appended to the pinned policy. Nothing is written to the target's
   repository by this fallback.
