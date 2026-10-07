@@ -194,7 +194,7 @@ local block: BlockDef<State> = {
  view = function(state, cx)
   related(state, cx)
   local model = state.view.model
-  if not model then return { main = ui.el('div', { class = 'tt-page' }, {
+  if not model then return { main = ui.el('div', {}, {
    ui.el('div', { class = 'tt-title-row' }, { ui.el('h1', { text = 'Task unavailable' }), button('← Orchestrator', 'orchestrator') }),
    text('Task view unavailable. Waiting for its saved detail file.', 'warn'),
   }) } end
@@ -227,7 +227,7 @@ local block: BlockDef<State> = {
    ui.row({ text(model.message.model or model.header.model or 'Model unavailable', 'accent'), text('Steers the worker; it reads this at its next safe step', 'muted'),
     button(if state.origin.busy then 'Sending…' else 'Send ↑', 'send', true) }),
   }))
-  return { main = ui.el('div', { class = 'tt-page' }, children) }
+  return { main = ui.el('div', {}, children) }
  end,
  event = function(state, ev, cx)
   local pr = prModel(state)

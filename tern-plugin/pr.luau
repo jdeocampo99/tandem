@@ -42,7 +42,7 @@ local block: BlockDef<State> = {
    end
   end
   table.insert(top, result.main)
-  return {main=ui.el("div", {class="tdm-pr-pane"},top),dock=result.dock}
+  return {main=ui.el("div", {},top),dock=result.dock}
  end,
  event = function(s, ev, cx)
   if ev.ev == "action" and ev.act == "pr-close" then cx:exit(0); return end

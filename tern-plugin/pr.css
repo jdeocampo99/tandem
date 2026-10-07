@@ -1,7 +1,3 @@
-.tdm-pr-pane {
-  display: flex;
-  flex-direction: column;
-}
 .tdm-pr-strip {
   flex-shrink: 0;
   padding-bottom: 6px;
