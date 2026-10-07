@@ -21,6 +21,7 @@ import {
   readMergingSettings,
   resolveRepoPolicy,
   saveMergingChoice,
+  saveRepositoryCommands,
 } from "../../src/config/repositories.ts";
 
 type PolicyFixture = Readonly<{
@@ -286,6 +287,60 @@ test("setup writes a private central policy and never creates a child-repository
   });
 });
 
+test("saving commands replaces only the two command lists of a saved project", async () => {
+  await withFixture("save-commands-repo", async ({ repo, home }) => {
+    const { configPath } = await onboardRepo({ repoPath: repo, home, write: true });
+    const before = await readFile(configPath, "utf8");
+
+    await saveRepositoryCommands({
+      repoPath: repo,
+      home,
+      validationCommands: ["make check", "make lint"],
+      setupCommands: ["make deps"],
+    });
+    const after = await readFile(configPath, "utf8");
+    expect(after).toBe(
+      before
+        .replace(/^# setupCommands = .*$/mu, 'setupCommands = ["make deps"]')
+        .replace(
+          /^# validationCommands = .*$/mu,
+          'validationCommands = ["make check", "make lint"]',
+        ),
+    );
+    const resolved = await resolveRepoPolicy({ repoPath: repo, home });
+    expect(resolved.config.validationCommands.map((command) => command.name)).toEqual([
+      "make check",
+      "make lint",
+    ]);
+
+    // A hand-written multi-line list is replaced whole, its comments and the other list kept.
+    const handWritten = after.replace(
+      'validationCommands = ["make check", "make lint"]',
+      'validationCommands = [\n  "make check", # runs [all] checks\n  "make lint",\n]',
+    );
+    await writeFile(configPath, handWritten, "utf8");
+    await saveRepositoryCommands({ repoPath: repo, home, validationCommands: ["make ci"] });
+    expect(await readFile(configPath, "utf8")).toBe(
+      after.replace(
+        'validationCommands = ["make check", "make lint"]',
+        'validationCommands = ["make ci"]',
+      ),
+    );
+  });
+});
+
+test("saving commands refuses a project without settings and an empty command", async () => {
+  await withFixture("save-commands-missing", async ({ repo, home }) => {
+    await expect(
+      saveRepositoryCommands({ repoPath: repo, home, validationCommands: ["make check"] }),
+    ).rejects.toThrow("has no Tandem settings yet");
+    await onboardRepo({ repoPath: repo, home, write: true });
+    await expect(
+      saveRepositoryCommands({ repoPath: repo, home, validationCommands: [" "] }),
+    ).rejects.toThrow("validationCommands must not have an empty command");
+  });
+});
+
 test("canonical repository aliases share central policy while distinct roots and homes stay isolated", async () => {
   await withFixture("same-name-repo", async ({ root, repo, home }) => {
     const alias = join(root, "repo-alias");
@@ -429,7 +484,10 @@ test("onboardRepo proposes a frozen install from the lockfile and saves it", asy
 
     const proposal = await onboardRepo({ repoPath: repo, home });
     expect(proposal.approvalRequired).toBe(true);
-    expect(proposal.discovery).toEqual({ scripts: ["lint", "test"], lockfile: "pnpm-lock.yaml" });
+    expect(proposal.discovery).toEqual({
+      commands: ["pnpm run lint", "pnpm run test", "pnpm run build"],
+      lockfile: "pnpm-lock.yaml",
+    });
     const install = ["/bin/sh", "-c", "pnpm install --frozen-lockfile"];
     expect(proposal.setupCommands.map((entry) => entry.argv)).toEqual([install]);
 

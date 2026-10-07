@@ -47,6 +47,7 @@ const TERN_PLUGIN_KEYS: Readonly<Record<string, string>> = {
   "cmd+shift+b": "plugin.tandem.board",
   "cmd+shift+p": "plugin.tandem.prs",
   "cmd+shift+u": "plugin.tandem.usage",
+  "cmd+shift+,": "plugin.tandem.settings",
   ...Object.fromEntries(
     Array.from({ length: 9 }, (_, index) => [
       [`cmd+${index + 1}`, `plugin.tandem.project-${index + 1}`],
@@ -85,8 +86,27 @@ const recordSchema = z
   })
   .strict();
 
+/** Tandem cannot run without Tern, so a missing app and a failed link end in this one message. */
+export class TernRequiredError extends Error {
+  constructor(options?: ErrorOptions) {
+    super(
+      "Tandem needs Tern, which could not be used. Install Tern at /Applications/Tern.app, then try again.",
+      options,
+    );
+    this.name = "TernRequiredError";
+  }
+}
+
+async function pluginCommand(deps: TernPluginDependencies, args: readonly string[]) {
+  try {
+    return await ternPlugin(deps, args);
+  } catch (error) {
+    throw new TernRequiredError({ cause: error });
+  }
+}
+
 async function catalog(deps: TernPluginDependencies) {
-  const raw = await ternPlugin(deps, ["list"]);
+  const raw = await pluginCommand(deps, ["list"]);
   try {
     return catalogSchema.parse(JSON.parse(raw));
   } catch {
@@ -407,7 +427,7 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
     if (before.plugins.some((plugin) => plugin.id === TANDEM_TERN_PLUGIN)) {
       if (!readyIn(before.plugins)) return false;
     } else {
-      await ternPlugin(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
+      await pluginCommand(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
       if (!readyIn((await catalog(deps)).plugins)) return false;
     }
     printConfigureNotices(
@@ -430,7 +450,7 @@ function printConfigureNotices(deps: TernPluginDependencies, result: ConfigureRe
     );
   if (!result.configured)
     deps.print?.(
-      "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To change this later, switch to Herdr and select Tern again in setup.\n",
+      `Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To be asked again, add terminal = "herdr" to Tandem's settings.toml, start Tandem once, then remove that line.\n`,
     );
 }
 

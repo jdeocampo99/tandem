@@ -381,7 +381,7 @@ for (const action of ["approve", "request-changes", "abandon"] as const) {
 
 test("Herdr workflow keeps projecting through the legacy shell pane", async () => {
   await withScenario({}, async (world) => {
-    const { workflow } = await fixture(world, terminalBackend(world.run));
+    const { workflow } = await fixture(world, terminalBackend(world.run, { terminal: "herdr" }));
     const drafted = await workflow.draft({
       repoPath: world.repoPath,
       content: content("Let users review their brief in Tern"),

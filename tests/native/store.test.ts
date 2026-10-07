@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeViewsPublication } from "../../src/board/native-views.ts";
-import { ViewFile } from "../../src/native/contract.ts";
+import { setupFile, ViewFile } from "../../src/native/contract.ts";
 import {
   projectStoreDirectory,
   publishViews,
@@ -11,6 +11,8 @@ import {
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
+import { SETUP_MODES, type SetupView } from "../../src/onboarding/setup-view.ts";
+import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { taskScreenPublication } from "../tasks/task-screen-fixture.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
@@ -86,6 +88,44 @@ test("every write takes the next seq of one epoch, committed before the file car
     const third = await readProjectState(home, project);
     expect(third?.epoch).not.toBe(first?.epoch);
     expect(third?.seq).toBe(4);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("each setup mode has its own detail file, which a full publication never prunes", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tdm-store-"));
+  const project = join(home, "repo");
+  try {
+    for (const mode of SETUP_MODES)
+      await publishViews(home, project, async () => ({ setup: setupViewFixture(mode) }));
+    await publishViews(home, project, async () => publication(project));
+    for (const mode of SETUP_MODES) {
+      const file = ViewFile.parse(
+        JSON.parse(await readFile(viewDetailPath(home, project, setupFile(mode)), "utf8")),
+      );
+      expect(file.kind).toBe("setup");
+      expect(file.model).toMatchObject({ mode, schemaVersion: 1 });
+    }
+    expect(() => viewDetailPath(home, project, "setup-later.json")).toThrow();
+    expect(() => viewDetailPath(home, project, "setup-settings.json/../../x")).toThrow();
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a setup model its block cannot draw is refused before anything is written", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tdm-store-"));
+  const project = join(home, "repo");
+  try {
+    const broken = { ...setupViewFixture("setup"), roles: undefined } as unknown as SetupView;
+    await expect(publishViews(home, project, async () => ({ setup: broken }))).rejects.toThrow(
+      "Native setup model is invalid: roles",
+    );
+    await expect(stat(viewDetailPath(home, project, setupFile("setup")))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
   } finally {
     await rm(home, { recursive: true, force: true });
   }

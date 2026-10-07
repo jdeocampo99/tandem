@@ -120,7 +120,7 @@ local function host(path: string, receipt: string, run: Run): {[string]: string}
   end
   if ticket.closeOrigin then
    if tonumber(ticket.closeOrigin)~=origin or
-    (source.block~="tandem.board" and source.block~="tandem.usage" and source.block~="tandem.catchup") then error("Return origin identity changed") end
+    (source.block~="tandem.board" and source.block~="tandem.usage" and source.block~="tandem.catchup" and source.block~="tandem.setup") then error("Return origin identity changed") end
    retire(origin)
   end
   -- The origin may have just been closed by this ticket; focus only the exact coordinator.

@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import { renderBoard } from "../../src/board/view.ts";
-import { modelPresets } from "../../src/config/model-presets.ts";
 import type { RepoPolicy } from "../../src/contracts.ts";
 import {
   type MemoryShowResult,
@@ -723,36 +722,6 @@ test("models summary discloses unresolved Balanced roles with actionable reasons
   expect(summary).toContain("No suitable model was found for these roles");
   expect(summary).toContain("Planning (coordinator)");
   expect(summary).toContain("no provider is explicitly enabled");
-});
-
-test("models summary offers each preset by name with every role's harness, or why it is off", () => {
-  const summary = summarizeTandemActionValue("models", {
-    modelSettings: { configPath: "/tandem-home/models.json", configured: false },
-    availableModels: [],
-    discoveredProviders: ["openai-codex"],
-    balancedProfile: { status: "unresolved", roles: {}, gaps: [] },
-    claudeCode: "ready",
-    presets: modelPresets({
-      ompCatalogue: [
-        {
-          selector: "openai-codex/gpt-6-astra",
-          id: "gpt-6-astra",
-          provider: "openai-codex",
-          reasoning: true,
-          thinking: ["low", "medium", "high", "max"],
-          cost: { input: 10, output: 50 },
-        },
-      ],
-      claudeCode: "not-installed",
-    }),
-  });
-
-  expect(summary).toContain(
-    "- Claude coordinates, Codex researches and reviews: unavailable. Claude Code isn't installed.",
-  );
-  expect(summary).toContain(
-    "- All OMP: Planning openai-codex/gpt-6-astra high (OMP); Research openai-codex/gpt-6-astra medium (OMP);",
-  );
 });
 
 test("onboard summaries render complete saved and pending role selections", () => {
@@ -1710,25 +1679,6 @@ test("a report-mode issue is filed only after the user approves the cleaned-up d
   expect(filed).toEqual([
     { taskId: "task-1", title: "Reviewer times out on acme", body: "It restarted twice." },
   ]);
-});
-
-test("the setup page opens without approval", async () => {
-  const calls: string[] = [];
-  const service = {
-    openSetupPage: async (repoPath: string) => {
-      calls.push(`open ${repoPath}`);
-      return { path: "/home/setup/tandem-setup.html", url: "http://127.0.0.1:4387/session/a" };
-    },
-  } as unknown as TandemService;
-
-  const opened = await executeTandemAction({ action: "setup-page", repoPath: "/tandem" }, service, {
-    confirm: async () => false,
-  });
-  expect(opened.value).toBe(
-    "The setup page is open in Lavish (http://127.0.0.1:4387/session/a). Its answer comes back to this chat by itself; wait for it.",
-  );
-  expect(calls).toEqual(["open /tandem"]);
-  expect(parseTandemCommand("setup-page")).toEqual({ action: "setup-page", repoPath: "." });
 });
 
 test("create forwards the workstream the work belongs to", async () => {

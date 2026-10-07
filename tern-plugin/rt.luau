@@ -17,6 +17,7 @@ M.TASK = {refused = "Tandem action failed", start = "Tandem action could not sta
 M.PR = {refused = "PR action failed", start = "PR action could not start"} :: Labels
 M.BRIEF = {refused = "Tandem couldn't send the brief", start = "Tandem couldn't start that action"} :: Labels
 M.PICKER = {refused = "Task could not open", start = "Task could not open"} :: Labels
+M.SETUP = {refused = "Tandem couldn't save your setup", start = "Tandem couldn't start saving your setup"} :: Labels
 M.QUIET = {} :: Labels
 
 local NOTICES: {[string]: {level: string, title: string}} = {
@@ -27,6 +28,7 @@ local NOTICES: {[string]: {level: string, title: string}} = {
  ["review-posted"] = {level = "info", title = "Review posted"},
  ["review-unconfirmed"] = {level = "info", title = "Review wasn't confirmed as posted"},
  ["feedback-saved"] = {level = "warning", title = "PR feedback saved"},
+ ["setup-incomplete"] = {level = "warning", title = "Setup saved with problems"},
 }
 
 -- One view file a block draws (src/native/contract.ts `ViewFile`). `model` is the newest file

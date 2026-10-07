@@ -68,8 +68,8 @@ with the same basename have different directories. The directory holds:
 
 - `views/index.json`, the index every screen without a detail file watches
   (`viewIndexPath(home, canonicalRepoPath)`).
-- `views/task-<encodedTaskId>.json`, `views/brief-<encodedRequestId>.json` and
-  `views/pr-<encodedOwnerRepo>-<number>.json`, the detail files
+- `views/task-<encodedTaskId>.json`, `views/brief-<encodedRequestId>.json`,
+  `views/pr-<encodedOwnerRepo>-<number>.json` and `views/setup-<mode>.json`, the detail files
   (`viewDetailPath(home, canonicalRepoPath, detailFile)`). Identifiers use `encodeURIComponent`,
   so each filename is one path segment. PR filenames include the repository.
 - `state.json`: the store's `epoch` and `seq`, the alert cursors (`board/native-alerts.ts`), the
@@ -138,11 +138,12 @@ read never means zero usage or passing CI.
 Every file in `views/` is one `ViewFile` (`src/native/contract.ts`):
 
 ```ts
-{ v: 1, kind: "index" | "task" | "brief" | "pr", epoch: string, seq: number, model: Model }
+{ v: 1, kind: "index" | "task" | "brief" | "pr" | "setup", epoch: string, seq: number, model: Model }
 ```
 
-The index has `kind:"index"` and `model:NativeViews`. Detail kinds are `task`, `brief` and `pr`,
-with `model:TaskPageView`, `model:BriefView` and `model:PrPaneView`. `VIEW_MODELS` holds one zod
+The index has `kind:"index"` and `model:NativeViews`. Detail kinds are `task`, `brief`, `pr` and
+`setup`, with `model:TaskPageView`, `model:BriefView`, `model:PrPaneView` and `model:SetupView`.
+`VIEW_MODELS` holds one zod
 schema per kind, covering what the screens draw. `publishViews` refuses a model that fails it
 before writing anything. Luau JSON reads `null` as absent, so optional fields accept either. A
 board, usage or catch-up block watching the index reads its part of the bundle. The native block
@@ -241,9 +242,10 @@ interpolated into a shell command, and no input file is written.
 recorded coordinator session must list the pane. It then dispatches its verb table to the
 existing services and prints the outcome. The verbs are `open`, `open-project`, `project`,
 `visit`, `restart`, `steer`, `brief-approve`, `brief-request-changes`, `pr-comment`,
-`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link` and `merged-link`. `open`
-takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`, `orchestrator`, `inbox`,
-`task-picker` or `new-request`.
+`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link` and
+`setup-save`. `open` takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`,
+`orchestrator`, `inbox`, `task-picker`, `new-request` or `{kind:"setup", mode:"setup"|"settings"}`
+with an optional `section` (`models`, `repositories` or `bug-reports`).
 
 `done` means the click did what it asked. `kept` means part of it did not happen, typically a
 view that could not be closed or proved, and the originating view stays. `refused` means Tandem
@@ -414,6 +416,8 @@ block: Show PRs opens the project's first cached `tandem.pr` instead.
 | `tandem.pr` | PR detail | Beside the conversation |
 | `tandem.board`, `tandem.usage`, `tandem.catchup` | Root index | Own full-window tab |
 | `tandem.welcome` | Root index (static welcome) | Beside the conversation |
+| `tandem.setup` | Setup detail, `setup-setup.json` | Beside the conversation |
+| `tandem.setup` (settings) | Setup detail, `setup-settings.json` | Own full-window tab |
 
 Task, brief and PR `views.open` calls keep their durable identifiers. Board, usage, PRs and
 catch-up use `view:{kind:"board"|"usage"|"prs"|"catchup"}` with the same coordinator, home, cwd
@@ -482,7 +486,8 @@ ownership.
 
 ## Views
 
-The package registers Panel, Welcome, Task, Task picker, Brief, PR, Board, Usage and Catch-up.
+The package registers Panel, Welcome, Task, Task picker, Brief, PR, Board, Usage, Catch-up and
+Setup.
 The authoritative, readonly TypeScript model schema is `NativeViews` in
 `src/board/native-views.ts`, with the domain schemas linked below. Every field is JSON, including
 timeline events and cost receipts. No Maps, Sets, undefined values, credential data, provider raw
@@ -562,9 +567,10 @@ not terminal identifiers.
 ### Panel and project switcher
 
 The panel header shows `tandem ▾`, the count of other projects that need you, the 5-hour meter
-and label, the bell count, and PRs and Board buttons. The panel always shows the PRs, Board and
-usage buttons, whatever the user decided about shortcuts. Rows open their task, brief or PR
-target through `open`. The bell opens Tern's inbox through `open` with `ref:{kind:"inbox"}` and
+and label, the bell count, and PRs, Board and Settings (⚙) buttons. The panel always shows the PRs,
+Board, Settings and usage buttons, whatever the user decided about shortcuts. Rows open their
+task, brief or PR target through `open`. The Settings button opens `ref:{kind:"setup",
+mode:"settings"}`. The bell opens Tern's inbox through `open` with `ref:{kind:"inbox"}` and
 marks alerts read.
 
 The project dropdown targets each online row by `project` with `target:{repoPath}`, including
@@ -970,6 +976,44 @@ actions:["open-needs-you","dismiss"]}`. Project merges include tasks without a w
 `shouldAutoShowCatchUp({now,lastVisibleAt?,previousSignature?,currentSignature})` returns true
 only at **1+ hour** since last visibility, with a known baseline and signature and a different
 meaningful signature. Invalid dates, repaint and timer changes, and unchanged work stay quiet.
+
+### Setup and settings
+
+`tandem.setup` draws `SetupView` (`src/onboarding/setup-view.ts`), the one pure model of every
+choice setup offers, as the detail files `setup-setup.json` and `setup-settings.json`
+(`setupFile(mode)`). A full publication never prunes them. `open` with
+`ref:{kind:"setup", mode}` computes the view (`service.setupView`), publishes it under the project
+lock with `publishViews(home, project, async () => ({ setup }))`, then opens the block. Setup opens
+in the `split` placement beside the conversation. Settings opens as a `window` tab, so `isWindowView`
+in `src/native/contract.ts` tells the two apart from the detail file: `retire-views.ts` and the
+return-origin proof in `host.ts` use it instead of a per-kind table. Settings refuses to open on
+the Tandem checkout's coordinator while onboarding is unfinished.
+The optional `section` on the ref travels in the published model, not the block args, so the
+block's identity and tab reuse do not change: an open Settings tab jumps to the section once per
+newer file and keeps its draft. "Tandem: Change models" and "Tandem: Add or edit repositories" send
+`models` and `repositories`.
+
+The Tandem coordinator opens the setup block at session start, in the slot where the welcome view
+opened, while `remainingOnboardingSteps` is not empty and the terminal has native views
+(`terminal.openSetup`; Herdr returns `false` and the chat checklist runs). The chat then says the
+setup is beside it, and the coordinator's context says to answer questions, not to ask them. Once
+setup is finished the welcome view behaves as before.
+
+The block keeps only a transient draft: model and thinking per role, the chosen repositories with
+editable validation and setup command lists, and the bug-report choice. Start (setup) and Save
+changes (settings) are disabled while any role has no model, setup has no repository, or a chosen
+repository has no non-blank validation command; the bottom bar names the repository. They send
+`setup-save` with `answer`, the `SetupAnswer` that `parseSetupAnswer` checks at the CLI boundary
+(`mode` is part of it). `SetupWorkflow.apply` revalidates it, saves models, the bug-report choice,
+code folders and repositories in order, updates the commands of repositories already set up in
+place (`saveRepositoryCommands`) and opens a chat for each new repository (setup mode opens every
+chat). Then the model is published again and the coordinator gets one fixed message: "Setup saved.
+Chats for <repos> are open in the sidebar." in setup mode, "Settings saved. New tasks will use
+them." in settings mode. A partly failed save is `kept` with notice code `setup-incomplete` and the
+failed steps. The coordinator then receives those steps instead.
+
+Settings is reached from the palette ("Tandem: Settings", "Tandem: Change models", "Tandem: Add or
+edit repositories"), `cmd+shift+,` (`plugin.tandem.settings`) and the panel header.
 
 ## Window callbacks
 

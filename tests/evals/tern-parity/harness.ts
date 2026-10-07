@@ -1,5 +1,5 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -475,21 +475,17 @@ export class TernParityHost {
     const { home } = this.world;
     const questions: string[] = [];
     const printed: string[] = [];
-    const ready = await installTerminalPlugin(
-      home,
-      {
-        run: this.#run,
-        cwd: home,
-        binary: "tern",
-        env: { TERN_CONFIG_DIR: join(home, configDirectory) },
-        confirm: async (question) => {
-          questions.push(question);
-          return answer;
-        },
-        print: (text) => printed.push(text),
+    await installTerminalPlugin(home, {
+      run: this.#run,
+      cwd: home,
+      binary: "tern",
+      env: { TERN_CONFIG_DIR: join(home, configDirectory) },
+      confirm: async (question) => {
+        questions.push(question);
+        return answer;
       },
-      { status: "ready" },
-    );
+      print: (text) => printed.push(text),
+    });
     const settings: unknown = await readFile(
       join(home, configDirectory, "settings.json"),
       "utf8",
@@ -497,7 +493,7 @@ export class TernParityHost {
       (text) => JSON.parse(text),
       () => undefined,
     );
-    return { ready, questions, printed, settings };
+    return { questions, printed, settings };
   }
 
   /** Lets every open block poll its file again, as Tern's one-second watch timers do. */
@@ -608,6 +604,7 @@ export class TernParityHost {
         TANDEM_HOME: world.home,
         TANDEM_SESSION: world.sessionId,
         TANDEM_POOL_ROOT: world.poolRoot,
+        TANDEM_PROJECT_ROOTS: dirname(world.repoPath),
       },
       run: this.#run,
       terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
@@ -731,7 +728,7 @@ export class TernParityHost {
     const paneKey = JSON.stringify(panes);
     const paths = await listFiles(
       join(this.world.home, "tern"),
-      /^(index|task-.+|brief-.+|pr-.+)\.json$|\.ticket\.json$/u,
+      /^(index|task-.+|brief-.+|pr-.+|setup-.+)\.json$|\.ticket\.json$/u,
     );
     const files: Record<string, string | boolean> = {};
     for (const path of paths) {

@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NativeViewsPublication } from "../../src/board/native-views.ts";
-import { blockArgs, ViewFile } from "../../src/native/contract.ts";
+import { blockArgs, setupFile, ViewFile } from "../../src/native/contract.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
+import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
 import { luauBinary } from "../luau.ts";
+import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { taskScreenPublication } from "../tasks/task-screen-fixture.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
@@ -164,6 +166,7 @@ test("every view the store writes draws through its real screen", async () => {
     "🔔︎ 0",
     "⎇",
     "▦",
+    "⚙",
     "Needs you · 0",
     "Running · 1",
     "●",
@@ -262,7 +265,7 @@ test("a model that cannot draw keeps the last good one and shows the unavailable
   const unavailable = "View unavailable · actions paused";
   const [good, broken, older, torn, newStore, missing] = (panel ?? []).map(strings);
   expect(good).not.toContain(unavailable);
-  expect(broken).toEqual([...(good ?? []).slice(0, 5), unavailable, ...(good ?? []).slice(5)]);
+  expect(broken).toEqual([...(good ?? []).slice(0, 6), unavailable, ...(good ?? []).slice(6)]);
   // An older `seq` from the same store never replaces what is shown.
   expect(older).toEqual(broken);
   expect(torn).toEqual(broken);
@@ -297,4 +300,20 @@ test("a model that cannot draw keeps the last good one and shows the unavailable
   expect(strings(prGood ?? {})).toContain("#281 ▾");
   expect(prBroken?.title).toBe("#281 ▾");
   expect(strings(prBroken ?? {})).toContain("#281 ▾");
+});
+
+test("the setup block draws the published setup and settings views", async () => {
+  const shown: Record<SetupMode, string[]> = { setup: [], settings: [] };
+  for (const mode of SETUP_MODES) {
+    await publishViews(home, project, async () => ({ setup: setupViewFixture(mode) }));
+    const path = viewDetailPath(home, project, setupFile(mode));
+    const [drawn] = await render([
+      { block: "setup", args: args(path), steps: [{ [path]: await readFile(path, "utf8") }] },
+    ]);
+    shown[mode] = strings(drawn?.at(-1) ?? {});
+  }
+  expect(shown.setup).toContain("Set up Tandem");
+  expect(shown.setup).toContain("Customize");
+  expect(shown.settings).toContain("Settings");
+  expect(shown.settings).not.toContain("Customize");
 });

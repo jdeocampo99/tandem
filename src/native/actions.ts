@@ -9,11 +9,15 @@ import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import { type CoordinatorRecord, canonicalPath, pathIsWithin } from "../coordinator/record.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
+import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import {
   dismissNativeCatchUp,
   recordNativeVisibility,
   tryShowCatchUp,
 } from "../memory/native-visits.ts";
+import { remainingOnboardingSteps } from "../onboarding/checklist.ts";
+import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
+import type { SetupMode, SetupSection } from "../onboarding/setup-view.ts";
 import { parseReviewSubmission } from "../pr-review/page.ts";
 import { validateThreadReplies } from "../pr-review/replies.ts";
 import { parseReviewReplies } from "../pr-review/review.ts";
@@ -45,7 +49,7 @@ import {
   parseBlockContext,
   type ViewRef,
 } from "./contract.ts";
-import { type Published, readProjectState } from "./store.ts";
+import { type Published, publishViews, readProjectState } from "./store.ts";
 
 /** Review submissions are the largest envelopes; brief feedback alone is capped at 64,000 bytes. */
 const MAX_ENVELOPE_BYTES = 1024 * 1024;
@@ -130,9 +134,10 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
       run,
       service: () => {
         if (dependencies.service !== undefined) return dependencies.service;
-        created ??= (dependencies.createService ?? createTandemService)(
-          serviceOptions(located.environment),
-        );
+        created ??= (dependencies.createService ?? createTandemService)({
+          ...serviceOptions(located.environment),
+          run,
+        });
         return created;
       },
     };
@@ -282,6 +287,7 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
       shown.merged.find((url) => url === action.url),
     );
   },
+  "setup-save": saveSetup,
 };
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
@@ -404,6 +410,8 @@ async function open(act: Act, ref: ViewRef): Promise<Outcome> {
     }
     case "new-request":
       return newRequest(act);
+    case "setup":
+      return openSetup(act, ref.mode, ref.section);
   }
 }
 
@@ -881,4 +889,69 @@ async function submitReview(
       result.message || "No posted review receipt was returned. Check the PR before trying again.",
     );
   return result.message ? notice("done", "review-posted", result.message) : DONE;
+}
+
+/** Built before publication takes the project lock, because discovery can take seconds. */
+async function publishSetup(
+  act: Act,
+  owner: CoordinatorRecord,
+  mode: SetupMode,
+  section?: SetupSection,
+): Promise<void> {
+  const view = await act.service().setupView(owner.repoPath, mode);
+  const setup = section === undefined ? view : { ...view, section };
+  await publishViews(act.environment.home, owner.repoPath, async () => ({ setup }));
+}
+
+async function openSetup(act: Act, mode: SetupMode, section?: SetupSection): Promise<Outcome> {
+  const owner = await ternOwner(act, "opening setup");
+  if (
+    mode === "settings" &&
+    (await isTandemCheckout(owner.repoPath)) &&
+    remainingOnboardingSteps(await act.service().onboardingFacts(owner.repoPath)).length > 0
+  )
+    throw new Error("Finish setting up Tandem first. Settings open once setup is saved.");
+  await publishSetup(act, owner, mode, section);
+  return viewOutcome(await show(act, owner, { kind: "setup", mode }));
+}
+
+function listNames(names: readonly string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/**
+ * Saves the block's answer through the same workflow as every setup, publishes the new model, and
+ * tells the coordinator in fixed words. A refused answer changes nothing; a partly failed save is
+ * `kept`, so the block stays on screen with what went wrong.
+ */
+async function saveSetup(
+  act: Act,
+  { answer }: Extract<Action, { verb: "setup-save" }>,
+): Promise<Outcome> {
+  const text = JSON.stringify(answer);
+  const parsed = parseSetupAnswer(text);
+  if (!parsed.ok) throw new Error(`The setup answer can't be saved: ${parsed.problems.join(" ")}`);
+  const { mode } = parsed.answer;
+  const owner = await ternOwner(act, "saving setup");
+  const result = await act.service().saveSetup(owner.repoPath, text);
+  const warnings: string[] = [];
+  try {
+    await publishSetup(act, owner, mode);
+  } catch (error) {
+    warnings.push(`The saved settings could not be shown again: ${message(error)}`);
+  }
+  const opened = listNames(result.opened);
+  const told = !result.complete
+    ? `Setup was saved with problems:\n${result.message}`
+    : mode === "settings"
+      ? "Settings saved. New tasks will use them."
+      : `Setup saved. ${opened === "" ? "" : `Chats for ${opened} are open in the sidebar.`}`.trim();
+  try {
+    await promptCoordinator(act, owner, told);
+  } catch (error) {
+    warnings.push(`The coordinator could not be told: ${message(error)}`);
+  }
+  if (!result.complete)
+    return notice("kept", "setup-incomplete", [result.message, ...warnings].join("\n"));
+  return warnings.length === 0 ? DONE : notice("done", "setup-incomplete", warnings.join("\n"));
 }

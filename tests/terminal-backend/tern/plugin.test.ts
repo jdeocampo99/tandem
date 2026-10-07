@@ -1,9 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readHomeSettings, saveTerminalChoice } from "../../../src/config/home-settings.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
-import { createTandemService } from "../../../src/service/controller.ts";
 import {
   installTerminalPlugin,
   reloadTerminalPlugin,
@@ -13,6 +11,7 @@ import {
   configureTernPluginSettings,
   ensureTernPlugin,
   reloadTernPlugin,
+  TernRequiredError,
 } from "../../../src/terminal-backend/tern/plugin.ts";
 
 const scratch = await mkdtemp("/tmp/tandem-plugin-scratch-");
@@ -93,6 +92,7 @@ test("first-time setup links and configures Tern before its config directory exi
     const applied = JSON.parse(await readFile(join(config, "settings.json"), "utf8"));
     expect(applied.tabs_autohide).toBe(true);
     expect(applied.keybinds["cmd+shift+b"]).toBe("plugin.tandem.board");
+    expect(applied.keybinds["cmd+shift+,"]).toBe("plugin.tandem.settings");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -169,22 +169,23 @@ test("window bindings alone do not count as a ready native view integration", as
   expect(incomplete.calls).toHaveLength(1);
 });
 
-test("installer and update read the saved choice without contacting unselected terminals", async () => {
-  const home = await mkdtemp("/tmp/tandem-plugin-choice-");
+test("installer and update follow the saved terminal, and an absent choice means Tern", async () => {
+  const absent = await mkdtemp("/tmp/tandem-plugin-choice-");
+  const herdr = await mkdtemp("/tmp/tandem-plugin-choice-");
   const selected = runner([missing, ready, ready, ready]);
   const deps = {
     ...selected,
-    cwd: home,
-    settingsPath: join(home, "tern-settings.json"),
+    cwd: absent,
+    settingsPath: join(absent, "tern-settings.json"),
     confirm: async () => true,
   };
   try {
-    expect(await installTerminalPlugin(home, deps, { status: "ready" })).toBe(true);
-    expect(await reloadTerminalPlugin(home, deps)).toBe(false);
+    await writeFile(join(herdr, "settings.toml"), 'terminal = "herdr"\n');
+    await installTerminalPlugin(herdr, deps);
+    expect(await reloadTerminalPlugin(herdr, deps)).toBe(false);
     expect(selected.calls).toHaveLength(0);
-    await saveTerminalChoice(home, "tern");
-    expect(await installTerminalPlugin(home, deps, { status: "ready" })).toBe(true);
-    expect(await reloadTerminalPlugin(home, deps)).toBe(true);
+    await installTerminalPlugin(absent, deps);
+    expect(await reloadTerminalPlugin(absent, deps)).toBe(true);
     expect(selected.calls.map((call) => call.argv[2])).toEqual([
       "list",
       "link",
@@ -193,99 +194,43 @@ test("installer and update read the saved choice without contacting unselected t
       "reload",
       "list",
     ]);
-    await saveTerminalChoice(home, "herdr");
-    expect(await installTerminalPlugin(home, deps)).toBe(true);
-    expect(await reloadTerminalPlugin(home, deps)).toBe(false);
+    await installTerminalPlugin(herdr, deps);
+    expect(await reloadTerminalPlugin(herdr, deps)).toBe(false);
     expect(selected.calls).toHaveLength(6);
     expect(JSON.parse(await readFile(deps.settingsPath, "utf8"))).toEqual({});
     expect(await Bun.file(`${deps.settingsPath}.tandem.json`).exists()).toBe(false);
   } finally {
-    await rm(home, { recursive: true, force: true });
+    await rm(absent, { recursive: true, force: true });
+    await rm(herdr, { recursive: true, force: true });
   }
 });
 
-test("chat and setup terminal selection awaits plugin preferences after saving either choice", async () => {
-  const home = await mkdtemp("/tmp/tandem-plugin-onboarding-");
-  const observed: (string | undefined)[] = [];
-  const run: CommandRunner = async (request) => ({
-    code: 0,
-    stdout: request.argv.includes("state") ? JSON.stringify({ gate: { signed_in: true } }) : "{}",
-    stderr: "",
-  });
-  const service = createTandemService({
-    home,
-    sessionId: "test",
-    run,
-    installTerminalPlugin: async () => {
-      const selected = (await readHomeSettings(home)).terminal;
-      observed.push(selected);
-      return selected === "herdr";
+test("a missing Tern or a failed link fails with one plain error naming Tern.app", async () => {
+  const home = await mkdtemp("/tmp/tandem-plugin-not-ready-");
+  const deps = { cwd: home, settingsPath: join(home, "tern-settings.json") };
+  const answer =
+    (code: number): CommandRunner =>
+    async () => ({ code, stdout: "", stderr: "" });
+  const scenarios: readonly CommandRunner[] = [
+    async () => {
+      throw new Error("spawn ENOENT");
     },
-  });
+    answer(127),
+    async (request) =>
+      request.argv.includes("link")
+        ? { code: 1, stdout: "", stderr: "no" }
+        : { code: 0, stdout: missing, stderr: "" },
+    runner([missing, missing]).run,
+  ];
   try {
-    await service.configureTerminal("herdr");
-    expect(observed).toEqual(["herdr"]);
-    const selected = await service.configureTerminal("tern");
-    expect(observed).toEqual(["herdr", "tern"]);
-    expect(selected.terminal).toBe("tern");
-    expect(selected.reason).toContain("left unchanged");
-  } finally {
-    await service.shutdown();
-    await rm(home, { recursive: true, force: true });
-  }
-});
-
-for (const readiness of [
-  { status: "missing" },
-  { status: "signedOut" },
-  { status: "unknown", reason: "Tern could not start." },
-] as const) {
-  test(`${readiness.status} readiness refuses plugin linking before commands or consent`, async () => {
-    const home = await mkdtemp("/tmp/tandem-plugin-not-ready-");
-    const selected = runner([missing, ready]);
-    let consent = 0;
-    try {
-      await saveTerminalChoice(home, "tern");
-      expect(
-        await installTerminalPlugin(
-          home,
-          {
-            ...selected,
-            cwd: home,
-            settingsPath: join(home, "tern-settings.json"),
-            confirm: async () => {
-              consent += 1;
-              return true;
-            },
-          },
-          readiness,
-        ),
-      ).toBe(false);
-      expect(selected.calls).toHaveLength(0);
-      expect(consent).toBe(0);
-    } finally {
-      await rm(home, { recursive: true, force: true });
+    for (const run of scenarios) {
+      const failure = await installTerminalPlugin(home, { ...deps, run }).catch(
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(TernRequiredError);
+      expect((failure as TernRequiredError).message).toContain("/Applications/Tern.app");
     }
-  });
-}
-
-test("missing Tern skips the onboarding plugin hook and saves Herdr", async () => {
-  const home = await mkdtemp("/tmp/tandem-plugin-fallback-");
-  let linked = false;
-  const service = createTandemService({
-    home,
-    sessionId: "test",
-    run: async () => ({ code: 127, stdout: "", stderr: "missing" }),
-    installTerminalPlugin: async () => {
-      linked = true;
-      return true;
-    },
-  });
-  try {
-    expect((await service.configureTerminal("tern")).terminal).toBe("herdr");
-    expect(linked).toBe(false);
   } finally {
-    await service.shutdown();
     await rm(home, { recursive: true, force: true });
   }
 });
@@ -298,16 +243,16 @@ test("invalid Tern preferences never block Herdr launch or update and warn only 
   try {
     await configureTernPluginSettings({ path, approved: true });
     await writeFile(path, '{"tabs_autohide":"yes"}');
-    await saveTerminalChoice(home, "herdr");
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n');
     const deps = {
       ...selected,
       cwd: home,
       settingsPath: path,
       print: (text: string) => notices.push(text),
     };
-    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    await installTerminalPlugin(home, deps);
     expect(await reloadTerminalPlugin(home, deps)).toBe(false);
-    expect(await installTerminalPlugin(home, deps)).toBe(true);
+    await installTerminalPlugin(home, deps);
     expect(selected.calls).toHaveLength(0);
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("Herdr will still open");
@@ -341,7 +286,7 @@ test("declined global preferences print once and explain how to change the decis
     expect(prompts).toBe(1);
     expect(notices).toHaveLength(2);
     expect(notices[0]).toContain("custom Tern shortcuts: Command+Shift+B");
-    expect(notices[1]).toContain("switch to Herdr and select Tern again");
+    expect(notices[1]).toContain('To be asked again, add terminal = "herdr"');
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -369,26 +314,20 @@ test("two projects starting together link Tern once and ask the consent question
   };
   const project = async (name: string) => {
     const home = join(root, name);
-    await mkdir(home);
-    await saveTerminalChoice(home, "tern");
-    return installTerminalPlugin(
-      home,
-      {
-        run,
-        cwd: home,
-        settingsPath: settings,
-        confirm: async () => {
-          prompts += 1;
-          await Bun.sleep(50);
-          return true;
-        },
+    return installTerminalPlugin(home, {
+      run,
+      cwd: home,
+      settingsPath: settings,
+      confirm: async () => {
+        prompts += 1;
+        await Bun.sleep(50);
+        return true;
       },
-      { status: "ready" },
-    );
+    });
   };
   try {
     await writeFile(settings, "{}");
-    expect(await Promise.all([project("first"), project("second")])).toEqual([true, true]);
+    await Promise.all([project("first"), project("second")]);
     expect(links).toBe(1);
     expect(prompts).toBe(1);
     const applied = JSON.parse(await readFile(settings, "utf8"));

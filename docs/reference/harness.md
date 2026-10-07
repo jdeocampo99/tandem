@@ -77,34 +77,36 @@ Claude Code runs an unsupported level at the highest level it supports below it.
 - `configure-models` and models.json validation accept these selectors alongside the OMP listing,
   and reject any other `claude-code/*` selector or an unsupported thinking level.
 - Tandem never picks a Claude Code model on its own: the balanced profile and model reassignment
-  read only the OMP listing. A Claude Code model is used only when the user names it or picks a
-  preset that names it (see [Presets](#presets)), and then approves the recap.
+  read only the OMP listing. A Claude Code model is used only when the user names it or accepts
+  setup's recommendation of it (see [Model recommendations](#model-recommendations)) and saves.
 - `claude-code` does not need to be in `enabledProviders`. That list gates only Tandem's automatic
   picks, never a selector the user chose, and Claude Code runs on the user's own Claude login.
 
-## Presets
+## Model recommendations
 
-Setup offers three one-click choices for all five roles, on the setup page and in chat
-onboarding (the `models` action returns them as `presets`). A preset only fills the choices: the
-user can still change any role and approves the full recap, which names each role's harness.
-Code: src/config/model-presets.ts (pure), src/harness/claude-code/availability.ts (the probe).
+Each of the five roles lists every model runnable on this computer (Claude Code's catalogue only
+when it is ready, then OMP's listing), with a thinking level that follows the picked model's
+levels. One model per role is marked Recommended, with a short reason. The user can change any
+role, or reset all of them with "Use recommended models". Code: `recommend` in
+src/onboarding/setup-view.ts (pure), `resolveBalancedProfile` in src/config/operating-profile.ts,
+src/harness/claude-code/availability.ts (the readiness check).
 
-| Preset | Planning | Research | Coding | Review | Mockups |
-| --- | --- | --- | --- | --- | --- |
-| Claude coordinates, Codex researches and reviews | `claude-code/opus` | Balanced Codex | `claude-code/opus` | top Codex | `claude-code/sonnet` |
-| All Claude Code | `claude-code/opus` | `claude-code/sonnet` | `claude-code/opus` | `claude-code/fable` | `claude-code/sonnet` |
-| All OMP | Balanced | Balanced | Balanced | Balanced | Balanced |
-
-- Thinking is the Balanced profile's level for the role, moved to the nearest level the model
-  supports. Balanced is `resolveBalancedProfile` over every provider OMP lists; the user's Save
-  approves the providers the recap names.
-- Top Codex is the reasoning model with the highest published output price, then input price,
-  from OMP's `openai-codex` provider, else from `openai`. Names always come from the live listing.
-- Balanced Codex is the Balanced profile's research pick over that same provider alone, so research
-  gets a mid-tier model rather than the flagship review uses.
-- A preset is disabled, with its reason, when a role has no model: Claude Code is not installed
-  (`claude --version` fails), a settings file a launch reads switches mods off (below), OMP lists
-  no Codex or OpenAI model, or Balanced finds no model for a role.
+- With Claude Code ready, Planning is `claude-code/fable` at `high`, Research `claude-code/sonnet`
+  at `medium` and Mockups `claude-code/sonnet` at `low`. Coding is the Balanced profile's Coding
+  pick, else `claude-code/opus` at `high`. Review is `claude-code/opus` at `high`, or
+  `claude-code/fable` when Balanced found no Coding pick, so Coding and Review always differ.
+- Otherwise every role takes the Balanced profile's pick. Balanced is `resolveBalancedProfile` over
+  every provider OMP lists, never Claude Code. A role with no pick has no recommendation.
+- A recommended thinking level the model does not support moves to the nearest supported level;
+  the lighter one wins a tie.
+- Each role shows a fixed hint beside its picker: Planning "your smartest model", Research "cheap
+  and fast", Coding "strong at code, high effort", Review "smart, and different from Coding",
+  Mockups "cheap and fast".
+- A picker row may show a price level from the catalogue's output price per million tokens: `$` up
+  to 20, `$$` up to 60, `$$$` above. It is descriptive; the catalogue has no speed or intelligence
+  data.
+- Claude Code is unavailable, with its reason, when it is not installed (`claude --version`
+  fails) or a settings file a launch reads switches mods off.
 - Mods are off when one of these is `true`. The reason names the setting and the file.
 
   | File | Settings read |
@@ -119,9 +121,8 @@ Code: src/config/model-presets.ts (pure), src/harness/claude-code/availability.t
   `settings.json` matches the checkout's. Claude Code honors the other three settings only from
   managed settings. The MDM profile (`com.anthropic.claudecode`) is not read; mods it switches off
   end in the ready wait's error.
-- The setup page's model pickers group models by harness: Claude Code's catalogue (only when it
-  is ready), then OMP's listing. Thinking choices follow the picked model's levels. Claude Code is
-  never added to `enabledProviders`; the recap says its roles use the Claude subscription.
+- Saving enables only the OMP providers of the chosen models (`setupProviders`). Claude Code is
+  never added to `enabledProviders`, and its roles use the user's Claude subscription.
 
 ## Resolving a harness
 
@@ -488,7 +489,7 @@ repository's tsc and bun tests.
 | No synchronous editor text | `$.prompt.read()` is async and `paneState()` is not, so the pane keeps `draft` from each `promptEdit` and clears it when a typed prompt is sent. A worker reads it to hold a close or a mockup back while the person types. |
 | No transcript reference | A Claude Code worker's result carries no `transcript` (OMP's session file and entry id); `tandem trace` has none to link. |
 | No `TodoWrite` | The to-do list is built from `TaskCreate` and `TaskUpdate` (above). There are no phases, so a playbook step matches an item's subject. |
-| No message list at turn end | `agentEnd` carries the run's prompt (`turn.start`'s text) and final answer (`turn.complete`'s `answer`), which the core reads as one user message and one assistant message, so the setup page's wait for the coordinator's answer to a comment matches. Without a prompt there are no messages and nothing matches. |
+| No message list at turn end | `agentEnd` carries the run's prompt (`turn.start`'s text) and final answer (`turn.complete`'s `answer`), which the core reads as one user message and one assistant message, so the review page's wait for the coordinator's answer to a comment matches. Without a prompt there are no messages and nothing matches. |
 | No background-result wake | OMP marks a finished background command's wake, and a submitted worker aborts it. Claude Code sends a finished background task as a prompt whose origin is `task-notification`; a submitted worker answers it `handled`, the mod drops it, and no turn runs. |
 | Model id, not selector | `assertSelectedModel("claude-code/<alias>")` passes when the reported id is the alias or contains it as a word (`claude-opus-5-5` for `opus`), and fails closed when no model was reported. |
 

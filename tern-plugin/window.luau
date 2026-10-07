@@ -47,6 +47,9 @@ command("open-task", "Tandem: Open task…", {verb = "open", ref = {kind = "task
 command("board", "Tandem: Toggle board", {verb = "open", ref = {kind = "board"}})
 command("prs", "Tandem: Show PRs", {verb = "open", ref = {kind = "prs"}})
 command("usage", "Tandem: Usage", {verb = "open", ref = {kind = "usage"}})
+command("settings", "Tandem: Settings", {verb = "open", ref = {kind = "setup", mode = "settings"}})
+command("settings-models", "Tandem: Change models", {verb = "open", ref = {kind = "setup", mode = "settings", section = "models"}})
+command("settings-repositories", "Tandem: Add or edit repositories", {verb = "open", ref = {kind = "setup", mode = "settings", section = "repositories"}})
 
 for number = 1, 9 do
  command("project-" .. tostring(number), "Tandem: Project " .. tostring(number), {verb = "project", target = number}, false)

@@ -109,7 +109,9 @@ test("the project trigger stays quiet without a publication and preserves visits
     },
   };
   let attempts = 0;
-  const base = terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" }));
+  const base = terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" }), {
+    terminal: "herdr",
+  });
   const terminal = {
     ...base,
     name: "tern" as const,

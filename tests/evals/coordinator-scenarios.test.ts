@@ -43,7 +43,7 @@ function launchDependencies(
 ): CoordinatorLaunchDependencies {
   return {
     run: world.run,
-    terminal: terminalBackend(world.run),
+    terminal: terminalBackend(world.run, { terminal: "herdr" }),
     startPersistent: async () => undefined,
     runInteractive: async () => 0,
     sleep: async () => undefined,

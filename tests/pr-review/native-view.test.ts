@@ -147,7 +147,7 @@ test("publication clock advances leave running CI detail bytes, inode and mtime 
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     const file = nativePrFile(cached.repo, cached.number);
     const path = viewDetailPath(world.home, world.repoPath, file);

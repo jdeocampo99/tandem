@@ -199,7 +199,10 @@ test("central recovery relaunches a dead legacy review lens as the current merge
     const endpoint = replacement.endpoint as Endpoint;
 
     // The relaunched review now "finishes": its pane goes quiet and a durable, passing result lands.
-    await terminalBackend(world.run).interrupt({ endpoint, cwd: lease.path });
+    await terminalBackend(world.run, { terminal: "herdr" }).interrupt({
+      endpoint,
+      cwd: lease.path,
+    });
     await writeWorkerReceipt(workerReceiptPath(replacement.jobPath), {
       schemaVersion: 1,
       jobId: replacement.id,

@@ -36,6 +36,7 @@ const TERN_KEYBINDS: Readonly<Record<string, string>> = {
   "cmd+shift+b": "plugin.tandem.board",
   "cmd+shift+p": "plugin.tandem.prs",
   "cmd+shift+u": "plugin.tandem.usage",
+  "cmd+shift+,": "plugin.tandem.settings",
   ...Object.fromEntries(
     Array.from({ length: 9 }, (_, index) => [
       [`cmd+${index + 1}`, `plugin.tandem.project-${index + 1}`],
@@ -238,6 +239,35 @@ async function seedWork(world: ScenarioWorld): Promise<string> {
   return brief.id;
 }
 
+/** What `omp models --json` lists on a real install: without it the settings pane has nothing to pick. */
+const PARITY_MODELS = [
+  {
+    provider: "openai-codex",
+    id: "gpt-5.6",
+    selector: "openai-codex/gpt-5.6",
+    reasoning: true,
+    contextWindow: 400_000,
+    cost: { input: 5, output: 30 },
+    thinking: ["low", "medium", "high", "max"],
+  },
+  {
+    provider: "anthropic",
+    id: "claude-sonnet-5-5",
+    selector: "anthropic/claude-sonnet-5-5",
+    reasoning: true,
+    contextWindow: 200_000,
+    cost: { input: 3, output: 15 },
+    thinking: ["low", "medium", "high", "max"],
+  },
+  // A pinned model missing from a non-empty listing pauses its task, as on a real install.
+  ...Object.values(SCENARIO_POLICY.config.models).map(({ model, thinking }) => ({
+    provider: "scenario",
+    id: model.slice("scenario/".length),
+    selector: model,
+    thinking: [thinking],
+  })),
+];
+
 /** Runs `body` against a seeded project whose panel is open in the Tern window. */
 export async function withParity(
   body: (parity: Parity) => Promise<void>,
@@ -245,7 +275,7 @@ export async function withParity(
 ): Promise<void> {
   // Switcher staleness and visit gaps read the wall clock, so the scenario clock starts at it.
   const now = new Date(Math.floor(Date.now() / 1000) * 1000).toISOString();
-  await withScenario({ terminal: "tern", now }, async (world) => {
+  await withScenario({ terminal: "tern", now, ompModels: PARITY_MODELS }, async (world) => {
     const project = await seedTernProject(world, { coordinatorPaneId: "101", helperPaneId: "102" });
     const briefId = options.seed === false ? "" : await seedWork(world);
     const host = await TernParityHost.start(world, project);
@@ -310,7 +340,7 @@ function blockKinds(world: ScenarioWorld): readonly string[] {
 export const inventory: readonly InventoryEntry[] = [
   {
     view: "Panel",
-    item: "Header with tandem ▾, other-project count, 5h meter and label, bell count, PRs and Board icons",
+    item: "Header with tandem ▾, other-project count, 5h meter and label, bell count, PRs, Board and Settings icons",
     run: () =>
       withParity(async (parity) => {
         const { host, panel, world } = parity;
@@ -318,21 +348,23 @@ export const inventory: readonly InventoryEntry[] = [
         await host.publish();
         await host.refresh();
         const view = await panel.render();
-        expect(view.text.slice(0, 7)).toEqual([
+        expect(view.text.slice(0, 8)).toEqual([
           "tandem ▾",
           "1",
           "5h unavailable",
           "🔔︎ 0",
           "⎇",
           "▦",
+          "⚙",
           "Needs you · 2",
         ]);
-        expect(labels(view).slice(0, 5)).toEqual([
+        expect(labels(view).slice(0, 6)).toEqual([
           "tandem ▾ 1",
           "5h unavailable",
           "🔔︎ 0",
           "⎇",
           "▦",
+          "⚙",
         ]);
         await panel.click("▦");
         expect(host.screen(host.pane("board")).pane).toBeGreaterThan(0);
@@ -355,7 +387,7 @@ export const inventory: readonly InventoryEntry[] = [
     run: () =>
       withParity(async ({ host, panel }) => {
         const view = await panel.render();
-        expect(view.text.slice(5)).toEqual([
+        expect(view.text.slice(6)).toEqual([
           "Needs you · 2",
           "●",
           "Add dark mode",
@@ -482,6 +514,7 @@ export const inventory: readonly InventoryEntry[] = [
             "🔔︎ 0",
             "⎇",
             "▦",
+            "⚙",
             "Needs you · 0",
             "Running · 0",
             "Ready · 0",
@@ -565,7 +598,7 @@ export const inventory: readonly InventoryEntry[] = [
   },
   {
     view: "Keys and palette",
-    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘1–9, ⌘⇧[ ]; five palette commands; project commands hidden",
+    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; eight palette commands; project commands hidden",
     run: () =>
       withParity(async (parity) => {
         const { host, world } = parity;
@@ -581,6 +614,9 @@ export const inventory: readonly InventoryEntry[] = [
           "Tandem: Toggle board",
           "Tandem: Show PRs",
           "Tandem: Usage",
+          "Tandem: Settings",
+          "Tandem: Change models",
+          "Tandem: Add or edit repositories",
         ]);
         const registered = new Set(commands.map((command) => `plugin.tandem.${command.id}`));
         const bound = [...new Set(Object.values(TERN_KEYBINDS))];
@@ -608,6 +644,18 @@ export const inventory: readonly InventoryEntry[] = [
         await host.command("open-task");
         const picker = host.screen(host.pane("task-picker"));
         expect((await picker.render()).text).toContain("Search tasks by title, id or stage");
+        await host.command("settings-repositories");
+        const settings = host.screen(host.pane("setup"));
+        await host.refresh();
+        expect((await settings.render()).text).toContain("+ Add repository");
+        await host.command("settings-models");
+        await host.refresh();
+        const models = (await settings.render()).text;
+        expect(models).toContain("Planning");
+        expect(models).not.toContain("+ Add repository");
+        await host.command("settings-repositories");
+        await host.refresh();
+        expect((await settings.render()).text).toContain("+ Add repository");
       }),
   },
   {
@@ -1513,29 +1561,24 @@ export const inventory: readonly InventoryEntry[] = [
         async ({ host, world }) => {
           const question =
             "Hide Tern's sidebar and use Tandem's board, PR, usage and project shortcuts? These settings apply to every Tern window. Your custom shortcuts stay unchanged. Palette commands and panel buttons work either way.";
-          const unchanged =
-            "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To change this later, switch to Herdr and select Tern again in setup.\n";
+          const unchanged = `Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To be asked again, add terminal = "herdr" to Tandem's settings.toml, start Tandem once, then remove that line.\n`;
           const installed = { keybinds: TERN_KEYBINDS, tabs_autohide: true };
           expect(await host.offerTernPreferences("approved", true)).toEqual({
-            ready: true,
             questions: [question],
             printed: [],
             settings: installed,
           });
           expect(await host.offerTernPreferences("approved", false)).toEqual({
-            ready: true,
             questions: [],
             printed: [],
             settings: installed,
           });
           expect(await host.offerTernPreferences("declined", false)).toEqual({
-            ready: true,
             questions: [question],
             printed: [unchanged],
             settings: undefined,
           });
           expect(await host.offerTernPreferences("declined", true)).toEqual({
-            ready: true,
             questions: [],
             printed: [],
             settings: undefined,

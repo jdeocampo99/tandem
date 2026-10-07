@@ -74,7 +74,6 @@ function onboardingService(
     : undefined;
   const enabledProviders = options.enabledProviders ?? [];
   const service = {
-    onboardingFacts: async () => ({ terminalChosen: true }),
     onboard: async (repoPath: string, write = false) => {
       if (write) writeCalls.push(repoPath);
       return {
@@ -165,6 +164,12 @@ async function registerProjects(home: string, projects: readonly string[]): Prom
       "utf8",
     );
   }
+}
+
+/** Herdr runs only when the saved terminal says so; these tests drive Herdr through fake runners. */
+async function chooseHerdr(home: string): Promise<void> {
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
 }
 
 const OSC_PALETTE_REPLY = "\x1b]4;142;rgb:1357/2468/abcd\x07";
@@ -283,6 +288,7 @@ test("explicit role answers are sent to the service only after the complete reca
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: false });
   const invocations: CliInvocation[] = [];
   const answers = ["enable", ...roles.flatMap(() => ["test/model", "high"])];
@@ -313,6 +319,7 @@ test("first-run onboarding accepts a resolved Balanced proposal without six sepa
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const fake = onboardingService({
     existingConfig: true,
     configured: false,
@@ -349,6 +356,7 @@ test("first-run onboarding lets the user inspect and override a resolved Balance
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const fake = onboardingService({
     existingConfig: true,
     configured: false,
@@ -458,6 +466,7 @@ test("focuses the requested coordinator workspace before one Herdr attach", asyn
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const focusCalls: CommandRequest[] = [];
   const run = async (request: CommandRequest): Promise<CommandResult> => {
     if (
@@ -509,6 +518,7 @@ test("multiple explicit projects use one selected session without inheriting ano
   const invocations: CliInvocation[] = [];
   let processEnvironment: Record<string, string | undefined> | undefined;
   const home = join(first, "..", "home");
+  await chooseHerdr(home);
   const application: CliApplication = {
     invoke: async (invocation) => {
       invocations.push(invocation);
@@ -562,6 +572,7 @@ test("bare launch opens all saved projects and the Tandem coordinator, and attac
   const home = join(parent, "home");
   await mkdir(cwd);
   await registerProjects(home, projects);
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const focusCalls: CommandRequest[] = [];
@@ -627,6 +638,7 @@ test("bare non-TTY launch inside a saved repo opens every saved project", async 
   const projects = [first, second];
   const home = join(first, "..", "home");
   await registerProjects(home, projects);
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const result = await runTerminal(["--home", home], {
@@ -656,6 +668,7 @@ test("explicit project paths override saved projects with only the requested sub
     throw new Error("test projects were not created");
   const home = join(first, "..", "home");
   await registerProjects(home, projects);
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const result = await runTerminal([first, "--home", home], {
@@ -738,6 +751,7 @@ test("bare launch with no saved projects opens only the Tandem coordinator and a
   if (repo === undefined || tandemCheckout === undefined)
     throw new Error("test projects were not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: false, configured: false });
   const invocations: CliInvocation[] = [];
   const answers = ["enable", ...roles.flatMap(() => ["test/model", "low"])];
@@ -766,6 +780,7 @@ test("saved interactive launch keeps terminal replies out of visible output", as
   if (repo === undefined) throw new Error("test project was not created");
   const parent = join(repo, "..");
   const home = join(parent, "home");
+  await chooseHerdr(home);
   const { input, output } = ttyStreams();
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
@@ -845,6 +860,7 @@ test("keyboard onboarding releases terminal input before Herdr attachment", asyn
   if (repo === undefined) throw new Error("test project was not created");
   const parent = join(repo, "..");
   const home = join(parent, "home");
+  await chooseHerdr(home);
   const { input, output } = ttyStreams();
   const fake = onboardingService({ existingConfig: false, configured: false });
   const invocations: CliInvocation[] = [];
@@ -999,6 +1015,7 @@ test("reset cancels work in saved projects and the Tandem coordinator, then laun
     throw new Error("test projects were not created");
   const home = join(first, "..", "home");
   await registerProjects(home, [first]);
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const events: string[] = [];
@@ -1069,6 +1086,7 @@ test("launch prints a notice when the previous coordinator workspace is retained
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const output: string[] = [];
@@ -1109,6 +1127,7 @@ test("reset prints a notice when a coordinator's workspace is quarantined", asyn
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   const output: string[] = [];
@@ -1569,6 +1588,7 @@ test("status --logs prints recent prompt-routing events without launching a proj
 
 test("fix inspects Tandem resources and applies nothing when there is nothing to clean", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-reconcile-test-"));
+  await chooseHerdr(home);
   try {
     expect(parseTerminalArgs(["fix", "--home", home])).toMatchObject({
       command: "fix",
@@ -1624,6 +1644,7 @@ test("a reset refusal prevents every coordinator launch", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");
   const home = join(repo, "..", "home");
+  await chooseHerdr(home);
   const fake = onboardingService({ existingConfig: true, configured: true });
   const invocations: CliInvocation[] = [];
   let resetCalls = 0;
@@ -1654,6 +1675,7 @@ test("update refuses only from the coordinator pane it would close", async () =>
   if (repo === undefined) throw new Error("test project was not created");
   const root = join(repo, "..");
   const home = join(root, "home");
+  await chooseHerdr(home);
   const worktreeRoot = join(root, "pool");
   const worktreePath = join(worktreeRoot, "coordinator");
   await mkdir(worktreePath, { recursive: true });
@@ -1834,6 +1856,7 @@ test("update puts task workspaces back under the replacement coordinator", async
   const root = join(repo, "..");
   const home = join(root, "home");
   await mkdir(home, { recursive: true });
+  await chooseHerdr(home);
   await saveCoordinator(home, repo, "w-old");
   await seedTasks(home, [{ id: "36a4f150-task", repoPath: repo, workspaceId: "w-task" }]);
   const sidebar = fakeSidebar(["w-old", "w-task"]);
@@ -1853,7 +1876,10 @@ test("update puts task workspaces back under the replacement coordinator", async
     tandemCheckout: repo,
     processEnvironment: {},
     run: (request) => (request.argv[0] === "herdr" ? sidebar.run(request) : runCommand(request)),
-    terminal: terminalBackend(sidebar.run, { herdr: { moveWorkspace: sidebar.moveWorkspace } }),
+    terminal: terminalBackend(sidebar.run, {
+      terminal: "herdr",
+      herdr: { moveWorkspace: sidebar.moveWorkspace },
+    }),
     service: fake.service,
     application,
     isTTY: false,
@@ -1871,6 +1897,7 @@ test("update re-nests before attaching to Herdr and prints every re-nest warning
   const root = join(repo, "..");
   const home = join(root, "home");
   await mkdir(home, { recursive: true });
+  await chooseHerdr(home);
   await saveCoordinator(home, repo, "w-old");
   await seedTasks(home, [{ id: "36a4f150-task", repoPath: repo, workspaceId: "w-task" }]);
   const sidebar = fakeSidebar(["w-old", "w-task"]);
@@ -1903,7 +1930,7 @@ test("update re-nests before attaching to Herdr and prints every re-nest warning
     terminal: terminalBackend(
       async (request) =>
         request.argv.includes("focus") ? { code: 0, stdout: "", stderr: "" } : sidebar.run(request),
-      { herdr: { moveWorkspace: sidebar.moveWorkspace } },
+      { terminal: "herdr", herdr: { moveWorkspace: sidebar.moveWorkspace } },
     ),
     service: fake.service,
     application,
@@ -1943,7 +1970,10 @@ test("fix re-nests task workspaces without asking, and says so in text and JSON"
       processEnvironment: {},
       isTTY: false,
       run: run(sidebar),
-      terminal: terminalBackend(run(sidebar), { herdr: { moveWorkspace: sidebar.moveWorkspace } }),
+      terminal: terminalBackend(run(sidebar), {
+        terminal: "herdr",
+        herdr: { moveWorkspace: sidebar.moveWorkspace },
+      }),
       stdout: (text) => output.push(text),
       stderr: (text) => output.push(text),
     });

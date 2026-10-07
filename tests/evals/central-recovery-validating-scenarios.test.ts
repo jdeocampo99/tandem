@@ -148,7 +148,10 @@ test("a stuck validation job reruns at the same reviewed HEAD and passes", async
     if (newEndpoint === undefined) throw new Error("replacement validation job has no endpoint");
 
     // --- The new validation run "finishes": its pane returns to shell and it writes a passing result. ---
-    await terminalBackend(world.run).interrupt({ endpoint: newEndpoint, cwd: lease.path });
+    await terminalBackend(world.run, { terminal: "herdr" }).interrupt({
+      endpoint: newEndpoint,
+      cwd: lease.path,
+    });
     const result: ValidationResult = {
       schemaVersion: 1,
       id: newJob.id,
@@ -281,7 +284,10 @@ test("a genuine task-code validation failure still moves to awaiting-fixes, not 
     );
     // The pane's process already returned to shell before this tick, matching a validation run that
     // finished (successfully or not) rather than one whose process is still live.
-    await terminalBackend(world.run).interrupt({ endpoint: validationEndpoint, cwd: lease.path });
+    await terminalBackend(world.run, { terminal: "herdr" }).interrupt({
+      endpoint: validationEndpoint,
+      cwd: lease.path,
+    });
     const result: ValidationResult = {
       schemaVersion: 1,
       id: job.id,

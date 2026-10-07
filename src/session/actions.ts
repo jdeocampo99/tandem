@@ -1,12 +1,7 @@
 import { isBoardView } from "../board/view.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import type { MergingChoice } from "../config/repositories.ts";
-import type {
-  CreatableTaskKind,
-  RepoPolicy,
-  RequestBriefContent,
-  TerminalName,
-} from "../contracts.ts";
+import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
 import type { PinnablePlaybookId } from "../playbooks/catalog.ts";
@@ -45,11 +40,9 @@ export type TandemAction =
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
   | Readonly<{ readonly action: "open-project"; readonly repoPath: string }>
   | Readonly<{ readonly action: "find-repo"; readonly name: string }>
-  | Readonly<{ readonly action: "terminal-setting"; readonly terminal: TerminalName }>
   | Readonly<{ readonly action: "save-code-folders"; readonly folders: readonly string[] }>
   | Readonly<{ readonly action: "self-improvement"; readonly mode: SelfImprovementMode }>
   | Readonly<{ readonly action: "check-tools" }>
-  | Readonly<{ readonly action: "setup-page"; readonly repoPath: string }>
   | Readonly<{
       readonly action: "configure-models";
       readonly repoPath: string;
@@ -318,7 +311,6 @@ function requiresHumanApproval(action: TandemAction): boolean {
     action.action === "open-project" ||
     action.action === "save-code-folders" ||
     action.action === "self-improvement" ||
-    action.action === "terminal-setting" ||
     action.action === "configure-models" ||
     action.action === "approve" ||
     action.action === "brief-approve" ||
@@ -371,12 +363,6 @@ async function approvalPrompt(
       message: action.folders.map((folder) => `- ${folder}`).join("\n"),
     };
   }
-  if (action.action === "terminal-setting")
-    return {
-      title: `Use ${action.terminal === "tern" ? "Tern" : "Herdr"} for Tandem?`,
-      message:
-        "Applies across this Tandem home. Running tasks prevent switching. If Tern is missing or signed out, Herdr is saved instead.",
-    };
   if (action.action === "self-improvement") {
     return {
       title: SELF_IMPROVEMENT_TITLES[action.mode],
@@ -598,23 +584,11 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
     actionResult(await service.saveProjectRoots(action.folders), action.action, {
       approved: true,
     }),
-  "terminal-setting": async (action, service) =>
-    actionResult(await service.configureTerminal(action.terminal), action.action, {
-      approved: true,
-    }),
   "self-improvement": async (action, service) =>
     actionResult(await service.saveSelfImprovement(action.mode), action.action, {
       approved: true,
     }),
   "check-tools": async (action, service) => actionResult(await service.checkTools(), action.action),
-  "setup-page": async (action, service) => {
-    const opened = await service.openSetupPage(action.repoPath);
-    const link = opened.url === undefined ? "" : ` (${opened.url})`;
-    return actionResult(
-      `The setup page is open in Lavish${link}. Its answer comes back to this chat by itself; wait for it.`,
-      action.action,
-    );
-  },
   models: async (action, service) =>
     actionResult(await service.models(action.repoPath), action.action),
   "configure-models": async (action, service) =>
@@ -1092,9 +1066,9 @@ export async function runTandemCommand(
   }
 }
 
-/** `/tandem models .` and `/tandem setup-page` mean the coordinator's own checkout. */
+/** `/tandem models .` means the coordinator's own checkout. */
 export function resolveCommandAction(action: TandemAction, cwd: string): TandemAction {
-  return (action.action === "models" || action.action === "setup-page") && action.repoPath === "."
+  return action.action === "models" && action.repoPath === "."
     ? { ...action, repoPath: cwd }
     : action;
 }
@@ -1312,10 +1286,6 @@ const TANDEM_COMMAND_PARSERS: Readonly<Record<string, TandemCommandParser>> = {
   "check-tools": {
     arity: { min: 1, max: 1 },
     parse: () => ({ action: "check-tools" }),
-  },
-  "setup-page": {
-    arity: { min: 1, max: 2 },
-    parse: (words) => ({ action: "setup-page", repoPath: words[1] ?? "." }),
   },
   models: {
     arity: { min: 1, max: 2 },

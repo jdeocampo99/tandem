@@ -33,9 +33,9 @@ src/service/scout-cleanup.ts, src/adapters/treehouse.ts, src/workers/workflow.ts
   as `setup`, `open-project`, `save-code-folders`, `self-improvement`, `configure-models`, `approve`,
   `brief-approve`, `cancel` (with or without `discard`), `publish`, `publish-now`, `draft`, `merge`,
   and `cleanup` with `discard`. Each needs a live TUI confirmation; without an interactive TUI they
-  fail closed. The Lavish Review Save is separate: it is the user's one consent for the complete
-  setup answer, and its backend validation reports a fixed success or error status without a model
-  turn.
+  fail closed. The native setup block's Start and Save changes are separate: each is the user's one
+  consent for the complete setup answer, and its backend validation reports a fixed success or
+  error status without a model turn.
 - `configure-models` does not change existing task snapshots.
 - User prompts route through `routeUserPrompt` (src/session/prompt-routing.ts) before the model
   sees them, for confirmations and other harness-neutral prompt handling; OMP's `input` event

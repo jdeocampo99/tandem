@@ -145,7 +145,7 @@ test("a close whose first exit keys are lost is completed by re-sending them (#2
   try {
     const pane: Pane = { active: true, exitBursts: 0, exitSendsNeeded: 2 };
     await prepareWorkerTerminal(
-      terminalBackend(paneRunner(pane)),
+      terminalBackend(paneRunner(pane), { terminal: "herdr" }),
       { endpoint: ENDPOINT, cwd: home, job },
       FAST,
     );
@@ -164,7 +164,7 @@ test("a worker whose process never exits still fails closed after the wait", asy
     const pane: Pane = { active: true, exitBursts: 0, exitSendsNeeded: Number.POSITIVE_INFINITY };
     await expect(
       prepareWorkerTerminal(
-        terminalBackend(paneRunner(pane)),
+        terminalBackend(paneRunner(pane), { terminal: "herdr" }),
         { endpoint: ENDPOINT, cwd: home, job },
         FAST,
       ),
@@ -182,7 +182,7 @@ test("a close that takes on the first exit keys sends them only once", async () 
   try {
     const pane: Pane = { active: true, exitBursts: 0, exitSendsNeeded: 1 };
     await prepareWorkerTerminal(
-      terminalBackend(paneRunner(pane)),
+      terminalBackend(paneRunner(pane), { terminal: "herdr" }),
       { endpoint: ENDPOINT, cwd: home, job },
       FAST,
     );

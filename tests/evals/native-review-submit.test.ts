@@ -946,7 +946,7 @@ for (const crash of ["lost-response", "review-receipt", "claim", "reply-receipt"
           home: world.home,
           clock: world.clock,
           run: boundary.run,
-          terminal: terminalBackend(world.run),
+          terminal: terminalBackend(world.run, { terminal: "herdr" }),
         });
         const snapshot = {
           version: 1 as const,

@@ -112,6 +112,37 @@ export function isolatedRunner(run: CommandRunner, log: string): CommandRunner {
   };
 }
 
+const SETUP_MODELS = JSON.stringify({
+  models: [
+    {
+      selector: "openai-codex/flagship",
+      id: "flagship",
+      provider: "openai-codex",
+      name: "Flagship",
+      reasoning: true,
+      thinking: ["low", "medium", "high", "max"],
+      contextWindow: 400_000,
+      cost: { input: 10, output: 50 },
+    },
+  ],
+});
+
+/**
+ * What setup reaches beyond Tern and Git: OMP's model listing answers one canned model, and opening
+ * a saved project's chat is logged instead of launching a coordinator. Nothing else gets through.
+ */
+export function setupRunner(run: CommandRunner, log: string): CommandRunner {
+  return async (request) => {
+    if (request.argv[0] === "omp" && request.argv[1] === "models")
+      return { code: 0, stdout: SETUP_MODELS, stderr: "" };
+    if (request.argv[0] === "env" && request.argv.includes("--no-attach")) {
+      await appendFile(log, `open-project ${JSON.stringify(request.argv)}\n`);
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return run(request);
+  };
+}
+
 /**
  * Starts an isolated Tern daemon and control window with a private config dir, plugin copy and
  * Tandem home, runs `body`, then quits the window and stops the daemon, also on failure.
@@ -125,7 +156,8 @@ export async function withTernWindow(
   const plugin = join(root, "plugin");
   const control = join(root, "w.sock");
   const shots = join(root, "shots");
-  const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
+  // A window started through a PATH symlink to Tern.app never answers `ctl account`.
+  const binary = await realpath(Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern");
   const env = {
     HOME: root,
     USER: "tandem-test",

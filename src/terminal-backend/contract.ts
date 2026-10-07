@@ -1,5 +1,6 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { AgentRole, Endpoint, TerminalName } from "../contracts.ts";
+import type { SetupMode } from "../onboarding/setup-view.ts";
 import type { ToolCheck } from "../onboarding/tools.ts";
 
 /** A pane Tandem owns, and the directory the backend's commands run from. */
@@ -73,7 +74,8 @@ export type TerminalView =
     }>
   | Readonly<{ kind: "task" | "pr"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>
-  | Readonly<{ kind: "pr"; repo: string; number: number }>;
+  | Readonly<{ kind: "pr"; repo: string; number: number }>
+  | Readonly<{ kind: "setup"; mode: SetupMode }>;
 
 /** Presentation context from the initiating view; it grants no pane ownership. */
 export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
@@ -164,11 +166,6 @@ export type ViewsCapability = Readonly<{
     conclusive: () => Promise<boolean>,
   ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
 }>;
-
-/** Installation and account readiness proved before offering a terminal in setup. */
-export type TerminalAvailability =
-  | Readonly<{ status: "missing" | "signedOut" | "ready" }>
-  | Readonly<{ status: "unknown"; reason: string }>;
 
 /** The last proven window width, and any limitation that prevented fitting the panel. */
 export type PanelFitResult = Readonly<{
@@ -351,6 +348,11 @@ export type TerminalBackend = Readonly<{
   notify(target: SessionTarget & Readonly<{ title: string; body: string }>): Promise<void>;
   /** Opens Tandem's welcome view; accepting it prompts the agent in `paneId`. */
   openWelcome(target: SessionTarget & Readonly<{ paneId: string }>): Promise<void>;
+  /**
+   * Opens Tandem's setup block beside the coordinator in `paneId`, which must already have its
+   * published view; false when this terminal has no native blocks and setup runs in the chat.
+   */
+  openSetup(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
   /** Submits a prompt to the agent in a pane, or types it and presses Enter when none is known. */
   promptAgent(target: SessionTarget & Readonly<{ paneId: string; text: string }>): Promise<void>;
   /** Opens Tandem's panel beside the coordinator, without focus; its pane id. */
