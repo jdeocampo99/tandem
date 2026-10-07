@@ -1,6 +1,7 @@
 --!strict
 -- The quick task composer: one text field, the project it starts in, and Start. Start is the
--- user's approval of exactly what they typed; the CLI checks the text again and records it.
+-- user's approval of exactly what they typed; `tandem native act` checks the text again and
+-- records it.
 local ui = tern.ui
 local fields = require("./text-field")
 local components = require("./components")
@@ -8,7 +9,8 @@ local rt = require("./rt")
 
 -- `QuickTaskView` in src/tasks/quick.ts.
 type Model = {
- repo: string, branch: string, placeholder: string, minChars: number, minWords: number, tooShort: string,
+ repo: string, branch: string, placeholder: string, minChars: number, minWords: number, maxChars: number,
+ tooShort: string, tooLong: string,
 }
 type State = { file: rt.Watch, origin: rt.Origin, field: fields.Field, started: boolean }
 
@@ -22,19 +24,27 @@ local function words(text: string): number
  return count
 end
 
--- The same length and word checks the CLI applies, so Start is disabled for text it would refuse.
-local function describes(state: State): boolean
+-- The same length and word checks `tandem native act` applies, so Start is disabled for text it
+-- would refuse. Returns why Start is refused, or nil when the text describes a change.
+local function problem(state: State): string?
  local model = state.file.model :: Model?
- if state.file.status ~= "ready" or not model then return false end
+ if state.file.status ~= "ready" or not model then return "Describe the change in a sentence or two." end
  local text = trimmed(state.field.text)
- return (utf8.len(text) or #text) >= model.minChars and words(text) >= model.minWords
+ local length = utf8.len(text) or #text
+ if length < model.minChars or words(text) < model.minWords then return model.tooShort end
+ if length > model.maxChars then return model.tooLong end
+ return nil
+end
+
+local function describes(state: State): boolean
+ return problem(state) == nil
 end
 
 local function start(state: State, cx: BlockCx)
  if state.origin.busy or state.started then return end
- local model = state.file.model :: Model?
- if not describes(state) then
-  cx:toast("warning", "Quick task", if model then model.tooShort else "Describe the change in a sentence or two.")
+ local refused = problem(state)
+ if refused then
+  cx:toast("warning", "Quick task", refused)
   return
  end
  if state.origin.ctx == "" then

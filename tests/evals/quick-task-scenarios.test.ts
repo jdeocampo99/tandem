@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { boardView } from "../../src/board/view.ts";
-import type { QuickScopeReport, TaskRecord } from "../../src/contracts.ts";
+import type { CommandRunner, QuickScopeReport, TaskRecord } from "../../src/contracts.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
 import { quickApproval, quickScopeQuestionText } from "../../src/tasks/quick.ts";
 import { readTimeline } from "../../src/tasks/timeline-store.ts";
@@ -28,12 +28,12 @@ const SCOPE: QuickScopeReport = {
   plan: "turn it into a request with a brief",
 };
 
-function serviceFor(world: ScenarioWorld): TandemService {
+function serviceFor(world: ScenarioWorld, run: CommandRunner = world.run): TandemService {
   return createTandemService({
     home: world.home,
     sessionId: world.sessionId,
     poolRoot: world.poolRoot,
-    run: world.run,
+    run,
     clock: world.clock,
     idFactory: world.idFactory,
     workerTimeoutMs: 1_500,
@@ -45,14 +45,13 @@ test("Start records the user's approval and dispatches an ordinary implementatio
     const service = serviceFor(world);
 
     await expect(
-      service.startQuickTask({ repoPath: world.repoPath, text: "fix it", via: "native" }),
+      service.startQuickTask({ repoPath: world.repoPath, text: "fix it" }),
     ).rejects.toThrow("Describe the change in a sentence or two.");
     expect(await service.list()).toHaveLength(0);
 
     const task = await service.startQuickTask({
       repoPath: world.repoPath,
       text: `  ${TEXT}\n`,
-      via: "native",
     });
     expect(task.stage).toBe("queued");
     expect(task.scopeApproved).toBe(true);
@@ -61,7 +60,7 @@ test("Start records the user's approval and dispatches an ordinary implementatio
     expect(task.title).toBe(TEXT);
     expect(task.requestId).toBeUndefined();
     expect(task.requiredStages).toEqual({ validation: true, review: true });
-    expect(task.quick).toEqual(quickApproval({ text: TEXT, at: SCENARIO_NOW, via: "native" }));
+    expect(task.quick).toEqual(quickApproval({ text: TEXT, at: SCENARIO_NOW }));
     const { events } = await readTimeline(world.home, task.id);
     expect(events.map((event) => event.type)).toEqual([
       "created",
@@ -77,6 +76,27 @@ test("Start records the user's approval and dispatches an ordinary implementatio
     const job = JSON.parse(await readFile(jobPath, "utf8")) as WorkerJob;
     expect(job.quickScope).toBe("may-ask");
     expect(job.prompt).toContain("This is a quick task");
+    await service.shutdown();
+  });
+});
+
+test("a quick task whose approval fails is cancelled, never left waiting for an approval", async () => {
+  await withScenario({}, async (world) => {
+    // The source's HEAD moves once the task is recorded, between creation and approval.
+    const run: CommandRunner = async (request) => {
+      const [, , , verb, reference] = request.argv;
+      if (verb === "rev-parse" && reference === "HEAD" && (await world.store.list()).length > 0)
+        return { code: 0, stdout: "moved-head\n", stderr: "" };
+      return world.run(request);
+    };
+    const service = serviceFor(world, run);
+    const failure = service.startQuickTask({ repoPath: world.repoPath, text: TEXT });
+    await expect(failure).rejects.toThrow("Quick task could not start: source checkpoint");
+    const [task] = await service.list();
+    if (task === undefined) throw new Error("the quick task was not recorded");
+    await expect(failure).rejects.toThrow(`Task ${task.id} was cancelled`);
+    expect(task.stage).toBe("cancelled");
+    expect(task.scopeApproved).toBe(false);
     await service.shutdown();
   });
 });
@@ -98,7 +118,7 @@ async function runningQuickTask(world: ScenarioWorld) {
   await world.store.update(seeded.id, seeded.revision, (current) => ({
     ...current,
     revision: current.revision + 1,
-    quick: quickApproval({ text: TEXT, at: SCENARIO_NOW, via: "cli" }),
+    quick: quickApproval({ text: TEXT, at: SCENARIO_NOW }),
   }));
   await seedScenarioRuntime(
     world,

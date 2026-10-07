@@ -8,9 +8,9 @@ export type QuickStarted =
   | Readonly<{ task: TaskRecord; told: false; problem: string }>;
 
 /**
- * The one way a quick task starts, shared by the native Start click and `tandem quick`: check the
- * text without a model, record the user's approval and create and approve the task, then tell the
- * coordinator in fixed words. `tell` proves the coordinator before it types; a failure there is
+ * The one way a quick task starts, from the native Start click: check the text without a model,
+ * record the user's approval and create and approve the task, then tell the coordinator in fixed
+ * words. `tell` proves the coordinator before it types; a failure there is
  * reported, never retried, because the task already started.
  */
 export async function startQuickTask(

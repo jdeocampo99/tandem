@@ -954,7 +954,7 @@ async function startQuick(
   const owner = await coordinator(act, act.environment.repo, "starting a quick task");
   const started = await startQuickTask(
     act.service(),
-    { repoPath: owner.repoPath, text: checked.text, via: "native" },
+    { repoPath: owner.repoPath, text: checked.text },
     (text) => promptCoordinator(act, owner, text),
   );
   return started.told

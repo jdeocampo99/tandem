@@ -7,9 +7,8 @@ import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
-import { findRunningCoordinator } from "./coordinator/ownership.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
-import { discoverCoordinatorRecords, listCoordinatorRecords } from "./coordinator/registry.ts";
+import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
 import { resetCoordinators } from "./coordinator/reset.ts";
 import { isTandemCheckout, TANDEM_CHECKOUT } from "./coordinator/tandem-checkout.ts";
@@ -19,24 +18,14 @@ import { nativeAct, readEnvelope } from "./native/actions.ts";
 import { renderPrWatchView } from "./pr-watch/view.ts";
 import { type PublishedReport, publishReport } from "./report/publish.ts";
 import { diagnosticsPath, readPromptRoutingLog } from "./runtime/diagnostics.ts";
-import {
-  createTandemService,
-  type TandemService,
-  type TandemServiceOptions,
-} from "./service/controller.ts";
-import { startQuickTask } from "./service/quick-start.ts";
-import { checkQuickText, quickStartedText } from "./tasks/quick.ts";
+import type { TandemService, TandemServiceOptions } from "./service/controller.ts";
 import { renderTaskTrace, renderTraceSummary } from "./tasks/trace.ts";
 import {
   parseTerminalArgs,
   type TerminalInvocation,
   type TerminalRunResult,
 } from "./terminal/arguments.ts";
-import {
-  type CliApplication,
-  type CliDependencies,
-  serviceOptions,
-} from "./terminal/cli-application.ts";
+import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
 import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
 import {
@@ -91,7 +80,6 @@ import {
   terminalContext,
 } from "./terminal-backend/compose.ts";
 import type { TerminalBackend } from "./terminal-backend/contract.ts";
-import { WORKER_JOB_PATH_ENV } from "./workers/terminal.ts";
 
 const HELP_TEXT = `Tandem
 
@@ -107,8 +95,6 @@ Usage:
   tandem watch [PR]        Your watched pull requests; with a PR link or number, watch it
                            --stop PR stops watching it
   tandem memory [NAME]     This project's workstreams; with a name, its catch-up and notes file
-  tandem quick TEXT        Start a quick task in this project: a small, clear change, no interview
-                           What you type is the approved scope; needs the project's coordinator
   tandem update            Load your latest local Tandem code into every coordinator
                            Keeps chats and tasks; --fresh starts new chats
   tandem fix               Find stale Tandem resources and offer the repair
@@ -126,7 +112,7 @@ Usage:
 
 Options:
   --yes                    Skip the confirmation (fix, reset)
-  --json                   Machine-readable output (status, trace, report, watch, memory, fix, quick)
+  --json                   Machine-readable output (status, trace, report, watch, memory, fix)
   --watch                  Redraw every 2 seconds until Esc, q, or Ctrl-C (status)
   --line                   One line: what needs you, what's running, PRs (status)
   --verbose                Full paths and reasons (fix)
@@ -484,110 +470,6 @@ async function handleMemory({
     return { exitCode: 0, status: "memory" };
   } finally {
     await service.shutdown();
-  }
-}
-
-/**
- * `tandem quick TEXT` starts a quick task in the project the current directory is in. Typing it is
- * the user's approval of the text as the scope, the same as Start in the composer, and it runs the
- * same code. A Tandem worker's shell is refused: only the user starts a quick task.
- */
-async function handleQuick({
-  invocation,
-  environment,
-  dependencies,
-  run,
-  terminal,
-  stdout,
-}: Readonly<{
-  readonly invocation: TerminalInvocation;
-  readonly environment: TerminalEnvironment;
-  readonly dependencies: TerminalMainDependencies;
-  readonly run: CommandRunner;
-  readonly terminal: TerminalBackend;
-  readonly stdout: (text: string) => void;
-}>): Promise<TerminalRunResult> {
-  if (environment.source[WORKER_JOB_PATH_ENV] !== undefined)
-    throw new Error("tandem quick is the user's own command; a Tandem worker cannot start one");
-  const text = invocation.paths.join(" ");
-  const checked = checkQuickText(text);
-  if (!checked.ok) throw new Error(checked.problem);
-  const project = await gitRootForPath(".", environment.cwd, run);
-  if (project === undefined) {
-    throw new Error("tandem quick runs inside a project; cd into one of your repositories");
-  }
-  const claims = (await discoverCoordinatorRecords({ home: environment.home })).records
-    .filter((entry) => entry.placement === "session-directory")
-    .map((entry) => entry.record)
-    .filter((record) => record.repoPath === project || record.worktree.path === project);
-  if (claims.length > 1) throw new Error("More than one coordinator claims this project");
-  const claimed = claims[0];
-  const owner = async () =>
-    claimed === undefined
-      ? undefined
-      : findRunningCoordinator(run, terminal, {
-          home: environment.home,
-          sessionId: claimed.endpoint.sessionId,
-          repoPath: claimed.repoPath,
-        });
-  const running = await owner();
-  if (running === undefined) {
-    throw new Error(
-      "tandem quick needs this project's coordinator running; open it with tandem, then try again",
-    );
-  }
-  const service =
-    dependencies.service ??
-    (dependencies.createService ?? createTandemService)({
-      ...serviceOptions({
-        home: environment.home,
-        sessionId: running.endpoint.sessionId,
-        poolRoot: environment.poolRoot,
-        repo: running.repoPath,
-        sourceRepo: running.worktree.path,
-        parentWorkspaceId: running.endpoint.workspaceId,
-        coordinatorPaneId: running.endpoint.paneId,
-      }),
-      run,
-    });
-  try {
-    const started = await startQuickTask(
-      service,
-      { repoPath: running.repoPath, text: checked.text, via: "cli" },
-      async (message) => {
-        // Prove the same coordinator again right before typing into it.
-        const current = await owner();
-        if (
-          current === undefined ||
-          JSON.stringify(current.endpoint) !== JSON.stringify(running.endpoint) ||
-          current.worktree.leaseId !== running.worktree.leaseId
-        )
-          throw new Error("the coordinator changed before it could be told");
-        await terminal.promptAgent({
-          sessionId: current.endpoint.sessionId,
-          cwd: current.worktree.path,
-          paneId: current.endpoint.paneId,
-          text: message,
-        });
-      },
-    );
-    const { task } = started;
-    if (invocation.json) {
-      stdout(`${JSON.stringify(started)}\n`);
-    } else {
-      stdout(
-        task.quick === undefined
-          ? `Task ${task.id} started.\n`
-          : `${quickStartedText(task, task.quick)}\n`,
-      );
-      if (!started.told)
-        stdout(
-          `The coordinator could not be told: ${started.problem}. The task is running; do not start it again.\n`,
-        );
-    }
-    return { exitCode: 0, status: "quick" };
-  } finally {
-    if (dependencies.service === undefined) await service.shutdown();
   }
 }
 
@@ -1002,9 +884,6 @@ export async function runTerminal(
     }
     if (invocation.command === "memory") {
       return await handleMemory({ invocation, environment, dependencies, run, stdout });
-    }
-    if (invocation.command === "quick") {
-      return await handleQuick({ invocation, environment, dependencies, run, terminal, stdout });
     }
     if (invocation.command === "panel") {
       // Panels read only the snapshot coordinators write, never the state, so they take no lock.

@@ -1257,7 +1257,7 @@ function parseQuickApproval(value: unknown, kind: string, source: string): Quick
   if (!isRecord(value)) failState(source, "quick must be an object");
   assertExactKeys(
     value,
-    ["kind", "text", "textDigest", "approvedAt", "via", "scopeQuestionId", "scopeExtendedAt"],
+    ["kind", "text", "textDigest", "approvedAt", "scopeQuestionId", "scopeExtendedAt"],
     source,
   );
   if (value.kind !== "quick-task") failState(source, "quick.kind must be quick-task");
@@ -1275,7 +1275,6 @@ function parseQuickApproval(value: unknown, kind: string, source: string): Quick
     text,
     textDigest,
     approvedAt,
-    via: requiredEnum(value, "via", ["native", "cli"] as const, source),
     ...(scopeQuestionId === undefined ? {} : { scopeQuestionId }),
     ...(scopeExtendedAt === undefined ? {} : { scopeExtendedAt }),
   };

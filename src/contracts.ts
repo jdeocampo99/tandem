@@ -76,8 +76,8 @@ export type QuickScopeReport = Readonly<{
 }>;
 
 /**
- * The user's own approval of a quick task: their click on Start or their `tandem quick` command.
- * No model ever decides that a request is quick. `text` is what they typed, verbatim, and is the
+ * The user's own approval of a quick task: their click on Start in the quick task composer. No
+ * model ever decides that a request is quick. `text` is what they typed, verbatim, and is the
  * approved scope.
  */
 export type QuickTaskApproval = Readonly<{
@@ -86,8 +86,6 @@ export type QuickTaskApproval = Readonly<{
   /** sha256 of `text`, so the approved bytes can be checked later. */
   readonly textDigest: string;
   readonly approvedAt: IsoTimestamp;
-  /** Where the user approved it: the native composer or the `tandem quick` command. */
-  readonly via: "native" | "cli";
   /** The one scope question the worker asked; a quick task never asks another. */
   readonly scopeQuestionId?: string;
   /** When the user answered Proceed to that question, stretching the approved scope. */

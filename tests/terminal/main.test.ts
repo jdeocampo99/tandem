@@ -1519,26 +1519,6 @@ test("report --since takes a local calendar day or a zoned timestamp, and only o
   expect(() => parseTerminalArgs(["report", "task-1"])).toThrow("takes no arguments");
 });
 
-test("quick takes the request as its words, quoted or not, and no flag but --json", () => {
-  expect(parseTerminalArgs(["quick", "Rename the Save button"])).toMatchObject({
-    command: "quick",
-    paths: ["Rename the Save button"],
-  });
-  expect(parseTerminalArgs(["quick", "Rename", "the", "button", "--json"])).toMatchObject({
-    command: "quick",
-    paths: ["Rename", "the", "button"],
-    json: true,
-  });
-  expect(parseTerminalArgs(["quick", "--", "-v", "flag", "removal"]).paths).toEqual([
-    "-v",
-    "flag",
-    "removal",
-  ]);
-  expect(() => parseTerminalArgs(["quick", "--yes", "text"])).toThrow(
-    "tandem quick does not accept --yes",
-  );
-});
-
 test("old command spellings name their replacement instead of opening a project", () => {
   expect(() => parseTerminalArgs(["restart"])).toThrow("`tandem restart` is now `tandem update`");
   expect(() => parseTerminalArgs(["--reset", "--force"])).toThrow("is now `tandem reset`");

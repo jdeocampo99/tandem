@@ -116,7 +116,7 @@ test("task page puts to-dos only in Overview and shows the real fix round, live 
 
 test("a quick task's page heads its approved scope with the user's words, verbatim", () => {
   const text = "Rename the Save button to Save draft\non the settings page";
-  const approval = quickApproval({ text, at: "2030-01-02T03:04:05.000Z", via: "native" });
+  const approval = quickApproval({ text, at: "2030-01-02T03:04:05.000Z" });
   const record = task({ stage: "implementing", quick: approval });
   const view = taskPageView({
     task: record,

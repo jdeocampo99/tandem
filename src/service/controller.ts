@@ -301,13 +301,14 @@ export type CreateTaskRequest = Readonly<{
 type PrReviewTaskRequest = Omit<CreateTaskRequest, "kind"> &
   Readonly<{ readonly kind: "pr-review"; readonly prReview: PrReviewState }>;
 /**
- * A quick task as the user typed it. Only the native Start click and `tandem quick` call this; the
- * coordinator's tool has no action that reaches it, so no model can start a quick task.
+ * A quick task as the user typed it. Only the native Start click, proved by the click transport,
+ * calls this; the coordinator's tool has no action that reaches it, and there is deliberately no
+ * CLI command, because a worker's shell cannot be told apart from the user's. No model can start
+ * a quick task.
  */
 export type StartQuickTaskInput = Readonly<{
   readonly repoPath: string;
   readonly text: string;
-  readonly via: QuickTaskApproval["via"];
 }>;
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
@@ -1412,7 +1413,7 @@ class TandemController {
     if (!isRecord(input)) throw new TypeError("quick task input must be an object");
     const checked = checkQuickText(text(input.text, "text"));
     if (!checked.ok) throw new Error(checked.problem);
-    const quick = quickApproval({ text: checked.text, at: this.#deps.clock(), via: input.via });
+    const quick = quickApproval({ text: checked.text, at: this.#deps.clock() });
     const created = await this.createTask(
       {
         repoPath: input.repoPath,
@@ -1425,7 +1426,25 @@ class TandemController {
       },
       quick,
     );
-    return this.approve(created.id);
+    try {
+      return await this.approve(created.id);
+    } catch (error) {
+      // An unapproved quick task would wait for an approval no one is asked for, and a retried
+      // Start would create a second one, so a failed approval cancels the task it created.
+      const cause = describeError(error);
+      try {
+        await this.cancel(created.id, `Quick task could not start: ${cause}`);
+      } catch (cancelError) {
+        throw new Error(
+          `Quick task ${created.id} could not start (${cause}) and could not be cancelled (${describeError(cancelError)}); it is still awaiting approval. Cancel it before starting it again.`,
+          { cause: error },
+        );
+      }
+      throw new Error(
+        `Quick task could not start: ${cause}. Task ${created.id} was cancelled; start it again when ready.`,
+        { cause: error },
+      );
+    }
   }
 
   private async createTask(

@@ -48,7 +48,7 @@ function quickTask(overrides: Partial<TaskRecord> = {}): TaskRecord {
         acceptanceCriteria: [],
         surfaces: ["*"],
         policy: SCENARIO_POLICY,
-        quick: quickApproval({ text: TEXT, at: SCENARIO_NOW, via: "native" }),
+        quick: quickApproval({ text: TEXT, at: SCENARIO_NOW }),
       },
       SCENARIO_NOW,
     ),
@@ -74,14 +74,13 @@ test("the title is the first line, cut at a word boundary; no model names it", (
   expect(long).toBe("Make every settings page button use the same spacing and…");
 });
 
-test("the approval records who approved what, when and how, bound to the exact bytes", () => {
-  const approval = quickApproval({ text: TEXT, at: SCENARIO_NOW, via: "cli" });
+test("the approval records who approved what and when, bound to the exact bytes", () => {
+  const approval = quickApproval({ text: TEXT, at: SCENARIO_NOW });
   expect(approval).toEqual({
     kind: "quick-task",
     text: TEXT,
     textDigest: quickTextDigest(TEXT),
     approvedAt: SCENARIO_NOW,
-    via: "cli",
   });
   expect(approval.textDigest).toMatch(/^[0-9a-f]{64}$/u);
 });
@@ -106,7 +105,7 @@ test("a quick task is approved implementation work whose record round-trips and 
         acceptanceCriteria: [],
         surfaces: [],
         policy: SCENARIO_POLICY,
-        quick: quickApproval({ text: TEXT, at: SCENARIO_NOW, via: "native" }),
+        quick: quickApproval({ text: TEXT, at: SCENARIO_NOW }),
       },
       SCENARIO_NOW,
     ),
@@ -120,7 +119,6 @@ test("the timeline records the user's quick approval at creation and their Proce
     "quick-approved",
   ]);
   expect(timelineEventsForChange(undefined, task)[1]).toMatchObject({
-    via: "native",
     textDigest: quickTextDigest(TEXT),
   });
   const asked = taskWithQuestion(task, {
@@ -181,7 +179,7 @@ test("only a quick task that has not asked may ask its one scope question", () =
   expect(quickScopeQuestionAllowed(plainTask())).toBe(false);
   const asked = quickTask({
     quick: {
-      ...quickApproval({ text: TEXT, at: SCENARIO_NOW, via: "native" }),
+      ...quickApproval({ text: TEXT, at: SCENARIO_NOW }),
       scopeQuestionId: "j",
     },
   });
@@ -260,7 +258,6 @@ test("the pull request and its draft carry the verbatim approved scope", () => {
     ...quickApproval({
       text: `${TEXT}\n\nKeep the icon.`,
       at: "2030-01-01T14:30:00.000Z",
-      via: "native",
     }),
   };
   const section = approvedScopeMarkdown(approval, "UTC");

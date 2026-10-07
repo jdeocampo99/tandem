@@ -50,8 +50,8 @@ off with `standards = "none"`.
 ### Quick tasks
 
 Some changes need no planning: a label, a typo, a flag. Choose **Tandem: Quick task…** in Tern's
-command palette, or run `tandem quick "Rename the Save button to Save draft"` in the project, and
-**what you type is the approved scope**. There is no interview and no brief, and no model ever
+command palette, type the change (for example "Rename the Save button to Save draft") and press
+Start: **what you type is the approved scope**. There is no interview and no brief, and no model ever
 decides on its own that something is quick; only you do. The task still gets your project's
 checks, an independent review and a draft PR, and nothing is published until you say so.
 
@@ -327,7 +327,6 @@ folder reopens Tandem's chat and every saved project with its previous chat.
 | `tandem report` | A page in Lavish showing where each task's time and money went and what held it up (`--since DATE` to narrow it) |
 | `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
 | `tandem memory [NAME]` | This project's workstreams; with a name, its catch-up and where its notes file is |
-| `tandem quick TEXT` | Start a quick task in this project: your text is the approved scope, with no interview (needs the project's chat open) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Clean up leftovers from a crash or failed launch, including paused Tern views and panes Tandem stopped touching (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |

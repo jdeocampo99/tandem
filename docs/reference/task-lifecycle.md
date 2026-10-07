@@ -22,7 +22,7 @@ src/harness/omp/terminal-extension.ts
   blocked, the coordinator discloses the blocker; direct research needs explicit user authorization.
 
 - A [quick task](#quick-tasks) is the one implementation that starts approved: the user's own
-  Start click or `tandem quick` command is its approval.
+  Start click is its approval.
 - The CLI's `create --input` file has exactly `repoPath`, `kind`, `objective`,
   `acceptanceCriteria`, and `surfaces`.
 - Ordinary worker briefs fail closed above 64 KiB of UTF-8 (`MAX_ORDINARY_BRIEF_BYTES` in
@@ -32,32 +32,37 @@ src/harness/omp/terminal-extension.ts
 ## Quick tasks
 
 A fast lane for a clear, small change, with no interview and no brief. **No model ever decides
-that a request is quick. Only the user does, through the quick task composer or `tandem quick`.**
+that a request is quick. Only the user does, through the quick task composer.**
 Code: src/tasks/quick.ts (pure decisions), `startQuickTask` in src/service/controller.ts and
-src/service/quick-start.ts (the one start path both entry points share).
+src/service/quick-start.ts (the one start path).
 
-- **Entry points.** The palette's "Tandem: Quick task…" opens the native composer
+- **Entry point.** The palette's "Tandem: Quick task…" opens the native composer
   ([native-views.md](native-views.md#quick-task-composer)); its Start sends `quick-start` through
-  the click transport, whose origin proof names the project. `tandem quick TEXT` does the same from
-  a shell inside the project; it needs that project's coordinator running and refuses a shell that
-  carries a worker's `TANDEM_WORKER_JOB_PATH`. The coordinator's `tandem` tool has no action that
-  reaches either, so a model cannot start or approve a quick task.
+  the click transport, whose origin proof names the project. The coordinator's `tandem` tool has
+  no action that reaches it, so a model cannot start or approve a quick task. There is
+  deliberately no CLI entry: a worker's shell cannot be told apart from the user's (an environment
+  marker such as `TANDEM_WORKER_JOB_PATH` can simply be unset), so a command would let a model
+  start a task recorded as user-approved scope.
 - **Checks, without a model.** `checkQuickText` trims the text and refuses fewer than 15
   characters or 3 words with "Describe the change in a sentence or two.", and more than 4,000
-  characters as a request. The composer mirrors the same limits to keep Start disabled.
+  characters with "Too long for a quick task. Start a request instead." The composer mirrors both
+  limits (`minChars`, `minWords`, `maxChars` in its model) to keep Start disabled.
 - **Approval provenance.** The task records `quick: {kind: "quick-task", text, textDigest,
-  approvedAt, via: "native" | "cli"}`: the typed text verbatim, its sha256, when, and how. The
-  store refuses a record whose digest does not match its text, and only implementation tasks may
+  approvedAt}`: the typed text verbatim, its sha256, and when. The store refuses a record whose digest does not match its text, and only implementation tasks may
   carry it. The approval is task-level rather than a request brief: a brief needs a model-written
   summary, joins plain-language checks, and waits in Needs you for its own approval, none of which
-  a quick task has. The timeline records `quick-approved` (with `via` and `textDigest`) in the
+  a quick task has. The timeline records `quick-approved` (with `textDigest`) in the
   creating write.
 - **Task.** `objective` is the text, `title` its first line cut to 60 characters, no acceptance
   criteria, surfaces `*` (every pinned validation command applies) and no request: a quick task
   never joins the project's open request. It is created through the ordinary `create` path and
   approved through the ordinary `approve` path, so source checks, dispatch, [required
   stages](#required-stages), validation, review, the draft PR and the user's approval before
-  publishing are unchanged. The playbook classifier still picks its playbook.
+  publishing are unchanged. The playbook classifier still picks its playbook. If the approval
+  fails (for example the source checkpoint changed since creation), the start cancels the task it
+  created through the ordinary `cancel` path and its error names that task, so a retried Start
+  never leaves a duplicate waiting for an approval no one is asked for; if that cancel also fails,
+  the error names the stranded task and both causes.
 - **The coordinator** gets one fixed chat message: `Quick task started` / `<task id> · <title>` /
   `Scope approved <HH:MM>`. If it cannot be told, the task still runs and the outcome says so.
 - **One scope question.** The implementer's brief says the objective is the user's approved words

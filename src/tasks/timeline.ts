@@ -6,7 +6,6 @@ import type {
   FindingSeverity,
   FindingStatus,
   IsoTimestamp,
-  QuickTaskApproval,
   StoredReviewLens,
   TaskRecord,
   TaskStage,
@@ -105,11 +104,7 @@ type TimelineFacts =
   | Readonly<{ readonly type: "steered"; readonly messageId: string }>
   | Readonly<{ readonly type: "admission-waiting"; readonly reason: AdmissionWaitReason }>
   /** The user approved a quick task's typed text as its scope; `textDigest` names those bytes. */
-  | Readonly<{
-      readonly type: "quick-approved";
-      readonly via: QuickTaskApproval["via"];
-      readonly textDigest: string;
-    }>
+  | Readonly<{ readonly type: "quick-approved"; readonly textDigest: string }>
   /** The user answered Proceed to the quick task's scope question. */
   | Readonly<{ readonly type: "quick-scope-extended"; readonly questionId: string }>;
 
@@ -286,7 +281,7 @@ function quickFacts(before: TaskRecord | undefined, after: TaskRecord): readonly
   const quick = after.quick;
   if (quick === undefined) return [];
   if (before?.quick === undefined)
-    return [{ fact: { type: "quick-approved", via: quick.via, textDigest: quick.textDigest } }];
+    return [{ fact: { type: "quick-approved", textDigest: quick.textDigest } }];
   if (
     before.quick.scopeExtendedAt === undefined &&
     quick.scopeExtendedAt !== undefined &&

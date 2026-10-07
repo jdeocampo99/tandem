@@ -2108,7 +2108,7 @@ function quickService(f: Fixture, calls: StartQuickTaskInput[]): TandemService {
               config: defaultPolicy(),
               guidance: { implementation: [], validation: [], review: [] },
             },
-            quick: quickApproval({ text: QUICK_TEXT, at: NOW, via: input.via }),
+            quick: quickApproval({ text: QUICK_TEXT, at: NOW }),
           },
           NOW,
         ),
@@ -2127,7 +2127,7 @@ test("Start is the user's approval: it records exactly the typed text and tells 
     expect(
       await f.act({ verb: "quick-start", text: `${QUICK_TEXT}\n` }, { deps: { service } }),
     ).toEqual({ status: "done" });
-    expect(calls).toEqual([{ repoPath: f.repo, text: QUICK_TEXT, via: "native" }]);
+    expect(calls).toEqual([{ repoPath: f.repo, text: QUICK_TEXT }]);
     expect(f.prompts).toEqual([
       `Quick task started\ntask-q1 · Rename the Save button\nScope approved ${clockTime(NOW)}`,
     ]);
@@ -2206,7 +2206,9 @@ test("the quick task composer opens beside the conversation from its published m
       placeholder: "Describe the change",
       minChars: 15,
       minWords: 3,
+      maxChars: 4000,
       tooShort: "Describe the change in a sentence or two.",
+      tooLong: "Too long for a quick task. Start a request instead.",
     });
     const herdr = await f.act(
       { verb: "open", ref: { kind: "quick-task" } },
@@ -2250,51 +2252,6 @@ test("a scope-question link answers through the ordinary answer path, only while
     expect(stale.notice?.text).toContain("no longer open");
     expect(Action.safeParse({ ...answer, choice: "approve" }).success).toBe(false);
     expect(answers).toHaveLength(1);
-  } finally {
-    await f.close();
-  }
-});
-
-test("tandem quick runs the composer's start: same approval, same task, same words to the coordinator", async () => {
-  const f = await fixture("tern");
-  try {
-    const calls: StartQuickTaskInput[] = [];
-    const output: string[] = [];
-    const errors: string[] = [];
-    const gitRoot = async (request: CommandRequest) => {
-      if (request.argv.includes("--show-toplevel"))
-        return { code: 0, stdout: `${f.repo}\n`, stderr: "" };
-      // The ownership check lists processes when the pane is not running its coordinator.
-      if (request.argv[0] === "ps") return { code: 0, stdout: "", stderr: "" };
-      throw new Error(`No other command expected: ${request.argv.join(" ")}`);
-    };
-    const quick = (argv: readonly string[], env: Record<string, string> = {}) =>
-      runTerminal(["quick", ...argv], {
-        ...f.deps,
-        run: gitRoot,
-        processEnvironment: { ...f.deps.processEnvironment, ...env },
-        service: quickService(f, calls),
-        stdout: (text) => output.push(text),
-        stderr: (text) => errors.push(text),
-      });
-
-    expect((await quick(QUICK_TEXT.split(" "))).exitCode).toBe(0);
-    expect(calls).toEqual([{ repoPath: f.repo, text: QUICK_TEXT, via: "cli" }]);
-    const told = `Quick task started\ntask-q1 · Rename the Save button\nScope approved ${clockTime(NOW)}`;
-    expect(f.prompts).toEqual([told]);
-    expect(output.join("")).toBe(`${told}\n`);
-
-    expect((await quick(["fix", "it"])).exitCode).toBe(1);
-    expect(errors.at(-1)).toContain("Describe the change in a sentence or two.");
-    expect((await quick([QUICK_TEXT], { TANDEM_WORKER_JOB_PATH: "/tmp/job.json" })).exitCode).toBe(
-      1,
-    );
-    expect(errors.at(-1)).toContain("a Tandem worker cannot start one");
-    f.setOwner(false);
-    expect((await quick([QUICK_TEXT])).exitCode).toBe(1);
-    expect(errors.at(-1)).toContain("needs this project's coordinator running");
-    expect(calls).toHaveLength(1);
-    expect(f.prompts).toHaveLength(1);
   } finally {
     await f.close();
   }

@@ -1012,8 +1012,10 @@ the placeholder `Describe the change` and the text limits.
 The block shows "Small, well-defined changes. No interview.", one multi-line field, the
 `<repo> · <branch>` chip and `Start  ⌘↵`. The chip only displays: the project is the one the
 origin proves, and starting in another project means opening its coordinator first. Start is
-disabled until the text has at least the model's characters and words; ⌘↵ or the button sends
-`quick-start` with the text, Enter adds a line and Escape or × closes the block. A refused start
+disabled until the trimmed text has at least the model's `minChars` characters and `minWords`
+words and at most `maxChars` characters; ⌘↵ on refused text toasts `tooShort` or `tooLong`.
+Otherwise ⌘↵ or the button sends `quick-start` with the text; Enter adds a line and Escape or ×
+closes the block. A refused start
 keeps the text and toasts the reason under "Quick task didn't start"; a started one closes the
 block. The text is transient and never saved. No shortcut is bound: Tandem's shortcuts are added
 only once, at the user's consent, and a new one would reach only new consents.

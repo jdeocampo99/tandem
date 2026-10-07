@@ -10,7 +10,8 @@ import type {
 /**
  * Quick tasks: a clear, small change the user approves as they type it, with no interview. No
  * model ever decides that a request is quick; only the user does, through the native composer's
- * Start or `tandem quick`. Everything here is pure: the native verb and the CLI share it.
+ * Start. There is deliberately no CLI entry: a worker's shell cannot be told apart from the user's.
+ * Everything here is pure.
  */
 
 /** What the quick task composer draws: its project chip and the checks that gate Start. */
@@ -23,7 +24,10 @@ export type QuickTaskView = Readonly<{
   placeholder: string;
   minChars: number;
   minWords: number;
+  /** The longest trimmed text Start accepts; the backend refuses anything longer. */
+  maxChars: number;
   tooShort: string;
+  tooLong: string;
 }>;
 
 export function quickTaskView(
@@ -36,7 +40,9 @@ export function quickTaskView(
     placeholder: "Describe the change",
     minChars: QUICK_TASK_MIN_CHARS,
     minWords: QUICK_TASK_MIN_WORDS,
+    maxChars: QUICK_TASK_MAX_CHARS,
     tooShort: QUICK_TASK_TOO_SHORT,
+    tooLong: QUICK_TASK_TOO_LONG,
   };
 }
 
@@ -46,8 +52,7 @@ export const QUICK_TASK_MIN_WORDS = 3;
 /** A quick task is a sentence or two; anything longer is a request. */
 export const QUICK_TASK_MAX_CHARS = 4_000;
 export const QUICK_TASK_TOO_SHORT = "Describe the change in a sentence or two.";
-export const QUICK_TASK_TOO_LONG =
-  "That is more than a quick task. Start a request instead, so it gets an interview.";
+export const QUICK_TASK_TOO_LONG = "Too long for a quick task. Start a request instead.";
 /** How many characters of the first line name the task. */
 const TITLE_MAX_CHARS = 60;
 
@@ -83,16 +88,15 @@ export function quickTextDigest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-/** The durable record of the user's approval: who (the user), when, how, and of exactly what. */
+/** The durable record of the user's approval: who (the user), when, and of exactly what. */
 export function quickApproval(
-  input: Readonly<{ text: string; at: IsoTimestamp; via: QuickTaskApproval["via"] }>,
+  input: Readonly<{ text: string; at: IsoTimestamp }>,
 ): QuickTaskApproval {
   return {
     kind: "quick-task",
     text: input.text,
     textDigest: quickTextDigest(input.text),
     approvedAt: input.at,
-    via: input.via,
   };
 }
 

@@ -521,7 +521,7 @@ const SetupModel = z.object({
 
 /**
  * The quick task composer's model: `QuickTaskView` (src/tasks/quick.ts), the project the click
- * is proved against and the validation the block mirrors so Start is disabled for too-short text.
+ * is proved against and the validation the block mirrors so Start is disabled for text that is too short or too long.
  */
 const QuickTaskModel = z.object({
   schemaVersion: z.literal(1),
@@ -530,7 +530,9 @@ const QuickTaskModel = z.object({
   placeholder: str,
   minChars: num.int().positive(),
   minWords: num.int().positive(),
+  maxChars: num.int().positive(),
   tooShort: str,
+  tooLong: str,
 });
 
 /** The model schema of each view file kind. The index feeds every screen without a detail file. */

@@ -23,9 +23,8 @@ a restart never has to rebuild workflow from chat.
    with their concrete cost; facts go to research, never the user; a timed-out or auto-selected
    answer is re-asked. The user confirms the settled decisions before the brief is drafted.
    **Quick tasks are the one exception, and only the user makes one.** No model ever decides that
-   a request is quick. Only the user does, through the quick task composer's Start or
-   `tandem quick`, and that click or command is their approval of exactly the text they typed: no
-   interview, no brief. Tandem's code checks the text, records the approval on the task and
+   a request is quick. Only the user does, through the quick task composer's Start, and that click is
+   their approval of exactly the text they typed: no interview, no brief. Tandem's code checks the text, records the approval on the task and
    approves it through the ordinary path; validation, review, the draft PR and publishing approval
    are unchanged. The implementer may stop once to say the request exceeds a small change; the user
    then chooses Proceed, Convert to request (back to the interview) or Cancel. See
