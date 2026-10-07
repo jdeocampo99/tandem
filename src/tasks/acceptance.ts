@@ -4,6 +4,7 @@ import type {
   ContractIdentity,
   IterationScope,
   PinnedValidationEvidence,
+  RepoPolicy,
   ResolvedPolicy,
   ReviewLens,
   TaskRecord,
@@ -32,6 +33,11 @@ export type FinalAcceptanceContract = Readonly<{
   readonly requirements: readonly FinalRequirement[];
   readonly lenses: readonly ReviewLens[];
   readonly criteria: readonly string[];
+  /**
+   * The project chose no checks: the manifest holds no commands and acceptance rests on review
+   * alone. Everything that reports the result must say it is unvalidated.
+   */
+  readonly unvalidated: boolean;
 }>;
 
 /** Why a review round's impact widened beyond the surface its fix round was authorized to touch. */
@@ -45,7 +51,20 @@ export type FinalAcceptanceStatus = Readonly<{
   readonly failed: readonly FinalRequirement[];
   readonly stale: readonly FinalRequirement[];
   readonly pendingLenses: readonly ReviewLens[];
+  /** As on the manifest: no checks are configured, so passing means reviewed, not validated. */
+  readonly unvalidated: boolean;
 }>;
+
+/**
+ * Whether the pinned policy is the user's deliberate "no checks". Zero commands without that
+ * choice is a configuration failure, never this.
+ */
+export function isUnvalidatedPolicy(config: RepoPolicy): boolean {
+  return config.validation === "none" && config.validationCommands.length === 0;
+}
+
+/** The one sentence every surface uses for work accepted without checks. */
+export const UNVALIDATED_LABEL = "Unvalidated: no validation commands configured";
 
 export class ValidationConfigurationError extends Error {
   public constructor(message: string) {
@@ -97,14 +116,29 @@ export function contractIdentity(task: TaskRecord, head: string): ContractIdenti
 export function finalAcceptanceContract(task: TaskRecord, head: string): FinalAcceptanceContract {
   const identity = contractIdentity(task, head);
   const surfaces = [...task.surfaces];
+  if (isUnvalidatedPolicy(task.policy.config)) {
+    return {
+      contract: "final",
+      identity,
+      surfaces,
+      commands: [],
+      requirements: [],
+      lenses: FINAL_REVIEW_LENSES,
+      criteria: [...task.acceptanceCriteria],
+      unvalidated: true,
+    };
+  }
+  // Commands that exist but cover none of the surfaces stay a refusal, never a pass.
   const commands = task.policy.config.validationCommands.filter((command) =>
     commandCoversSurfaces(command, surfaces),
   );
   if (commands.length === 0) {
     throw new ValidationConfigurationError(
-      surfaces.length === 0
-        ? "no validation commands are configured"
-        : `no validation commands match surfaces: ${surfaces.join(", ")}`,
+      task.policy.config.validationCommands.length === 0
+        ? "no validation commands are configured; add one, or choose No checks in Settings"
+        : surfaces.length === 0
+          ? "no validation commands are configured"
+          : `no validation commands match surfaces: ${surfaces.join(", ")}`,
     );
   }
   return {
@@ -115,6 +149,7 @@ export function finalAcceptanceContract(task: TaskRecord, head: string): FinalAc
     requirements: commands.map((command) => ({ name: command.name, origin: "local" as const })),
     lenses: FINAL_REVIEW_LENSES,
     criteria: [...task.acceptanceCriteria],
+    unvalidated: false,
   };
 }
 
@@ -205,6 +240,7 @@ export function finalAcceptanceStatus(task: TaskRecord, head: string): FinalAcce
     failed,
     stale,
     pendingLenses,
+    unvalidated: manifest.unvalidated,
   };
 }
 

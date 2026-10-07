@@ -185,7 +185,11 @@ import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findin
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { isActiveTask, transitionTask } from "../tasks/lifecycle.ts";
-import { decideRequiredStages, pullRequestPublished } from "../tasks/required-stages.ts";
+import {
+  decideRequiredStages,
+  policyStageFacts,
+  pullRequestPublished,
+} from "../tasks/required-stages.ts";
 import {
   DEFAULT_RESEARCH_CONTINUATION_TIMEOUT_MS,
   type ResearchContinuationClassifier,
@@ -1441,6 +1445,7 @@ class TandemController {
                 requiredStages: decideRequiredStages({
                   briefSkipsReview: brief !== undefined && briefSkipsReview(brief),
                   pullRequestPublished: false,
+                  ...policyStageFacts({ policy }),
                 }),
               }
             : {}),
@@ -1530,7 +1535,8 @@ class TandemController {
 
   /**
    * The target repository's own saved policy and guidance. Implementation there needs validation
-   * commands; when none are saved, the user's answer from the brief supplies them.
+   * commands or its saved "no checks"; when neither is saved, the user's answer from the brief
+   * supplies them.
    */
   private async targetPolicy(
     input: CreateTaskRequest,
@@ -1541,7 +1547,11 @@ class TandemController {
       input.validationCommands === undefined
         ? saved.config
         : parsePolicyOverride({ validationCommands: input.validationCommands }, saved.config);
-    if (input.kind === "implementation" && config.validationCommands.length === 0) {
+    if (
+      input.kind === "implementation" &&
+      config.validationCommands.length === 0 &&
+      config.validation !== "none"
+    ) {
       throw new Error(
         `${target.repo} has no saved validation commands. Ask the user how to check work there (for example "bun test"), add their answer to the brief's automated checks, and create again with it as validationCommands.`,
       );
@@ -2456,6 +2466,7 @@ class TandemController {
       const requiredStages = decideRequiredStages({
         briefSkipsReview: briefSkips,
         pullRequestPublished: pullRequestPublished(task),
+        ...policyStageFacts(task),
       });
       const recorded = task.requiredStages;
       if (

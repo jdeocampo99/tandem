@@ -10,6 +10,7 @@ import {
   canSkipValidation,
   finalAcceptanceContract,
   finalAcceptanceStatus,
+  isUnvalidatedPolicy,
   iterationScopeFor,
   policyIdentity,
   ValidationConfigurationError,
@@ -142,6 +143,32 @@ test("a manifest with no matching check is a configuration failure rather than a
   expect(() => finalAcceptanceContract(task({ surfaces: ["unmapped"] }), HEAD)).toThrow(
     ValidationConfigurationError,
   );
+  // Zero commands without the explicit "no checks" choice is never configured, never a pass.
+  expect(() => finalAcceptanceContract(task({}, policyWith([])), HEAD)).toThrow(
+    "no validation commands are configured",
+  );
+});
+
+test("a project that chose no checks accepts on review alone, labeled unvalidated", () => {
+  const base = policyWith([]);
+  const noChecks: ResolvedPolicy = { ...base, config: { ...base.config, validation: "none" } };
+  const manifest = finalAcceptanceContract(task({}, noChecks), HEAD);
+  expect(manifest).toMatchObject({ commands: [], requirements: [], unvalidated: true });
+  expect(manifest.lenses).toEqual(["review"]);
+  expect(isUnvalidatedPolicy(noChecks.config)).toBe(true);
+  expect(isUnvalidatedPolicy(base.config)).toBe(false);
+
+  const unreviewed = finalAcceptanceStatus(task({}, noChecks), HEAD);
+  expect(unreviewed).toMatchObject({
+    satisfied: false,
+    pendingLenses: ["review"],
+    unvalidated: true,
+  });
+  expect(canSkipValidation(task({}, noChecks), HEAD)).toBe(true);
+  const reviewed = finalAcceptanceStatus(task({ reviews: [review("review")] }, noChecks), HEAD);
+  expect(reviewed).toMatchObject({ satisfied: true, missing: [], unvalidated: true });
+  // Configured commands keep the manifest validated.
+  expect(finalAcceptanceContract(task(), HEAD).unvalidated).toBe(false);
 });
 
 test("an iteration scope records the checks that reported the failure and the findings to resolve", () => {

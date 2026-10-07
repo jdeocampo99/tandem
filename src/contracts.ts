@@ -165,6 +165,13 @@ export type RepoPolicy = {
   readonly instructions: InstructionChannels;
   readonly instructionFiles: InstructionChannels;
   readonly validationCommands: readonly ValidationCommand[];
+  /**
+   * `none` is the user's deliberate "no checks": the project has no validation commands, tasks
+   * skip validation and are labeled unvalidated. Only ever present with no validation commands;
+   * absent means validation is required, so a project with no commands and no choice still blocks.
+   * It is never written otherwise, so policies pinned before this setting keep their digest.
+   */
+  readonly validation?: "none";
   readonly setupCommands: readonly SetupCommand[];
   /**
    * Only on a policy pinned before the worker limit was removed. Never read: it stays in place so

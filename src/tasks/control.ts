@@ -49,7 +49,7 @@ import {
   type TaskTransitionContext,
   transitionTask,
 } from "./lifecycle.ts";
-import { decideRequiredStages, pullRequestPublished } from "./required-stages.ts";
+import { decideRequiredStages, policyStageFacts, pullRequestPublished } from "./required-stages.ts";
 import type { TaskStore, TaskStoreTransaction } from "./store.ts";
 
 type ControlAction = "pause" | "cancel";
@@ -948,6 +948,7 @@ export class TaskControlWorkflow {
           : decideRequiredStages({
               briefSkipsReview,
               pullRequestPublished: pullRequestPublished(task),
+              ...policyStageFacts(task),
             });
       const withInstruction = (candidate: TaskRecord): TaskRecord =>
         instruction === undefined || communication === undefined

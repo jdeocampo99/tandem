@@ -11,6 +11,8 @@ import {
   type FinalRequirement,
   finalAcceptanceContract,
   finalAcceptanceStatus,
+  isUnvalidatedPolicy,
+  UNVALIDATED_LABEL,
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
 import { findingHeadline, fixRoundBudget } from "../tasks/findings.ts";
@@ -62,11 +64,19 @@ export function readSingleLine(value: unknown, field: string): string {
   return text;
 }
 
+/**
+ * The pinned evidence for `head`, all of it passing. Empty evidence is accepted only when the
+ * pinned policy is the project's deliberate "no checks"; anywhere else it is evidence loss.
+ */
 export function assertEvidence(
   task: TaskRecord,
   head: string,
 ): readonly PinnedValidationEvidence[] {
-  if (!Array.isArray(task.validationEvidence) || task.validationEvidence.length === 0) {
+  if (!Array.isArray(task.validationEvidence)) {
+    throw new Error("delivery requires nonempty validation evidence");
+  }
+  if (task.validationEvidence.length === 0) {
+    if (isUnvalidatedPolicy(task.policy.config)) return [];
     throw new Error("delivery requires nonempty validation evidence");
   }
 
@@ -209,6 +219,11 @@ function findingBullet(entry: FindingLedgerEntry): string {
 
 function acceptedValidation(task: TaskRecord, head: string): readonly string[] {
   const manifest = finalAcceptanceContract(task, head);
+  if (manifest.unvalidated) {
+    return [
+      `${UNVALIDATED_LABEL}. No automated checks ran; this change passed review only, at HEAD ${head} (${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria).`,
+    ];
+  }
   return [
     `final acceptance manifest at HEAD ${head}: ${manifest.requirements.length} required checks, ${manifest.lenses.length} review lenses, ${manifest.criteria.length} acceptance criteria`,
     ...assertEvidence(task, head).map(evidenceBullet),
@@ -218,6 +233,7 @@ function acceptedValidation(task: TaskRecord, head: string): readonly string[] {
 function skippedValidation(task: TaskRecord, head: string): readonly string[] {
   return [
     `Review was skipped at the user's request at HEAD ${head}.`,
+    ...(isUnvalidatedPolicy(task.policy.config) ? [`${UNVALIDATED_LABEL}.`] : []),
     ...passedValidation(task, head),
   ];
 }
@@ -296,10 +312,13 @@ export function pinnedReviewLevel(task: TaskRecord): ReviewLevelSummary {
     throw new TypeError("draft progress requires a pinned repository policy");
   }
   const recorded = recordedReviewLevel(task);
+  const checks = isUnvalidatedPolicy(config)
+    ? `no validation commands (${UNVALIDATED_LABEL.toLowerCase()}, so nothing is checked automatically)`
+    : `${config.validationCommands.length} pinned validation command(s)`;
   return {
     level: recorded.level,
     reason: recorded.reason,
-    finalRequirements: `Whatever the level, the pinned repository policy requires review at final acceptance by a fresh read-only reviewer, ${config.validationCommands.length} pinned validation command(s), and at most ${config.maxFixRounds} bounded fix round(s).`,
+    finalRequirements: `Whatever the level, the pinned repository policy requires review at final acceptance by a fresh read-only reviewer, ${checks}, and at most ${config.maxFixRounds} bounded fix round(s).`,
   };
 }
 
@@ -364,7 +383,9 @@ function draftActivity(task: TaskRecord): readonly string[] {
       ];
     case "ready":
       return [
-        `The final acceptance manifest and the review pass at ${head}. Delivery acceptance is still a separate explicit step.`,
+        isUnvalidatedPolicy(task.policy.config)
+          ? `${UNVALIDATED_LABEL}. The review passes at ${head}; no automated checks ran. Delivery acceptance is still a separate explicit step.`
+          : `The final acceptance manifest and the review pass at ${head}. Delivery acceptance is still a separate explicit step.`,
       ];
     case "paused":
       return [
@@ -432,7 +453,9 @@ function draftRemainingChecks(task: TaskRecord, candidateHead: string | undefine
     }
     throw error;
   }
-  const remaining: string[] = [];
+  const remaining: string[] = status.unvalidated
+    ? [`${UNVALIDATED_LABEL}; no automated check will run, so review is the only gate.`]
+    : [];
   for (const requirement of status.missing) {
     remaining.push(describeRequirement(requirement, "has no recorded evidence"));
   }
