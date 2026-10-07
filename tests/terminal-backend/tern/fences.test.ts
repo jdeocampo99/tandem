@@ -29,7 +29,7 @@ async function withQuarantinedPane(
 ): Promise<void> {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "42", cwd: world.repoPath });
-    const tern = ternBackend(lostAcknowledgement(world), { home: world.home });
+    const tern = ternBackend(lostAcknowledgement(world), { ...world.tern, home: world.home });
     await expect(
       tern.sendKeys({ endpoint, cwd: world.repoPath, keys: ["ctrl+c"] }),
     ).rejects.toBeInstanceOf(TernOutcomeUnknownError);

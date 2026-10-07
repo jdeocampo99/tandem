@@ -319,6 +319,8 @@ export type TandemServiceOptions = Readonly<{
   readonly refreshSource?: () => Promise<SourceRefreshResult>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
+  /** The terminal port; defaults to the one the saved settings select, built on `run`. */
+  readonly terminal?: TerminalBackend;
   readonly clock?: Clock;
   readonly idFactory?: IdFactory;
   /** Chooses a new scout's post-research disposition; defaults to deterministic cues alone. */
@@ -2955,7 +2957,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     refreshSource,
     workerTimeoutMs,
     run,
-    terminal: terminalBackend(run, { home }),
+    terminal: options.terminal ?? terminalBackend(run, { home }),
     clock,
     idFactory,
     classifyResearchContinuation,

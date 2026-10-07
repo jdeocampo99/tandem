@@ -27,7 +27,7 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
       },
       {
         run: world.run,
-        terminal: terminalBackend(world.run, { home: world.home }),
+        terminal: terminalBackend(world.run, { tern: world.tern, home: world.home }),
         startPersistent: async () => undefined,
         runInteractive: async () => {
           throw new Error("must launch in a Tern pane");
@@ -67,7 +67,7 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
     world.advanceClock(60);
     let opened = 0;
     let catchUpFails = true;
-    const base = terminalBackend(world.run, { home: world.home });
+    const base = terminalBackend(world.run, { tern: world.tern, home: world.home });
     const terminal = {
       ...base,
       views: viewsWith(base, {
@@ -140,7 +140,7 @@ test("a fresh Tern launch preserves its coordinator and visit when optional catc
     const previous = await visit();
     world.advanceClock(60);
     let opens = 0;
-    const base = terminalBackend(world.run, { home: world.home });
+    const base = terminalBackend(world.run, { tern: world.tern, home: world.home });
     const terminal = {
       ...base,
       views: viewsWith(base, {
@@ -196,7 +196,7 @@ test("a fresh Tern launch preserves its coordinator and visit when optional catc
 test("a second project launches beside the first project's live native panel", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-    const terminal = terminalBackend(world.run, { home: world.home });
+    const terminal = terminalBackend(world.run, { tern: world.tern, home: world.home });
     const launch = (repo: string) =>
       launchCoordinator(
         {

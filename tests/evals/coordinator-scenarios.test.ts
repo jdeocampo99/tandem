@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { chmod, readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RequestBriefContent } from "../../src/contracts.ts";
+import type { CommandResult, CommandRunner, RequestBriefContent } from "../../src/contracts.ts";
 import type {
   CoordinatorLaunchDependencies,
   CoordinatorLaunchRequest,
@@ -12,6 +12,7 @@ import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import {
+  SCENARIO_HEAD,
   SCENARIO_POLICY,
   type ScenarioWorld,
   scenarioRuntimeTask,
@@ -449,5 +450,93 @@ test("a request brief gates dispatch, retires only its own pane, and pauses supe
     expect(reread.record.approval?.briefRevision).toBe(1);
     expect(reread.record.history.map((entry) => entry.revision)).toEqual([1, 2]);
     await service.shutdown();
+  });
+});
+
+type Observed = { readonly argv: readonly string[] };
+
+function ok(stdout = ""): CommandResult {
+  return { code: 0, stdout, stderr: "" };
+}
+
+/** The world's runner, recording every command it is given in order. */
+function recordingRun(world: ScenarioWorld, calls: Observed[]): CommandRunner {
+  return async (request) => {
+    calls.push({ argv: request.argv });
+    return world.run(request);
+  };
+}
+
+function gitCalls(calls: readonly Observed[], path: string): readonly (readonly string[])[] {
+  return calls
+    .filter((call) => call.argv[0] === "git" && call.argv[2] === path)
+    .map((call) => call.argv.slice(3));
+}
+
+test("an update proves the coordinator checkout without rereading evidence it never uses", async () => {
+  await withScenario({}, async (world) => {
+    const first = await restartCoordinator(launchRequest(world), launchDependencies(world, []));
+    const calls: Observed[] = [];
+    const run = recordingRun(world, calls);
+    await restartCoordinator(launchRequest(world), {
+      ...launchDependencies(world, []),
+      run,
+      terminal: terminalBackend(run, { terminal: "herdr" }),
+    });
+
+    const reads = gitCalls(calls, first.worktree.path);
+    // A checkpoint's full binary diff is evidence for tasks; a launch only needs clean and pinned.
+    expect(reads.some((argv) => argv.includes("--binary"))).toBe(false);
+    // The previous checkout is observed once, and the lease acquire proves it once more.
+    expect(reads.filter((argv) => argv[0] === "status")).toHaveLength(2);
+  });
+});
+
+test("an update fetches origin while it checks the new coordinator", async () => {
+  await withScenario({}, async (world) => {
+    let fetching!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      fetching = resolve;
+    });
+    const run: CommandRunner = async (request) => {
+      const [program, , , verb] = request.argv;
+      if (program === "git" && verb === "remote") return ok("origin\n");
+      if (program === "git" && verb === "fetch") {
+        fetching();
+        return ok();
+      }
+      if (program === "git" && request.argv.includes("refs/remotes/origin/main^{commit}")) {
+        return ok(`${SCENARIO_HEAD}\n`);
+      }
+      return world.run(request);
+    };
+    await restartCoordinator(launchRequest(world), {
+      ...launchDependencies(world, []),
+      run,
+      terminal: terminalBackend(run, { terminal: "herdr" }),
+      // Never returns unless the fetch was already running: a serial update would hang here.
+      checkNewCoordinator: () => fetchStarted,
+    });
+  });
+});
+
+test("a new coordinator's panel opens while the coordinator starts, not after it is proven", async () => {
+  await withScenario({}, async (world) => {
+    const calls: Observed[] = [];
+    const run = recordingRun(world, calls);
+    await restartCoordinator(launchRequest(world), {
+      ...launchDependencies(world, []),
+      run,
+      terminal: terminalBackend(run, { terminal: "herdr" }),
+    });
+
+    const words = calls.map((call) => call.argv.join(" "));
+    const panelOpen = words.findIndex((line) => line.includes("plugin pane open"));
+    const bootstrap = words.findIndex((line) => line.includes("pane run"));
+    const firstProof = words.findIndex(
+      (line, index) => index > bootstrap && line.includes("process-info"),
+    );
+    expect(panelOpen).toBeGreaterThan(bootstrap);
+    expect(panelOpen).toBeLessThan(firstProof);
   });
 });

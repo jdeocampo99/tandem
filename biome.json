@@ -190,7 +190,7 @@
               "level": "error",
               "options": {
                 "deniedGlobals": {
-                  "Bun": "Only src/terminal-backend/tern/cli.ts spawns processes (process-reader.ts runs ps for it). Spawn Tern through ternCli and mutate."
+                  "Bun": "Only src/terminal-backend/tern/cli.ts spawns processes (process-reader.ts runs ps and reads native argv in-process for it). Spawn Tern through ternCli and mutate."
                 }
               }
             }

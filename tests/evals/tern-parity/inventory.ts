@@ -1580,7 +1580,7 @@ export const inventory: readonly InventoryEntry[] = [
       withParity(async ({ host, world, project }) => {
         expect(await host.openSetup()).toBe(true);
         const setup = host.pane("setup");
-        const views = terminalBackend(world.run, { home: world.home }).views;
+        const views = terminalBackend(world.run, { home: world.home, tern: world.tern }).views;
         if (views === undefined) throw new Error("Tern hosts no native views");
         expect(
           await views.isView({

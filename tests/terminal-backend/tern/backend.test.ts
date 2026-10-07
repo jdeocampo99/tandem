@@ -33,7 +33,7 @@ test("Tern port pins identity and observable outcomes through a pane lifecycle",
     const terminal = ternBackend(async (request) => {
       calls.push(request);
       return world.run(request);
-    });
+    }, world.tern);
     const session = { sessionId: world.sessionId, cwd: world.repoPath };
     const root = await terminal.createWorkspace({
       ...session,
@@ -150,7 +150,7 @@ test("a relaunched backend reuses the exact session from durable coordinator, ta
       role: "coordinator" as const,
       generation: 0,
     };
-    const first = await ternBackend(run).createWorkspace(target);
+    const first = await ternBackend(run, world.tern).createWorkspace(target);
     const worktree = await world.grantLease({ name: "coordinator", holder: "coordinator" });
     await saveCoordinatorRecord(world.home, {
       schemaVersion: 1,
@@ -187,7 +187,7 @@ test("a relaunched backend reuses the exact session from durable coordinator, ta
     );
     // An empty native session may survive terminal restoration or Tern's acknowledged last close.
     world.removePane(first.endpoint.paneId);
-    const relaunched = await ternBackend(run).createWorkspace({
+    const relaunched = await ternBackend(run, world.tern).createWorkspace({
       ...target,
       previousEndpoint: recorded.endpoint,
     });
@@ -216,10 +216,10 @@ test("an absent stored session creates a new session without adopting a matching
       role: "coordinator" as const,
       generation: 0,
     };
-    const first = await ternBackend(run).createWorkspace(target);
+    const first = await ternBackend(run, world.tern).createWorkspace(target);
     const name = calls.find((request) => request.argv[1] === "new")?.argv[3];
     if (name === undefined) throw new Error("missing native session name");
-    await ternBackend(run).close({ endpoint: first.endpoint, cwd: world.repoPath });
+    await ternBackend(run, world.tern).close({ endpoint: first.endpoint, cwd: world.repoPath });
     const impostor = decode(
       (
         await world.run({
@@ -230,7 +230,7 @@ test("an absent stored session creates a new session without adopting a matching
       Created,
       "test session",
     );
-    const relaunched = await ternBackend(run).createWorkspace({
+    const relaunched = await ternBackend(run, world.tern).createWorkspace({
       ...target,
       previousEndpoint: first.endpoint,
     });
@@ -246,7 +246,7 @@ test("an absent stored session creates a new session without adopting a matching
 test("notifications require the injected durable endpoint even after a backend created a coordinator", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const session = { sessionId: world.sessionId, cwd: world.repoPath };
-    const terminal = ternBackend(world.run);
+    const terminal = ternBackend(world.run, world.tern);
     const created = await terminal.createWorkspace({
       ...session,
       label: "coordinator",
@@ -261,7 +261,9 @@ test("notifications require the injected durable endpoint even after a backend c
     const other = world.openPane({ paneId: "48", cwd: world.repoPath });
     world.titlePane(other.paneId, helper.paneId);
     await expect(
-      ternBackend(world.run, { notificationEndpoint: async () => helper }).notify(alert),
+      ternBackend(world.run, { ...world.tern, notificationEndpoint: async () => helper }).notify(
+        alert,
+      ),
     ).rejects.toBeInstanceOf(EndpointOwnershipError);
     expect(world.paneIsPresent(other.paneId)).toBe(true);
     expect(world.trace().some((event) => event.action === "tern close")).toBe(false);
@@ -278,7 +280,7 @@ test("an uncertain helper creation retains both panes", async () => {
         return { ...result, stdout: result.stdout.replace(/"session":"\d+"/u, '"session":"999"') };
       }
       return result;
-    });
+    }, world.tern);
     const target = {
       sessionId: world.sessionId,
       cwd: world.repoPath,
@@ -300,7 +302,7 @@ test("an uncertain helper creation retains both panes", async () => {
 
 test("a busy recorded helper refuses project closure before either pane is closed", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
-    const terminal = ternBackend(world.run);
+    const terminal = ternBackend(world.run, world.tern);
     const created = await terminal.createWorkspace({
       sessionId: world.sessionId,
       cwd: world.repoPath,
@@ -327,7 +329,7 @@ test("a busy recorded helper refuses project closure before either pane is close
 test("native views without a recorded coordinator refuse before any terminal effects", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const coordinator = world.openPane({ paneId: "46", cwd: world.repoPath });
-    const terminal = ternBackend(world.run);
+    const terminal = ternBackend(world.run, world.tern);
     const views: readonly TerminalView[] = [
       { kind: "task", taskId: "task-1" },
       { kind: "brief", requestId: "request-1" },
@@ -354,7 +356,7 @@ test("project switching focuses exact blocks across native sessions with a final
     const terminal = ternBackend(async (request) => {
       calls.push(request);
       return world.run(request);
-    });
+    }, world.tern);
     const session = {
       sessionId: world.sessionId,
       cwd: world.repoPath,
@@ -400,7 +402,7 @@ test("workspace focus refuses a native session change between selection and the 
           return { ...result, stdout: result.stdout.replace('"id":"100"', '"id":"101"') };
       }
       return result;
-    });
+    }, world.tern);
     const result = await terminal.focusWorkspace({
       sessionId: world.sessionId,
       cwd: world.repoPath,
@@ -425,7 +427,7 @@ test("wrong block acknowledgement quarantines resources and prevents blind retri
       return result;
     };
     // A fresh backend per call stands for a fresh process; only the durable record refuses.
-    const terminal = () => ternBackend(run, { home: world.home });
+    const terminal = () => ternBackend(run, { ...world.tern, home: world.home });
     const target = { endpoint, cwd: world.repoPath, keys: ["ctrl+c"] };
     await expect(terminal().sendKeys(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     await expect(terminal().sendKeys(target)).rejects.toBeInstanceOf(TernQuarantinedError);
@@ -451,7 +453,7 @@ test("a window-scoped close never forgets the quarantine of a pane another windo
           tab.blocks = tab.blocks.filter((block) => block.id !== endpoint.paneId);
       return { ...result, stdout: JSON.stringify(listing) };
     };
-    const terminal = ternBackend(run, { home: world.home });
+    const terminal = ternBackend(run, { ...world.tern, home: world.home });
     await expect(
       terminal.sendKeys({ endpoint, cwd: world.repoPath, keys: ["ctrl+c"] }),
     ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
@@ -461,14 +463,14 @@ test("a window-scoped close never forgets the quarantine of a pane another windo
       );
     expect(await quarantined()).toEqual([endpoint.paneId]);
     const close = { verb: "close", endpoint: ternEndpoint(endpoint), cwd: world.repoPath } as const;
-    const windowed = ternCli(run, { home: world.home, windowKey: "this-window" });
+    const windowed = ternCli(run, { ...world.tern, home: world.home, windowKey: "this-window" });
     for (const view of [{ program: "tandem.brief", args: [] }, undefined])
       expect(await windowed.mutate({ ...close, ...(view === undefined ? {} : { view }) })).toEqual({
         absent: true,
       });
     expect(await quarantined()).toEqual([endpoint.paneId]);
     world.removePane(endpoint.paneId);
-    await ternCli(run, { home: world.home }).mutate({
+    await ternCli(run, { ...world.tern, home: world.home }).mutate({
       ...close,
       view: { program: "tandem.brief", args: [] },
     });
@@ -491,7 +493,7 @@ test("u64 identity parsing preserves exact ids and refuses a changed tab or nati
         ),
       };
     };
-    const terminal = ternBackend(run, { windowKey: "owned-window" });
+    const terminal = ternBackend(run, { ...world.tern, windowKey: "owned-window" });
     expect((await terminal.inspect({ endpoint, cwd: world.repoPath })).pane.paneId).toBe(
       endpoint.paneId,
     );
@@ -510,7 +512,7 @@ test("a failed mutation retains its pane and is never retried", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "42", cwd: world.repoPath });
     world.failAt({ boundary: "tern", action: "tern close" });
-    const terminal = () => ternBackend(world.run, { home: world.home });
+    const terminal = () => ternBackend(world.run, { ...world.tern, home: world.home });
     await expect(terminal().close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
       TernOutcomeUnknownError,
     );
@@ -548,6 +550,7 @@ test("close waits for its exact session to disappear without retrying an acknowl
         return result;
       },
       {
+        ...world.tern,
         windowKey: "owned-window",
         clock: () => now,
         wait: async (milliseconds) => {
@@ -590,6 +593,7 @@ test("a killed session with an unconfirmed tab times out and quarantines another
           return result;
         },
         {
+          ...world.tern,
           home: world.home,
           clock: () => now,
           wait: async (milliseconds) => {
@@ -611,7 +615,7 @@ test("a foreground shell script is busy even though its process is named sh", as
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "43", cwd: world.repoPath });
     world.replaceForeground(endpoint.paneId, ["sh", "/work/long-running-script.sh"]);
-    const terminal = ternBackend(world.run);
+    const terminal = ternBackend(world.run, world.tern);
     expect((await terminal.inspect({ endpoint, cwd: world.repoPath })).activeWorker).toBe(true);
     await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toThrow(
       "active foreground worker",
@@ -646,7 +650,10 @@ test("Tern's stopped coordinator bootstrap remains eligible for retirement with 
       "sh",
       `${world.home}/coordinator-scripts/coordinator-${digest}-${digest}-${digest}.sh`,
     ]);
-    const inspection = await ternBackend(world.run).inspect({ endpoint, cwd: world.repoPath });
+    const inspection = await ternBackend(world.run, world.tern).inspect({
+      endpoint,
+      cwd: world.repoPath,
+    });
     expect(inspection.activeWorker).toBe(true);
     expect(() => assertStoppedCoordinatorShell(inspection)).not.toThrow();
   });
@@ -661,7 +668,7 @@ test("detached blocks never turn an unknown pane placement into absence proof", 
       return request.argv[1] === "ls"
         ? { ...result, stdout: result.stdout.replace('"detached":[]', '"detached":[{}]') }
         : result;
-    });
+    }, world.tern);
     try {
       await terminal.close({ endpoint, cwd: world.repoPath });
       throw new Error("absence incorrectly accepted");

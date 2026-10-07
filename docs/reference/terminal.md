@@ -156,8 +156,11 @@ notifications are disabled. Coordinator ask notifications stay enabled.
 - Every Tern effect goes through `mutate(op)` in `tern/cli.ts`, the only module that runs the
   Tern CLI (including `tern plugin`) or writes the alert helper's tty.
   Biome forbids importing the command runner, `node:child_process` or the `Bun` global anywhere
-  else under `tern/` (`process-reader.ts`, which runs `ps` for the process proof, is the one
-  exception for `Bun`). The op union is closed
+  else under `tern/` (`process-reader.ts` is the one exception for `Bun`). That module reads a
+  foreground group's native argv in-process (`ps` for membership, `sysctl` through FFI for each
+  member's argv, never its environment); `ternCli` takes it as `readForeground`, so a process
+  proof spawns no helper process and tests inject a fake reader. A read failure is a protocol
+  failure that `inspect`'s retry rules treat like any other disagreement. The op union is closed
   (`focus`, `run`, `send`, `rename`, `split`, `newTab`, `newSession`, `close`, `killSession`,
   `open`, `browser`, `notify`) and takes only a `TernEndpoint`, which `identity.ts` narrows from a
   tag-checked endpoint. Each op rechecks the exact id, proves destructive targets idle, reads the

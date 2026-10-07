@@ -367,7 +367,7 @@ export class TernParityHost {
   async openPanel(project: ScenarioTernProject = this.project): Promise<number> {
     const id = await terminalBackend(this.#run, {
       home: this.world.home,
-      tern: { clock: this.#clock },
+      tern: { ...this.world.tern, clock: this.#clock },
     }).openPanel({
       coordinator: project.coordinator,
       cwd: project.worktree.path,
@@ -380,7 +380,10 @@ export class TernParityHost {
   /** The setup block opens the way a Tandem coordinator's startup opens it: `openSetupBeside`. */
   async openSetup(project: ScenarioTernProject = this.project): Promise<boolean> {
     const opened = await openSetupBeside(
-      terminalBackend(this.#run, { home: this.world.home, tern: { clock: this.#clock } }),
+      terminalBackend(this.#run, {
+        home: this.world.home,
+        tern: { ...this.world.tern, clock: this.#clock },
+      }),
       this.#service(project),
       {
         home: this.world.home,
@@ -405,6 +408,7 @@ export class TernParityHost {
       poolRoot,
       coordinatorPaneId: project.coordinator.paneId,
       run: this.#run,
+      terminal: terminalBackend(this.#run, { home, tern: this.world.tern }),
       clock,
       idFactory,
     });
@@ -621,11 +625,15 @@ export class TernParityHost {
         TANDEM_PROJECT_ROOTS: dirname(world.repoPath),
       },
       run: this.#run,
-      terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
+      terminal: terminalBackend(this.#run, {
+        home: world.home,
+        tern: { ...world.tern, clock: this.#clock },
+      }),
       createService: (options) =>
         createTandemService({
           ...options,
           run: this.#run,
+          terminal: terminalBackend(this.#run, { home: options.home, tern: world.tern }),
           clock: world.clock,
           idFactory: world.idFactory,
         }),
