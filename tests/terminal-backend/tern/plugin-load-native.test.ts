@@ -3,9 +3,8 @@ import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promi
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CommandRunner } from "../../../src/contracts.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { viewFileText } from "../../native/view-files.ts";
+import { publishFixture } from "../../native/view-files.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -197,22 +196,15 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         workspaceId: coordinator.workspaceId,
       });
       await until(async () => (await ctl("tree")).includes("coordinator · tandem"));
-      await mkdir(join(home, "native-views"));
       const panel = panelFixture(root);
-      await writeFile(
-        viewIndexPath(home, root),
-        viewFileText("index", {
-          version: 1,
-          project: root,
-          writtenAt: new Date().toISOString(),
-          panel,
-          projects: panel.header.projects,
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          warnings: [],
-        }),
-      );
+      await publishFixture(home, root, {
+        panel,
+        projects: panel.header.projects,
+        tasks: {},
+        briefs: {},
+        pullRequests: {},
+        warnings: [],
+      });
       const opened = await terminal.openPanel({ coordinator, cwd: root, project: root });
       await writeFile(join(root, "panel-open.json"), JSON.stringify(opened));
       await writeFile(join(root, "panel-list.json"), await checked("ls", "--json"));

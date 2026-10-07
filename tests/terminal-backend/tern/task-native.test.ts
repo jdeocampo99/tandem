@@ -6,10 +6,11 @@ import { nativeTaskFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { blockArgs, parseBlockContext } from "../../../src/native/contract.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
+import type { TaskPageView } from "../../../src/tasks/page-view.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
-import { openFiles, viewFileText } from "../../native/view-files.ts";
+import { openFiles } from "../../native/view-files.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
 import { recordedActions, recordingCli } from "./native-window.ts";
 
@@ -51,6 +52,21 @@ type ControlNode = {
     );
     const publication = taskScreenPublication(root);
     await publishViews(env.TANDEM_HOME, publication.bundle.project, async () => publication);
+    /** The review-state publication with task 102's detail replaced by `data`. */
+    const publishTask = (data: TaskPageView) =>
+      publishViews(env.TANDEM_HOME, root, async () => {
+        const review = taskScreenPublication(root, true);
+        return {
+          ...review,
+          details: [
+            {
+              file: nativeTaskFile("102"),
+              view: { version: 1, project: root, kind: "task", data },
+            },
+            ...review.details.filter((detail) => detail.file !== nativeTaskFile("102")),
+          ],
+        };
+      });
     const file = viewDetailPath(env.TANDEM_HOME, root, nativeTaskFile("102"));
     const index = viewIndexPath(env.TANDEM_HOME, root);
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
@@ -202,7 +218,7 @@ type ControlNode = {
       expect(JSON.stringify(await tree())).toContain("Additional charges · unavailable");
       await ctl("shot", "03-task-cost");
       await click("Overview");
-      await writeFile(file, viewFileText("task", taskScreenFixture(true)));
+      await publishTask(taskScreenFixture(true));
       await until(async () => JSON.stringify(await tree()).includes("Restart"));
       await ctl("shot", "03b-task-stuck");
       await click("Restart");
@@ -265,7 +281,7 @@ type ControlNode = {
       expect(afterCancel.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === opened.paneId)).toBe(
         true,
       );
-      await writeFile(file, viewFileText("task", taskScreenFixture()));
+      await publishTask(taskScreenFixture());
       const previous = opened;
       opened = await host.open(
         { ...input, origin: { paneId: previous.paneId, cwd: root } },

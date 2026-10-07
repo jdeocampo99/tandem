@@ -15,8 +15,7 @@ import {
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
-import { viewFileText } from "../../native/view-files.ts";
-import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { publishFixture } from "../../native/view-files.ts";
 import { viewsOf } from "../views.ts";
 import { recordedActions, recordingCli } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
@@ -138,27 +137,17 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       });
       await ctl("account", "signed-in");
       await Bun.sleep(500);
-      await mkdir(join(home, "native-views"));
       const path = viewIndexPath(home, root);
       const panel = panelFixture(root);
-      await writeFile(
-        path,
-        viewFileText("index", {
-          version: 1,
-          project: root,
-          writtenAt: new Date().toISOString(),
-          summary: {},
-          panel,
-          projects: panel.header.projects,
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          board: nativeScreensFixture().board,
-          usage: nativeScreensFixture().usage,
-          catchup: nativeScreensFixture().catchup,
-          warnings: [],
-        }),
-      );
+      const fixture = {
+        panel,
+        projects: panel.header.projects,
+        tasks: {},
+        briefs: {},
+        pullRequests: {},
+        warnings: [],
+      };
+      await publishFixture(home, root, fixture);
       await terminal.runCommand({
         endpoint: coordinator,
         cwd: root,
@@ -218,16 +207,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await until(async () => JSON.stringify(await ctl("tree")).includes("+ Open another project"));
       await ctl("shot", "02-projects");
       await ctl("key", "escape");
-      const envelope = JSON.parse(await readFile(path, "utf8")) as {
-        model: Record<string, unknown>;
-      };
-      await writeFile(
-        path,
-        viewFileText("index", {
-          ...envelope.model,
-          panel: { ...panel, footer: undefined },
-        }),
-      );
+      const { footer: _declined, ...withoutFooter } = panel;
+      await publishFixture(home, root, { ...fixture, panel: withoutFooter });
       await until(async () => !JSON.stringify(await ctl("tree")).includes("⌘⇧B board"));
       const declined = JSON.stringify(await ctl("tree"));
       expect(declined).toContain("⎇");

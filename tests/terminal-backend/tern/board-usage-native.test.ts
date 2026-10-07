@@ -12,7 +12,7 @@ import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
-import { viewFileText } from "../../native/view-files.ts";
+import { publishFixture } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { viewsOf } from "../views.ts";
 import { recordedActions } from "./native-window.ts";
@@ -48,10 +48,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
       recursive: true,
     });
-    await mkdir(join(home, "native-views"));
-    await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }), {
-      mode: 0o600,
-    });
+    await publishFixture(home, project);
     await writeFile(
       join(plugin, "tandem.sh"),
       `#!/bin/sh\ninput="$(cat)"\nprintf '%s\\n' "$input" >> '${log}'\nif [ -f '${fail}' ]; then printf 'isolated action failure\\n' >&2; exit 1; fi\nprintf '{"status":"done"}'\n`,
@@ -201,22 +198,18 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           console.log(await ctl("shot", kind));
         }
         if (kind === "usage") {
-          const fixture = { ...nativeScreensFixture(), project };
+          const fixture = nativeScreensFixture();
           const warning = "Provider limit refresh failed; last known limits may be stale";
           const warnings = [warning];
           const writtenAt = "2030-01-02T12:02:00Z";
-          await writeFile(
-            path,
-            viewFileText("index", {
-              ...fixture,
-              writtenAt,
-              warnings,
-              usage: {
-                ...fixture.usage,
-                display: usageDisplay(fixture.usage, { writtenAt, warnings }),
-              },
-            }),
-          );
+          await publishFixture(home, project, {
+            writtenAt,
+            warnings,
+            usage: {
+              ...fixture.usage,
+              display: usageDisplay(fixture.usage, { writtenAt, warnings }),
+            },
+          });
           await until(async () => (await ctl("tree")).includes(warning));
           const stale = await ctl("tree");
           expect(stale).toContain("62% left");
@@ -225,7 +218,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           expect(stale).toContain("View updated at 2030-01-02 12:02:00 UTC");
           expect(stale.indexOf(warning)).toBeLessThan(stale.indexOf("cost today"));
           if (shots) console.log(await ctl("shot", "usage-stale"));
-          await writeFile(path, viewFileText("index", fixture));
+          await publishFixture(home, project);
           await until(async () => !(await ctl("tree")).includes(warning));
         }
         if (kind === "catchup") {
@@ -267,7 +260,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         expect(remaining.some((entry) => entry.block.id === viewPane)).toBe(false);
         expect(remaining.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
       }
-      await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }));
+      await publishFixture(home, project);
       expect(
         (
           await viewsOf(backend).open({

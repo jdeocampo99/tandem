@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type NativePrIndex,
@@ -6,8 +6,8 @@ import {
   nativePrFile,
 } from "../../src/board/native-views.ts";
 import type { NativeProjectRow } from "../../src/board/panel.ts";
-import type { ViewFileKind } from "../../src/native/contract.ts";
-import { openDirectories, publishViews } from "../../src/native/store.ts";
+import { ViewFile, type ViewFileKind } from "../../src/native/contract.ts";
+import { openDirectories, publishViews, viewIndexPath } from "../../src/native/store.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
 let seq = 0;
@@ -40,6 +40,17 @@ export async function publishFixture(
     catchup: { ...base.catchup, project },
     ...change,
   };
+  await publishViews(home, project, async () => ({ bundle, details: [] }));
+}
+
+/** Republishes the index this project last published through the store, edited by `change`. */
+export async function republishIndex(
+  home: string,
+  project: string,
+  change: (bundle: NativeViews) => NativeViews,
+): Promise<void> {
+  const file = ViewFile.parse(JSON.parse(await readFile(viewIndexPath(home, project), "utf8")));
+  const bundle = change(file.model as NativeViews);
   await publishViews(home, project, async () => ({ bundle, details: [] }));
 }
 

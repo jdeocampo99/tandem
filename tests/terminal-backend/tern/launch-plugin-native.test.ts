@@ -2,16 +2,17 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { quoteShellArgument } from "../../../src/adapters/commands.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { findRunningCoordinator } from "../../../src/coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { type Action, Outcome, parseBlockArgs } from "../../../src/native/contract.ts";
-import { publishViews, viewIndexPath } from "../../../src/native/store.ts";
+import { publishViews } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks } from "../../../src/terminal-backend/tern/protocol.ts";
-import { openFiles, viewFileText } from "../../native/view-files.ts";
+import { openFiles, publishFixture } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
@@ -49,6 +50,8 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
     await Promise.all(
       [home, env.ZDOTDIR, env.TERN_CONFIG_DIR, join(root, "shots")].map((p) => mkdir(p)),
     );
+    // Tern panes start the user's login shell; a real profile puts the harness on PATH.
+    await writeFile(join(env.ZDOTDIR, ".zshrc"), `export PATH=${quoteShellArgument(env.PATH)}\n`);
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
         cwd: request.cwd,
@@ -165,22 +168,15 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await Bun.sleep(5000);
       // Authentic coordinator and launch paths, realistic derived view data, no model turn or task mutation.
       const panel = panelFixture(a);
-      await mkdir(join(home, "native-views"), { recursive: true });
       const writePanelFixture = () =>
-        writeFile(
-          viewIndexPath(home, a),
-          viewFileText("index", {
-            version: 1,
-            project: a,
-            writtenAt: new Date().toISOString(),
-            panel,
-            projects: panel.header.projects,
-            tasks: {},
-            briefs: {},
-            pullRequests: {},
-            warnings: [],
-          }),
-        );
+        publishFixture(home, a, {
+          panel,
+          projects: panel.header.projects,
+          tasks: {},
+          briefs: {},
+          pullRequests: {},
+          warnings: [],
+        });
       await writePanelFixture();
       await terminal.openPanel({
         coordinator: record.endpoint,
