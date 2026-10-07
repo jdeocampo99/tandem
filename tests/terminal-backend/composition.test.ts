@@ -122,7 +122,7 @@ test("only Tern hosts native views, and the saved choice decides which terminal 
   });
 });
 
-test("Tern launch context needs its injected workspace and namespace, and mixed contexts fail closed", () => {
+test("Tern launch context needs its injected workspace and namespace, a user's own Tern pane is outside, and mixed contexts fail closed", () => {
   const tern = { TERN_PANE: "42", TANDEM_SESSION: "daemon", TANDEM_TERN_WORKSPACE_ID: "tab" };
   expect(terminalContext.inheritedPane(tern)).toEqual({
     status: "inside",
@@ -130,7 +130,10 @@ test("Tern launch context needs its injected workspace and namespace, and mixed 
     workspaceId: "tab",
     paneId: "42",
   });
-  expect(terminalContext.inheritedPane({ TERN_PANE: "42" }).status).toBe("invalid");
+  expect(terminalContext.inheritedPane({ TERN_PANE: "42" }).status).toBe("outside");
+  expect(
+    terminalContext.inheritedPane({ TERN_PANE: "42", TANDEM_TERN_WORKSPACE_ID: "tab" }).status,
+  ).toBe("invalid");
   const herdr = {
     HERDR_ENV: "1",
     HERDR_SESSION: "other",
