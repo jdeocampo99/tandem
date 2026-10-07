@@ -590,8 +590,11 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await uncertainClose.closePanel(closeInput);
       expect(panelCloses).toBe(1);
       expect(
-        (await terminal.quarantinedPanes(home)).some(
-          (entry) => entry.status === "readable" && entry.endpoint.paneId === pane,
+        (await terminal.fences.list(home)).fences.some(
+          (fence) =>
+            fence.kind === "tern-quarantine" &&
+            fence.status === "readable" &&
+            fence.protects.endpoint.paneId === pane,
         ),
       ).toBe(true);
       expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(false);

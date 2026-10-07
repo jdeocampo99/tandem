@@ -3,11 +3,10 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { launchCoordinator } from "../../src/coordinator/launch.ts";
 import { findRunningCoordinator } from "../../src/coordinator/ownership.ts";
-import { visitNativeProject } from "../../src/memory/native-visits.ts";
-import { readProjectState } from "../../src/native/store.ts";
+import { recordVisit } from "../../src/native/store.ts";
 import { catchUpWarningNotice } from "../../src/terminal/launch.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
-import { publishFixture } from "../native/view-files.ts";
+import { publishFixture, savedState } from "../native/view-files.ts";
 import { viewsWith } from "../terminal-backend/views.ts";
 import { withScenario } from "./scenario.ts";
 
@@ -59,10 +58,12 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
       writtenAt: world.clock(),
       changeSignature: "after",
     });
-    await visitNativeProject(
-      { home: world.home, project: world.repoPath, now: world.clock(), signature: "before" },
-      async () => {},
-    );
+    await recordVisit(world.home, world.repoPath, {
+      kind: "entry",
+      now: world.clock(),
+      signature: "before",
+      showCatchUp: async () => {},
+    });
     world.advanceClock(60);
     let opened = 0;
     let catchUpFails = true;
@@ -105,8 +106,7 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
       );
     await reconnect(true);
     expect(opened).toBe(0);
-    const visit = async () =>
-      JSON.stringify((await readProjectState(world.home, world.repoPath))?.visit);
+    const visit = async () => JSON.stringify((await savedState(world.home, world.repoPath))?.visit);
     expect(JSON.parse(await visit()).previousSignature).toBe("before");
     const unacknowledged = await visit();
     const warned = await reconnect(false);
@@ -130,12 +130,13 @@ test("a fresh Tern launch preserves its coordinator and visit when optional catc
       writtenAt: world.clock(),
       changeSignature: "after",
     });
-    await visitNativeProject(
-      { home: world.home, project: world.repoPath, now: world.clock(), signature: "before" },
-      async () => {},
-    );
-    const visit = async () =>
-      JSON.stringify((await readProjectState(world.home, world.repoPath))?.visit);
+    await recordVisit(world.home, world.repoPath, {
+      kind: "entry",
+      now: world.clock(),
+      signature: "before",
+      showCatchUp: async () => {},
+    });
+    const visit = async () => JSON.stringify((await savedState(world.home, world.repoPath))?.visit);
     const previous = await visit();
     world.advanceClock(60);
     let opens = 0;

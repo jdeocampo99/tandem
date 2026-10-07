@@ -26,8 +26,9 @@ import {
 
 import { createTaskStore } from "../tasks/store.ts";
 import type {
-  QuarantinedPane,
-  RetainedViewOpen,
+  Fence,
+  FenceKind,
+  ReadableFence,
   TerminalBackend,
 } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock, withCoordinatorRepositoryLock } from "./lock.ts";
@@ -73,8 +74,7 @@ export type ReconcileResourceKind =
   | "implementation-task"
   | "unreadable-record"
   | "quarantine-note"
-  | "native-open"
-  | "tern-quarantine";
+  | FenceKind;
 
 /**
  * What the plan says should happen to one resource: release it through its owner, keep it and say
@@ -133,42 +133,12 @@ export type ObservedPendingScout = Readonly<{
 
 /** Something the read-only scan itself could not complete, reported rather than assumed empty. */
 export type ReconcileScanFailure = Readonly<{
-  readonly kind: Extract<
-    ReconcileResourceKind,
-    "worktree-lease" | "native-open" | "tern-quarantine"
-  >;
+  readonly kind: "worktree-lease" | FenceKind;
   readonly subject: string;
   readonly reason: string;
   /** The path that could not be read, when the subject is one. */
   readonly path?: string;
 }>;
-
-/** Whether a retained native open's coordinator is exactly present, exactly gone, or unclear. */
-export type NativeOpenOwner =
-  | Readonly<{ readonly status: "present" }>
-  | Readonly<{ readonly status: "gone" }>
-  | Readonly<{ readonly status: "ambiguous"; readonly detail: string }>;
-
-type ReadableViewOpen = Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>;
-
-/** One native view open whose outcome was never proved, which pauses new opens for its owner. */
-export type ObservedNativeOpen =
-  | Readonly<{ readonly open: ReadableViewOpen; readonly owner: NativeOpenOwner }>
-  | Readonly<{ readonly unreadable: Readonly<{ path: string; reason: string }> }>;
-
-type ReadableQuarantinedPane = Extract<QuarantinedPane, Readonly<{ status: "readable" }>>;
-
-/** Whether a quarantined pane can never repeat its doubted effect: gone, or idle at its exact id. */
-export type QuarantinedPaneState =
-  | Readonly<{ readonly status: "gone" }>
-  | Readonly<{ readonly status: "idle" }>
-  | Readonly<{ readonly status: "busy" }>
-  | Readonly<{ readonly status: "ambiguous"; readonly detail: string }>;
-
-/** One pane Tandem refuses to touch because an effect there ended with an unknown outcome. */
-export type ObservedQuarantinedPane =
-  | Readonly<{ readonly pane: ReadableQuarantinedPane; readonly state: QuarantinedPaneState }>
-  | Readonly<{ readonly unreadable: Readonly<{ path: string; reason: string }> }>;
 
 /** Everything the plan is allowed to look at, gathered without changing a single resource. */
 export type ReconcileObservation = Readonly<{
@@ -182,8 +152,8 @@ export type ReconcileObservation = Readonly<{
   /** Notes whose lease Treehouse no longer holds, so nothing is left for them to protect. */
   readonly settledQuarantineIds: readonly string[];
   readonly failures: readonly ReconcileScanFailure[];
-  readonly nativeOpens: readonly ObservedNativeOpen[];
-  readonly quarantinedPanes: readonly ObservedQuarantinedPane[];
+  /** The terminal's records of effects whose outcome is unknown, each proved when listed. */
+  readonly fences: readonly Fence[];
 }>;
 
 /** One planned resource, carrying exactly what its owner needs to act on it. */
@@ -246,24 +216,18 @@ export type ReconcilePlanItem =
       readonly sessionId: string;
       readonly record: CoordinatorQuarantineRecord;
     }>
-  | Readonly<{
-      readonly kind: "native-open";
-      readonly action: "clean" | "retain" | "quarantine";
-      readonly reason: string;
-      readonly path: string;
-      readonly sessionId: string | undefined;
-      /** Present only when the record parsed; an unreadable one is only ever reported. */
-      readonly open: ReadableViewOpen | undefined;
-    }>
-  | Readonly<{
-      readonly kind: "tern-quarantine";
-      readonly action: "clean" | "retain" | "quarantine";
-      readonly reason: string;
-      readonly path: string;
-      readonly sessionId: string | undefined;
-      /** Present only when the record parsed; an unreadable one is only ever reported. */
-      readonly pane: ReadableQuarantinedPane | undefined;
-    }>;
+  | FenceItem;
+
+/** One terminal fence, settled only through the terminal that listed it. */
+type FenceItem = Readonly<{
+  readonly kind: FenceKind;
+  readonly action: ReconcileAction;
+  readonly reason: string;
+  readonly path: string;
+  readonly sessionId: string | undefined;
+  /** Present only when the record parsed; an unreadable one is only ever reported. */
+  readonly fence: ReadableFence | undefined;
+}>;
 
 export type ReconcilePlan = Readonly<{
   readonly schemaVersion: typeof RECONCILE_REPORT_SCHEMA_VERSION;
@@ -602,8 +566,7 @@ export async function scanTandemResources(
   const { coordinators, unreadable } = await observeCoordinators(input, home);
   const { leases, failures } = await observePoolLeases(input, coordinators);
   const quarantines = await listCoordinatorQuarantineRecords(home);
-  const native = await observeNativeOpens(input.terminal, home);
-  const panes = await observeQuarantinedPanes(input.terminal, home);
+  const fences = await input.terminal.fences.list(home);
   return {
     home,
     coordinators,
@@ -618,9 +581,8 @@ export async function scanTandemResources(
     unreadable,
     quarantines,
     settledQuarantineIds: await observeSettledQuarantines(input.run, quarantines, coordinators),
-    failures: [...failures, ...native.failures, ...panes.failures],
-    nativeOpens: native.opens,
-    quarantinedPanes: panes.panes,
+    failures: [...failures, ...fences.failures],
+    fences: fences.fences,
   };
 }
 
@@ -826,211 +788,34 @@ function planUnreadableRecord(entry: UnreadableCoordinatorRecord): ReconcilePlan
   };
 }
 
-/**
- * Whether a retained open's coordinator is exactly present or exactly gone. Anything the terminal
- * cannot answer exactly, including a detached listing, leaves the open retained.
- */
-async function nativeOpenOwner(
-  terminal: TerminalBackend,
-  open: ReadableViewOpen,
-): Promise<NativeOpenOwner> {
-  try {
-    await terminal.inspect({ endpoint: open.coordinator, cwd: open.cwd });
-    return { status: "present" };
-  } catch (error) {
-    return terminal.isEndpointGone(error)
-      ? { status: "gone" }
-      : { status: "ambiguous", detail: describeFailure(error) };
-  }
-}
-
-async function observeNativeOpens(
-  terminal: TerminalBackend,
-  home: string,
-): Promise<Readonly<{ opens: readonly ObservedNativeOpen[]; failures: ReconcileScanFailure[] }>> {
-  let retained: readonly RetainedViewOpen[];
-  try {
-    retained = (await terminal.views?.retained(home)) ?? [];
-  } catch (error) {
+function planFence(fence: Fence): FenceItem {
+  if (fence.status === "unreadable")
     return {
-      opens: [],
-      failures: [
-        {
-          kind: "native-open",
-          subject: "native view opens",
-          reason: `paused views could not be listed: ${describeFailure(error)}`,
-        },
-      ],
-    };
-  }
-  const opens: ObservedNativeOpen[] = [];
-  for (const open of retained)
-    opens.push(
-      open.status === "unreadable"
-        ? { unreadable: open }
-        : { open, owner: await nativeOpenOwner(terminal, open) },
-    );
-  return { opens, failures: [] };
-}
-
-function planNativeOpen(observed: ObservedNativeOpen): ReconcilePlanItem {
-  if ("unreadable" in observed)
-    return {
-      kind: "native-open",
+      kind: fence.kind,
       action: "quarantine",
-      reason: `the paused Tern view record could not be read and is left in place: ${observed.unreadable.reason}`,
-      path: observed.unreadable.path,
+      reason: fence.reason,
+      path: fence.path,
       sessionId: undefined,
-      open: undefined,
+      fence: undefined,
     };
-  const { open, owner } = observed;
-  const item = (action: "clean" | "retain", why: string): ReconcilePlanItem => ({
-    kind: "native-open",
-    action,
-    reason: `${open.view} view: ${open.reason}; ${why}`,
-    path: open.path,
-    sessionId: open.coordinator.sessionId,
-    open,
-  });
-  if (owner.status === "present")
-    return item(
-      "clean",
-      "new Tandem views stay paused for its running coordinator until the record is abandoned; every pane is kept",
-    );
-  if (owner.status === "gone")
-    return item("clean", "its coordinator is gone, so the record can be removed");
-  return item("retain", `kept because its coordinator cannot be proved: ${owner.detail}`);
-}
-
-async function applyNativeOpenItem(
-  terminal: TerminalBackend,
-  item: NativeOpenItem,
-): Promise<ReconcileResult> {
-  const views = terminal.views;
-  if (item.open === undefined || views === undefined)
-    return { item, outcome: "quarantined", reason: item.reason };
-  const { open } = item;
-  let detail = "";
-  const outcome = await views.abandon(open, async () => {
-    const owner = await nativeOpenOwner(terminal, open);
-    if (owner.status === "ambiguous") detail = owner.detail;
-    return owner.status !== "ambiguous";
-  });
-  if (outcome === "abandoned" || outcome === "settled")
-    return { item, outcome: "cleaned", reason: item.reason };
   return {
-    item,
-    outcome: "retained",
-    reason:
-      outcome === "changed"
-        ? "the paused view record changed while fix ran, so it was kept"
-        : `kept because its coordinator cannot be proved: ${detail}`,
+    kind: fence.kind,
+    action: fence.proof.settleable ? "clean" : "retain",
+    reason: `${fence.description}; ${fence.proof.why}`,
+    path: fence.path,
+    sessionId: fence.protects.endpoint.sessionId,
+    fence,
   };
 }
 
-/**
- * Whether a quarantined pane is gone or idle at its exact id. Anything the terminal cannot answer
- * exactly, including a detached listing, keeps the record.
- */
-async function quarantinedPaneState(
+async function applyFenceItem(
   terminal: TerminalBackend,
-  pane: ReadableQuarantinedPane,
-): Promise<QuarantinedPaneState> {
-  try {
-    const inspected = await terminal.inspect({ endpoint: pane.endpoint, cwd: pane.cwd });
-    return { status: inspected.activeWorker ? "busy" : "idle" };
-  } catch (error) {
-    return terminal.isEndpointGone(error)
-      ? { status: "gone" }
-      : { status: "ambiguous", detail: describeFailure(error) };
-  }
-}
-
-async function observeQuarantinedPanes(
-  terminal: TerminalBackend,
-  home: string,
-): Promise<
-  Readonly<{ panes: readonly ObservedQuarantinedPane[]; failures: ReconcileScanFailure[] }>
-> {
-  let listed: readonly QuarantinedPane[];
-  try {
-    listed = await terminal.quarantinedPanes(home);
-  } catch (error) {
-    return {
-      panes: [],
-      failures: [
-        {
-          kind: "tern-quarantine",
-          subject: "quarantined panes",
-          reason: `quarantined panes could not be listed: ${describeFailure(error)}`,
-        },
-      ],
-    };
-  }
-  const panes: ObservedQuarantinedPane[] = [];
-  for (const pane of listed)
-    panes.push(
-      pane.status === "unreadable"
-        ? { unreadable: pane }
-        : { pane, state: await quarantinedPaneState(terminal, pane) },
-    );
-  return { panes, failures: [] };
-}
-
-function planQuarantinedPane(observed: ObservedQuarantinedPane): ReconcilePlanItem {
-  if ("unreadable" in observed)
-    return {
-      kind: "tern-quarantine",
-      action: "quarantine",
-      reason: `the Tern pane quarantine record could not be read and is left in place: ${observed.unreadable.reason}`,
-      path: observed.unreadable.path,
-      sessionId: undefined,
-      pane: undefined,
-    };
-  const { pane, state } = observed;
-  const item = (action: "clean" | "retain", why: string): ReconcilePlanItem => ({
-    kind: "tern-quarantine",
-    action,
-    reason: `${pane.operation} on ${pane.key} at ${pane.at} has an unknown outcome (${pane.reason}); ${why}`,
-    path: pane.path,
-    sessionId: pane.endpoint.sessionId,
-    pane,
-  });
-  if (state.status === "gone")
-    return item("clean", "the pane is gone, so the record can be removed");
-  if (state.status === "idle")
-    return item(
-      "clean",
-      "the pane is idle at its exact id, so the record can be removed; the pane is kept",
-    );
-  if (state.status === "busy")
-    return item("retain", "kept because the pane is still running something");
-  return item("retain", `kept because the pane cannot be proved: ${state.detail}`);
-}
-
-async function applyQuarantinedPaneItem(
-  terminal: TerminalBackend,
-  item: QuarantinedPaneItem,
+  item: SettleableFenceItem,
 ): Promise<ReconcileResult> {
-  if (item.pane === undefined) return { item, outcome: "quarantined", reason: item.reason };
-  const { pane } = item;
-  let detail = "";
-  const outcome = await terminal.clearPaneQuarantine(pane, async () => {
-    const state = await quarantinedPaneState(terminal, pane);
-    if (state.status === "ambiguous") detail = state.detail;
-    if (state.status === "busy") detail = "the pane is running something";
-    return state.status === "gone" || state.status === "idle";
-  });
-  if (outcome === "cleared" || outcome === "settled")
-    return { item, outcome: "cleaned", reason: item.reason };
-  return {
-    item,
-    outcome: "retained",
-    reason:
-      outcome === "changed"
-        ? "the pane quarantine record changed while fix ran, so it was kept"
-        : `kept because the pane is not proven gone or idle: ${detail}`,
-  };
+  const settled = await terminal.fences.settle(item.fence);
+  return settled.status === "removed"
+    ? { item, outcome: "cleaned", reason: item.reason }
+    : { item, outcome: "retained", reason: settled.reason };
 }
 
 function planQuarantineNote(
@@ -1073,8 +858,7 @@ export function planTandemReconciliation(
     ),
     ...observation.unreadable.map(planUnreadableRecord),
     ...observation.quarantines.map((record) => planQuarantineNote(record, observation)),
-    ...observation.nativeOpens.map(planNativeOpen),
-    ...observation.quarantinedPanes.map(planQuarantinedPane),
+    ...observation.fences.map(planFence),
   ];
   return { schemaVersion: RECONCILE_REPORT_SCHEMA_VERSION, items };
 }
@@ -1271,18 +1055,17 @@ function applyRepositoryItem(
   return applyLeaseItem(input, item);
 }
 
-type NativeOpenItem = Extract<ReconcilePlanItem, Readonly<{ readonly kind: "native-open" }>>;
-type QuarantinedPaneItem = Extract<
-  ReconcilePlanItem,
-  Readonly<{ readonly kind: "tern-quarantine" }>
->;
+type SettleableFenceItem = FenceItem & Readonly<{ readonly fence: ReadableFence }>;
+
+function isSettleableFence(item: ReconcilePlanItem): item is SettleableFenceItem {
+  return "fence" in item && item.fence !== undefined && item.action === "clean";
+}
 
 type ReconcileWork = Readonly<{
   readonly repositories: ReadonlyMap<string, readonly RepositoryItem[]>;
   readonly scouts: readonly ScoutItem[];
   readonly implementationTasks: readonly ImplementationTaskItem[];
-  readonly nativeOpens: readonly NativeOpenItem[];
-  readonly quarantinedPanes: readonly QuarantinedPaneItem[];
+  readonly fences: readonly SettleableFenceItem[];
   readonly reported: readonly ReconcilePlanItem[];
 }>;
 
@@ -1291,8 +1074,7 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
   const repositories = new Map<string, RepositoryItem[]>();
   const scouts: ScoutItem[] = [];
   const implementationTasks: ImplementationTaskItem[] = [];
-  const nativeOpens: NativeOpenItem[] = [];
-  const quarantinedPanes: QuarantinedPaneItem[] = [];
+  const fences: SettleableFenceItem[] = [];
   const reported: ReconcilePlanItem[] = [];
   for (const item of plan.items) {
     if (item.kind === "scout-task") {
@@ -1303,12 +1085,8 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
       implementationTasks.push(item);
       continue;
     }
-    if (item.kind === "native-open" && item.action === "clean") {
-      nativeOpens.push(item);
-      continue;
-    }
-    if (item.kind === "tern-quarantine" && item.action === "clean") {
-      quarantinedPanes.push(item);
+    if (isSettleableFence(item)) {
+      fences.push(item);
       continue;
     }
     if (
@@ -1324,7 +1102,7 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
     if (group === undefined) repositories.set(repoPath, [item]);
     else group.push(item);
   }
-  return { repositories, scouts, implementationTasks, nativeOpens, quarantinedPanes, reported };
+  return { repositories, scouts, implementationTasks, fences, reported };
 }
 
 /**
@@ -1334,10 +1112,9 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
  * lock, so a launch in another session cannot allocate underneath the reconcile. Task cleanup runs
  * through its durable owner, which revalidates state and lease identity before every release.
  * Unreadable records are only ever reported. A quarantine note is deleted only after its lease is
- * re-read under the repository lock and found returned. A retained native open is abandoned only
- * under its own open lock, after its coordinator is proved exactly present or exactly gone again.
- * A pane quarantine record is cleared only under its own lock, after the pane is proved gone or
- * idle at its exact id again; the pane itself is never touched.
+ * re-read under the repository lock and found returned. A terminal fence is settled only by its
+ * terminal, under the record's own lock, while it is exactly as listed and its pane re-proves it;
+ * the pane itself is never touched.
  */
 export async function applyTandemReconciliation(
   input: ReconcileApplyInput,
@@ -1347,16 +1124,9 @@ export async function applyTandemReconciliation(
   for (const item of work.reported) {
     results.set(item, { item, outcome: plannedOutcome(item.action), reason: item.reason });
   }
-  for (const item of work.nativeOpens) {
+  for (const item of work.fences) {
     try {
-      results.set(item, await applyNativeOpenItem(input.terminal, item));
-    } catch (error) {
-      results.set(item, { item, outcome: "failed", reason: describeFailure(error) });
-    }
-  }
-  for (const item of work.quarantinedPanes) {
-    try {
-      results.set(item, await applyQuarantinedPaneItem(input.terminal, item));
+      results.set(item, await applyFenceItem(input.terminal, item));
     } catch (error) {
       results.set(item, { item, outcome: "failed", reason: describeFailure(error) });
     }
@@ -1424,7 +1194,7 @@ function entryFor(item: ReconcilePlanItem, reason: string): ReconcileReportEntry
   if (item.kind === "scout-task") {
     return { kind: item.kind, id: item.taskId, reason, repoPath: item.repoPath };
   }
-  if (item.kind === "native-open" || item.kind === "tern-quarantine") {
+  if ("fence" in item) {
     return {
       kind: item.kind,
       id: item.path,

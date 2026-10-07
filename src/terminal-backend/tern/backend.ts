@@ -11,15 +11,8 @@ import type { Endpoint, TerminalPaneLocation } from "../../contracts.ts";
 import { blockArgs, parseBlockArgs, setupFile } from "../../native/contract.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import { type TernEndpoint, ternEndpoint, withoutForeignPaneIdentity } from "../identity.ts";
-import {
-  clearTernQuarantine,
-  listTernQuarantine,
-  missing,
-  type TernCli,
-  type TernOptions,
-  type TernRunner,
-  ternCli,
-} from "./cli.ts";
+import { missing, type TernCli, type TernOptions, type TernRunner, ternCli } from "./cli.ts";
+import { ternFences } from "./fences.ts";
 import {
   blocks,
   type Created,
@@ -91,6 +84,8 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       throw error;
     }
   };
+  const isEndpointGone = (error: unknown) =>
+    (error instanceof EndpointOwnershipError && error.reason === "missing") || isDaemonGone(error);
   const endpointFor = (target: SessionTarget, entry: LocatedBlock): TernEndpoint =>
     ternEndpoint({
       terminal: "tern",
@@ -241,13 +236,10 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
     views: {
       open: async (input) => (await native()).views.openView(input),
       close: async (input) => (await native()).views.closeView(input),
+      isView: async (input) => (await native()).views.isView(input),
       recover: async (home) => (await import("./host.ts")).recoverViewOpens(cli, home, cli.clock()),
-      retained: async (home) => (await import("./host.ts")).listRetainedNativeOpens(home),
-      abandon: async (open, conclusive) =>
-        (await import("./host.ts")).abandonRetainedNativeOpen(open, conclusive),
     },
-    quarantinedPanes: listTernQuarantine,
-    clearPaneQuarantine: clearTernQuarantine,
+    fences: ternFences({ inspect: check, isEndpointGone }),
     inspect: check,
     runCommand: (target) =>
       cli.mutate({
@@ -293,9 +285,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
     close: (target) => closeWithNotification(target, false),
     closeOwned: (target) => closeWithNotification({ ...target, force: true }, true),
     isPaneGone: (error) => error instanceof EndpointOwnershipError && error.reason === "missing",
-    isEndpointGone: (error) =>
-      (error instanceof EndpointOwnershipError && error.reason === "missing") ||
-      isDaemonGone(error),
+    isEndpointGone,
     createWorkspace: async (target) => {
       let created: z.infer<typeof Created>;
       if (target.parentWorkspaceId !== undefined) {

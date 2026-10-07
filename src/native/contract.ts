@@ -705,6 +705,7 @@ export const NOTICE_CODES = [
   "review-unconfirmed",
   "feedback-saved",
   "setup-incomplete",
+  "origin-unproven",
 ] as const;
 export const NoticeCode = z.enum(NOTICE_CODES);
 export type NoticeCode = z.infer<typeof NoticeCode>;

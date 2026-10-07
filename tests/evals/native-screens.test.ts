@@ -6,10 +6,10 @@ import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import { type Action, Outcome } from "../../src/native/contract.ts";
-import { projectStoreDirectory, readProjectState } from "../../src/native/store.ts";
+import { projectStoreDirectory } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
-import { publishFixture } from "../native/view-files.ts";
+import { publishFixture, savedState } from "../native/view-files.ts";
 import { viewsWith } from "../terminal-backend/views.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 import { withScenario } from "./scenario.ts";
@@ -132,7 +132,7 @@ test("Open what needs me returns to the orchestrator and opens the saved brief",
   await withScreens(async ({ call, opened, home, repo }) => {
     expect((await call({ verb: "catchup-open-needs" })).status).toBe("done");
     expect(opened).toEqual([{ kind: "orchestrator" }, { kind: "brief", requestId: "req-tern" }]);
-    expect((await readProjectState(home, repo))?.visit?.dismissedSignature).toBe("after");
+    expect((await savedState(home, repo))?.visit?.dismissedSignature).toBe("after");
   });
 });
 

@@ -43,7 +43,10 @@ are typed: `EndpointOwnershipError` for a missing or foreign pane and `EndpointB
 active worker. Herdr (`herdr/`) and Tern (`tern/`) implement it. `compose.ts` alone picks one.
 
 Native view hosting is the port's optional `views` capability (`ViewsCapability`): `open`,
-`close`, `recover`, `retained` and `abandon`. Tern provides it. Herdr omits it, and callers branch
+`close`, `isView` and `recover`. `isView` is a read-only proof that a pane is
+the coordinator's exact block for a view. It checks the program, the launch arguments, the session
+and the placement, never a title. See
+[approval-bearing clicks](native-views.md#approval-bearing-clicks). Tern provides it. Herdr omits it, and callers branch
 on `terminal.views` rather than on the terminal's name. Without `views`:
 
 - a native open is refused with Herdr's unsupported-view reason,
@@ -51,8 +54,15 @@ on `terminal.views` rather than on the terminal's name. Without `views`:
 - arrival notifications go through `notify` instead of native alerts, and
 - the coordinator publishes no native views.
 
-`quarantinedPanes` and `clearPaneQuarantine` expose Tern's durable pane quarantine to
-`tandem fix`. Herdr returns none.
+`fences` exposes every record of an owned effect whose outcome is unknown to `tandem fix`, in
+one shape. `fences.list(home)` returns each `Fence` with its kind, the exact pane it protects,
+the record exactly as listed (`token`), a description, and a proof read from that pane, plus a
+failure for any ledger it could not list. `fences.settle(fence)` removes one fence's records, never
+a pane, under the record's lock, only while the record is unchanged and the pane re-proves it;
+it returns `removed` or `kept` with the reason. Tern's fences (`tern/fences.ts`) are its
+[quarantined panes](#quarantined-panes) and [paused view opens](#paused-view-opens). Herdr keeps
+none: it lists nothing and keeps any fence it is asked to settle. A new kind of Tern fence is a
+new ledger in `tern/fences.ts` and a `FenceKind`; `tandem fix` plans every kind the same way.
 
 ## Tern mapping
 
@@ -179,9 +189,8 @@ A record goes away in two ways:
   absent. When the listing covers every window, it drops the record, so replacing a coordinator
   or helper still succeeds. A window-scoped listing cannot see other windows, so it keeps the
   record.
-- `tandem fix` lists every record through `quarantinedPanes`. With `--yes`, it clears one through
-  `clearPaneQuarantine` only after proving its pane gone or idle at the exact id. The pane itself
-  is never closed.
+- `tandem fix` lists every record as a `tern-quarantine` fence. With `--yes`, it settles one only
+  after proving its pane gone or idle at the exact id again. The pane itself is never closed.
 
 ### Paused view opens
 
@@ -192,9 +201,9 @@ that new views stay paused. The click, the coordinator's publication tick (`view
 `tandem fix` all decide retained tickets, so a late receipt lifts the pause without another
 click. See [staged opens](native-views.md#staged-opens) for the state machine.
 
-`tandem fix` lists each paused open through `views.retained`, with its view kind and the reason
-it is unproven. With `--yes`, it abandons one through `views.abandon` only after proving its
-coordinator exactly present or exactly gone. Abandoning removes the ticket and its receipt. No
+`tandem fix` lists each paused open as a `native-open` fence, with its view kind and the reason
+it is unproven. With `--yes`, it settles (abandons) one only after proving its coordinator
+exactly present or exactly gone again. Abandoning removes the ticket and its receipt. No
 pane is closed and nothing is reopened.
 
 ## Native views

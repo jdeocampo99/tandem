@@ -10,7 +10,7 @@ import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
-import { visitNativeProject } from "../../src/memory/native-visits.ts";
+import { blockOriginProblem, isApprovalVerb, VERB_AUTHORITY } from "../../src/native/actions.ts";
 import {
   Action,
   ActionEnvelope,
@@ -19,7 +19,12 @@ import {
   setupFile,
   ViewFile,
 } from "../../src/native/contract.ts";
-import { projectStoreDirectory, readProjectState, viewDetailPath } from "../../src/native/store.ts";
+import {
+  projectStoreDirectory,
+  recordVisit,
+  viewDetailPath,
+  viewIndexPath,
+} from "../../src/native/store.ts";
 import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
 import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
@@ -29,6 +34,7 @@ import { createTandemService, type TandemService } from "../../src/service/contr
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type {
+  ProvableView,
   TerminalBackend,
   TerminalView,
   ViewsCapability,
@@ -38,7 +44,7 @@ import type { TernParityHost } from "../evals/tern-parity/harness.ts";
 import { seedReview, withParity } from "../evals/tern-parity/inventory.ts";
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { viewsOf, viewsWith } from "../terminal-backend/views.ts";
-import { prIndexEntry, projectRow, publishFixture } from "./view-files.ts";
+import { prIndexEntry, projectRow, publishFixture, savedState } from "./view-files.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
 const content: RequestBriefContent = {
@@ -94,6 +100,9 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
   const opened: TerminalView[] = [];
   const focused: string[] = [];
   const closed: Parameters<ViewsCapability["close"]>[0][] = [];
+  /** The views Tern lists pane 102 as, this coordinator's block; every view unless a test says. */
+  let blockViews: readonly ProvableView[] | "any" = "any";
+  const proofs: Parameters<ViewsCapability["isView"]>[0][] = [];
   let ownsCoordinator = true;
   const run = async (): Promise<never> => {
     throw new Error("No external commands expected");
@@ -142,6 +151,15 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
         closed.push(target);
         return { closed: true, warnings: [] };
       },
+      isView: async (target) => {
+        proofs.push(target);
+        return (
+          target.origin.paneId === "102" &&
+          target.coordinator.paneId === endpoint.paneId &&
+          (blockViews === "any" ||
+            blockViews.some((view) => JSON.stringify(view) === JSON.stringify(target.view)))
+        );
+      },
     }),
   };
   let nextId = 0;
@@ -173,7 +191,23 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     service,
     stderr: () => {},
   };
-  /** One click through `tandem native act`, from the coordinator pane unless `origin` says. */
+  /** What a block Tandem launched for this coordinator echoes as its origin. */
+  const blockOrigin = (
+    ctx: Partial<Record<"coordinator" | "cwd" | "home" | "index" | "window", string>> = {},
+  ) => ({
+    pane: "102",
+    ctx: blockArgs(join(home, "view.json"), {
+      coordinator: endpoint.paneId,
+      cwd: clean,
+      home,
+      index: viewIndexPath(home, repo),
+      ...ctx,
+    })[1],
+  });
+  /**
+   * One click through `tandem native act`: an approval-bearing verb from this coordinator's block,
+   * anything else from the coordinator pane, unless `origin` says.
+   */
   const act = async (
     action: unknown,
     options: Readonly<{ origin?: unknown; deps?: TerminalMainDependencies }> = {},
@@ -185,7 +219,13 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
       ...(options.deps?.createService === undefined ? deps : unscoped),
       ...options.deps,
       input: Readable.from([
-        JSON.stringify({ v: 1, origin: options.origin ?? { pane: "101", cwd: clean }, action }),
+        JSON.stringify({
+          v: 1,
+          origin:
+            options.origin ??
+            (approvalBearing(action) ? blockOrigin() : { pane: "101", cwd: clean }),
+          action,
+        }),
       ]),
       stdout: (text) => output.push(text),
     });
@@ -207,7 +247,12 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
     opened,
     focused,
     closed,
+    proofs,
     endpoint,
+    blockOrigin,
+    setBlockViews: (views: readonly ProvableView[] | "any") => {
+      blockViews = views;
+    },
     setOwner: (owns: boolean) => {
       ownsCoordinator = owns;
     },
@@ -219,6 +264,11 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
 }
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
+
+function approvalBearing(action: unknown): boolean {
+  const parsed = Action.safeParse(action);
+  return parsed.success && isApprovalVerb(parsed.data.verb);
+}
 
 const approve = (f: Fixture, seen: Record<string, unknown> = f.seen) => ({
   verb: "brief-approve",
@@ -257,7 +307,7 @@ async function createPrTask(f: Fixture) {
 }
 
 test("native Approve click records the displayed revision and both digests without another confirmation", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     expect(await f.act(approve(f))).toEqual({ status: "done" });
     expect((await f.store.read(f.record.id))?.approval).toMatchObject({
@@ -273,7 +323,7 @@ test("native Approve click records the displayed revision and both digests witho
 
 for (const changed of ["revision", "content", "agreement", "missing-agreement"]) {
   test(`native approval refuses ${changed} without approving or prompting the coordinator`, async () => {
-    const f = await fixture();
+    const f = await fixture("tern");
     try {
       let seen: Record<string, unknown> = { ...f.seen };
       if (changed === "revision") {
@@ -300,7 +350,7 @@ for (const changed of ["revision", "content", "agreement", "missing-agreement"])
 
 for (const verb of ["brief-request-changes"] as const) {
   test(`${verb} resolves stable line ids through the original historical view`, async () => {
-    const f = await fixture();
+    const f = await fixture("tern");
     try {
       const originalLine = briefView(f.record).lines.find((line) => line.text === content.goal);
       if (originalLine === undefined) throw new Error("Missing displayed goal line");
@@ -314,19 +364,16 @@ for (const verb of ["brief-request-changes"] as const) {
         },
         reviewPane: false,
       });
-      // Without native views, feedback retires the request's own review pane.
-      const deps = { terminal: { ...f.deps.terminal, views: undefined } };
-      const outcome = await f.act(
-        {
-          verb,
-          requestId: f.record.id,
-          ...f.seen,
-          text: "Keep the original goal",
-          comments: [{ lineId: originalLine.id, text: "Keep this goal" }],
-        },
-        { deps },
-      );
-      expect(outcome.status).toBe("done");
+      const outcome = await f.act({
+        verb,
+        requestId: f.record.id,
+        ...f.seen,
+        text: "Keep the original goal",
+        comments: [{ lineId: originalLine.id, text: "Keep this goal" }],
+      });
+      // Delivered against the displayed revision; the newer draft stays open.
+      expect(outcome.status).toBe("kept");
+      expect(outcome.notice?.code).toBe("brief-left-open");
       expect(f.prompts[0]).toContain("From the open review page:");
       expect(f.prompts[0]).toContain(`Brief ${f.record.id}, revision 1: Request changes`);
       expect(f.prompts[0]).toContain(
@@ -342,15 +389,12 @@ for (const verb of ["brief-request-changes"] as const) {
         (line) => line.text === "A newly added question",
       );
       if (latestOnlyLine === undefined) throw new Error("Missing new line");
-      const refused = await f.act(
-        {
-          verb,
-          requestId: f.record.id,
-          ...f.seen,
-          comments: [{ lineId: latestOnlyLine.id, text: "Not in old view" }],
-        },
-        { deps },
-      );
+      const refused = await f.act({
+        verb,
+        requestId: f.record.id,
+        ...f.seen,
+        comments: [{ lineId: latestOnlyLine.id, text: "Not in old view" }],
+      });
       expect(refused.status).toBe("refused");
       expect(refused.notice?.text).toContain("Unknown brief line id");
       expect(f.prompts).toHaveLength(1);
@@ -360,7 +404,7 @@ for (const verb of ["brief-request-changes"] as const) {
   });
 
   test(`${verb} refuses invalid line ids, numeric anchors and stale view bindings before delivery`, async () => {
-    const f = await fixture();
+    const f = await fixture("tern");
     try {
       const line = briefView(f.record).lines.find((each) => each.text === content.goal);
       if (line === undefined) throw new Error("Missing displayed goal line");
@@ -414,42 +458,230 @@ for (const verb of ["brief-request-changes"] as const) {
   });
 }
 
-test("request changes forwards feedback and retires only the matching brief projection", async () => {
-  const f = await fixture();
+/** Every approval-bearing verb, as its own block sends it for this fixture's brief and task. */
+async function approvalActions(f: Fixture) {
+  const task = await createPrTask(f);
+  const submission = {
+    tandemPrReview: 1,
+    verdict: "comment",
+    summary: "Looks fine",
+    drafts: [],
+    yours: [],
+  };
+  return [
+    { verb: "restart", taskId: task.id },
+    { verb: "steer", taskId: task.id, text: "Narrow this" },
+    approve(f),
+    { verb: "brief-request-changes", requestId: f.record.id, ...f.seen, comments: [] },
+    { verb: "pr-comment", taskId: task.id, text: "Fix this" },
+    {
+      verb: "review-submit",
+      taskId: task.id,
+      reviewHead: "a".repeat(40),
+      reviewGeneration: 0,
+      submission,
+    },
+    { verb: "setup-save", answer: { mode: "settings" } },
+  ] as const;
+}
+
+/** What each approval-bearing verb changed: none of these may move when its origin is refused. */
+async function effects(f: Fixture, taskId: string) {
+  const task = await f.service.get(taskId);
+  return {
+    approval: (await f.store.read(f.record.id))?.approval,
+    messages: task.communication?.messages.length ?? 0,
+    revision: task.revision,
+    prompts: f.prompts.length,
+    closed: f.closed.length,
+  };
+}
+
+test("approval classification covers every verb, and only navigation is open to any listed pane", () => {
+  const verbs = Action.options.map((option) => option.shape.verb.value).toSorted();
+  expect(Object.keys(VERB_AUTHORITY).toSorted()).toEqual(verbs);
+  expect(verbs.filter(isApprovalVerb)).toEqual([
+    "brief-approve",
+    "brief-request-changes",
+    "pr-comment",
+    "restart",
+    "review-submit",
+    "setup-save",
+    "steer",
+  ]);
+});
+
+test("an approval-bearing origin must echo exactly this coordinator's block context", () => {
+  const expected = { coordinator: "101", cwd: "/clean", home: "/home", index: "/home/index.json" };
+  const block = { ...expected };
+  expect(blockOriginProblem(block, "102", expected)).toBeUndefined();
+  expect(blockOriginProblem(undefined, "102", expected)).toContain("Only Tandem's own view");
+  expect(blockOriginProblem(block, "101", expected)).toContain("conversation pane");
+  for (const field of ["coordinator", "cwd", "home", "index"] as const)
+    expect(blockOriginProblem({ ...block, [field]: "/other" }, "102", expected)).toContain(
+      "another coordinator",
+    );
+});
+
+test("every approval-bearing verb is refused from a worker pane, a window command, the conversation and a forged context", async () => {
+  const f = await fixture("tern");
   try {
-    const closed: unknown[] = [];
-    const outcome = await f.act(
-      {
-        verb: "brief-request-changes",
-        requestId: f.record.id,
-        ...f.seen,
-        text: "Please narrow the scope",
-        comments: [],
-      },
-      {
-        deps: {
-          terminal: { ...f.deps.terminal, views: undefined },
-          service: {
-            ...f.service,
-            closeRequestBriefReview: async (id: string, revision: number) => {
-              closed.push({ id, revision });
-              return f.service.closeRequestBriefReview(id, revision);
+    const actions = await approvalActions(f);
+    const taskId = actions[0].taskId;
+    const before = await effects(f, taskId);
+    // A worker's pane in the project's session, with its own echoed-looking context.
+    const workerPane = { paneId: "103", workspaceId: "worker", tabId: "worker-tab" };
+    const terminal: TerminalBackend = {
+      ...f.deps.terminal,
+      listPanes: async (input) => [
+        ...(await f.deps.terminal.listPanes(input)),
+        { ...f.endpoint, ...workerPane, cwd: f.clean, foregroundCwd: f.clean },
+      ],
+    };
+    const origins = [
+      { name: "worker block-shaped", origin: { ...f.blockOrigin(), pane: "103" } },
+      { name: "worker window command", origin: { pane: "103", cwd: f.clean } },
+      { name: "window command from the block", origin: { pane: "102", cwd: f.clean } },
+      { name: "conversation pane", origin: { ...f.blockOrigin(), pane: "101" } },
+      { name: "conversation window command", origin: { pane: "101", cwd: f.clean } },
+      { name: "other coordinator", origin: f.blockOrigin({ coordinator: "999" }) },
+      { name: "other home", origin: f.blockOrigin({ home: join(f.root, "elsewhere") }) },
+      { name: "other index", origin: f.blockOrigin({ index: join(f.root, "index.json") }) },
+    ];
+    for (const action of actions)
+      for (const { name, origin } of origins) {
+        const outcome = await f.act(action, { origin, deps: { terminal } });
+        expect({ verb: action.verb, name, status: outcome.status }).toEqual({
+          verb: action.verb,
+          name,
+          status: "refused",
+        });
+        // Another home records no coordinator, so locating the origin refuses first.
+        expect(outcome.notice?.code).toBe(name === "other home" ? "failed" : "origin-unproven");
+      }
+    expect(await effects(f, taskId)).toEqual(before);
+    // Window commands and conversation panes never reach Tern's listing.
+    expect(f.proofs.every((proof) => proof.origin.paneId === "103")).toBe(true);
+  } finally {
+    await f.close();
+  }
+});
+
+test("an approval-bearing verb is refused unless Tern lists its origin as the block for that subject", async () => {
+  const f = await fixture("tern");
+  try {
+    const actions = await approvalActions(f);
+    const taskId = actions[0].taskId;
+    const before = await effects(f, taskId);
+    // Pane 102 is a genuine block of this coordinator, but of another subject.
+    f.setBlockViews([{ kind: "brief", requestId: "req-other" }]);
+    for (const action of actions) {
+      const outcome = await f.act(action);
+      expect({ verb: action.verb, outcome: outcome.notice?.code }).toEqual({
+        verb: action.verb,
+        outcome: "origin-unproven",
+      });
+    }
+    expect(await effects(f, taskId)).toEqual(before);
+    const asked = f.proofs.map((proof) => proof.view);
+    expect(asked).toContainEqual({ kind: "task", taskId });
+    expect(asked).toContainEqual({ kind: "pr", taskId });
+    expect(asked).toContainEqual({ kind: "brief", requestId: f.record.id });
+    expect(asked).toContainEqual({ kind: "setup", mode: "settings" });
+    // A listing Tern cannot read refuses too, with its reason.
+    const outcome = await f.act(approve(f), {
+      deps: {
+        terminal: {
+          ...f.deps.terminal,
+          views: viewsWith(f.deps.terminal, {
+            isView: async () => {
+              throw new Error("native view placement or identity is ambiguous");
             },
-          },
+          }),
         },
       },
-    );
-    expect(outcome).toEqual({ status: "done" });
-    expect(f.prompts[0]).toContain("revision 1: Request changes");
-    expect(closed).toEqual([{ id: f.record.id, revision: 1 }]);
-    expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
+    });
+    expect(outcome.notice?.code).toBe("origin-unproven");
+    expect(outcome.notice?.text).toContain("ambiguous");
+    expect(await effects(f, taskId)).toEqual(before);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a genuine block click is proved against its own subject and then acts", async () => {
+  const f = await fixture("tern");
+  try {
+    f.setBlockViews([{ kind: "brief", requestId: f.record.id }]);
+    expect(await f.act(approve(f))).toEqual({ status: "done" });
+    expect((await f.store.read(f.record.id))?.approval).toBeDefined();
+    expect(f.proofs).toEqual([
+      {
+        coordinator: f.endpoint,
+        cwd: f.clean,
+        home: f.home,
+        origin: { paneId: "102" },
+        view: { kind: "brief", requestId: f.record.id },
+      },
+    ]);
+    const task = await createPrTask(f);
+    f.setBlockViews([{ kind: "pr", taskId: task.id }]);
+    expect(await f.act({ verb: "pr-comment", taskId: task.id, text: "Fix this" })).toEqual({
+      status: "done",
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+test("Herdr refuses every approval-bearing verb; approvals stay in the coordinator conversation", async () => {
+  const f = await fixture();
+  try {
+    const actions = await approvalActions(f);
+    const taskId = actions[0].taskId;
+    const before = await effects(f, taskId);
+    // Herdr's terminal hosts no native views at all.
+    const terminal = { ...f.deps.terminal, views: undefined };
+    for (const action of actions)
+      for (const origin of [
+        { pane: "101", cwd: f.clean },
+        { ...f.blockOrigin(), pane: "101" },
+      ]) {
+        const outcome = await f.act(action, { origin, deps: { terminal } });
+        expect(outcome.status).toBe("refused");
+        expect(outcome.notice?.code).toBe("origin-unproven");
+        expect(outcome.notice?.text).toContain("coordinator conversation");
+      }
+    expect(await effects(f, taskId)).toEqual(before);
+    // Navigation still works from a window command.
+    expect(await f.act({ verb: "open", ref: { kind: "brief", requestId: f.record.id } })).toEqual({
+      status: "done",
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+test("navigational verbs still work from window commands without a block proof", async () => {
+  const f = await fixture("tern");
+  try {
+    const task = await createPrTask(f);
+    expect(await f.act({ verb: "open", ref: { kind: "brief", requestId: f.record.id } })).toEqual({
+      status: "done",
+    });
+    expect(await f.act({ verb: "open", ref: { kind: "task-picker" } })).toEqual({
+      status: "done",
+    });
+    expect(f.opened).toEqual([{ kind: "brief", requestId: f.record.id }, { kind: "task-picker" }]);
+    expect(f.proofs).toEqual([]);
+    expect(task.id).toBe("task-pr");
   } finally {
     await f.close();
   }
 });
 
 test("brief feedback refuses a coordinator pane occupied by another process", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     f.setOwner(false);
     const outcome = await f.act({
@@ -467,7 +699,7 @@ test("brief feedback refuses a coordinator pane occupied by another process", as
 });
 
 test("native brief actions refuse another project's request before ownership or mutation", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     const otherRepo = join(f.root, "another-project");
     await mkdir(otherRepo);
@@ -515,7 +747,7 @@ test("native brief actions refuse another project's request before ownership or 
 });
 
 test("a corrupt unrelated record cannot disable a native action in the same session", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     await writeFile(recordPath(f.home, "isolated", join(f.root, "corrupt-project")), "{broken");
     const outcome = await f.act({
@@ -602,44 +834,8 @@ test("a dead recorded session is a non-match, while two live matches remain ambi
   }
 });
 
-test("request changes reports delivered feedback, not success, when retiring the pane fails", async () => {
-  const f = await fixture();
-  try {
-    let closes = 0;
-    const outcome = await f.act(
-      {
-        verb: "brief-request-changes",
-        requestId: f.record.id,
-        ...f.seen,
-        text: "Please change this brief",
-        comments: [],
-      },
-      {
-        deps: {
-          terminal: { ...f.deps.terminal, views: undefined },
-          service: {
-            ...f.service,
-            closeRequestBriefReview: async () => {
-              closes += 1;
-              throw new Error("Pane retirement failed");
-            },
-          },
-        },
-      },
-    );
-    expect(outcome.status).toBe("kept");
-    expect(outcome.notice?.code).toBe("brief-warning");
-    expect(outcome.notice?.text).toContain("Feedback was delivered");
-    expect(outcome.notice?.text).toContain("Do not resubmit this feedback");
-    expect(f.prompts).toHaveLength(1);
-    expect(closes).toBe(1);
-  } finally {
-    await f.close();
-  }
-});
-
 test("Tandem PR comments become durable worker fix requests without any GitHub call", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     const task = await createPrTask(f);
     expect(
@@ -745,7 +941,7 @@ test("Herdr reports unsupported native views and uses its existing review pane f
 });
 
 test("native review submit routes to the existing page submission service and refuses malformed submissions", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     const submissions: unknown[] = [];
     const service = {
@@ -799,7 +995,7 @@ test("native review submit routes to the existing page submission service and re
 });
 
 test("a posted review is done and names where it landed", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     const service = {
       ...f.service,
@@ -827,7 +1023,7 @@ test("a posted review is done and names where it landed", async () => {
 });
 
 test("a failed coordinator notification reports the recorded approval instead of inviting an approval retry", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     const outcome = await f.act(approve(f), {
       deps: {
@@ -854,7 +1050,7 @@ test("a failed coordinator notification reports the recorded approval instead of
 
 for (const state of ["closed", "merged", "completed"] as const) {
   test(`comments on a ${state} PR task are refused without recording a worker direction`, async () => {
-    const f = await fixture();
+    const f = await fixture("tern");
     try {
       const task = await createPrTask(f);
       const store = createTaskStore({
@@ -1310,15 +1506,12 @@ test("project switching selects published projects, refusing stale or foreign ta
     const model = { changeSignature: "changed-work", projects: [current] };
     const publish = (change: Partial<NativeViews>) => publishFixture(f.home, f.repo, change);
     await publish(model);
-    await visitNativeProject(
-      {
-        home: f.home,
-        project: f.repo,
-        signature: "earlier-work",
-        now: new Date(Date.now() - 2 * 3600000).toISOString(),
-      },
-      async () => {},
-    );
+    await recordVisit(f.home, f.repo, {
+      kind: "entry",
+      signature: "earlier-work",
+      now: new Date(Date.now() - 2 * 3600000).toISOString(),
+      showCatchUp: async () => {},
+    });
     const project = (target: unknown) => f.act({ verb: "project", target });
     expect((await project("next")).status).toBe("done");
     expect(f.focused).toEqual(["101"]);
@@ -1356,7 +1549,7 @@ for (const status of ["closed", "retained", "quarantined"] as const) {
     const f = await fixture("tern");
     try {
       const outcome = await f.act(approve(f), {
-        origin: { pane: "102", cwd: f.clean },
+        origin: f.blockOrigin(),
         deps: {
           service: {
             ...f.service,
@@ -1415,17 +1608,14 @@ for (const failure of [
       ];
       await publishFixture(source.home, source.repo, { changeSignature: "before", projects });
       await publishFixture(source.home, destination.repo, { changeSignature: "after", projects });
-      await visitNativeProject(
-        {
-          home: source.home,
-          project: destination.repo,
-          signature: "before",
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-        },
-        async () => {},
-      );
+      await recordVisit(source.home, destination.repo, {
+        kind: "entry",
+        signature: "before",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        showCatchUp: async () => {},
+      });
       const visit = async () =>
-        JSON.stringify((await readProjectState(source.home, destination.repo))?.visit);
+        JSON.stringify((await savedState(source.home, destination.repo))?.visit);
       const before = await visit();
       const events: string[] = [];
       const outcome = await source.act(
@@ -1489,9 +1679,9 @@ for (const verb of ["brief-approve", "brief-request-changes"] as const) {
   test(`${verb} closes only its native brief origin after recording or delivering the action`, async () => {
     const f = await fixture("tern");
     try {
-      expect(
-        await f.act(action(f), { origin: { pane: "102", cwd: f.clean, window: "brief-window" } }),
-      ).toEqual({ status: "done" });
+      expect(await f.act(action(f), { origin: f.blockOrigin({ window: "brief-window" }) })).toEqual(
+        { status: "done" },
+      );
       expect(f.prompts).toHaveLength(1);
       expect(f.closed).toEqual([
         {
@@ -1511,7 +1701,7 @@ for (const verb of ["brief-approve", "brief-request-changes"] as const) {
     const f = await fixture("tern");
     try {
       const outcome = await f.act(action(f), {
-        origin: { pane: "102", cwd: f.clean },
+        origin: f.blockOrigin(),
         deps: {
           terminal: {
             ...f.deps.terminal,
@@ -1547,7 +1737,7 @@ for (const verb of ["brief-approve", "brief-request-changes"] as const) {
     let attempts = 0;
     try {
       const outcome = await f.act(action(f), {
-        origin: { pane: "102", cwd: f.clean },
+        origin: f.blockOrigin(),
         deps: {
           terminal: {
             ...f.deps.terminal,
@@ -1577,7 +1767,7 @@ test("a refused native approval never closes the brief or prompts the coordinato
   const f = await fixture("tern");
   try {
     const outcome = await f.act(approve(f, { ...f.seen, contentDigest: "stale" }), {
-      origin: { pane: "102", cwd: f.clean },
+      origin: f.blockOrigin(),
     });
     expect(outcome.status).toBe("refused");
     expect(f.closed).toEqual([]);
@@ -1613,7 +1803,7 @@ test("cached taskless PRs open from palette, repo and number, number alone, with
 });
 
 test("owned PR thread replies retain exact context in a worker fix request without GitHub writes", async () => {
-  const f = await fixture();
+  const f = await fixture("tern");
   try {
     const task = await createPrTask(f);
     const reply = {
@@ -1677,6 +1867,47 @@ test("owned PR thread replies retain exact context in a worker fix request witho
     expect(calls[0]?.includes("POST")).toBe(false);
     expect((await comment([{ ...reply, commentId: "wrong" }])).status).toBe("refused");
     expect((await f.service.get(task.id)).communication?.messages).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a focus report from a pane that has closed changes no presence state", async () => {
+  const f = await fixture("tern");
+  try {
+    await publishFixture(f.home, f.repo, { changeSignature: "after" });
+    await recordVisit(f.home, f.repo, {
+      kind: "entry",
+      signature: "before",
+      now: new Date(Date.now() - 2 * 3600000).toISOString(),
+      showCatchUp: async () => {},
+    });
+    const path = join(projectStoreDirectory(f.home, f.repo), "state.json");
+    const before = await readFile(path, "utf8");
+    const coordinatorOnly = [{ ...f.endpoint, cwd: f.clean, foregroundCwd: f.clean }];
+    // Pane 102 was a task page. It closed before the report was sent, or while the CLI proved it.
+    for (const [closedAfter, refusal] of [
+      [0, "does not identify exactly one Tandem project"],
+      [1, "Originating pane disappeared"],
+    ] as const) {
+      for (const event of ["entry", "away", "visible"] as const) {
+        let listings = 0;
+        const terminal: TerminalBackend = {
+          ...f.deps.terminal,
+          listPanes: async (input) =>
+            listings++ < closedAfter ? f.deps.terminal.listPanes(input) : coordinatorOnly,
+        };
+        const outcome = await f.act(
+          { verb: "visit", event },
+          { origin: { pane: "102", cwd: f.clean }, deps: { terminal } },
+        );
+        expect(outcome.status).toBe("refused");
+        expect(outcome.notice?.text).toContain(refusal);
+      }
+    }
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(f.opened).toEqual([]);
+    expect(f.focused).toEqual([]);
   } finally {
     await f.close();
   }

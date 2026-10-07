@@ -23,7 +23,7 @@ import {
 } from "../../native/store.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
-import type { RetainedViewOpen, ViewOrigin, ViewsCapability } from "../contract.ts";
+import type { ViewOrigin } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli, ViewTarget } from "./cli.ts";
 import {
@@ -692,6 +692,21 @@ function retainedReason(receipt: ObservedReceipt): string {
     : failureReason(receipt);
 }
 
+/** A staged open ticket whose outcome was never proved, so it pauses new opens for its owner. */
+export type RetainedViewOpen =
+  | Readonly<{
+      status: "readable";
+      path: string;
+      /** The record exactly as listed, so an abandon never removes one that changed since. */
+      record: string;
+      coordinator: Endpoint;
+      cwd: string;
+      view: string;
+      /** Why the open is still unproven, in the user's terms. */
+      reason: string;
+    }>
+  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+
 /** Every project's staged open tickets, read without changing anything. */
 export async function listRetainedNativeOpens(home: string): Promise<RetainedViewOpen[]> {
   const opens: RetainedViewOpen[] = [];
@@ -736,7 +751,14 @@ export async function listRetainedNativeOpens(home: string): Promise<RetainedVie
   return opens;
 }
 
-export const abandonRetainedNativeOpen: ViewsCapability["abandon"] = async (open, conclusive) => {
+/**
+ * Removes one ticket and its receipt, never a pane, under its open lock: only while the ticket is
+ * exactly as listed and `conclusive` re-proves its coordinator's state.
+ */
+export async function abandonRetainedNativeOpen(
+  open: Readonly<{ path: string; record: string }>,
+  conclusive: () => Promise<boolean>,
+): Promise<"abandoned" | "settled" | "changed" | "unproven"> {
   const name = basename(open.path);
   const key = name.slice(0, name.indexOf("."));
   const directory = open.path.slice(0, open.path.length - name.length - 1);
@@ -757,4 +779,4 @@ export const abandonRetainedNativeOpen: ViewsCapability["abandon"] = async (open
   } finally {
     await release();
   }
-};
+}
