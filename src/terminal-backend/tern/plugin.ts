@@ -450,7 +450,7 @@ function printConfigureNotices(deps: TernPluginDependencies, result: ConfigureRe
     );
   if (!result.configured)
     deps.print?.(
-      "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To change this later, switch to Herdr and select Tern again in setup.\n",
+      `Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To be asked again, add terminal = "herdr" to Tandem's settings.toml, start Tandem once, then remove that line.\n`,
     );
 }
 

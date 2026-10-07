@@ -1,6 +1,6 @@
 import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
-import { SETUP_MODES, type SetupMode } from "../onboarding/setup-view.ts";
+import { SETUP_MODES, SETUP_SECTIONS, type SetupMode } from "../onboarding/setup-view.ts";
 
 /** Every native block Tandem defines, as `tandem.<kind>` programs. */
 export const VIEW_KINDS = [
@@ -510,6 +510,7 @@ const SetupModel = z.object({
   repos: z.array(SetupRepoModel),
   candidates: z.array(SetupRepoModel),
   selfImprovement: z.enum(["off", "fix", "report"]),
+  section: opt(z.enum(SETUP_SECTIONS)),
 });
 
 /** The model schema of each view file kind. The index feeds every screen without a detail file. */
@@ -603,7 +604,13 @@ export const ViewRef = z.discriminatedUnion("kind", [
       ]),
     })
     .strict(),
-  z.object({ kind: z.literal("setup"), mode: z.enum(SETUP_MODES) }).strict(),
+  z
+    .object({
+      kind: z.literal("setup"),
+      mode: z.enum(SETUP_MODES),
+      section: z.enum(SETUP_SECTIONS).optional(),
+    })
+    .strict(),
 ]);
 export type ViewRef = z.infer<typeof ViewRef>;
 

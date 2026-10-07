@@ -17,7 +17,7 @@ import {
 } from "../memory/native-visits.ts";
 import { remainingOnboardingSteps } from "../onboarding/checklist.ts";
 import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
-import type { SetupMode } from "../onboarding/setup-view.ts";
+import type { SetupMode, SetupSection } from "../onboarding/setup-view.ts";
 import { parseReviewSubmission } from "../pr-review/page.ts";
 import { validateThreadReplies } from "../pr-review/replies.ts";
 import { parseReviewReplies } from "../pr-review/review.ts";
@@ -411,7 +411,7 @@ async function open(act: Act, ref: ViewRef): Promise<Outcome> {
     case "new-request":
       return newRequest(act);
     case "setup":
-      return openSetup(act, ref.mode);
+      return openSetup(act, ref.mode, ref.section);
   }
 }
 
@@ -892,12 +892,18 @@ async function submitReview(
 }
 
 /** Built before publication takes the project lock, because discovery can take seconds. */
-async function publishSetup(act: Act, owner: CoordinatorRecord, mode: SetupMode): Promise<void> {
-  const setup = await act.service().setupView(owner.repoPath, mode);
+async function publishSetup(
+  act: Act,
+  owner: CoordinatorRecord,
+  mode: SetupMode,
+  section?: SetupSection,
+): Promise<void> {
+  const view = await act.service().setupView(owner.repoPath, mode);
+  const setup = section === undefined ? view : { ...view, section };
   await publishViews(act.environment.home, owner.repoPath, async () => ({ setup }));
 }
 
-async function openSetup(act: Act, mode: SetupMode): Promise<Outcome> {
+async function openSetup(act: Act, mode: SetupMode, section?: SetupSection): Promise<Outcome> {
   const owner = await ternOwner(act, "opening setup");
   if (
     mode === "settings" &&
@@ -905,7 +911,7 @@ async function openSetup(act: Act, mode: SetupMode): Promise<Outcome> {
     remainingOnboardingSteps(await act.service().onboardingFacts(owner.repoPath)).length > 0
   )
     throw new Error("Finish setting up Tandem first. Settings open once setup is saved.");
-  await publishSetup(act, owner, mode);
+  await publishSetup(act, owner, mode, section);
   return viewOutcome(await show(act, owner, { kind: "setup", mode }));
 }
 

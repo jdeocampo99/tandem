@@ -1784,7 +1784,8 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     const setup = host.screen(await settings());
     await host.refresh();
     await setup.click("Bug reports");
-    await setup.click("Fix it");
+    // "Fix it" is what an unchosen setting already means, so only another option makes it unsaved.
+    await setup.click("Draft an issue");
     await setup.click("Save changes");
     // The project switcher's rows live in a dropdown layer only drawn while it is open.
     await host.refresh();

@@ -287,7 +287,7 @@ test("declined global preferences print once and explain how to change the decis
     expect(prompts).toBe(1);
     expect(notices).toHaveLength(2);
     expect(notices[0]).toContain("custom Tern shortcuts: Command+Shift+B");
-    expect(notices[1]).toContain("switch to Herdr and select Tern again");
+    expect(notices[1]).toContain('To be asked again, add terminal = "herdr"');
   } finally {
     await rm(home, { recursive: true, force: true });
   }

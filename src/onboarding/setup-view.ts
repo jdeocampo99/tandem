@@ -25,6 +25,13 @@ import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harne
 export const SETUP_MODES = ["setup", "settings"] as const;
 export type SetupMode = (typeof SETUP_MODES)[number];
 
+/**
+ * The Settings tab to show first, set only by a publication that opens Settings at one; an
+ * absent section leaves the block where it is.
+ */
+export const SETUP_SECTIONS = ["models", "repositories", "bug-reports"] as const;
+export type SetupSection = (typeof SETUP_SECTIONS)[number];
+
 export type SetupView = Readonly<{
   schemaVersion: 1;
   mode: SetupMode;
@@ -40,6 +47,7 @@ export type SetupView = Readonly<{
   /** Discovered checkouts not set up yet, which "Add repository" offers. */
   candidates: readonly SetupRepo[];
   selfImprovement: SelfImprovementMode;
+  section?: SetupSection;
 }>;
 
 /** One harness's group in the model pickers; `unavailable` says why it offers no models. */

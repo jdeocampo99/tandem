@@ -21,6 +21,7 @@ type RepoInfo = {
 type View = {
  mode: string, models: {ModelInfo}, harnesses: {Harness}, roles: {Role},
  thinkingLevels: {{level: string, note: string}}, repos: {RepoInfo}, candidates: {RepoInfo}, selfImprovement: string,
+ section: string?,
 }
 
 type Repo = {
@@ -32,6 +33,7 @@ type State = {
  file: rt.Watch, origin: rt.Origin, draft: Draft?, saved: Draft?, savedSignature: string,
  step: string, open: string?, modelSearch: fields.Field, repoSearch: fields.Field, selected: number, adding: boolean,
  active: string, fields: {[string]: fields.Field}, order: {string}, done: boolean, notice: string?,
+ jumped: number,
 }
 
 local SELF = {
@@ -215,18 +217,30 @@ local function blocker(model: View, draft: Draft): string?
  return nil
 end
 
-local function sync(state: State)
- if state.draft ~= nil or state.file.status ~= "ready" then return end
- local model = state.file.model :: View
- local draft = buildDraft(model)
- state.draft, state.saved, state.savedSignature = draft, copyDraft(draft), signature(model, draft)
- state.step = if model.mode == "setup" then "summary" else "models"
-end
-
 -- Field keys are the one way a key press finds its field; clearing them on any layout change keeps
 -- a stale index from reaching another row.
 local function reflow(state: State)
  state.active, state.fields, state.order = "", {}, {}
+end
+
+-- The tab a file that opened Settings at a section names. A newer file may name one while the block
+-- is already open, so each file is acted on once and the draft is kept.
+local SECTION_STEPS: {[string]: string} = {models = "models", repositories = "repos", ["bug-reports"] = "self"}
+
+local function sync(state: State)
+ if state.file.status ~= "ready" then return end
+ local model = state.file.model :: View
+ if state.draft == nil then
+  local draft = buildDraft(model)
+  state.draft, state.saved, state.savedSignature = draft, copyDraft(draft), signature(model, draft)
+  state.step = if model.mode == "setup" then "summary" else "models"
+ end
+ local step = if model.mode == "settings" and model.section then SECTION_STEPS[model.section] else nil
+ if step and state.jumped ~= state.file.seq then
+  state.step, state.open, state.adding = step, nil, false
+  reflow(state)
+ end
+ state.jumped = state.file.seq
 end
 
 local function clearField(field: fields.Field)
@@ -704,7 +718,7 @@ local block: BlockDef<State> = {
   local state: State = {
    file = rt.watch(cx, args[1] or "", "setup"), origin = rt.origin(args), savedSignature = "",
    step = "summary", modelSearch = fields.create(), repoSearch = fields.create(), selected = 1, adding = false,
-   active = "", fields = {}, order = {}, done = false,
+   active = "", fields = {}, order = {}, done = false, jumped = 0,
   }
   sync(state)
   return state
