@@ -47,7 +47,7 @@ assert(view.main ~= nil)
 local calls = {}
 local frames = {}
 local cx = {pane=1,render=function() end,frame=function(_,ops) table.insert(frames,ops) end,open=function(_,url) table.insert(calls,{url=url}) end,toast=function() end}
-local invoke = function(verb,id,payload,done) table.insert(calls,{verb=verb,id=id,payload=payload}); if done then done({status=0,stdout='{"posted":true}',stderr=''}) end end
+local invoke = function(action,done) table.insert(calls,action); if done then done({status='done'}) end end
 assert(content.event(state,model,true,{ev='action',act='pr-tab',value='Diff'},cx,invoke))
 assert(state.tab == 'Diff')
 local beforeFocus = #frames
@@ -57,9 +57,9 @@ assert(not content.event(state,model,false,{ev='action',act='pr-line',value='2'}
 assert(content.event(state,model,true,{ev='action',act='pr-line',value='2'},cx,invoke))
 fields.key(state.diff.editor,{name='paste',text='Typed error? 日本語 😀',ctrl=false,meta=false,alt=false,shift=false})
 assert(content.event(state,model,true,{ev='action',act='pr-save'},cx,invoke))
-assert(calls[1].verb == 'pr-comment' and calls[1].id == model.header.taskId)
-assert(calls[1].payload.comments[1].file == model.files[1].path and calls[1].payload.comments[1].line == 1)
-assert(calls[1].payload.comments[1].text == 'Typed error? 日本語 😀')
+assert(calls[1].verb == 'pr-comment' and calls[1].taskId == model.header.taskId)
+assert(calls[1].comments[1].file == model.files[1].path and calls[1].comments[1].line == 1)
+assert(calls[1].comments[1].text == 'Typed error? 日本語 😀')
 assert(state.diff.yours[1].sent)
 model.header.taskId = 'another-task'
 assert(not content.ready(state,model,true))
@@ -79,9 +79,9 @@ assert(content.event(state,model,true,{ev='action',act='pr-save'},cx,invoke))
 assert(#calls == 1 and #state.diff.yours == 1)
 assert(content.event(state,model,true,{ev='action',act='pr-verdict',value='request-changes'},cx,invoke))
 assert(content.event(state,model,true,{ev='action',act='pr-post'},cx,invoke))
-assert(calls[2].verb == 'review-submit' and calls[2].payload.verdict == 'request-changes')
-assert(calls[2].payload.reviewHead == model.header.head and calls[2].payload.reviewGeneration == model.review.generation)
-assert(calls[2].payload.drafts[1].decision == 'post' and calls[2].payload.yours[1].body == 'My review comment')
+assert(calls[2].verb == 'review-submit' and calls[2].submission.verdict == 'request-changes')
+assert(calls[2].reviewHead == model.header.head and calls[2].reviewGeneration == model.review.generation)
+assert(calls[2].submission.drafts[1].decision == 'post' and calls[2].submission.yours[1].body == 'My review comment')
 assert(state.submitted)
 content.event(state,model,true,{ev='action',act='pr-post'},cx,invoke)
 assert(#calls == 2)
