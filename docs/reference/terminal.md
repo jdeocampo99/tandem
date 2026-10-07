@@ -43,7 +43,10 @@ are typed: `EndpointOwnershipError` for a missing or foreign pane and `EndpointB
 active worker. Herdr (`herdr/`) and Tern (`tern/`) implement it. `compose.ts` alone picks one.
 
 Native view hosting is the port's optional `views` capability (`ViewsCapability`): `open`,
-`close`, `recover`, `retained` and `abandon`. Tern provides it. Herdr omits it, and callers branch
+`close`, `isView`, `recover`, `retained` and `abandon`. `isView` is a read-only proof that a pane is
+the coordinator's exact block for a view. It checks the program, the launch arguments, the session
+and the placement, never a title. See
+[approval-bearing clicks](native-views.md#approval-bearing-clicks). Tern provides it. Herdr omits it, and callers branch
 on `terminal.views` rather than on the terminal's name. Without `views`:
 
 - a native open is refused with Herdr's unsupported-view reason,

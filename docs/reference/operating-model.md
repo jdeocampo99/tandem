@@ -34,7 +34,14 @@ a restart never has to rebuild workflow from chat.
    (never the model) reads the tagged Submit control's message and posts with no second yes. Either
    way the review is pinned to the reviewed commit and refused if the PR moved
    ([pr-review.md](pr-review.md#show-edit-post)).
-7. **Visuals are drawn outside the repository.** A research task's own scout writes HTML to a
+7. **A native click approves only from a proven block.** Tern's views can approve a brief, request
+   changes, steer, restart, comment on or post a PR review, and save settings. Each of those
+   verbs must come from the exact `tandem.<kind>` block Tandem opened for this coordinator and
+   subject, as Tern lists it. A worker pane, a window command, the conversation pane, and every
+   Herdr pane are refused. Herdr approvals go through the conversation. A reply link only opens
+   the view where the user chooses. See
+   [approval-bearing clicks](native-views.md#approval-bearing-clicks).
+8. **Visuals are drawn outside the repository.** A research task's own scout writes HTML to a
    private artifact directory when asked; the controller, not the scout, opens Lavish and owns the
    feedback listener, and routes the user's comments back to that scout.
 
@@ -70,6 +77,13 @@ assigned to new work.
   ownership proofs, filesystem checks, and Git/GitHub preconditions guard mutations.
 - Tool allowlists are not an OS or filesystem sandbox, and a private artifact directory is not
   credential isolation: workers inherit the local environment.
+- Approval checks therefore stop mistakes and casual forgery, not a determined worker. An
+  implementer's `bash` runs as the user, so it can run the advanced action CLI with `--yes`. It
+  can replay a genuine native block's pane id, or open a look-alike block through `tern open`. It
+  can also call Tandem's service from its own Bun process. No environment variable, TTY, process
+  ancestry, or file in the Tandem home tells the user's shell from a worker's, because the worker
+  can set, allocate, spawn through Tern, or read each of them. Isolating workers needs a separate
+  OS user or a sandbox.
 - Tandem has no login flow and copies no credentials. OMP, the selected terminal, Treehouse, `gh`, and Git use
   their existing local configuration and authentication.
 
