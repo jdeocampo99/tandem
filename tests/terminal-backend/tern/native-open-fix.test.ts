@@ -10,6 +10,7 @@ import type {
 } from "../../../src/terminal-backend/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { missing, ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { ternFences } from "../../../src/terminal-backend/tern/fences.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { openFiles, openPath } from "../../native/view-files.ts";
 
@@ -82,18 +83,20 @@ async function withRetainedOpen(body: (home: string) => Promise<void>): Promise<
 /** The configured Tern backend, answering only whether the coordinator pane is there. */
 function terminal(owner: () => Owner): TerminalBackend {
   const base = ternBackend(async () => ({ code: 1, stdout: "", stderr: "unexpected" }), {});
+  const inspect: TerminalBackend["inspect"] = async ({ endpoint }) => {
+    const state = owner();
+    if (state === "gone") throw missing(endpoint);
+    if (state === "detached")
+      throw new EndpointOwnershipError(
+        endpoint,
+        "detached Tern blocks leave the pane's placement ambiguous",
+      );
+    return { endpoint } as unknown as EndpointInspection;
+  };
   return {
     ...base,
-    inspect: async ({ endpoint }) => {
-      const state = owner();
-      if (state === "gone") throw missing(endpoint);
-      if (state === "detached")
-        throw new EndpointOwnershipError(
-          endpoint,
-          "detached Tern blocks leave the pane's placement ambiguous",
-        );
-      return { endpoint } as unknown as EndpointInspection;
-    },
+    inspect,
+    fences: ternFences({ inspect, isEndpointGone: base.isEndpointGone }),
   };
 }
 

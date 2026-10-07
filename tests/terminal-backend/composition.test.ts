@@ -114,7 +114,8 @@ test("only Tern hosts native views, and the saved choice decides which terminal 
     expect(saved.views).toBeUndefined();
     await writeFile(settings, 'terminal = "tern"\n');
     expect(saved.name).toBe("tern");
-    expect(await saved.views?.retained(world.home)).toEqual([]);
+    expect(saved.views).toBeDefined();
+    expect(await saved.fences.list(world.home)).toEqual({ fences: [], failures: [] });
     expect(
       terminalBackend(world.run, { terminal: "herdr", home: world.home }).views,
     ).toBeUndefined();

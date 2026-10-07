@@ -51,9 +51,12 @@ export function herdrBackend(
 ): TerminalBackend {
   return {
     name: "herdr",
-    quarantinedPanes: async () => [],
-    clearPaneQuarantine: async () => {
-      throw new Error("Herdr keeps no pane quarantine records to clear");
+    fences: {
+      list: async () => ({ fences: [], failures: [] }),
+      settle: async (fence) => ({
+        status: "kept",
+        reason: `Herdr keeps no ${fence.kind} records, so it never listed ${fence.path}`,
+      }),
     },
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),

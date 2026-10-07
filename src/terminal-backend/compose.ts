@@ -99,8 +99,10 @@ export function terminalBackend(
     get views() {
       return select().views;
     },
-    quarantinedPanes: (home) => select().quarantinedPanes(home),
-    clearPaneQuarantine: (pane, conclusive) => select().clearPaneQuarantine(pane, conclusive),
+    fences: {
+      list: (home) => select().fences.list(home),
+      settle: (fence) => select().fences.settle(fence),
+    },
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),
