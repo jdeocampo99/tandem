@@ -229,6 +229,8 @@ type ControlNode = {
         (await sent()).filter(
           ({ action }) => action.verb === "open" && action.ref.kind === "orchestrator",
         ).length;
+      // Focus changes record visits whenever Tern moves focus; only clicks are under test here.
+      const clicked = async () => (await sent()).filter(({ action }) => action.verb !== "visit");
       await until(async () =>
         (await sent()).some(({ action }) => action.verb === "restart" && action.taskId === "102"),
       );
@@ -253,17 +255,19 @@ type ControlNode = {
         JSON.stringify(await tree()).includes("Direction refused by saved task policy"),
       );
       await ctl("shot", "03-task-action-error");
-      const failed = await readFile(join(root, "actions.log"), "utf8");
-      expect(failed.split("Reject this direction")).toHaveLength(2);
+      const failed = await clicked();
+      expect(
+        (await readFile(join(root, "actions.log"), "utf8")).split("Reject this direction"),
+      ).toHaveLength(2);
       expect(JSON.stringify(await tree())).toContain("Reject this direction");
       await Bun.sleep(300);
-      expect(await readFile(join(root, "actions.log"), "utf8")).toBe(failed);
+      expect(await clicked()).toEqual(failed);
       await writeFile(file, "broken");
       await until(async () => JSON.stringify(await tree()).includes("Actions are disabled"));
-      const before = await readFile(join(root, "actions.log"), "utf8");
+      const before = await clicked();
       await click("Restart");
       await Bun.sleep(300);
-      expect(await readFile(join(root, "actions.log"), "utf8")).toBe(before);
+      expect(await clicked()).toEqual(before);
       const floatingPicker = await host.open(
         { ...input, origin: { paneId: opened.paneId, cwd: root }, view: { kind: "task-picker" } },
         root,
@@ -379,7 +383,7 @@ type ControlNode = {
       }));
       await host.open(input, root, "task", "task", file);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
-      const beforeEmpty = await readFile(join(root, "actions.log"), "utf8");
+      const beforeEmpty = await clicked();
       await clickUntil("Brief", shows("No brief is linked"));
       expect(JSON.stringify(await tree())).not.toContain("Open brief");
       await ctl("shot", "03-task-no-brief");
@@ -388,7 +392,7 @@ type ControlNode = {
         JSON.stringify(await tree()).includes("No pull request is available yet"),
       );
       await ctl("shot", "03-task-no-pr");
-      expect(await readFile(join(root, "actions.log"), "utf8")).toBe(beforeEmpty);
+      expect(await clicked()).toEqual(beforeEmpty);
 
       console.log(`Native task proof: ${root}`);
     } finally {

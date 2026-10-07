@@ -339,13 +339,16 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       expect(secondPanel?.session.id).toBe(second.endpoint.terminalSessionId);
       expect(secondPanel?.block.program).toBe("tandem.panel");
       expect(parseBlockArgs(secondPanel?.block.args)?.ctx.coordinator).toBe(second.endpoint.paneId);
-      await publish(b);
       await terminal.focusWorkspace({
         sessionId: env.TANDEM_SESSION,
         cwd: b,
         workspaceId: second.endpoint.workspaceId,
       });
-      await until(async () => (await ctl("tree")).includes("Tern backend adapter"));
+      // B's live coordinator publishes its own empty board, so hold the fixture through a poll.
+      await until(async () => {
+        await publish(b);
+        return (await ctl("tree")).includes("Tern backend adapter");
+      });
       await ctl("shot", "03-project-b-panel");
       const catchup = blocks(await commands.ls(b)).find(
         (p) =>
