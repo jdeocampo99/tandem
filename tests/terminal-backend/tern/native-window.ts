@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { ActionEnvelope } from "../../../src/native/contract.ts";
+import { ActionEnvelope } from "../../../src/native/envelope.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../../src/terminal-backend/contract.ts";
 import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin.ts";

@@ -1,12 +1,18 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
 import { boardView } from "../../src/board/view.ts";
+import type {
+  RequestReviewPane,
+  RequestReviewPaneStatus,
+  TerminalName,
+} from "../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
-import { withRequestReviewPane } from "../../src/requests/brief.ts";
+import { createRequestBriefRecord, withRequestReviewPane } from "../../src/requests/brief.ts";
+import { briefOriginAfterAction } from "../../src/requests/native-pane.ts";
 import { projectRequestBriefPane } from "../../src/requests/review-pane.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { RequestBriefWorkflow } from "../../src/requests/workflow.ts";
@@ -453,5 +459,76 @@ test("an unknown native opening propagates once and leaves the exact draft durab
     expect(
       world.trace().filter((each) => each.boundary === "tern" || each.boundary === "herdr"),
     ).toEqual([]);
+  });
+});
+
+describe("briefOriginAfterAction", () => {
+  const record = createRequestBriefRecord(
+    { id: "req-origin", repoPath: "/repo", content: content("Close the brief I acted on") },
+    "2030-01-01T00:00:00.000Z",
+  );
+  const seen = {
+    requestId: record.id,
+    briefRevision: record.draft.revision,
+    contentDigest: record.draft.contentDigest,
+    agreementDigest: record.draft.agreementDigest,
+  };
+  const origin = { terminal: "tern", paneId: "102" } as const;
+  const withPane = (
+    status: RequestReviewPaneStatus,
+    paneId = "102",
+    terminal: TerminalName = "tern",
+  ) =>
+    withRequestReviewPane(
+      record,
+      {
+        status,
+        endpoint: {
+          terminal,
+          sessionId: "s",
+          workspaceId: "w",
+          tabId: "t",
+          paneId,
+          role: "coordinator",
+          generation: 0,
+        },
+        renderedRevision: record.draft.revision,
+        renderedPath: "/views/brief.json",
+        observedAt: "2030-01-01T00:00:00.000Z",
+        reason: "pane busy",
+      },
+      "2030-01-01T00:00:00.000Z",
+    );
+
+  test("a revised draft stays open whatever its pane says", () => {
+    for (const changed of [
+      { briefRevision: seen.briefRevision + 1 },
+      { contentDigest: "other" },
+      { agreementDigest: "other" },
+    ])
+      expect(briefOriginAfterAction(withPane("closed"), { ...seen, ...changed }, origin)).toEqual({
+        kind: "revised",
+      });
+  });
+
+  test("the origin pane the workflow already settled is reported, not closed again", () => {
+    for (const status of ["closed", "retained", "quarantined"] as const) {
+      const latest = withPane(status);
+      expect(briefOriginAfterAction(latest, seen, origin)).toEqual({
+        kind: "retired",
+        pane: latest.reviewPane as RequestReviewPane,
+      });
+    }
+  });
+
+  test("the brief the user saw is closed when no settled pane is the origin", () => {
+    expect(briefOriginAfterAction(record, seen, origin)).toEqual({ kind: "close" });
+    expect(briefOriginAfterAction(withPane("open"), seen, origin)).toEqual({ kind: "close" });
+    expect(briefOriginAfterAction(withPane("closed", "999"), seen, origin)).toEqual({
+      kind: "close",
+    });
+    expect(briefOriginAfterAction(withPane("closed", "102", "herdr"), seen, origin)).toEqual({
+      kind: "close",
+    });
   });
 });

@@ -1,10 +1,11 @@
 import { EndpointBusyError } from "../adapters/primitives.ts";
 import { nativeBriefFile } from "../board/native-views.ts";
-import type { RequestBriefRecord, RequestReviewPane } from "../contracts.ts";
+import type { Endpoint, RequestBriefRecord, RequestReviewPane } from "../contracts.ts";
 import { type CoordinatorRecord, canonicalPath } from "../coordinator/record.ts";
 import { findRecordedOwner } from "../coordinator/recorded-owner.ts";
 import { publishViews, viewDetailPath } from "../native/store.ts";
 import type { ViewsCapability } from "../terminal-backend/contract.ts";
+import type { ViewedBrief } from "./feedback.ts";
 import { briefView } from "./native-view.ts";
 import type { RequestReviewPaneDependencies } from "./review-pane.ts";
 import { createRequestBriefStore } from "./store.ts";
@@ -112,4 +113,35 @@ export async function closeNativeBriefPane(
       `native brief could not be closed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+}
+
+/**
+ * What becomes of the native brief a click came from once its action took effect. `revised`: a
+ * newer draft is showing, so it stays open. `retired`: the workflow already settled that exact
+ * pane. `close`: the origin is still the brief the user saw, so close it.
+ */
+export type BriefOriginAfterAction =
+  | Readonly<{ kind: "revised" }>
+  | Readonly<{ kind: "retired"; pane: RequestReviewPane }>
+  | Readonly<{ kind: "close" }>;
+
+export function briefOriginAfterAction(
+  latest: RequestBriefRecord,
+  seen: ViewedBrief,
+  origin: Readonly<{ terminal: Endpoint["terminal"]; paneId: string }>,
+): BriefOriginAfterAction {
+  if (
+    latest.draft.revision !== seen.briefRevision ||
+    latest.draft.contentDigest !== seen.contentDigest ||
+    latest.draft.agreementDigest !== seen.agreementDigest
+  )
+    return { kind: "revised" };
+  const pane = latest.reviewPane;
+  if (
+    pane?.endpoint.terminal === origin.terminal &&
+    pane.endpoint.paneId === origin.paneId &&
+    pane.status !== "open"
+  )
+    return { kind: "retired", pane };
+  return { kind: "close" };
 }

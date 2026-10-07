@@ -6,7 +6,7 @@ import { nativeBriefFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { parseBlockArgs, parseBlockContext } from "../../../src/native/contract.ts";
+import { parseBlockArgs, parseBlockContext } from "../../../src/native/block.ts";
 import { viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import {
   ternBackend,

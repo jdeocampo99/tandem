@@ -8,7 +8,7 @@ import {
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
 import type { Endpoint, TerminalPaneLocation } from "../../contracts.ts";
-import { blockArgs, parseBlockArgs } from "../../native/contract.ts";
+import { blockArgs, parseBlockArgs } from "../../native/block.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
 import { type TernEndpoint, ternEndpoint, withoutForeignPaneIdentity } from "../identity.ts";
 import { missing, type TernCli, type TernOptions, type TernRunner, ternCli } from "./cli.ts";

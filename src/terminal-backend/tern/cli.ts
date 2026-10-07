@@ -17,7 +17,7 @@ import {
   type Endpoint,
   MODEL_ROLE_ORDER,
 } from "../../contracts.ts";
-import type { Receipt } from "../../native/contract.ts";
+import type { Receipt } from "../../native/block.ts";
 import { type EndpointInspection, type EndpointTarget, isWorkerProcess } from "../contract.ts";
 import type { TernEndpoint } from "../identity.ts";
 import {

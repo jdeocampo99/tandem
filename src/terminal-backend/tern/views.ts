@@ -2,13 +2,14 @@ import { z } from "zod";
 import { AdapterError, EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { nativeBriefFile, nativePrFile, nativeTaskFile } from "../../board/native-views.ts";
 import type { Endpoint } from "../../contracts.ts";
-import { blockArgs, type Placement, setupFile, type ViewKind } from "../../native/contract.ts";
+import { blockArgs, type Placement, type ViewKind } from "../../native/block.ts";
 import {
   type Published,
   readPublished,
   viewDetailPath,
   viewIndexPath,
 } from "../../native/store.ts";
+import { setupFile } from "../../native/view-file.ts";
 import type { ViewsCapability } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";

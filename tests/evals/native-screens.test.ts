@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
-import { type Action, Outcome } from "../../src/native/contract.ts";
+import { type Action, Outcome } from "../../src/native/envelope.ts";
 import { projectStoreDirectory } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";

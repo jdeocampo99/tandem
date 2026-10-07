@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { nativeTaskFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { blockArgs, parseBlockContext } from "../../../src/native/contract.ts";
+import { blockArgs, parseBlockContext } from "../../../src/native/block.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import type { TaskPageView } from "../../../src/tasks/page-view.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";

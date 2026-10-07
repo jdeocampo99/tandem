@@ -6,7 +6,6 @@ import { NativeAlerts } from "../../src/board/native-alerts.ts";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
 import { boardView } from "../../src/board/view.ts";
 import { repositoryKey } from "../../src/config/repositories.ts";
-import { ViewFile } from "../../src/native/contract.ts";
 import {
   markNativeAlertsRead,
   projectStoreDirectory,
@@ -15,6 +14,7 @@ import {
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
+import { ViewFile } from "../../src/native/view-file.ts";
 import { reviseRequestBriefRecord } from "../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";

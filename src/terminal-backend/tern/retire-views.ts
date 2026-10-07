@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { findRecordedOwner } from "../../coordinator/recorded-owner.ts";
 import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
-import { isWindowView, parseBlockArgs, ViewKind } from "../../native/contract.ts";
+import { isWindowView, parseBlockArgs, ViewKind } from "../../native/block.ts";
 import { viewDetailPath, viewIndexPath } from "../../native/store.ts";
 import type { EndpointTarget } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
