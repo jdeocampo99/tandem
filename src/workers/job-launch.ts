@@ -182,7 +182,9 @@ export class JobLauncher {
     const sessionDirectory =
       role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
     const claim = claimOf(runtime.operation);
-    if (claim === undefined) return;
+    // Another coordinator took the operation over since this one admitted it: the new owner
+    // launches. Adopting its claim here would append a job that only the owner may launch.
+    if (claim === undefined || claim.claimOwner !== this.#deps.claimOwner) return;
     if (sessionDirectory !== undefined) {
       const prepared = await this.#deps.records.withOperationEffect(
         task.id,
