@@ -7,6 +7,7 @@ import type { CommandRunner, Endpoint, WorktreeLease } from "../../src/contracts
 import { retireCoordinatorWorkspace } from "../../src/coordinator/workspace.ts";
 import { recoverEndpointFromLaunch } from "../../src/tasks/endpoint-launch.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
 import { storedEndpointTerminal } from "../../src/terminal-backend/identity.ts";
 import { withScenario } from "../evals/scenario.ts";
 
@@ -16,7 +17,7 @@ for (const [chosen, selection] of [
   ["tern", "saved"],
   ["tern", "explicit"],
 ] as const) {
-  test(`${selection} ${chosen} quarantines the other terminal's identical ids without contacting it`, async () => {
+  test(`${selection} ${chosen} refuses the other terminal's identical ids in every guarded operation without contacting it`, async () => {
     const home = await mkdtemp(join(tmpdir(), "tandem-terminal-"));
     const calls: unknown[] = [];
     const forbidden: CommandRunner = async (request) => {
@@ -59,6 +60,7 @@ for (const [chosen, selection] of [
         `it is a ${endpoint.terminal} pane but this Tandem home uses ${chosen}`,
       );
       const views = terminal.views;
+      expect(views === undefined).toBe(chosen === "herdr");
       for (const operation of [
         () => terminal.inspect({ endpoint, cwd: home }),
         () => terminal.close({ endpoint, cwd: home, force: true }),
@@ -68,6 +70,15 @@ for (const [chosen, selection] of [
         () => terminal.interrupt({ endpoint, cwd: home }),
         () =>
           terminal.splitBeside({ anchor: endpoint, cwd: home, role: "reviewer", generation: 0 }),
+        () =>
+          terminal.createWorkspace({
+            sessionId: "same",
+            cwd: home,
+            label: "coordinator",
+            role: "coordinator",
+            generation: 0,
+            previousEndpoint: endpoint,
+          }),
         () => terminal.openPanel({ coordinator: endpoint, cwd: home, project: home }),
         () => terminal.isPanelOpen({ coordinator: endpoint, cwd: home, panelPaneId: "same" }),
         ...(views === undefined
@@ -124,14 +135,17 @@ test("an uncertain adapter effect remains quarantined after later calls and term
     const endpoint = world.openPane({ paneId: "42", cwd: world.repoPath });
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
     world.failAt({ boundary: "tern", action: "tern run" });
+    const launch = (terminal: TerminalBackend) =>
+      terminal.runCommand({ endpoint, cwd: world.repoPath, command: ["agent"] });
     const terminal = terminalBackend(world.run, { home: world.home });
-    const launch = () => terminal.runCommand({ endpoint, cwd: world.repoPath, command: ["agent"] });
-    await expect(launch()).rejects.toThrow("outcome is unknown");
-    await expect(launch()).rejects.toThrow("outcome is unknown");
+    await expect(launch(terminal)).rejects.toThrow("outcome is unknown");
+    await expect(launch(terminal)).rejects.toThrow("outcome is unknown");
     await writeFile(join(world.home, "settings.toml"), 'terminal = "herdr"\n');
-    expect(terminal.name).toBe("herdr");
+    expect(terminalBackend(world.run, { home: world.home }).name).toBe("herdr");
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-    await expect(launch()).rejects.toThrow("outcome is unknown");
+    await expect(launch(terminalBackend(world.run, { home: world.home }))).rejects.toThrow(
+      "outcome is unknown",
+    );
     expect(world.trace().filter((event) => event.action === "tern run")).toHaveLength(1);
     expect(world.paneIsPresent(endpoint.paneId)).toBe(true);
   });

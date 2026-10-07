@@ -15,9 +15,9 @@ mirror these under `tests/terminal-backend/`.
 
 Tern is the default terminal. `<home>/settings.toml` stores an optional top-level `terminal`;
 an absent key selects Tern, and only `terminal = "herdr"` selects Herdr. `compose.ts` alone
-selects the implementation (`savedTerminal`), reading the saved choice before operations and
-caching each adapter's uncertain-effect guard. Injected callers can supply a fixed choice with the
-same identity guards. Tern is a closed beta and requires a signed-in Stencil account.
+selects the implementation (`savedTerminal`), reading the saved choice once, when it composes the
+port; a running process keeps the terminal it started with, and a changed choice applies to the
+next process. Injected callers can supply a fixed choice with the same identity guards. Tern is a closed beta and requires a signed-in Stencil account.
 
 No setup surface asks about the terminal or offers Herdr: chat setup, the native setup block and
 direct terminal onboarding take the saved choice as given. Herdr is a working backend for anyone
@@ -36,9 +36,9 @@ Tern's preferences instead and never touches the plugin.
 
 `TerminalBackend` in `src/terminal-backend/contract.ts` is every pane, workspace and session
 effect Tandem has: inspect, run, send keys, interrupt, close, create and split, list, focus,
-notify, the panel, the welcome view and the setup block (`openSetup`, which Herdr answers with
-`false` so setup runs in the chat). Every operation that names a pane takes its full identity
-and refuses a pane whose session, workspace or tab no longer match. Failures a caller decides on
+notify, the panel and the welcome view. Both terminals have the panel and the welcome view: Herdr
+opens them as plugin panes, Tern as native blocks. Every operation that names a pane takes its
+full identity and refuses a pane whose session, workspace or tab no longer match. Failures a caller decides on
 are typed: `EndpointOwnershipError` for a missing or foreign pane and `EndpointBusyError` for an
 active worker. Herdr (`herdr/`) and Tern (`tern/`) implement it. `compose.ts` alone picks one.
 
@@ -50,6 +50,7 @@ and the placement, never a title. See
 on `terminal.views` rather than on the terminal's name. Without `views`:
 
 - a native open is refused with Herdr's unsupported-view reason,
+- the setup block does not open and the chat runs the setup checklist,
 - a brief opens in its request review pane,
 - arrival notifications go through `notify` instead of native alerts, and
 - the coordinator publishes no native views.

@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { ActionEnvelope } from "../../../src/native/contract.ts";
+import { ActionEnvelope } from "../../../src/native/envelope.ts";
 import { publishViews, viewDetailPath } from "../../../src/native/store.ts";
 import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { briefView } from "../../../src/requests/native-view.ts";

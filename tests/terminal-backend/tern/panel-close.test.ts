@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { blockArgs } from "../../../src/native/contract.ts";
+import { blockArgs } from "../../../src/native/block.ts";
 import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import {

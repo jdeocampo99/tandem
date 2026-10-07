@@ -9,7 +9,7 @@ TypeScript computes every model, reads GitHub and provider data and applies poli
 keeps transient drafts and sends clicks. The CLI alone changes task state. A renderer never
 fetches GitHub, provider limits or the task store itself, and no view file authorizes an action.
 
-Code: [src/native/](../../src/native/) (`contract.ts`, `store.ts`, `actions.ts`),
+Code: [src/native/](../../src/native/) (`view-file.ts`, `block.ts`, `envelope.ts`, `store.ts`, `actions.ts`),
 `src/terminal-backend/tern/host.ts` and `views.ts`, and [tern-plugin/](../../tern-plugin/).
 Tests: `tests/native/` and the parity harness in `tests/evals/tern-parity/`.
 
@@ -39,19 +39,21 @@ the implementation.
 
 ## Contracts and their owners
 
-Every shape that crosses the language boundary has one owner in `src/native/contract.ts`. Luau
-reads the same fields by name. The plugin ships in lockstep with the repository
+Every shape that crosses the language boundary has one owner in `src/native/`, one file per
+contract: `view-file.ts` (view files and their models), `block.ts` (view kinds, block arguments,
+open ticket and receipt) and `envelope.ts` (action input and outcome, reply links). Luau reads the
+same fields by name. The plugin ships in lockstep with the repository
 (`tern-plugin/tandem.sh` runs `../src/main.ts`), so no generator sits between them. Each contract
 has a test that runs the real Luau beside the real TypeScript. `luau` is a required dev
 dependency, so these tests never skip.
 
 | Contract | Owner | How Luau gets it | Cross-boundary test |
 | --- | --- | --- | --- |
-| View file envelope and models | `ViewFile` and `VIEW_MODELS`; written only by `publishViews` in `store.ts` | `rt.watch` checks the envelope; screens read model fields by name | `tests/native/render.test.ts` (T1): every view the store writes draws through its real screen, and a model that cannot draw keeps the last good one. `tests/native/store.test.ts`: undrawable models are refused and `seq` is committed before a file carries it |
-| Block arguments | `blockArgs` and `parseBlockArgs` | `rt.origin(args)` keeps `args[2]` opaque; screens watch `args[1]` and `args[3]` | `tests/native/actions.test.ts`: an echoed context that `blockArgs` did not write is refused. The parity harness sends every click through the real `tandem native act` |
-| Action input and outcome | `ActionEnvelope`, `Outcome` and `NOTICE_CODES` | `rt.act` builds one table per verb and toasts by `notice.code` | `tests/native/actions.test.ts` (T2): every click in every rendered view sends an envelope the contract accepts. `tests/native/routes.test.ts`: `rt.luau` toasts every notice code, window commands send only navigational verbs, and only provable blocks send approval-bearing ones |
-| Block and link names | `VIEW_KINDS`, `LINK_KINDS` and `nativeLink` | `host.luau` registrations, `plugin.toml` blocks and the `window.luau` link pattern | `tests/native/routes.test.ts` (T3): manifest, registrations and `VIEW_KINDS` name the same views, and every `nativeLink` output routes to an accepted `open` |
-| Open ticket and receipt | `Ticket` and `Receipt`; lifecycle in `host.ts` | `layout.luau` reads ticket fields by name and writes the receipt | `tests/native/layout.test.ts` (T4): `layout.luau` runs TypeScript-built tickets and `decide()` gives every receipt the table's answer. `tests/native/decide.test.ts` covers the state machine |
+| View file envelope and models | `view-file.ts`: `ViewFile` and `VIEW_MODELS`; written only by `publishViews` in `store.ts` | `rt.watch` checks the envelope; screens read model fields by name | `tests/native/render.test.ts` (T1): every view the store writes draws through its real screen, and a model that cannot draw keeps the last good one. `tests/native/store.test.ts`: undrawable models are refused and `seq` is committed before a file carries it |
+| Block arguments | `block.ts`: `blockArgs` and `parseBlockArgs` | `rt.origin(args)` keeps `args[2]` opaque; screens watch `args[1]` and `args[3]` | `tests/native/actions.test.ts`: an echoed context that `blockArgs` did not write is refused. The parity harness sends every click through the real `tandem native act` |
+| Action input and outcome | `envelope.ts`: `ActionEnvelope`, `Outcome` and `NOTICE_CODES` | `rt.act` builds one table per verb and toasts by `notice.code` | `tests/native/actions.test.ts` (T2): every click in every rendered view sends an envelope the contract accepts. `tests/native/routes.test.ts`: `rt.luau` toasts every notice code, window commands send only navigational verbs, and only provable blocks send approval-bearing ones |
+| Block and link names | `block.ts`: `VIEW_KINDS`; `envelope.ts`: `LINK_KINDS` and `nativeLink` | `host.luau` registrations, `plugin.toml` blocks and the `window.luau` link pattern | `tests/native/routes.test.ts` (T3): manifest, registrations and `VIEW_KINDS` name the same views, and every `nativeLink` output routes to an accepted `open` |
+| Open ticket and receipt | `block.ts`: `Ticket` and `Receipt`; lifecycle in `host.ts` | `layout.luau` reads ticket fields by name and writes the receipt | `tests/native/layout.test.ts` (T4): `layout.luau` runs TypeScript-built tickets and `decide()` gives every receipt the table's answer. `tests/native/decide.test.ts` covers the state machine |
 
 `tests/evals/tern-parity.test.ts` drives every view through the real screens, with
 `tests/evals/tern-parity/host.luau` standing in for Tern. Its inventory is the parity contract
@@ -150,7 +152,7 @@ read never means zero usage or passing CI.
 
 ## View files and polling
 
-Every file in `views/` is one `ViewFile` (`src/native/contract.ts`):
+Every file in `views/` is one `ViewFile` (`src/native/view-file.ts`):
 
 ```ts
 { v: 1, kind: "index" | "task" | "brief" | "pr" | "setup", epoch: string, seq: number, model: Model }
@@ -229,7 +231,7 @@ these primitives to native windows through the manifest's `styles` entry.
 ## Block arguments
 
 Every block receives three strings, `blockArgs(viewPath, ctx) = [viewPath, ctxJson, indexPath]`,
-built only by `src/native/contract.ts`. Listings are matched only through `parseBlockArgs`.
+built only by `src/native/block.ts`. Listings are matched only through `parseBlockArgs`.
 `ctx` holds the coordinator pane, cwd, home, index path and optional window key. Luau never reads
 it. Every action echoes it back verbatim as the envelope origin's `ctx`, with the renderer's
 **own** `cx.pane` as `pane`, and `tandem native act` parses it with `parseBlockContext`, which
@@ -1057,7 +1059,7 @@ choice setup offers, as the detail files `setup-setup.json` and `setup-settings.
 `ref:{kind:"setup", mode}` computes the view (`service.setupView`), publishes it under the project
 lock with `publishViews(home, project, async () => ({ setup }))`, then opens the block. Setup opens
 in the `split` placement beside the conversation. Settings opens as a `window` tab, so `isWindowView`
-in `src/native/contract.ts` tells the two apart from the detail file: `retire-views.ts` and the
+in `src/native/block.ts` tells the two apart from the detail file: `retire-views.ts` and the
 return-origin proof in `host.ts` use it instead of a per-kind table. Settings refuses to open on
 the Tandem checkout's coordinator while onboarding is unfinished.
 The optional `section` on the ref travels in the published model, not the block args, so the
@@ -1067,7 +1069,9 @@ newer file and keeps its draft. "Tandem: Change models" and "Tandem: Add or edit
 
 The Tandem coordinator opens the setup block at session start, in the slot where the welcome view
 opened, while `remainingOnboardingSteps` is not empty and the terminal has native views
-(`terminal.openSetup`; Herdr returns `false` and the chat checklist runs). The chat then says the
+(`openSetupBeside` in src/harness/coordinator-session.ts publishes the setup view and calls
+`terminal.views.open` with `{ kind: "setup", mode: "setup" }`; Herdr has no `views` and the chat
+checklist runs). The chat then says the
 setup is beside it, and the coordinator's context says to answer questions, not to ask them. Once
 setup is finished the welcome view behaves as before.
 

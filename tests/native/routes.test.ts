@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { isApprovalVerb } from "../../src/native/actions.ts";
+import { VIEW_KINDS } from "../../src/native/block.ts";
 import {
   Action,
   ActionEnvelope,
   LINK_KINDS,
   NOTICE_CODES,
   nativeLink,
-  VIEW_KINDS,
-} from "../../src/native/contract.ts";
+} from "../../src/native/envelope.ts";
 import { withParity } from "../evals/tern-parity/inventory.ts";
 
 const plugin = (name: string) =>

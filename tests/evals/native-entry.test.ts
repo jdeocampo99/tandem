@@ -7,7 +7,7 @@ import { boardView } from "../../src/board/view.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
-import { Outcome } from "../../src/native/contract.ts";
+import { Outcome } from "../../src/native/envelope.ts";
 import {
   nativeAlertCounts,
   projectStoreDirectory,

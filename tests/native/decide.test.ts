@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { blockArgs, type Receipt, Ticket } from "../../src/native/contract.ts";
+import { blockArgs, type Receipt, Ticket } from "../../src/native/block.ts";
 import { type Decision, decide, type ViewListing } from "../../src/terminal-backend/tern/host.ts";
 
 const NOW = 1_800_000_000_000;

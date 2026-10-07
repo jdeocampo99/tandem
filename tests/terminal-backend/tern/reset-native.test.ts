@@ -6,7 +6,7 @@ import { quoteShellArgument } from "../../../src/adapters/commands.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
-import { parseBlockArgs } from "../../../src/native/contract.ts";
+import { parseBlockArgs } from "../../../src/native/block.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, Processes } from "../../../src/terminal-backend/tern/protocol.ts";

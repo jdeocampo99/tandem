@@ -15,7 +15,7 @@ import {
   releaseCoordinatorLease,
 } from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
-import { blockArgs } from "../../src/native/contract.ts";
+import { blockArgs } from "../../src/native/block.ts";
 import { viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "./scenario.ts";

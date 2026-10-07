@@ -1,5 +1,5 @@
 --!strict
--- Interprets one backend-authored ticket (src/native/contract.ts `Ticket`). Every stage checks
+-- Interprets one backend-authored ticket (src/native/block.ts `Ticket`). Every stage checks
 -- the ticket's expiry, then rechecks its exact panes, then applies one effect. It never retries.
 local M = {}
 -- Every window callback has a 50 ms budget. Yield between native calls, and use only the

@@ -14,7 +14,7 @@ import { shouldAutoShowCatchUp } from "../memory/native-view.ts";
 import { SETUP_MODES, type SetupView } from "../onboarding/setup-view.ts";
 import type { BriefView } from "../requests/native-view.ts";
 import { acquireDarwinFileLock } from "../tasks/store-lock.ts";
-import { setupFile, VIEW_MODELS, ViewFile, type ViewFileKind } from "./contract.ts";
+import { setupFile, VIEW_MODELS, ViewFile, type ViewFileKind } from "./view-file.ts";
 
 /*
  * `<home>/tern/<projectKey>/` holds everything Tandem keeps for one project's native views:
