@@ -736,18 +736,6 @@ async function runProjectFlow({
         ? {}
         : { TERN_DAEMON_SOCKET: environment.source.TERN_DAEMON_SOCKET }),
     },
-    ...(interactive && prompter !== undefined
-      ? {
-          confirm: async (question: string) =>
-            (await prompter.ask(question, {
-              choices: [
-                { name: "Yes", value: "yes" },
-                { name: "Not now", value: "not-now" },
-              ],
-              default: "not-now",
-            })) === "yes",
-        }
-      : {}),
   };
   // Update reloads a linked package after its launches; a home that never linked one (or a fresh
   // Tern) still needs it before any coordinator opens a view.

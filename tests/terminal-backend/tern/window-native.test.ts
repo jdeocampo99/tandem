@@ -59,7 +59,6 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
     const prefs = join(config, "settings.json");
     const original = '{"keybinds":{"cmd+shift+b":"palette"}}';
     await writeFile(prefs, original);
-    await configureTernPluginSettings({ path: prefs, approved: false });
     const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
       env,
       cwd: root,
@@ -187,7 +186,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       expect(await readFile(prefs, "utf8")).toBe(original);
       await close();
       await restoreTernPluginSettings({ path: prefs });
-      await configureTernPluginSettings({ path: prefs, approved: true });
+      await configureTernPluginSettings({ path: prefs });
       await open();
       await run("ctl", "--control", control, "key", "cmd+1");
       await until(async () =>

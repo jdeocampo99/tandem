@@ -31,7 +31,6 @@ export type TernPluginDependencies = Readonly<{
   binary?: string;
   directory?: string;
   env?: Readonly<Record<string, string>>;
-  confirm?: (question: string) => Promise<boolean>;
   settingsPath?: string;
   print?: (text: string) => void;
 }>;
@@ -39,8 +38,6 @@ export type TernPluginDependencies = Readonly<{
 type TernPluginSettingsInput = Readonly<{
   path?: string;
   configDirectory?: string;
-  approved?: boolean;
-  confirm?: (question: string) => Promise<boolean>;
 }>;
 
 const TERN_PLUGIN_KEYS: Readonly<Record<string, string>> = {
@@ -69,7 +66,6 @@ const ternSettingsSchema = z
 const recordSchema = z
   .object({
     version: z.literal(1),
-    approved: z.boolean(),
     keybindsExisted: z.boolean(),
     keys: z
       .array(z.object({ key: z.string(), installed: z.string() }).strict())
@@ -132,7 +128,6 @@ function settingsInput(deps: TernPluginDependencies): TernPluginSettingsInput {
     ...(deps.env?.TERN_CONFIG_DIR === undefined
       ? {}
       : { configDirectory: deps.env.TERN_CONFIG_DIR }),
-    ...(deps.confirm === undefined ? {} : { confirm: deps.confirm }),
   };
 }
 
@@ -283,13 +278,17 @@ async function replacePreferenceFile(
 type ConfigureResult = Readonly<{
   configured: boolean;
   skipped: readonly string[];
-  notice?: true;
+  /** What this call changed in Tern's settings; absent when it changed nothing. */
+  applied?: Readonly<{ sidebar: boolean; keys: boolean }>;
   preset?: string;
 }>;
 
 type PreferenceEffects = Readonly<{ replaceFile: typeof replacePreferenceFile }>;
 
-/** One decision controls both global preferences. Record changes before applying them for recovery. */
+/**
+ * Tern is Tandem's terminal, so its sidebar and shortcuts are set on first link without asking.
+ * The changes are recorded before they apply, so choosing Herdr can restore them.
+ */
 async function configureLocked(
   input: TernPluginSettingsInput,
   effects: PreferenceEffects,
@@ -304,7 +303,6 @@ async function configureLocked(
     const current = ternSettingsSchema.parse(JSON.parse(raw.text));
     return {
       configured:
-        record.approved &&
         record.keys.every(({ key, installed }) => current.keybinds?.[key] === installed) &&
         (!record.sidebar || current.tabs_autohide === record.sidebar.installed),
       skipped: plan.skipped,
@@ -313,48 +311,31 @@ async function configureLocked(
   const settings = ternSettingsSchema.parse(JSON.parse(plan.text));
   const sidebar = settings.tabs_autohide !== true;
   if (!plan.changed && !sidebar) return { configured: true, skipped: plan.skipped };
-  if (input.approved === undefined && input.confirm === undefined)
-    return { configured: false, skipped: plan.skipped };
-  const approved =
-    input.approved ??
-    (await input.confirm?.(
-      "Hide Tern's sidebar and use Tandem's board, PR, usage and project shortcuts? These settings apply to every Tern window. Your custom shortcuts stay unchanged. Palette commands and panel buttons work either way.",
-    )) ??
-    false;
   const record = recordSchema.parse({
     version: 1,
-    approved,
     keybindsExisted: ternSettingsSchema.parse(JSON.parse(raw.text)).keybinds !== undefined,
-    keys: approved ? plan.added.map((key) => ({ key, installed: TERN_PLUGIN_KEYS[key] })) : [],
-    ...(approved && sidebar
-      ? { sidebar: { previous: settings.tabs_autohide, installed: true } }
-      : {}),
+    keys: plan.added.map((key) => ({ key, installed: TERN_PLUGIN_KEYS[key] })),
+    ...(sidebar ? { sidebar: { previous: settings.tabs_autohide, installed: true } } : {}),
   });
-  // Refuse consent based on a stale settings snapshot, even when only recording a decline.
-  const current = await readPreferenceFile(path);
-  if (current.text !== raw.text || current.exists !== raw.exists)
-    throw new Error("Tern settings changed while configuring preferences");
   const recordText = `${JSON.stringify(record, null, 2)}\n`;
   await effects.replaceFile(recordPath, prior, recordText);
-  if (approved) {
-    if (sidebar) settings.tabs_autohide = true;
-    const installedText = `${JSON.stringify(settings, null, 2)}\n`;
-    try {
-      await effects.replaceFile(path, raw, installedText);
-    } catch (error) {
-      // Byte differences cannot prove a failed commit: a user may have edited afterward.
-      // Only an explicit pre-commit proof permits abandoning restoration ownership.
-      if (error instanceof PreferenceWriteNotCommittedError) {
-        const saved = await readPreferenceFile(recordPath);
-        if (saved.exists && saved.text === recordText) await rm(recordPath);
-      }
-      throw error;
+  if (sidebar) settings.tabs_autohide = true;
+  const installedText = `${JSON.stringify(settings, null, 2)}\n`;
+  try {
+    await effects.replaceFile(path, raw, installedText);
+  } catch (error) {
+    // Byte differences cannot prove a failed commit: a user may have edited afterward.
+    // Only an explicit pre-commit proof permits abandoning restoration ownership.
+    if (error instanceof PreferenceWriteNotCommittedError) {
+      const saved = await readPreferenceFile(recordPath);
+      if (saved.exists && saved.text === recordText) await rm(recordPath);
     }
+    throw error;
   }
   return {
-    configured: approved,
+    configured: true,
     skipped: plan.skipped,
-    notice: true,
+    applied: { sidebar, keys: plan.added.length > 0 },
     ...(plan.preset ? { preset: plan.preset } : {}),
   };
 }
@@ -417,8 +398,8 @@ function readyIn(plugins: z.infer<typeof catalogSchema>["plugins"]): boolean {
 }
 
 /**
- * Selecting Tern links its view package; one separate consent controls global preferences. The
- * whole sequence holds the setup lock, so concurrent starts link once and ask once.
+ * Selecting Tern links its view package and sets Tern's sidebar and shortcuts. The whole sequence
+ * holds the setup lock, so concurrent starts link and configure once.
  */
 export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<boolean> {
   const input = settingsInput(deps);
@@ -439,18 +420,18 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
 }
 
 function printConfigureNotices(deps: TernPluginDependencies, result: ConfigureResult): void {
-  if (!result.notice) return;
-  if (result.preset)
+  const { applied } = result;
+  if (applied === undefined) return;
+  if (applied.sidebar) deps.print?.("Tandem hid Tern's sidebar; the panel replaces it.\n");
+  if (applied.keys)
     deps.print?.(
-      `Tandem kept Tern's ${result.preset} keymap preset; Tandem shortcuts were not added.\n`,
+      "Tandem added Tern shortcuts: ⌘⇧B board, ⌘⇧P PRs, ⌘⇧U usage, ⌘⇧, settings, ⌘1–9 projects.\n",
     );
+  if (result.preset)
+    deps.print?.(`Tandem kept Tern's ${result.preset} keymap preset, so it added no shortcuts.\n`);
   if (result.skipped.length > 0)
     deps.print?.(
       `Tandem kept your custom Tern shortcuts: ${describeTernPluginKeys(result.skipped)}.\n`,
-    );
-  if (!result.configured)
-    deps.print?.(
-      `Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To be asked again, add terminal = "herdr" to Tandem's settings.toml, start Tandem once, then remove that line.\n`,
     );
 }
 
