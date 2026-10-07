@@ -3,16 +3,17 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ModelSpec } from "../../contracts.ts";
-import type {
-  AgentKind,
-  AgentProcess,
-  Harness,
-  LaunchIo,
-  LaunchSpec,
-  ModelRecord,
-  SavedConversation,
-  StartedAgent,
-  UnrecordedCoordinatorMatch,
+import {
+  type AgentKind,
+  type AgentProcess,
+  HARNESS_EXECUTABLES,
+  type Harness,
+  type LaunchIo,
+  type LaunchSpec,
+  type ModelRecord,
+  type SavedConversation,
+  type StartedAgent,
+  type UnrecordedCoordinatorMatch,
 } from "../contract.ts";
 import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER } from "./models.ts";
 import { sidecarSocketPath } from "./socket.ts";
@@ -333,7 +334,7 @@ const NESTED_SESSION_VARIABLES = [
 ] as const;
 
 export const claudeCodeHarness: Harness = {
-  executable: "claude",
+  executable: HARNESS_EXECUTABLES["claude-code"],
   displayName: "Claude Code",
   coordinatorFiles: [
     { name: "adapter plugin", path: ADAPTER_PLUGIN_PATH, kind: "directory" },

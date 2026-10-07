@@ -713,7 +713,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { setDrawer(false); $("#finish").close(); }
   if (e.key === "Escape" && $("#pop") && !$("#pop").hidden) return closePop();
   if (at < 0 || e.target.closest("textarea, input")) return;
-  if (e.key === "ArrowRight") { e.preventDefault(); at === TOUR.length - 1 ? endTour() : startTour(at + 1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); if (at === TOUR.length - 1) endTour(); else startTour(at + 1); }
   if (e.key === "ArrowLeft") { e.preventDefault(); startTour(Math.max(0, at - 1)); }
   if (e.key === "Escape") endTour();
 });

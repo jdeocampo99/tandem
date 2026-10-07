@@ -32,10 +32,19 @@ export function watchCloseKeys(input: NodeJS.ReadableStream): Readonly<{
     readonly setRawMode?: (raw: boolean) => unknown;
   };
   if (tty.isTTY !== true || typeof tty.setRawMode !== "function") {
-    return { closed: new Promise<void>(() => {}), release: () => {} };
+    return {
+      closed: new Promise<void>(() => {
+        // Without a TTY no close key can arrive, so this never settles.
+      }),
+      release: () => {
+        // Nothing was taken over.
+      },
+    };
   }
   const setRawMode = tty.setRawMode.bind(tty);
-  let release = (): void => {};
+  let release = (): void => {
+    // Replaced once the listener is installed.
+  };
   const closed = new Promise<void>((resolve) => {
     const onData = (chunk: Buffer | string): void => {
       if (!isCloseKey(chunk.toString())) return;
@@ -43,7 +52,9 @@ export function watchCloseKeys(input: NodeJS.ReadableStream): Readonly<{
       resolve();
     };
     release = () => {
-      release = () => {};
+      release = () => {
+        // Already released.
+      };
       input.off("data", onData);
       setRawMode(false);
       input.pause();

@@ -700,7 +700,9 @@ async function switchProject(act: Act, action: Extract<Action, { verb: "project"
       kind: "away",
       now: new Date().toISOString(),
       signature: model.changeSignature,
-    }).catch(() => {});
+    }).catch(() => {
+      // Best effort: the focus already happened; a lost visit only changes the next catch-up.
+    });
   const { warning } = await tryShowCatchUp(act.terminal, {
     home: act.environment.home,
     record: destination,

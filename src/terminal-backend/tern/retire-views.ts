@@ -49,7 +49,10 @@ export async function planCoordinatorViews(
   home: string | undefined,
   target: EndpointTarget,
 ): Promise<() => Promise<void>> {
-  if (target.endpoint.role !== "coordinator") return async () => {};
+  if (target.endpoint.role !== "coordinator")
+    return async () => {
+      // Only a coordinator owns views to retire.
+    };
   const listing = await commands.ls(target.cwd);
   if (listing.detached.length > 0)
     throw new EndpointOwnershipError(
@@ -61,7 +64,10 @@ export async function planCoordinatorViews(
       entry.block.program?.startsWith("tandem.") &&
       parseBlockArgs(entry.block.args)?.ctx.coordinator === target.endpoint.paneId,
   );
-  if (claims.length === 0) return async () => {};
+  if (claims.length === 0)
+    return async () => {
+      // No view claims this coordinator.
+    };
   if (home === undefined)
     throw new EndpointOwnershipError(target.endpoint, "view retirement requires its recorded home");
   const owner = await recordedCoordinator(home, target);

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/worker.ts",
+    "src/validation-worker.ts",
+    "src/harness/omp/extension.ts",
+    "src/harness/omp/worker-control.ts",
+    "src/harness/claude-code/sidecar.ts",
+    "src/harness/claude-code/plugins/*/hooks/register.ts",
+    "src/terminal-backend/tern/process-reader.ts",
+    "evals/*.ts",
+    "scripts/*.ts",
+    ".claude/skills/*/*.ts",
+    "tests/**/*.ts",
+    "src/**/tests/**/*.ts"
+  ],
+  "project": ["src/**/*.ts", "tests/**/*.ts", "evals/**/*.ts", "scripts/**/*.ts"],
+  "ignoreDependencies": ["claude-code"]
+}

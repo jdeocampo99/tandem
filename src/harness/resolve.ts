@@ -4,11 +4,10 @@ import { CLAUDE_CODE_MODELS } from "./claude-code/models.ts";
 import type { Harness, HarnessName, KnownHarness, ModelRecord } from "./contract.ts";
 import { ompHarness } from "./omp/launch.ts";
 
-// A function, not a module constant: omp/launch.ts imports this module back through
-// coordinator/record.ts, so the harnesses may not exist yet while this module loads.
-function harnesses(): Readonly<Record<KnownHarness, Harness>> {
-  return { omp: ompHarness, "claude-code": claudeCodeHarness };
-}
+const HARNESSES: Readonly<Record<KnownHarness, Harness>> = {
+  omp: ompHarness,
+  "claude-code": claudeCodeHarness,
+};
 
 /**
  * The one place a harness name, recorded or derived from a model with `harnessOf`, becomes the
@@ -16,12 +15,12 @@ function harnesses(): Readonly<Record<KnownHarness, Harness>> {
  */
 export function harnessFor(name: HarnessName): Harness {
   const known: KnownHarness = name;
-  return harnesses()[known];
+  return HARNESSES[known];
 }
 
 /** Every harness a coordinator may run in, for recognizing one Tandem launched without a record. */
 export function coordinatorHarnesses(): readonly Harness[] {
-  return Object.values(harnesses());
+  return Object.values(HARNESSES);
 }
 
 /**

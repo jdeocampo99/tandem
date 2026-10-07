@@ -1,0 +1,11 @@
+language js
+
+or {
+  `Date.now()`,
+  `new Date()`,
+  `Math.random()`,
+  `crypto.randomUUID()`,
+  `randomUUID()`
+} as $call where {
+  register_diagnostic(span=$call, message="[tandem/hidden-clock] Hidden clock or randomness: inject a clock or id source.", severity="error")
+}
