@@ -1,7 +1,7 @@
 import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { SETUP_MODES, SETUP_SECTIONS, type SetupMode } from "../onboarding/setup-view.ts";
-import { SPECIALIST_ORIGINS } from "../specialists/specialist.ts";
+import { SPECIALIST_NAME_PATTERN, SPECIALIST_ORIGINS } from "../specialists/specialist.ts";
 
 /** Every native block Tandem defines, as `tandem.<kind>` programs. */
 export const VIEW_KINDS = [
@@ -551,6 +551,7 @@ const SetupModel = z.object({
   selfImprovement: z.enum(["off", "fix", "report"]),
   section: opt(z.enum(SETUP_SECTIONS)),
   specialists: opt(SetupSpecialistsModel),
+  chatDraft: opt(z.object({ request: str, name: str, fields: SpecialistFieldsModel })),
 });
 
 /** The model schema of each view file kind. The index feeds every screen without a detail file. */
@@ -718,6 +719,15 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("merged-link"), url: z.string().url() }).strict(),
   /** The setup block's answer: parsed by `parseSetupAnswer`, so its shape lives in one place. */
   z.object({ verb: z.literal("setup-save"), answer: z.record(z.string(), z.unknown()) }).strict(),
+  /** Starts the task that proposes one saved Just-me specialist, as Settings showed it, to a team. */
+  z
+    .object({
+      verb: z.literal("specialist-share"),
+      name: z.string().regex(SPECIALIST_NAME_PATTERN),
+      revision: z.string().regex(/^[0-9a-f]{64}$/u),
+      repoPath: AbsolutePath,
+    })
+    .strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -741,6 +751,7 @@ export const NOTICE_CODES = [
   "review-unconfirmed",
   "feedback-saved",
   "setup-incomplete",
+  "specialist-shared",
 ] as const;
 export const NoticeCode = z.enum(NOTICE_CODES);
 export type NoticeCode = z.infer<typeof NoticeCode>;

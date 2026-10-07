@@ -16,13 +16,13 @@ type Role = {
 type ModelInfo = {selector: string, harness: string, name: string, provider: string, thinking: {string}, priceLevel: string?}
 type Harness = {id: string, name: string, unavailable: string?}
 type RepoInfo = {
- name: string, path: string, shownPath: string, setUp: boolean, validationCommands: {string},
+ name: string, path: string, shownPath: string, repo: string?, setUp: boolean, validationCommands: {string},
  setupCommands: {string}, suggestions: {string}, detectedFrom: string?, inspectionError: string?,
 }
 type View = {
  mode: string, models: {ModelInfo}, harnesses: {Harness}, roles: {Role},
  thinkingLevels: {{level: string, note: string}}, repos: {RepoInfo}, candidates: {RepoInfo}, selfImprovement: string,
- section: string?, specialists: specialists.Model?,
+ section: string?, specialists: specialists.Model?, chatDraft: specialists.ChatDraft?,
 }
 
 type Repo = {
@@ -30,13 +30,15 @@ type Repo = {
  validation: {fields.Field}, setup: {fields.Field}, suggestions: {string},
 }
 type Draft = {mode: string, models: {[string]: Choice}, repos: {Repo}, selfImprovement: string, specialists: specialists.Edits}
--- `pick` and `nextId` belong to the Specialists tab; `settled` is the seq of the last file whose
--- specialists were compared with the draft.
+-- `pick`, `nextId`, `banner` and `sharing` belong to the Specialists tab; `settled` and `adopted`
+-- are the seqs of the last file whose specialists were compared with the draft and whose chat
+-- draft was taken.
 type State = {
  file: rt.Watch, origin: rt.Origin, draft: Draft?, saved: Draft?, savedSignature: string,
  step: string, open: string?, modelSearch: fields.Field, repoSearch: fields.Field, selected: number, adding: boolean,
  active: string, fields: {[string]: fields.Field}, order: {string}, done: boolean, notice: string?,
- jumped: number, pick: string?, nextId: number, settled: number,
+ jumped: number, pick: string?, nextId: number, settled: number, adopted: number,
+ banner: {request: string, pick: string}?, sharing: {name: string, revision: string, repo: number?}?,
 }
 
 local SELF = {
@@ -236,7 +238,8 @@ end
 local SECTION_STEPS: {[string]: string} = {models = "models", repositories = "repos", specialists = "specialists", ["bug-reports"] = "self"}
 
 -- Drops the specialist edits a newer file shows saved, from the draft and from what was last sent,
--- and moves the selection from a new specialist that was saved onto its row.
+-- and moves the selection from a new specialist that was saved onto its row. A chat draft's
+-- banner goes once its draft is saved.
 local function settle(state: State, model: View)
  local section = model.specialists
  local draft, saved = state.draft, state.saved
@@ -245,6 +248,8 @@ local function settle(state: State, model: View)
  local digits = if state.pick then string.match(state.pick, "^new:(%d+)$") else nil
  local name = if digits then named[tonumber(digits) :: number] else nil
  if name then state.pick = "home:" .. name end
+ local chat = state.banner
+ if chat and not specialists.unsaved(section, draft.specialists, chat.pick) then state.banner = nil end
  specialists.settle(section, saved.specialists)
  state.savedSignature = signature(model, saved)
 end
@@ -263,6 +268,12 @@ local function sync(state: State)
  local step = if model.mode == "settings" and model.section then SECTION_STEPS[model.section] else nil
  if step and state.jumped ~= state.file.seq then setStep(state, step) end
  state.jumped = state.file.seq
+ -- Like a section jump, a chat draft is taken once per file and keeps every other unsaved edit.
+ local chat, section, draft = model.chatDraft, model.specialists, state.draft
+ if chat and section and draft and state.adopted ~= state.file.seq then
+  specialists.adopt(state, section, draft.specialists, chat)
+ end
+ state.adopted = state.file.seq
 end
 
 local function clearField(field: fields.Field)
@@ -293,6 +304,19 @@ local function send(state: State, model: View, draft: Draft, cx: BlockCx)
   end
   pcall(function() cx:render() end)
  end, rt.SETUP)
+end
+
+-- Starts the share task for the open sheet. A refusal (for example, the file changed on disk)
+-- keeps the sheet open with its toast.
+local function share(state: State, model: View, cx: BlockCx)
+ local sharing = state.sharing
+ local repo = if sharing and sharing.repo then model.repos[sharing.repo] else nil
+ if state.origin.busy or sharing == nil or repo == nil then return end
+ local action = {verb = "specialist-share", name = sharing.name, revision = sharing.revision, repoPath = repo.path}
+ rt.act(cx, state.origin, action, function(outcome)
+  if outcome ~= nil and outcome.status == "done" and state.sharing == sharing then state.sharing = nil end
+  pcall(function() cx:render() end)
+ end, rt.SHARE)
 end
 
 local function leaf(class: string, text: string, action: string?): Node
@@ -606,7 +630,7 @@ local function body(state: State, model: View, draft: Draft, id: string): Node
  if id == "repos" then return reposPane(state, model, draft) end
  if id == "specialists" then
   local section = model.specialists
-  if section then return specialists.pane(state, section, draft.specialists) end
+  if section then return specialists.pane(state, section, draft.specialists, model.repos) end
   return leaf("setup-muted", "Specialists are shown in Settings.")
  end
  return selfCard(draft)
@@ -673,7 +697,16 @@ local function settingsView(state: State, model: View, draft: Draft, reason: str
  if state.notice then table.insert(children, leaf("setup-warn", state.notice)) end
  table.insert(children, body(state, model, draft, state.step))
  local dirty = signature(model, draft) ~= state.savedSignature
- local actions: {Node} = {leaf("setup-muted", if dirty then "Unsaved changes" else "All changes saved"), spacer()}
+ local actions: {Node} = {leaf("setup-muted", if dirty then "Unsaved changes" else "All changes saved")}
+ local section = model.specialists
+ local offer = if section and state.step == "specialists" and state.sharing == nil then specialists.shareable(section, draft.specialists, state.pick) else nil
+ if offer == "ready" then
+  table.insert(actions, components.button("Share with team…", "sp-share"))
+ elseif offer == "save first" then
+  table.insert(actions, disabled("Share with team…"))
+  table.insert(actions, leaf("setup-muted", "Save first"))
+ end
+ table.insert(actions, spacer())
  if dirty then
   if reason then table.insert(actions, leaf("setup-warn setup-note", reason)) end
   table.insert(actions, components.button("Discard", "discard"))
@@ -741,7 +774,7 @@ local block: BlockDef<State> = {
   local state: State = {
    file = rt.watch(cx, args[1] or "", "setup"), origin = rt.origin(args), savedSignature = "",
    step = "summary", modelSearch = fields.create(), repoSearch = fields.create(), selected = 1, adding = false,
-   active = "", fields = {}, order = {}, done = false, jumped = 0, nextId = 1, settled = 0,
+   active = "", fields = {}, order = {}, done = false, jumped = 0, nextId = 1, settled = 0, adopted = 0,
   }
   sync(state)
   return state
@@ -795,6 +828,11 @@ local block: BlockDef<State> = {
     return true
    end
    return false
+  end
+  if key.name == "escape" and state.sharing then
+   state.sharing = nil
+   reflow(state)
+   return true
   end
   if key.name == "enter" and draft.mode == "setup" and state.step == "summary" and state.file.status == "ready" and not state.origin.busy and blocker(model, draft) == nil then
    send(state, model, draft, cx)
@@ -850,8 +888,9 @@ local block: BlockDef<State> = {
    reflow(state)
   elseif name == "cmd-add" or name == "rm" or name == "suggest" then editCommands(state, draft, cx, name, value)
   elseif name == "self" then draft.selfImprovement = value
+  elseif name == "sp-share-go" then share(state, model, cx)
   elseif (name == "sp" or string.sub(name, 1, 3) == "sp-") and model.specialists then
-   specialists.event(state, model.specialists, draft.specialists, name, value, cx)
+   specialists.event(state, model.specialists, draft.specialists, model.repos, name, value, cx)
   elseif name == "discard" then
    local saved = state.saved
    if saved then state.draft = copyDraft(saved) end

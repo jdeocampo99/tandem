@@ -58,6 +58,19 @@ export type SetupView = Readonly<{
   section?: SetupSection;
   /** Settings only: every specialist the project's new tasks could use, and the Just-me files. */
   specialists?: SetupSpecialists;
+  /**
+   * Settings only, set by the publication `draft-specialist` makes; the block adopts it once per
+   * newer file as an unsaved specialist. Every other publication leaves it out.
+   */
+  chatDraft?: SpecialistChatDraft;
+}>;
+
+/** A specialist the coordinator drafted from the user's words, shown unsaved in Settings. */
+export type SpecialistChatDraft = Readonly<{
+  /** The user's words, quoted in the banner. */
+  request: string;
+  name: string;
+  fields: SpecialistFields;
 }>;
 
 /** One harness's group in the model pickers; `unavailable` says why it offers no models. */

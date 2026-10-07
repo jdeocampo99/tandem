@@ -102,6 +102,21 @@ export const tandemRequestSchema = z.strictObject({
     z.strictObject({ action: z.literal("models"), repoPath: z.string() }),
     z.strictObject({ action: z.literal("specialists"), repoPath: z.string() }),
     z.strictObject({
+      action: z.literal("draft-specialist"),
+      repoPath: z.string(),
+      request: z.string().max(500).describe("The user's words asking for this specialist."),
+      name: z
+        .string()
+        .describe("The file name: lowercase letters, digits, and hyphens, at most 40."),
+      label: z.string().describe("A short title shown in chat and on the board."),
+      description: z
+        .string()
+        .optional()
+        .describe("When Tandem should pick it. Leave out to use it only when named."),
+      instructions: z.string().describe("What the implementer should know and do, in Markdown."),
+      steps: z.array(z.string()).describe("Ordered one-line steps; may be empty."),
+    }),
+    z.strictObject({
       action: z.literal("configure-models"),
       repoPath: z.string(),
       models: modelAssignmentsSchema,

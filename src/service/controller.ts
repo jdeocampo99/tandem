@@ -62,6 +62,7 @@ import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { openProject } from "../coordinator/open-project.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../coordinator/registry.ts";
+import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import { describeTaskPr, type PrSummary } from "../delivery/evidence.ts";
 import { type DeliveryPreflightResult, deliveryPreflight } from "../delivery/preflight.ts";
 import {
@@ -77,10 +78,18 @@ import type { HarnessName, ModelRecord } from "../harness/contract.ts";
 import { catalogueHarness, harnessFor, runnableModels } from "../harness/resolve.ts";
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
-import type { OnboardingFacts } from "../onboarding/checklist.ts";
+import { publishViews } from "../native/store.ts";
+import { type OnboardingFacts, remainingOnboardingSteps } from "../onboarding/checklist.ts";
 import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
-import type { SetupMode, SetupView } from "../onboarding/setup-view.ts";
-import { type SetupApplyResult, SetupWorkflow } from "../onboarding/setup-workflow.ts";
+import type { SetupMode, SetupView, SpecialistChatDraft } from "../onboarding/setup-view.ts";
+import {
+  type SetupApplyResult,
+  type SetupFocus,
+  SetupWorkflow,
+  type SpecialistDraftPreview,
+  type SpecialistDraftResult,
+  type SpecialistShare,
+} from "../onboarding/setup-workflow.ts";
 import { checkTools, type ToolCheck } from "../onboarding/tools.ts";
 import { maintainPool } from "../pool/maintenance.ts";
 import type { PoolMaintenanceResult } from "../pool/policy.ts";
@@ -364,13 +373,27 @@ export type TandemService = Readonly<{
   readonly checkTools: () => Promise<readonly ToolCheck[]>;
   /** What first-time setup still needs, for the Tandem coordinator at `repoPath`. */
   readonly onboardingFacts: (repoPath: string) => Promise<OnboardingFacts>;
-  /** What the setup block shows for the Tandem coordinator at `repoPath`. */
-  readonly setupView: (repoPath: string, mode: SetupMode) => Promise<SetupView>;
+  /** What the setup block shows for the coordinator at `repoPath`; Settings may open at `focus`. */
+  readonly setupView: (repoPath: string, mode: SetupMode, focus?: SetupFocus) => Promise<SetupView>;
   /** Parses, revalidates, and saves a setup answer; reports its complete or partial result. */
   readonly saveSetup: (repoPath: string, answerText: string) => Promise<SetupApplyResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   /** Every specialist a new implementation task in this project could use, and any file problems. */
   readonly specialists: (repoPath: string) => Promise<SpecialistRegistry>;
+  /** Where `draft-specialist` puts a draft: Tern's Settings, or a file after the user approves. */
+  readonly specialistDraftSurface: "settings" | "file";
+  /** The file a chat draft would become, for the approval dialog; refuses a name Just me has. */
+  readonly previewSpecialistDraft: (
+    repoPath: string,
+    draft: SpecialistChatDraft,
+  ) => Promise<SpecialistDraftPreview>;
+  /** Opens Settings with the draft unsaved on Tern; elsewhere creates the approved file. */
+  readonly draftSpecialist: (
+    repoPath: string,
+    draft: SpecialistChatDraft,
+  ) => Promise<SpecialistDraftResult>;
+  /** Starts the task that adds one Just-me specialist to a repository; it waits for approval. */
+  readonly shareSpecialist: (repoPath: string, share: SpecialistShare) => Promise<TaskRecord>;
   /** Opens a saved project's coordinator in this Herdr session; refuses one not yet set up. */
   readonly openProject: (
     repoPath: string,
@@ -728,6 +751,36 @@ class TandemController {
       openProject: (path) => this.openProject(path),
       specialists: (repoPath) => this.specialists(repoPath),
       changeSpecialist: (change) => changeHomeSpecialist(deps.home, change),
+      createTask: (input) => this.createTask(input, false),
+      settingsRefusal: async (repoPath) =>
+        (await isTandemCheckout(repoPath)) &&
+        remainingOnboardingSteps(await this.onboardingFacts(repoPath)).length > 0
+          ? "Finish setting up Tandem first. Settings open once setup is saved."
+          : undefined,
+      ...(deps.terminal.views === undefined
+        ? {}
+        : {
+            openSettings: async (repoPath: string, view: SetupView) => {
+              const views = deps.terminal.views;
+              const owned = await findRunningCoordinator(deps.run, deps.terminal, {
+                home: deps.home,
+                sessionId: deps.sessionId,
+                repoPath,
+              });
+              if (views === undefined || owned === undefined)
+                throw new Error("Open this project's Tern coordinator before opening Settings");
+              await publishViews(deps.home, owned.repoPath, async () => ({ setup: view }));
+              const result = await views.open({
+                coordinator: owned.endpoint,
+                cwd: owned.worktree.path,
+                home: deps.home,
+                view: { kind: "setup", mode: "settings" },
+                origin: { paneId: owned.endpoint.paneId, cwd: owned.worktree.path },
+              });
+              if (!result.opened)
+                throw new Error(result.warnings.join("; ") || "Settings did not open");
+            },
+          }),
     });
     this.#prWatch = new PrWatcher({
       home: deps.home,
@@ -980,7 +1033,7 @@ class TandemController {
           sessionId: this.#deps.sessionId,
         }),
       onboardingFacts: (repoPath) => this.onboardingFacts(repoPath),
-      setupView: (repoPath, mode) => this.#setup.view(repoPath, mode),
+      setupView: (repoPath, mode, focus) => this.#setup.view(repoPath, mode, focus),
       saveSetup: (repoPath, answerText) => this.saveSetup(repoPath, answerText),
       inspect: (id) => this.inspect(id),
       trace: (id) => this.trace(id),
@@ -989,6 +1042,11 @@ class TandemController {
       deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
       specialists: (repoPath) => this.specialists(repoPath),
+      specialistDraftSurface: this.#setup.draftSurface,
+      previewSpecialistDraft: (repoPath, draft) =>
+        this.#setup.previewSpecialistDraft(repoPath, draft),
+      draftSpecialist: (repoPath, draft) => this.#setup.draftSpecialist(repoPath, draft),
+      shareSpecialist: (repoPath, share) => this.#setup.shareSpecialist(repoPath, share),
       openProject: (repoPath) => this.openProject(repoPath),
       configureModels: (input) => this.configureModels(input),
       create: (input) => this.create(input),
@@ -1392,13 +1450,25 @@ class TandemController {
   }
 
   async create(input: CreateTaskRequest | PrReviewTaskRequest): Promise<TaskRecord> {
+    return this.createTask(input, true);
+  }
+
+  /**
+   * `joinOpenRequest` false is the internal path behind sharing a specialist: that task is the
+   * user's own click, so it must neither join an unrelated request (inheriting its skipped review)
+   * nor fail because several are open. The coordinator's create never reaches it.
+   */
+  private async createTask(
+    input: CreateTaskRequest | PrReviewTaskRequest,
+    joinOpenRequest: boolean,
+  ): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
     // Implementation work the coordinator did not attribute joins the repository's one open
     // approved request, so its time and tokens land on that request's receipt.
     const requestId =
       input.requestId ??
-      (input.kind === "implementation"
+      (input.kind === "implementation" && joinOpenRequest
         ? await this.#requests.openRequestForNewWork(input.repoPath, await this.#deps.store.list())
         : undefined);
     const brief =

@@ -5,6 +5,7 @@ import type { MergingChoice } from "../config/repositories.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";
+import type { SpecialistChatDraft } from "../onboarding/setup-view.ts";
 import type { CommentEdit, NewComment } from "../pr-review/edits.ts";
 import type { ReviewVerdict } from "../pr-review/post.ts";
 import type { ReviewLens } from "../pr-review/review.ts";
@@ -39,6 +40,18 @@ export type TandemAction =
     }>
   | Readonly<{ readonly action: "models"; readonly repoPath: string }>
   | Readonly<{ readonly action: "specialists"; readonly repoPath: string }>
+  | Readonly<{
+      readonly action: "draft-specialist";
+      readonly repoPath: string;
+      /** The user's words asking for it, quoted where the draft is reviewed. */
+      readonly request: string;
+      readonly name: string;
+      readonly label: string;
+      /** When Tandem should pick it; absent means only when named. */
+      readonly description?: string | undefined;
+      readonly instructions: string;
+      readonly steps: readonly string[];
+    }>
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
   | Readonly<{ readonly action: "open-project"; readonly repoPath: string }>
   | Readonly<{ readonly action: "find-repo"; readonly name: string }>
@@ -307,8 +320,13 @@ async function onboardingDetails(repoPath: string, service: TandemService) {
   };
 }
 
-function requiresHumanApproval(action: TandemAction): boolean {
+/**
+ * A chat draft opened in Tern's Settings writes nothing, so it needs no dialog; anywhere else it
+ * writes a file, so it asks. An unknown surface asks.
+ */
+function requiresHumanApproval(action: TandemAction, service: TandemService): boolean {
   if (action.action === "cleanup") return action.discard === true;
+  if (action.action === "draft-specialist") return service.specialistDraftSurface !== "settings";
   return (
     action.action === "setup" ||
     action.action === "open-project" ||
@@ -336,6 +354,17 @@ async function approvalPrompt(
   action: TandemAction,
   service: TandemService,
 ): Promise<Readonly<{ readonly title: string; readonly message: string }>> {
+  if (action.action === "draft-specialist") {
+    // Refuses an invalid draft or a name Just me already has before anyone is asked.
+    const preview = await service.previewSpecialistDraft(action.repoPath, specialistDraft(action));
+    const team = preview.hiddenByTeam
+      ? `\n\nYour team's ${action.name} in ${projectName(action.repoPath)} replaces it there.`
+      : "";
+    return {
+      title: `Save the specialist "${action.label}" to Just me?`,
+      message: `${preview.path}\n\n${preview.text}${team}`,
+    };
+  }
   if (action.action === "configure-models") {
     const choices = summarizeModelAssignments(action.models);
     const providers =
@@ -516,7 +545,7 @@ async function confirmAction(
   confirm: ApprovalDialog | undefined,
   confirmedInConversation: boolean,
 ): Promise<boolean> {
-  if (!requiresHumanApproval(action) || confirmedInConversation) return true;
+  if (!requiresHumanApproval(action, service) || confirmedInConversation) return true;
   if (confirm === undefined) return false;
   const prompt = await approvalPrompt(action, service);
   return confirm(prompt.title, prompt.message);
@@ -546,6 +575,21 @@ function serviceCreateInput(
       ? {}
       : { validationCommands: action.validationCommands }),
     ...(action.workstream === undefined ? {} : { workstream: action.workstream }),
+  };
+}
+
+function specialistDraft(
+  action: Extract<TandemAction, { readonly action: "draft-specialist" }>,
+): SpecialistChatDraft {
+  return {
+    request: action.request,
+    name: action.name,
+    fields: {
+      label: action.label,
+      ...(action.description === undefined ? {} : { description: action.description }),
+      instructions: action.instructions,
+      steps: action.steps,
+    },
   };
 }
 
@@ -594,6 +638,21 @@ const TANDEM_ACTION_HANDLERS: TandemActionHandlers = {
   "check-tools": async (action, service) => actionResult(await service.checkTools(), action.action),
   models: async (action, service) =>
     actionResult(await service.models(action.repoPath), action.action),
+  "draft-specialist": async (action, service) => {
+    const result = await service.draftSpecialist(action.repoPath, specialistDraft(action));
+    if (result.surface === "file") {
+      return actionResult(
+        `Saved ${result.path}. New implementation tasks can use it.`,
+        action.action,
+        { approved: true },
+      );
+    }
+    const replaces = result.replaces ? ` Saving replaces your current ${action.name}.` : "";
+    return actionResult(
+      `Opened Settings › Specialists with ${action.name} as an unsaved draft. Nothing is saved until the user presses Save changes there.${replaces}`,
+      action.action,
+    );
+  },
   "configure-models": async (action, service) =>
     actionResult(
       await service.configureModels({

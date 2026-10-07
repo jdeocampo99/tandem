@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NativeViewsPublication } from "../../src/board/native-views.ts";
-import { blockArgs, setupFile, ViewFile } from "../../src/native/contract.ts";
+import { ActionEnvelope, blockArgs, setupFile, ViewFile } from "../../src/native/contract.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
 import { parseSetupAnswer } from "../../src/onboarding/setup-answer.ts";
-import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
+import { SETUP_MODES, type SetupMode, type SetupView } from "../../src/onboarding/setup-view.ts";
 import { BUILT_IN_SPECIALISTS } from "../../src/specialists/built-in.ts";
 import { specialistFields, specialistMarkdown } from "../../src/specialists/specialist.ts";
 import { luauBinary } from "../luau.ts";
@@ -24,7 +24,6 @@ type Drawn = Readonly<{
   title?: string;
   tree?: Record<string, Node>;
   error?: string;
-  /** What the block sent to `tandem native act` in this step. */
   sent?: readonly string[];
 }>;
 type Case = Readonly<{
@@ -338,7 +337,6 @@ function enabled(drawn: Drawn, label: string, action: string): boolean {
   return ["main", "dock"].some((slot) => find(drawn.tree?.[slot]));
 }
 
-/** The setup answer the block sent with Save. */
 function sentAnswer(drawn: Drawn | undefined): unknown {
   const [stdin] = drawn?.sent ?? [];
   const envelope = JSON.parse(stdin ?? "null") as { action: { verb: string; answer: unknown } };
@@ -346,8 +344,11 @@ function sentAnswer(drawn: Drawn | undefined): unknown {
   return envelope.action.answer;
 }
 
-async function settingsFile(): Promise<Readonly<{ path: string; text: string }>> {
-  await publishViews(home, project, async () => ({ setup: setupViewFixture("settings") }));
+async function settingsFile(
+  change: Partial<SetupView> = {},
+): Promise<Readonly<{ path: string; text: string }>> {
+  const setup = { ...setupViewFixture("settings"), ...change };
+  await publishViews(home, project, async () => ({ setup }));
   const path = viewDetailPath(home, project, setupFile("settings"));
   return { path, text: await readFile(path, "utf8") };
 }
@@ -498,4 +499,94 @@ test("Settings › Specialists edits, removes and customizes in one answer, and 
   expect(after).not.toContain("Not saved yet");
   expect(after).toContain("locked");
   expect(after).toContain("Unsaved changes");
+});
+
+const CHAT = {
+  request: "make me a specialist that writes release notes from merged PRs",
+  fields: {
+    label: "Weekly notes",
+    instructions: "Group merged PRs by area.",
+    steps: ["Collect PRs"],
+  },
+};
+
+test("a chat draft opens unsaved with the request quoted, as a new specialist or an edit of yours", async () => {
+  const created = await settingsFile({
+    section: "specialists",
+    chatDraft: { ...CHAT, name: "weekly-notes" },
+  });
+  const edited = await settingsFile({
+    section: "specialists",
+    chatDraft: { ...CHAT, name: "release-notes" },
+  });
+  const [fresh = [], replacing = []] = await render([
+    {
+      block: "setup",
+      args: args(created.path),
+      steps: [{ [created.path]: created.text }, { "@act": "send" }],
+    },
+    {
+      block: "setup",
+      args: args(edited.path),
+      steps: [{ [edited.path]: edited.text }, { "@act": "send" }],
+    },
+  ]);
+  for (const [steps, change] of [
+    [fresh, { op: "create", name: "weekly-notes", fields: CHAT.fields }],
+    [
+      replacing,
+      { op: "update", name: "release-notes", revision: "a".repeat(64), fields: CHAT.fields },
+    ],
+  ] as const) {
+    const shown = strings(steps[0] ?? {});
+    expect(shown).toContain("Drafted from chat. Review and save.");
+    expect(shown).toContain(`“${CHAT.request}”`);
+    expect(shown).toContain("Unsaved changes");
+    const parsed = parseSetupAnswer(JSON.stringify(sentAnswer(steps[1])));
+    if (!parsed.ok) throw new Error(parsed.problems.join(" "));
+    expect(parsed.answer.specialists).toEqual([change]);
+  }
+  expect(strings(fresh[0] ?? {})).toContain("Not saved yet");
+});
+
+test("Share with team waits for a saved specialist and sends the revision the user saw", async () => {
+  const fixture = setupViewFixture("settings");
+  const { path, text: file } = await settingsFile({
+    repos: fixture.repos.map((repo, index) =>
+      index === 0 ? { ...repo, repo: "acme/tandem" } : repo,
+    ),
+  });
+  const [steps = []] = await render([
+    {
+      block: "setup",
+      args: args(path),
+      steps: [
+        { [path]: file },
+        { "@act": "go=specialists" },
+        { "@act": "sp=home:release-notes" },
+        { "@focus": "sp-label", "@type": "!" },
+        { "@act": "discard" },
+        { "@act": "sp-share" },
+        { "@act": "sp-share-go" },
+      ],
+    },
+  ]);
+  expect(enabled(steps[2] ?? {}, "Share with team…", "sp-share")).toBe(true);
+  expect(strings(steps[3] ?? {})).toContain("Save first");
+  expect(enabled(steps[3] ?? {}, "Share with team…", "sp-share")).toBe(false);
+  const sheet = strings(steps[5] ?? {});
+  expect(sheet).toContain("Share Release notes with your team");
+  expect(sheet).toContain(
+    "Tandem will start a task that adds .tandem/specialists/release-notes.md in a pull request. Your team reviews it; it goes live once merged. Until then your Just-me copy keeps working.",
+  );
+  expect(enabled(steps[5] ?? {}, "Start task", "sp-share-go")).toBe(true);
+  const [stdin] = steps[6]?.sent ?? [];
+  const repoPath = fixture.repos[0]?.path;
+  if (repoPath === undefined) throw new Error("the settings fixture has no repository");
+  expect(ActionEnvelope.parse(JSON.parse(stdin ?? "null")).action).toEqual({
+    verb: "specialist-share",
+    name: "release-notes",
+    revision: "a".repeat(64),
+    repoPath,
+  });
 });

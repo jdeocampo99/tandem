@@ -26,8 +26,17 @@ export type Problem = {field: string, text: string}
 -- `taken` maps a name a new specialist may not use to why.
 export type Ctx = {limits: Limits, creating: boolean, taken: {[string]: string}}
 
--- The part of setup.luau's State this tab reads and writes.
-export type Session = {pick: string?, nextId: number, active: string, fields: {[string]: fields.Field}, order: {string}}
+-- What the coordinator drafted from the user's words; the block takes it once per newer file.
+export type ChatDraft = {request: string, name: string, fields: Content}
+-- A registered repository a specialist can be shared to; `repo` is its GitHub `owner/repo`.
+export type ShareRepo = {name: string, path: string, shownPath: string, repo: string?}
+
+-- The part of setup.luau's State this tab reads and writes. `banner` quotes the request a chat
+-- draft came from while that draft is selected; `sharing` is the open Share with team sheet.
+export type Session = {
+ pick: string?, nextId: number, active: string, fields: {[string]: fields.Field}, order: {string},
+ banner: {request: string, pick: string}?, sharing: {name: string, revision: string, repo: number?}?,
+}
 
 local M = {}
 
@@ -153,7 +162,6 @@ local function findCreate(edits: Edits, id: number): Form?
  return nil
 end
 
--- A row's content when it is something to edit or compare: a ready row.
 local function contentOfRow(row: Row?): Content?
  if row == nil or row.state ~= "ready" or row.fields == nil then return nil end
  return normal(row.fields :: Content)
@@ -346,6 +354,24 @@ function M.keep(model: Model?, edits: Edits, pick: string?): string?
  return if findRow(model, pick) then pick else nil
 end
 
+-- Whether `pick` is a new specialist or a saved one with edits Save would send.
+function M.unsaved(model: Model, edits: Edits, pick: string): boolean
+ local id = createId(pick)
+ if id then return findCreate(edits, id) ~= nil end
+ local row = findRow(model, pick)
+ if row == nil or row.origin ~= "home" then return false end
+ local form = edits.forms[row.name]
+ return edits.removes[row.name] ~= nil or (form ~= nil and changed(model, row.name, form))
+end
+
+-- What Share with team offers for the selection: a saved, readable Just-me specialist can be
+-- shared ("ready") once it has nothing unsaved ("save first"); anything else offers nothing.
+function M.shareable(model: Model, edits: Edits, pick: string?): (string?, Row?)
+ local row = if pick then findRow(model, pick) else nil
+ if row == nil or row.origin ~= "home" or row.state ~= "ready" or row.revision == nil then return nil, nil end
+ return (if M.unsaved(model, edits, pick :: string) then "save first" else "ready"), row
+end
+
 -- The form a selection edits: a create, or a saved Just-me row's, made on first use.
 local function formFor(model: Model, edits: Edits, pick: string): (Form?, Row?)
  local id = createId(pick)
@@ -501,7 +527,37 @@ local function formBody(state: Session, model: Model, edits: Edits, form: Form):
  }
 end
 
-local function formPane(state: Session, model: Model, edits: Edits, form: Form, row: Row?): {Node}
+local function sheet(state: Session, row: Row, repos: {ShareRepo}): Node
+ local sharing = state.sharing :: {name: string, revision: string, repo: number?}
+ local options: {Node} = {}
+ for index, repo in repos do
+  local on = sharing.repo == index
+  local action = if repo.repo then "sp-share-repo=" .. index else nil
+  local class = if on then "setup-option setup-option-on" elseif action then "setup-option" else "setup-option setup-dim"
+  table.insert(options, box(class, {
+   ui.el("span", {class = if on then "setup-radio setup-radio-on" else "setup-radio", actions = if action then {click = action} else nil}),
+   box("setup-option-text", {leaf("setup-strong", repo.name, action), leaf("setup-muted", repo.repo or "No GitHub remote", action)}),
+  }, "share-" .. index, action))
+ end
+ if #repos == 0 then table.insert(options, leaf("setup-muted", "Add a repository in Repositories first.")) end
+ local start = if sharing.repo then components.button("Start task", "sp-share-go", "accent") else ui.node("badge", {text = "Start task", tone = "muted"})
+ return box("setup-sheet", {
+  leaf("setup-card-title", "Share " .. (if row.fields then row.fields.label else row.name) .. " with your team"),
+  leaf("setup-sheet-copy", "Tandem will start a task that adds .tandem/specialists/" .. row.name .. ".md in a pull request. Your team reviews it; it goes live once merged. Until then your Just-me copy keeps working."),
+  leaf("setup-label", "Repository"),
+  box("setup-sheet-repos", options),
+  box("setup-sheet-actions", {components.button("Cancel", "sp-share-cancel"), start}),
+ })
+end
+
+local function banner(request: string): Node
+ return box("setup-banner", {
+  leaf("setup-tag", "Chat"),
+  box("setup-banner-text", {leaf("setup-strong", "Drafted from chat. Review and save."), leaf("setup-quote", "“" .. request .. "”")}),
+ })
+end
+
+local function formPane(state: Session, model: Model, edits: Edits, repos: {ShareRepo}, form: Form, row: Row?): {Node}
  local marked = row ~= nil and edits.removes[row.name] ~= nil
  local name = trim(form.name.text)
  local title = trim(form.label.text)
@@ -512,6 +568,13 @@ local function formPane(state: Session, model: Model, edits: Edits, form: Form, 
   table.insert(actions, if marked then leaf("setup-link", "Keep", "sp-keep") else leaf("setup-remove", "Remove", "sp-remove"))
  end
  local body: {Node} = {head(title, tags, model.homeFolder .. "/" .. (if name == "" then "<name>" else name) .. ".md", actions)}
+ local sharing = state.sharing
+ if row and sharing and sharing.name == row.name then
+  table.insert(body, sheet(state, row, repos))
+  return body
+ end
+ local chat = state.banner
+ if chat and chat.pick == state.pick then table.insert(body, banner(chat.request)) end
  local content = contentOfRow(row)
  if marked and content then
   table.insert(body, leaf("setup-warn setup-notice", "Will be removed when you save."))
@@ -599,7 +662,7 @@ local function list(state: Session, model: Model, edits: Edits): Node
  return box("setup-split-list setup-spec-list", items)
 end
 
-function M.pane(state: Session, model: Model, edits: Edits): Node
+function M.pane(state: Session, model: Model, edits: Edits, repos: {ShareRepo}): Node
  local pick = M.keep(model, edits, state.pick)
  state.pick = pick
  local body: {Node}
@@ -607,7 +670,7 @@ function M.pane(state: Session, model: Model, edits: Edits): Node
   body = overview(model)
  else
   local form, row = formFor(model, edits, pick)
-  if form then body = formPane(state, model, edits, form, row)
+  if form then body = formPane(state, model, edits, repos, form, row)
   elseif row then body = rowPane(model, edits, row)
   else body = overview(model) end
  end
@@ -640,19 +703,78 @@ local function moveStep(form: Form, from: number, to: number)
  table.insert(form.steps, to, step)
 end
 
--- Handles `sp`, `sp-new`, `sp-customize`, `sp-remove`, `sp-keep` and the `sp-step-*` events.
-function M.event(state: Session, model: Model, edits: Edits, name: string, value: string, cx: BlockCx)
+-- Takes a chat draft into the edits: an unsaved edit when Just me has that name, otherwise a new
+-- specialist that replaces any unsaved one with the same name. Selects it and shows the banner.
+function M.adopt(state: Session, model: Model, edits: Edits, draft: ChatDraft)
+ local row = homeRow(model, draft.name)
+ if row and row.state == "ready" then
+  edits.forms[draft.name] = formFromContent(draft.name, draft.fields, row.revision, nil, true)
+  edits.removes[draft.name] = nil
+  select(state, pickOf(row))
+ else
+  local at: number? = nil
+  for index, form in edits.creates do
+   if trim(form.name.text) == draft.name then at = index end
+  end
+  if at then
+   local id = edits.creates[at].id :: number
+   edits.creates[at] = formFromContent(draft.name, draft.fields, nil, id, false)
+   select(state, "new:" .. id)
+  else
+   addCreate(state, edits, function(id) return formFromContent(draft.name, draft.fields, nil, id, false) end)
+  end
+ end
+ state.sharing = nil
+ state.banner = {request = draft.request, pick = state.pick :: string}
+end
+
+-- The repository a share starts on: the project's own when it has GitHub, else the first that does.
+local function defaultRepo(model: Model, repos: {ShareRepo}): number?
+ local first: number? = nil
+ for index, repo in repos do
+  if repo.repo then
+   if repo.name == model.project then return index end
+   first = first or index
+  end
+ end
+ return first
+end
+
+-- Handles `sp`, `sp-new`, `sp-customize`, `sp-remove`, `sp-keep`, the `sp-step-*` events and the
+-- share sheet's `sp-share`, `sp-share-repo` and `sp-share-cancel`; setup.luau sends `sp-share-go`.
+function M.event(state: Session, model: Model, edits: Edits, repos: {ShareRepo}, name: string, value: string, cx: BlockCx)
  local pick = state.pick
  if name == "sp" then
   if M.keep(model, edits, value) then
    select(state, value)
+   state.sharing = nil
    formFor(model, edits, value)
   end
   return
  end
  if name == "sp-new" then
+  state.sharing = nil
   addCreate(state, edits, blank)
   focus(state, cx, "sp-name")
+  return
+ end
+ if name == "sp-share" then
+  local ready, row = M.shareable(model, edits, pick)
+  if ready == "ready" and row then
+   state.sharing = {name = row.name, revision = row.revision :: string, repo = defaultRepo(model, repos)}
+  end
+  reflow(state)
+  return
+ end
+ if name == "sp-share-repo" then
+  local sharing, at = state.sharing, tonumber(value)
+  local repo = if at then repos[at] else nil
+  if sharing and repo and repo.repo then sharing.repo = at end
+  return
+ end
+ if name == "sp-share-cancel" then
+  state.sharing = nil
+  reflow(state)
   return
  end
  local form: Form?, row: Row? = nil, nil
