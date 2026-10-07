@@ -6,6 +6,7 @@ local fields = require("./text-field")
 local components = require("./components")
 local screen = require("./screen")
 local rt = require("./rt")
+local specialists = require("./setup-specialists")
 
 type Choice = {model: string, thinking: string}
 type Role = {
@@ -21,19 +22,21 @@ type RepoInfo = {
 type View = {
  mode: string, models: {ModelInfo}, harnesses: {Harness}, roles: {Role},
  thinkingLevels: {{level: string, note: string}}, repos: {RepoInfo}, candidates: {RepoInfo}, selfImprovement: string,
- section: string?,
+ section: string?, specialists: specialists.Model?,
 }
 
 type Repo = {
  path: string, name: string, shownPath: string, setUp: boolean, detectedFrom: string?, inspectionError: string?,
  validation: {fields.Field}, setup: {fields.Field}, suggestions: {string},
 }
-type Draft = {mode: string, models: {[string]: Choice}, repos: {Repo}, selfImprovement: string}
+type Draft = {mode: string, models: {[string]: Choice}, repos: {Repo}, selfImprovement: string, specialists: specialists.Edits}
+-- `pick` and `nextId` belong to the Specialists tab; `settled` is the seq of the last file whose
+-- specialists were compared with the draft.
 type State = {
  file: rt.Watch, origin: rt.Origin, draft: Draft?, saved: Draft?, savedSignature: string,
  step: string, open: string?, modelSearch: fields.Field, repoSearch: fields.Field, selected: number, adding: boolean,
  active: string, fields: {[string]: fields.Field}, order: {string}, done: boolean, notice: string?,
- jumped: number,
+ jumped: number, pick: string?, nextId: number, settled: number,
 }
 
 local SELF = {
@@ -45,6 +48,7 @@ local STEPS = {
  {id = "models", label = "Models"}, {id = "repos", label = "Repositories"},
  {id = "self", label = "Bug reports"}, {id = "review", label = "Review"},
 }
+local SPECIALISTS_TAB = {id = "specialists", label = "Specialists"}
 local SHORTCUTS = {{"Board", "⌘⇧B"}, {"Pull requests", "⌘⇧P"}, {"Usage", "⌘⇧U"}, {"Settings", "⌘⇧,"}}
 
 local function trim(text: string): string
@@ -146,7 +150,7 @@ local function buildDraft(model: View): Draft
  end
  local repos = {}
  for _, info in model.repos do table.insert(repos, repoFrom(info)) end
- return {mode = model.mode, models = models, repos = repos, selfImprovement = model.selfImprovement}
+ return {mode = model.mode, models = models, repos = repos, selfImprovement = model.selfImprovement, specialists = specialists.empty()}
 end
 
 local function copyFields(list: {fields.Field}): {fields.Field}
@@ -166,7 +170,7 @@ local function copyDraft(draft: Draft): Draft
    validation = copyFields(repo.validation), setup = copyFields(repo.setup), suggestions = repo.suggestions,
   })
  end
- return {mode = draft.mode, models = models, repos = repos, selfImprovement = draft.selfImprovement}
+ return {mode = draft.mode, models = models, repos = repos, selfImprovement = draft.selfImprovement, specialists = specialists.copy(draft.specialists)}
 end
 
 -- What the answer would say, as one string: equal strings mean equal answers.
@@ -181,6 +185,7 @@ local function signature(model: View, draft: Draft): string
   table.insert(parts, table.concat(texts(repo.validation), "\30"))
   table.insert(parts, table.concat(texts(repo.setup), "\30"))
  end
+ table.insert(parts, specialists.signature(model.specialists, draft.specialists))
  return table.concat(parts, "\31")
 end
 
@@ -196,7 +201,10 @@ local function answer(model: View, draft: Draft): {[string]: unknown}
    path = repo.path, validationCommands = tern.json.array(texts(repo.validation)), setupCommands = tern.json.array(texts(repo.setup)),
   })
  end
- return {tandemSetup = 1, mode = draft.mode, models = models, repositories = tern.json.array(repositories), selfImprovement = draft.selfImprovement}
+ return {
+  tandemSetup = 1, mode = draft.mode, models = models, repositories = tern.json.array(repositories), selfImprovement = draft.selfImprovement,
+  specialists = specialists.answer(model.specialists, draft.specialists),
+ }
 end
 
 local function blocker(model: View, draft: Draft): string?
@@ -209,7 +217,7 @@ local function blocker(model: View, draft: Draft): string?
   if filled(repo.validation) == 0 then table.insert(names, repo.name) end
  end
  if #names > 0 then return table.concat(names, " and ") .. (if #names > 1 then " need" else " needs") .. " a validation command." end
- return nil
+ return specialists.blocker(model.specialists, draft.specialists)
 end
 
 -- Field keys are the one way a key press finds its field; clearing them on any layout change keeps
@@ -225,7 +233,21 @@ end
 
 -- The tab a file that opened Settings at a section names. A newer file may name one while the block
 -- is already open, so each file is acted on once and the draft is kept.
-local SECTION_STEPS: {[string]: string} = {models = "models", repositories = "repos", ["bug-reports"] = "self"}
+local SECTION_STEPS: {[string]: string} = {models = "models", repositories = "repos", specialists = "specialists", ["bug-reports"] = "self"}
+
+-- Drops the specialist edits a newer file shows saved, from the draft and from what was last sent,
+-- and moves the selection from a new specialist that was saved onto its row.
+local function settle(state: State, model: View)
+ local section = model.specialists
+ local draft, saved = state.draft, state.saved
+ if section == nil or draft == nil or saved == nil then return end
+ local named = specialists.settle(section, draft.specialists)
+ local digits = if state.pick then string.match(state.pick, "^new:(%d+)$") else nil
+ local name = if digits then named[tonumber(digits) :: number] else nil
+ if name then state.pick = "home:" .. name end
+ specialists.settle(section, saved.specialists)
+ state.savedSignature = signature(model, saved)
+end
 
 local function sync(state: State)
  if state.file.status ~= "ready" then return end
@@ -234,7 +256,10 @@ local function sync(state: State)
   local draft = buildDraft(model)
   state.draft, state.saved, state.savedSignature = draft, copyDraft(draft), signature(model, draft)
   state.step = if model.mode == "setup" then "summary" else "models"
+ elseif state.settled ~= state.file.seq then
+  settle(state, model)
  end
+ state.settled = state.file.seq
  local step = if model.mode == "settings" and model.section then SECTION_STEPS[model.section] else nil
  if step and state.jumped ~= state.file.seq then setStep(state, step) end
  state.jumped = state.file.seq
@@ -260,6 +285,8 @@ local function send(state: State, model: View, draft: Draft, cx: BlockCx)
     end
    end
    state.saved, state.savedSignature = sent, signature(model, sent)
+   -- The republished file can arrive before this outcome, so what it shows saved is dropped now too.
+   settle(state, current(state) or model)
    if sent.mode == "setup" then state.done = true end
   elseif outcome ~= nil and outcome.status == "kept" and outcome.notice then
    state.notice = outcome.notice.text
@@ -577,6 +604,11 @@ end
 local function body(state: State, model: View, draft: Draft, id: string): Node
  if id == "models" then return modelsCard(state, model, draft) end
  if id == "repos" then return reposPane(state, model, draft) end
+ if id == "specialists" then
+  local section = model.specialists
+  if section then return specialists.pane(state, section, draft.specialists) end
+  return leaf("setup-muted", "Specialists are shown in Settings.")
+ end
  return selfCard(draft)
 end
 
@@ -634,7 +666,9 @@ end
 
 local function settingsView(state: State, model: View, draft: Draft, reason: string?): BlockView
  local children = heading("Settings", "Changes apply to new tasks. Tasks already running keep the settings they started with.")
- table.insert(children, tabs({STEPS[1], STEPS[2], STEPS[3]}, state.step, false))
+ local labels = {STEPS[1], STEPS[2], STEPS[3]}
+ if model.specialists then table.insert(labels, 3, SPECIALISTS_TAB) end
+ table.insert(children, tabs(labels, state.step, false))
  screen.status(children, state.file.status)
  if state.notice then table.insert(children, leaf("setup-warn", state.notice)) end
  table.insert(children, body(state, model, draft, state.step))
@@ -707,7 +741,7 @@ local block: BlockDef<State> = {
   local state: State = {
    file = rt.watch(cx, args[1] or "", "setup"), origin = rt.origin(args), savedSignature = "",
    step = "summary", modelSearch = fields.create(), repoSearch = fields.create(), selected = 1, adding = false,
-   active = "", fields = {}, order = {}, done = false, jumped = 0,
+   active = "", fields = {}, order = {}, done = false, jumped = 0, nextId = 1, settled = 0,
   }
   sync(state)
   return state
@@ -816,6 +850,8 @@ local block: BlockDef<State> = {
    reflow(state)
   elseif name == "cmd-add" or name == "rm" or name == "suggest" then editCommands(state, draft, cx, name, value)
   elseif name == "self" then draft.selfImprovement = value
+  elseif (name == "sp" or string.sub(name, 1, 3) == "sp-") and model.specialists then
+   specialists.event(state, model.specialists, draft.specialists, name, value, cx)
   elseif name == "discard" then
    local saved = state.saved
    if saved then state.draft = copyDraft(saved) end

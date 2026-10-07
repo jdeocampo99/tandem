@@ -966,3 +966,46 @@ workflow(
   },
   180_000,
 );
+
+workflow(
+  "settings: a new Just-me specialist saves the file the parser reads, and its row shows it",
+  async () => {
+    await withTernWindow({ name: "wf-specialists", driver }, async (window) => {
+      const coordinator = await seedCoordinator(window, { name: "tandem", sessionId: SESSION });
+      await onboardRepo({ repoPath: coordinator.repo, home: window.home, write: true });
+      const envelope = JSON.stringify({
+        v: 1,
+        origin: { pane: coordinator.endpoint.paneId, cwd: coordinator.checkout },
+        action: { verb: "open", ref: { kind: "setup", mode: "settings", section: "specialists" } },
+      });
+      const child = Bun.spawn([process.execPath, driver, "native", "act"], {
+        cwd: coordinator.repo,
+        env: { ...window.env, TANDEM_SESSION: SESSION, TANDEM_WORKFLOW_ROOT: window.root },
+        stdin: new Blob([envelope]),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(await child.exited).toBe(0);
+      await window.until("specialists", async () =>
+        (await window.screen()).includes("+ New specialist"),
+      );
+      await window.shot("specialists-list");
+      await window.click("+ New specialist");
+      await window.until("form", async () => (await window.screen()).includes("Instructions"));
+      await window.typeInto("release-notes", "changelog");
+      await window.typeInto("Release notes", "Changelog");
+      await window.click("+ Add step");
+      await window.typeInto("Step", "Write the notes");
+      await window.shot("specialists-form");
+      await window.click("Save changes");
+      const file = join(window.home, "specialists", "changelog.md");
+      await window.until("file written", async () => (await readFile(file, "utf8")).length > 0);
+      expect(await readFile(file, "utf8")).toContain("- Write the notes");
+      await window.until("saved row", async () =>
+        (await window.screen()).includes("All changes saved"),
+      );
+      await window.shot("specialists-saved");
+    });
+  },
+  120_000,
+);

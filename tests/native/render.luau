@@ -1,7 +1,9 @@
 --!nocheck
 -- Runs the production plugin's blocks against files Tandem wrote. The test prepends the parity
 -- stand-ins' json.luau, MODULES (every tern-plugin/*.luau source) and CASES. Each case mounts one block in its own
--- pane; each step replaces files, fires the pending timers once and draws the block.
+-- pane; each step replaces files, fires the pending timers once and draws the block. A step may also
+-- act like the user, in this order: `@focus` a field key, `@type` text into the focused field, and
+-- `@act` one click action (`name=value`). What the block sends to `tandem native act` is printed.
 
 local ui = {}
 function ui.node(kind, props, children) return { k = kind, p = props or {}, c = children } end
@@ -19,6 +21,7 @@ local files = {}
 local timers = {}
 local definitions = {}
 local current = 0
+local sent = {}
 
 local tern = {
 	ui = ui,
@@ -39,7 +42,7 @@ local tern = {
 		write = function() end,
 	},
 	pane = { list = function() return { { pane = current } } end },
-	process = { run = function() end },
+	process = { run = function(_, options) table.insert(sent, options.stdin) end },
 	block = { define = function(name, definition) definitions[name] = definition end },
 	command = function() end,
 	route = { open = function() end, link = function() end },
@@ -76,7 +79,9 @@ for index, case in CASES do
 	function cx:frame() end
 	local state
 	for step, changes in case.steps do
-		for path, text in changes do files[path] = if text == false then nil else text end
+		for path, text in changes do
+			if string.sub(path, 1, 1) ~= "@" then files[path] = if text == false then nil else text end
+		end
 		if step == 1 then
 			state = definition.init(cx, case.args, nil)
 		end
@@ -85,9 +90,22 @@ for index, case in CASES do
 		for _, timer in due do
 			if not timer.cancelled then timer.callback({}) end
 		end
+		sent = {}
+		if changes["@focus"] then definition.event(state, { ev = "focus", id = "main." .. changes["@focus"] }, cx) end
+		if changes["@type"] then
+			for _, code in utf8.codes(changes["@type"]) do
+				local char = utf8.char(code)
+				definition.key(state, { name = char, text = char, shift = false, meta = false, ctrl = false, alt = false }, cx)
+			end
+		end
+		if changes["@act"] then
+			local act, value = string.match(changes["@act"], "^([^=]*)=?(.*)$")
+			definition.event(state, { ev = "action", act = act, value = value }, cx)
+		end
 		local ok, view = pcall(definition.view, state, cx)
 		local line = { title = definition.title(state) }
 		if ok then line.tree = { main = view.main, dock = view.dock, layer = view.layer } else line.error = tostring(view) end
+		if #sent > 0 then line.sent = sent end
 		print("@@" .. index .. "\t" .. step .. "\t" .. json.encode(line))
 	end
 end
