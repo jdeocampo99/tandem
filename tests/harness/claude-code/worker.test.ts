@@ -330,8 +330,10 @@ test("an implementer's edits stop once its report is in, as on OMP", async () =>
   });
 });
 
-test("an implementer's playbook steps count as done once Claude Code's task tools mark them", async () => {
-  const { binding, files } = await worker("implementer", { playbookSteps: ["Write the test"] });
+test("an implementer's playbook steps count as done once Claude Code's task tools mark them, even paraphrased", async () => {
+  const { binding, files } = await worker("implementer", {
+    playbookSteps: ["Look for code to reuse or dead code to delete"],
+  });
   await binding.handle({ type: "agentStart", prompt: BRIEF });
   const report = {
     type: "pluginTool",
@@ -341,12 +343,12 @@ test("an implementer's playbook steps count as done once Claude Code's task tool
   } as const;
   expect(await binding.handle(report)).toMatchObject({
     isError: true,
-    text: expect.stringContaining("Write the test"),
+    text: expect.stringContaining('"1. Look for code to reuse or dead code to delete"'),
   });
   const create = {
     id: "c",
     name: "TaskCreate",
-    input: { subject: "Write the test", description: "Write the test" },
+    input: { subject: "1. Reuse check", description: "Look for code to reuse" },
   };
   await binding.handle({ type: "toolStart", call: create });
   await binding.handle({ type: "toolEnd", call: create, result: { task: { id: "1" } } });

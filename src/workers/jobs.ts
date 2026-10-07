@@ -67,8 +67,6 @@ export type WorkerJob = Readonly<{
   readonly setup?: readonly SetupCommand[];
   /** The implementer's playbook steps; its report is rejected while any is open in its to-do list. */
   readonly playbookSteps?: readonly string[];
-  /** The pinned validation command lines an implementer may not run; Tandem runs them after its report. */
-  readonly validationCommands?: readonly string[];
   /**
    * A quick task's implementer: `may-ask` while its one scope question is unasked, `spent` after.
    * Absent on every other job, which may not submit `scopeExceeded`.
@@ -463,13 +461,6 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   if (playbookSteps !== undefined && role !== "implementer") {
     throw new TypeError("playbookSteps is only permitted for implementer jobs");
   }
-  const validationCommands =
-    value.validationCommands === undefined
-      ? undefined
-      : readValidationCommandLines(value.validationCommands);
-  if (validationCommands !== undefined && role !== "implementer") {
-    throw new TypeError("validationCommands is only permitted for implementer jobs");
-  }
   if (
     value.quickScope !== undefined &&
     value.quickScope !== "may-ask" &&
@@ -504,7 +495,6 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(setup === undefined ? {} : { setup }),
     ...(playbookSteps === undefined ? {} : { playbookSteps }),
-    ...(validationCommands === undefined ? {} : { validationCommands }),
     ...(quickScope === undefined ? {} : { quickScope }),
     ...(prReview === undefined ? {} : { prReview }),
   };
@@ -515,11 +505,6 @@ function readPlaybookSteps(value: unknown): readonly string[] {
     throw new TypeError("playbookSteps must be a non-empty array");
   }
   return value.map((step, index) => readSingleLineText(step, `playbookSteps[${index}]`));
-}
-
-function readValidationCommandLines(value: unknown): readonly string[] {
-  if (!Array.isArray(value)) throw new TypeError("validationCommands must be an array");
-  return value.map((line, index) => readNonEmptyText(line, `validationCommands[${index}]`));
 }
 
 function readPrReviewJob(value: unknown): NonNullable<WorkerJob["prReview"]> {

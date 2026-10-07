@@ -46,7 +46,9 @@ home is a separate namespace and never changes the remembered setup.
   fencing revision.
 - A worker launch is at-most-once. A claim must match all of those plus stop state; the first
   committed claim wins and duplicate or stale claims are refused. A missing process or result never
-  justifies a retry.
+  justifies a retry. A coordinator appends and launches a worker job only under a claim it owns:
+  once another coordinator takes an unlaunched operation over (bumping its fencing revision), the
+  first stops and the new owner launches.
 - Reconciliation continues only on positive evidence: an endpoint matching exact workspace label,
   root pane, and cwd, or a result matching task, generation, job, and input HEAD. Restart with the
   same home, repository, pool root, and session.

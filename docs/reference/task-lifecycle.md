@@ -244,13 +244,17 @@ Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` t
   brief's goal (or the objective). A pick below 0.80 confidence, `other`, any Jev failure, or no
   `TYPESAFE_API_KEY` pins `general`. Jev picks the playbook and nothing else. The task summary shows
   it as `Type:`.
-- The implementer brief lists the steps and asks the worker to load them verbatim into OMP's `todo`
-  tool. Every fix round uses the `fix-round` playbook, whose first step carries the fix-round rule
+- The implementer brief numbers the steps and asks the worker to load each line verbatim, number
+  included, as one item in its to-do tool (OMP's `todo`, Claude Code's `TaskCreate` subject), and
+  to give its own items no leading number. Every fix round uses the `fix-round` playbook, whose first step carries the fix-round rule
   to fix each P0 and P1 finding, or decline it in the report if it has no realistic failure or is
   out of scope, and leave P2 and P3 as known issues. Older tasks without a playbook get one only in fix rounds.
-- The worker extension remembers the list from the latest `todo` result. An `implemented` report is
-  rejected while any step is not completed or abandoned (missing counts as open); the rejection
-  names the steps. A dropped step's reason goes in the report.
+- The worker extension remembers the list from the latest `todo` result. An item stands for a step
+  when it starts with that step's number (`2.`, `2)`, `Step 2:`), whatever its wording, since Claude
+  Code workers paraphrase subjects; an unnumbered item stands for the step whose text it matches,
+  ignoring case, spacing and punctuation. An `implemented` report is rejected while any step has no
+  completed or abandoned item (missing counts as open); the rejection quotes each open step as the
+  numbered item text to use. A dropped step's reason goes in the report.
 - The to-do list is the worker's scratch state and a submit-time gate only. It is never task state.
 
 ## Interactive child terminals

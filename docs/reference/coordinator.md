@@ -60,7 +60,9 @@ loads before starting anything (see [harness.md](harness.md#the-launch-port)).
 - Tandem starts the shared Herdr server in the Tandem home, never in a pool worktree, because
   returning a worktree ends every process still running inside it.
 - The terminal attaches once after every coordinator is ready, and releases its setup readline
-  first so Herdr is the only terminal input owner.
+  first so Herdr is the only terminal input owner. Run from any Tern pane, nothing attaches:
+  `tern focus` already shows the coordinator in every Tern window, and opening another window would
+  leave native views (the setup block included) without a unique window to open in.
 
 Old spellings (`restart`, `--restart`, `--reset`, `--force`, `--continue`, `logs`,
 `reconcile-resources`, `inspect`) exit with an error naming the replacement (`RENAMED` in

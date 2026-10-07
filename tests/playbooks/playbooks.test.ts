@@ -3,7 +3,7 @@ import type { JevEvaluationResponse, JevGateway } from "../../src/adapters/types
 import { buildAgentBrief } from "../../src/instructions.ts";
 import { PLAYBOOKS } from "../../src/playbooks/catalog.ts";
 import { classifyPlaybook } from "../../src/playbooks/classify.ts";
-import { openSteps, todoItems } from "../../src/playbooks/progress.ts";
+import { openSteps, openStepsRejection, todoItems } from "../../src/playbooks/progress.ts";
 import { playbookForRun, selectPlaybook } from "../../src/playbooks/selection.ts";
 
 test("selection pins each confident job type, and general for other, low confidence, or no pick", () => {
@@ -92,9 +92,40 @@ test("progress: completed and abandoned steps close; open, blocked, and missing 
       { content: "Find the cause", status: "blocked" },
     ]),
   );
-  expect(openSteps(steps, partial)).toEqual(["Find the cause", "Measure again"]);
-  expect(openSteps(steps, undefined)).toEqual(steps);
+  expect(openSteps(steps, partial)).toEqual(["2. Find the cause", "3. Measure again"]);
+  expect(openSteps(steps, undefined)).toEqual([
+    "1. Measure a baseline",
+    "2. Find the cause",
+    "3. Measure again",
+  ]);
   expect(todoItems({ details: { phases: [{ tasks: [{ content: 1 }] }] } })).toBeUndefined();
+});
+
+test("progress: a step's item matches by its number or by its text, whatever the case, spacing or punctuation", () => {
+  const items = [
+    { content: "1. Reuse check", status: "completed" },
+    { content: "  find THE cause. ", status: "completed" },
+    { content: "Step 3: Measure again", status: "abandoned" },
+  ];
+  expect(openSteps(steps, items)).toEqual([]);
+});
+
+test("progress: a paraphrase without its number, or an unfinished numbered item, leaves its step open", () => {
+  const items = [
+    { content: "Baseline timing", status: "completed" },
+    { content: "2. Root cause hunt", status: "completed" },
+    { content: "Measure again", status: "in_progress" },
+    { content: "3. Write notes", status: "pending" },
+  ];
+  expect(openSteps(steps, items)).toEqual(["1. Measure a baseline", "3. Measure again"]);
+});
+
+test("progress: the rejection quotes each open step as the item text that closes it", () => {
+  const message = openStepsRejection(openSteps(steps, []));
+  expect(message).toContain(
+    'still open in your to-do list: "1. Measure a baseline"; "2. Find the cause"; "3. Measure again".',
+  );
+  expect(message).toContain("number included");
 });
 
 test("only a brief given a playbook carries its steps", () => {

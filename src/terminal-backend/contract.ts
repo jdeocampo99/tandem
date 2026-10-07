@@ -404,6 +404,11 @@ export type TerminalContext = Readonly<{
    * when the variables disagree, so nothing guesses.
    */
   inheritedPane(environment: TandemEnvironmentSource): InheritedPane;
+  /**
+   * Whether this process runs in one of the terminal's own windows, so focusing a coordinator
+   * shows it there and no client needs to open.
+   */
+  inWindow(environment: TandemEnvironmentSource): boolean;
   /** The session named by the environment, even outside an active pane. */
   sessionName(environment: TandemEnvironmentSource): string | undefined;
   /** The workspace named by the environment, even outside an active pane. */

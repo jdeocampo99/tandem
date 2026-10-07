@@ -21,6 +21,8 @@ export const TERN_CONTEXT: TerminalContext = {
       };
     return { status: "inside", sessionId, workspaceId, paneId: source.TERN_PANE };
   },
+  // `tern focus` shows a block in every window, so any Tern pane already sees the coordinator.
+  inWindow: (source) => source.TERN_PANE !== undefined,
   sessionName: (source) => source.TANDEM_SESSION,
   workspaceId: (source) => source.TANDEM_TERN_WORKSPACE_ID,
   paneInSession: (source, sessionId) =>
