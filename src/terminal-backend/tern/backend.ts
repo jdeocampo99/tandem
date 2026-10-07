@@ -514,7 +514,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       if (options.home === undefined) throw new Error("Tern welcome requires a Tandem home");
       const { views, projectForView, viewIndexPath } = await native();
       const coordinator = await byId(target, target.paneId);
-      const project = await projectForView(options.home, coordinator);
+      const project = await projectForView(options.home, coordinator, target.cwd);
       await views.open(
         { coordinator, cwd: target.cwd, home: options.home, view: { kind: "board" } },
         project,
@@ -527,7 +527,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       if (options.home === undefined) throw new Error("Tern setup requires a Tandem home");
       const { views, projectForView, viewDetailPath } = await native();
       const coordinator = await byId(target, target.paneId);
-      const project = await projectForView(options.home, coordinator);
+      const project = await projectForView(options.home, coordinator, target.cwd);
       await views.open(
         {
           coordinator,
@@ -588,22 +588,21 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
       const endpoint = endpointFor(target, entry);
       if (options.home === undefined)
         throw new EndpointOwnershipError(endpoint, "panel close requires its recorded home");
-      const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
+      const { findRecordedOwner } = await import("../../coordinator/recorded-owner.ts");
       const { viewIndexPath } = await import("../../native/store.ts");
       const { exactView } = await import("./host.ts");
-      const owners = (await listCoordinatorRecords(options.home, target.sessionId)).filter(
-        (record) =>
-          record.endpoint.terminal === "tern" &&
-          record.endpoint.paneId !== entry.block.id &&
-          record.endpoint.paneId === parseBlockArgs(entry.block.args)?.ctx.coordinator &&
-          record.endpoint.terminalSessionId === entry.session.id &&
-          record.endpoint.tabId === entry.tab.id &&
-          record.endpoint.workspaceId === entry.tab.id &&
-          record.worktree.path === target.cwd,
-      );
-      const owner = owners[0];
-      if (owners.length !== 1 || owner === undefined)
+      const coordinatorPane = parseBlockArgs(entry.block.args)?.ctx.coordinator;
+      const found =
+        coordinatorPane === undefined || coordinatorPane === entry.block.id
+          ? undefined
+          : await findRecordedOwner(options.home, {
+              by: "pane",
+              pane: { ...endpoint, paneId: coordinatorPane },
+              cwd: target.cwd,
+            });
+      if (found?.status !== "owned")
         throw new EndpointOwnershipError(endpoint, "panel has no unique recorded coordinator");
+      const owner = found.record;
       const path = viewIndexPath(options.home, owner.repoPath);
       const args = blockArgs(path, {
         coordinator: owner.endpoint.paneId,

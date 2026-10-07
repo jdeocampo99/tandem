@@ -8,6 +8,7 @@ import {
 import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import { type CoordinatorRecord, canonicalPath, pathIsWithin } from "../coordinator/record.ts";
+import { decideRecordedOwner } from "../coordinator/recorded-owner.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import {
@@ -329,19 +330,18 @@ async function coordinator(
 ): Promise<CoordinatorRecord> {
   const canonical = await canonicalPath(repoPath, "repoPath");
   const discovery = await discoverCoordinatorRecords({ home: act.environment.home });
-  const candidates = discovery.records
-    .filter((entry) => entry.placement === "session-directory")
-    .map((entry) => entry.record)
-    .filter(
-      (record) =>
-        record.endpoint.sessionId === act.environment.sessionId &&
-        (record.repoPath === canonical || record.worktree.path === canonical),
-    );
-  if (candidates.length > 1) throw new Error("More than one coordinator claims this project");
+  const claimed = decideRecordedOwner(
+    discovery.records
+      .filter((entry) => entry.placement === "session-directory")
+      .map((entry) => entry.record),
+    { by: "project", sessionId: act.environment.sessionId, path: canonical, terminal: "any" },
+  );
+  if (claimed.status === "ambiguous")
+    throw new Error("More than one coordinator claims this project");
   const owned = await findRunningCoordinator(act.run, act.terminal, {
     home: act.environment.home,
     sessionId: act.environment.sessionId,
-    repoPath: candidates[0]?.repoPath ?? canonical,
+    repoPath: claimed.status === "owned" ? claimed.record.repoPath : canonical,
   });
   if (owned === undefined) throw new Error(`Open this project's coordinator before ${purpose}`);
   return owned;
