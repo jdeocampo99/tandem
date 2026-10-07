@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { EndpointOwnershipError } from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
@@ -9,9 +9,9 @@ import type {
   TerminalBackend,
 } from "../../../src/terminal-backend/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { missing } from "../../../src/terminal-backend/tern/endpoints.ts";
-import { ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { missing, ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { openFiles, openPath } from "../../native/view-files.ts";
 
 const coordinator: Endpoint = {
   terminal: "tern",
@@ -57,13 +57,15 @@ async function withRetainedOpen(body: (home: string) => Promise<void>): Promise<
   };
   try {
     await expect(
-      ternViewHost(ternCommands(run, { binary: "tern" }), {
-        clock: () => now,
-        wait: async (ms) => {
-          now += ms;
-        },
-        guard: async (_key, operation) => operation(),
-      }).open(
+      ternViewHost(
+        ternCli(run, {
+          binary: "tern",
+          clock: () => now,
+          wait: async (ms) => {
+            now += ms;
+          },
+        }),
+      ).open(
         { home, cwd: home, coordinator, view: { kind: "task", taskId: "task-new" } },
         home,
         "task",
@@ -106,13 +108,13 @@ const fix = (home: string, owner: () => Owner, apply: boolean) =>
   });
 
 const intents = async (home: string) =>
-  (await readdir(join(home, "native-host"))).filter((name) => !name.endsWith(".lock"));
+  (await openFiles(home)).filter((name) => !name.endsWith(".lock"));
 
 for (const owner of ["present", "gone"] as const) {
   test(`tandem fix lists a retained open and, with --yes, abandons it when its coordinator is ${owner}`, async () => {
     await withRetainedOpen(async (home) => {
       const before = await intents(home);
-      expect(before.filter((name) => name.endsWith(".intent.json"))).toHaveLength(1);
+      expect(before.filter((name) => name.endsWith(".ticket.json"))).toHaveLength(1);
       const planned = await fix(home, () => owner, false);
       expect(planned.cleaned).toEqual([
         expect.objectContaining({
@@ -156,11 +158,27 @@ test("tandem fix --yes keeps a retained open when the coordinator turns ambiguou
 
 test("tandem fix reports an unreadable open record and leaves it in place", async () => {
   await withRetainedOpen(async (home) => {
-    const [name] = (await intents(home)).filter((each) => each.endsWith(".intent.json"));
-    const path = join(home, "native-host", name ?? "");
+    const [name] = (await intents(home)).filter((each) => each.endsWith(".ticket.json"));
+    const path = await openPath(home, name ?? "");
     await Bun.write(path, "{broken");
     const applied = await fix(home, () => "gone", true);
     expect(applied.quarantined).toEqual([expect.objectContaining({ kind: "native-open", path })]);
     expect(await readFile(path, "utf8")).toBe("{broken");
   });
+});
+
+test("tandem fix reports paused views it cannot list and still scans everything else", async () => {
+  const home = await realpath(await mkdtemp("/tmp/tandem-native-open-fix-"));
+  try {
+    await writeFile(join(home, "tern"), "not a directory");
+    const planned = await fix(home, () => "present", false);
+    expect(planned.failed).toEqual([
+      expect.objectContaining({
+        kind: "native-open",
+        reason: expect.stringContaining("paused views could not be listed"),
+      }),
+    ]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
 });

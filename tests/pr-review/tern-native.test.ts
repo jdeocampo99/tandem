@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { copyFile, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../src/board/native-views.ts";
 import { prPaneView } from "../../src/pr-review/native-view.ts";
+import { viewFileText } from "../native/view-files.ts";
 
 const TERN_BINARY = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
 
@@ -34,7 +34,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     await mkdir(env.TANDEM_HOME);
     for (const name of [
       "text-field",
-      "view-file",
+      "rt",
       "diff-row",
       "components",
       "pr-model",
@@ -56,7 +56,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     );
     await writeFile(
       join(plugin, "fixture.json"),
-      nativeViewText(
+      viewFileText(
         "pr",
         prPaneView({
           taskId: "task-98",

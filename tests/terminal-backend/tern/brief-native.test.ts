@@ -3,10 +3,11 @@ import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/p
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { nativeDetailPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import { ActionEnvelope } from "../../../src/native/contract.ts";
+import { viewDetailPath } from "../../../src/native/store.ts";
 import { createRequestBriefRecord, reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { briefView } from "../../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
@@ -14,10 +15,12 @@ import { RequestBriefWorkflow } from "../../../src/requests/workflow.ts";
 import { createTandemService } from "../../../src/service/controller.ts";
 import { executeTandemAction } from "../../../src/session/actions.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
-import { Created, decode, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
-import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/view-intent.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
+import { Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { content, NOW } from "../../board/fixtures.ts";
+import { viewsOf } from "../views.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -113,38 +116,31 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
     );
     // Production request briefs have no Lavish page; this fixture has no browser URL either.
     const model = briefView(second);
-    const path = nativeDetailPath(env.TANDEM_HOME, repo, "brief-req-tern.json");
+    const path = viewDetailPath(env.TANDEM_HOME, repo, "brief-req-tern.json");
     await mkdir(join(path, ".."), { recursive: true, mode: 0o700 });
     const publish = async (revision: string, value = model) =>
       writeFile(path, JSON.stringify({ version: 1, kind: "brief", revision, model: value }), {
         mode: 0o600,
       });
     // The shared writer and scoped host close run unchanged; durable action effects use a receipt sink.
-    await mkdir(join(root, "src", "terminal"), { recursive: true });
-    await cp(
-      fileURLToPath(new URL("../../../src/terminal/native-input.ts", import.meta.url)),
-      join(root, "src", "terminal", "native-input.ts"),
-    );
+    await mkdir(join(root, "src"), { recursive: true });
     await writeFile(
       join(root, "src", "main.ts"),
-      `import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+      `import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ternCommands } from ${JSON.stringify(fileURLToPath(new URL("../../../src/terminal-backend/tern/protocol.ts", import.meta.url)))};
+import { ternCli } from ${JSON.stringify(fileURLToPath(new URL("../../../src/terminal-backend/tern/cli.ts", import.meta.url)))};
 import { ternViewHost } from ${JSON.stringify(fileURLToPath(new URL("../../../src/terminal-backend/tern/views.ts", import.meta.url)))};
 import type { CommandRunner, Endpoint } from ${JSON.stringify(fileURLToPath(new URL("../../../src/contracts.ts", import.meta.url)))};
 const root = ${JSON.stringify(root)};
 const argv = Bun.argv.slice(2);
-const input = argv[argv.indexOf("--input") + 1];
-if (!argv.includes("--input") || !input) throw new Error("Receipt sink requires --input");
+const received = await Bun.stdin.text();
 writeFileSync(join(root, "args.txt"), argv.join("\\n") + "\\n");
-writeFileSync(join(root, "received.json"), readFileSync(input));
-writeFileSync(join(root, "mode.txt"), (statSync(input).mode & 0o777).toString(8));
-writeFileSync(join(root, "input-path.txt"), input);
+writeFileSync(join(root, "received.json"), received);
+const envelope = JSON.parse(received);
 if (existsSync(join(root, "refuse"))) {
-  console.error("Brief revision is stale; review the latest draft.");
-  process.exitCode = 1;
+  console.log(JSON.stringify({status: "refused", notice: {code: "failed", text: "Brief revision is stale; review the latest draft."}}));
 } else if (existsSync(join(root, "retain"))) {
-  console.log(JSON.stringify({warnings: ["The action completed, but the native brief remains open. Do not resubmit this action."]}));
+  console.log(JSON.stringify({status: "kept", notice: {code: "brief-warning", text: "The action completed, but the native brief remains open. Do not resubmit this action."}}));
 } else {
   const runner: CommandRunner = async (request) => {
     const child = Bun.spawn([...request.argv], {
@@ -156,17 +152,15 @@ if (existsSync(join(root, "refuse"))) {
     ]);
     return {stdout, stderr, code};
   };
-  const host = ternViewHost(ternCommands(runner, { binary: ${JSON.stringify(binary)} }), {
-    clock: Date.now, wait: (ms) => Bun.sleep(ms), guard: async (_key, operation) => operation(),
-  });
+  const host = ternViewHost(ternCli(runner, { binary: ${JSON.stringify(binary)} }));
   const coordinator: Endpoint = JSON.parse(readFileSync(join(root, "coordinator.json"), "utf8"));
-  const windowId = argv.includes("--window") ? argv[argv.indexOf("--window") + 1] : undefined;
+  const windowId = JSON.parse(envelope.origin.ctx).window;
   const closed = await host.close({
     coordinator, cwd: root, home: join(root, "home"),
-    origin: {paneId: argv[argv.indexOf("--pane") + 1]!, ...(windowId === undefined ? {} : {windowId})},
-    view: {kind: "brief", requestId: argv[2]!},
+    origin: {paneId: envelope.origin.pane, ...(windowId === undefined ? {} : {windowId})},
+    view: {kind: "brief", requestId: envelope.action.requestId},
   }, ${JSON.stringify(repo)});
-  console.log(JSON.stringify({warnings: closed.warnings}));
+  console.log(JSON.stringify(closed.warnings.length === 0 ? {status: "done"} : {status: "kept", notice: {code: "brief-warning", text: closed.warnings.join("\\n")}}));
 }
 `,
     );
@@ -317,16 +311,12 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
         ]);
         return { stdout, stderr, code };
       };
-      const commands = ternCommands(runner, { binary });
+      const commands = ternCli(runner, { binary });
       const paneExists = async (id: string) =>
         (await commands.ls(root)).sessions.some((session) =>
           session.tabs.some((tab) => tab.blocks.some((block) => block.id === id)),
         );
-      const host = ternViewHost(commands, {
-        clock: Date.now,
-        wait: (ms) => Bun.sleep(ms),
-        guard: async (_key, operation) => operation(),
-      });
+      const host = ternViewHost(commands);
       const terminal = terminalBackend(runner, {
         terminal: "tern",
         home: env.TANDEM_HOME,
@@ -334,8 +324,8 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       });
       // A brief opened during the window's startup tick either opens or fails cleanly with
       // nothing changed; it never pauses the opens below.
-      await terminal
-        .openView({
+      await viewsOf(terminal)
+        .open({
           coordinator,
           cwd: root,
           home: env.TANDEM_HOME,
@@ -348,7 +338,7 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       // test opening, not startup.
       await Bun.sleep(500);
       // A pane may be hosted before either its index or detail is published.
-      const waiting = await terminal.openView({
+      const waiting = await viewsOf(terminal).open({
         coordinator,
         cwd: root,
         home: env.TANDEM_HOME,
@@ -499,25 +489,18 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       );
       await clickText("Approve");
       await until(async () => await Bun.file(join(root, "received.json")).exists());
-      expect(JSON.parse(await readFile(join(root, "received.json"), "utf8"))).toEqual(
-        model.approval,
-      );
-      expect((await readFile(join(root, "mode.txt"), "utf8")).trim()).toBe("400");
-      const input = await readFile(join(root, "input-path.txt"), "utf8");
+      const received = async () =>
+        ActionEnvelope.parse(JSON.parse(await readFile(join(root, "received.json"), "utf8")));
+      expect((await received()).action).toEqual({
+        verb: "brief-approve",
+        requestId: model.requestId,
+        ...model.approval,
+      });
+      expect((await received()).origin).toMatchObject({ pane: String(opened.paneId) });
       expect((await readFile(join(root, "args.txt"), "utf8")).trim().split("\n")).toEqual([
         "native",
-        "brief-approve",
-        model.requestId,
-        "--input",
-        input,
-        "--pane",
-        String(opened.paneId),
-        "--cwd",
-        root,
-        "--home",
-        env.TANDEM_HOME,
+        "act",
       ]);
-      await until(async () => !(await Bun.file(input).exists()));
       await until(async () =>
         (await tree()).some((each) => each.text?.includes("Brief revision is stale") === true),
       );
@@ -531,23 +514,21 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       await rm(join(root, "refuse"));
       await writeFile(join(root, "retain"), "successful action, uncertain closure");
       await clickText("Request changes (1)");
-      await until(async () =>
-        (await readFile(join(root, "args.txt"), "utf8")).includes("brief-request-changes"),
-      );
-      expect(JSON.parse(await readFile(join(root, "received.json"), "utf8"))).toEqual({
+      await until(async () => (await received()).action.verb === "brief-request-changes");
+      const commented = model.lines.find((each) => each.kind !== "heading");
+      if (commented === undefined) throw new Error("fixture brief has no commentable line");
+      expect((await received()).action).toEqual({
+        verb: "brief-request-changes",
+        requestId: model.requestId,
         ...model.approval,
         text: "Please keep Herdr as an option.",
         comments: [
           {
-            lineId: model.lines.find((each) => each.kind !== "heading")?.id,
+            lineId: commented.id,
             text: "Keep Herdr tests unchanged too.",
           },
         ],
       });
-      await until(
-        async () =>
-          !(await Bun.file(await readFile(join(root, "input-path.txt"), "utf8")).exists()),
-      );
       await until(async () =>
         (await tree()).some((each) => each.text?.includes("Do not resubmit this action") === true),
       );
@@ -575,19 +556,15 @@ printf '%s\\n' 'Coordinator · tandem' '' 'You: Add a Tern terminal backend so T
       // Let the newly opened split finish laying out before using control coordinates.
       await Bun.sleep(500);
       await clickText("Approve");
-      await until(async () =>
-        (await readFile(join(root, "args.txt"), "utf8")).includes(String(reopened.paneId)),
-      );
+      await until(async () => (await received()).origin.pane === String(reopened.paneId));
       await until(async () => !(await paneExists(reopened.paneId)));
-      await until(
-        async () =>
-          !(await Bun.file(await readFile(join(root, "input-path.txt"), "utf8")).exists()),
-      );
       expect(await paneExists(coordinator.paneId)).toBe(true);
       if (shots) await ctl("shot", "brief-closed");
-      expect(JSON.parse(await readFile(join(root, "received.json"), "utf8"))).toEqual(
-        model.approval,
-      );
+      expect((await received()).action).toEqual({
+        verb: "brief-approve",
+        requestId: model.requestId,
+        ...model.approval,
+      });
       // Conversation approval uses the same scoped retirement as the native action.
       await writeFile(join(env.TANDEM_HOME, "settings.toml"), 'terminal = "tern"\n');
       const service = createTandemService({

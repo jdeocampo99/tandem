@@ -5,8 +5,9 @@ policy, routes coordinator prompts through Jev, and records where each instructi
 
 Code: src/config/repositories.ts, src/config/policy.ts, src/config/models.ts,
 src/config/storage.ts, src/config/values.ts, src/config/environment.ts,
-src/terminal/onboarding.ts, src/session/tool-guard.ts, src/session/prompt-routing.ts,
-src/adapters/typesafe.ts, src/instructions.ts
+src/terminal/onboarding.ts, src/onboarding/setup-answer.ts, src/onboarding/setup-workflow.ts,
+src/session/tool-guard.ts, src/session/prompt-routing.ts, src/adapters/typesafe.ts,
+src/instructions.ts
 
 ## Where settings live
 
@@ -36,8 +37,9 @@ src/adapters/typesafe.ts, src/instructions.ts
   proposal is not a completed setup.
 - Discovery reads `package.json`, the lockfiles below, and the central record. It never executes
   scripts or inspects CI. It reads from the source checkout when one is given. `discovery` in the
-  result names the scripts behind the proposed checks and the lockfile behind the install, which
-  the setup page shows.
+  result names every `package.json` script as the command that runs it, and the lockfile behind
+  the proposed install. The setup block offers the scripts the validation commands do not run yet
+  as suggestions.
 - The write (`setup --yes`, or `onboard --write --yes`) creates only a missing record, exclusively
   (`wx`), re-checking for either settings file just before writing. An existing, malformed, or
   mismatched record is refused, never repaired or replaced. The CLI has no custom-command override.
@@ -49,16 +51,26 @@ src/adapters/typesafe.ts, src/instructions.ts
 - In chat, these two home settings each retain their own approval through `saveHomeSetting` in
   src/config/home-settings.ts (a one-line value is replaced, a missing key is added first, a
   multi-line value or a file changed since reading is refused): `projectRoots`, the absolute
-  folders searched for checkouts by name, and `selfImprovement`. The Lavish Review Save bundles
-  them into its one user consent after the backend re-checks the answer.
-- The setup page (see [coordinator.md](coordinator.md#the-tandem-coordinator)) covers four stages:
-  Models, Repos, Self-improvement, and Review. Review's Save and continue is the user's one consent
-  to apply the complete answer: models and selected providers, code folders, the self-improvement
-  setting, and selected repository settings before opening chats for selected repositories. The
-  backend validates the answer against the current machine before writing, then posts a fixed
-  success or error status without a model turn. Chat setup actions retain their own approval. The
-  page does not ask the user to choose MCP servers or worker skills; OMP determines skills and MCP
-  availability from each coordinator or child worker's checkout and user configuration.
+  folders searched for checkouts by name, and `selfImprovement`. The setup block's Start or Save
+  changes bundles them into its one user consent after the backend re-checks the answer.
+- In Tern, first-time setup is the native `setup` block beside the Tandem coordinator's chat (see
+  [native-views.md](native-views.md#setup-and-settings)). It opens on a summary of the models, the
+  repositories and what happens when Tandem finds a bug in itself; **Customize** walks Models,
+  Repositories, Bug reports and Review. **Start** is the user's one consent to apply the complete
+  answer: models and selected providers, code folders, the self-improvement setting, and the
+  commands of each chosen repository before opening chats for them. The backend validates the
+  answer against the current machine before writing, then posts a fixed success or error status
+  without a model turn. Chat setup actions retain their own approval. The block does not ask the
+  user to choose MCP servers or worker skills; OMP determines skills and MCP availability from
+  each coordinator or child worker's checkout and user configuration. Herdr has no native blocks,
+  so its coordinator runs the same steps as the chat checklist.
+- Every repository needs at least one non-blank validation command to be saved by the setup block.
+  The block's Start and Save changes are disabled, and the answer is refused by the backend, while
+  any chosen repository has none. The bottom bar names the repository.
+- The same block in `settings` mode changes those choices later, for new tasks only. A repository
+  that is already set up has its `validationCommands` and `setupCommands` replaced in place
+  (`saveRepositoryCommands`, src/config/repositories.ts), which touches only those two keys of its
+  `settings.toml` and refuses a file changed since it was read.
 - The native terminal asks **Save settings** / **Not now** before writing; **Not now** or Ctrl+C
   creates no project record and leaves saved model choices intact. The interview text and choice
   rules live in `src/terminal/onboarding.ts` and `src/instructions.ts`.
@@ -110,9 +122,10 @@ The coordinator delegates research and does judgement itself.
   fails closed. Writes replace the file atomically.
 - The catalogue comes from `omp models --json`, one lookup per operation, plus a fixed Claude Code
   catalogue (`claude-code/fable`, `claude-code/opus`, `claude-code/sonnet`, `claude-code/haiku`) that only explicit
-  choices accept: `configure-models`, a setup-page pick, or a preset the user picks (see
-  [harness.md](harness.md#presets)). Tandem never picks those on its own. Never parse private
-  model configuration or invent names. Catalogue cost is descriptive, not a price guarantee.
+  choices accept: `configure-models`, a model the user picks in the setup block, or the
+  recommendation they save (see [harness.md](harness.md#model-recommendations)). Tandem never
+  picks those on its own. Never parse private model configuration or invent names. Catalogue cost
+  is descriptive, not a price guarantee.
 - `configure-models` takes a file mapping all five roles directly to `{ model, thinking }` (not
   the storage envelope), with no model-controlled approval field. It refuses without `--yes`, and
   rejects missing or ambiguous selectors and unsupported thinking for every role before writing.
@@ -127,9 +140,9 @@ The coordinator delegates research and does judgement itself.
 - **Not now** stops before `configure-models`, `setup`, or `launch` and never falls through to
   built-in defaults. Never infer omitted roles, merge roles, or treat recommendation approval as
   consent. Empty or failed discovery stays visible and never falls back.
-- A preset (see [harness.md](harness.md#presets)), picked on the setup page or named in plain words
-  in chat, fills all five roles at once; the user may change any role, and the recap shows each
-  role's harness. Picking a preset is not approval: the recap still is.
+- Setup's per-role recommendation (see [harness.md](harness.md#model-recommendations)) starts each
+  role in the setup block, unless the role has a saved choice. The user may change any role.
+  Seeing a recommendation is not approval: Start or Save changes is, and in chat the recap is.
 - `configure-models` runs once, only after explicit approval of the complete recap.
 
 ### Resolution order
@@ -289,9 +302,8 @@ lookups, and short replies to Tandem's fixed-choice questions, skip the model.
 ## Choosing the terminal
 
 The home setting `terminal = "herdr"` or `terminal = "tern"` applies across projects; absent
-means Herdr. Onboarding offers Tern only after a ready sign-in probe. A switch requires no
-unfinished work or retained uncertain resources. Selecting Tern links the view package; a
-separate consent controls global sidebar and shortcut changes. See
-[terminal.md](terminal.md#choosing-a-terminal) for the authoritative selection and probe rules,
+means Tern, and only `terminal = "herdr"` selects Herdr. No setup surface asks about it. Linking
+the view package needs no consent; a separate consent controls global sidebar and shortcut
+changes. See [terminal.md](terminal.md#choosing-a-terminal) for the authoritative selection rules,
 and [plugin consent and restoration](terminal.md#plugin-consent-and-restoration) for guarded
 settings changes. Task policy and model/harness choices are independent of the terminal.

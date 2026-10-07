@@ -178,18 +178,9 @@ the coordinator's chat is compacted after a task finishes so later turns don't p
 ## One view of everything
 
 `tandem status` shows every project at once: what needs you, what's running, and your pull
-requests. In Herdr you don't have to ask: a narrow panel beside each project's chat shows what
-every agent is doing, and Enter on a row jumps to it. The tab bar counts what needs you
-(`● 2 need you`), and when something new does, Herdr shows a notification. A few keys work from
-any pane, even inside an agent:
-
-- `prefix+t` opens the panel as a popup (Esc closes it). Closing the side panel loses nothing;
-  `prefix+t` or running `tandem` brings it back.
-- `prefix+0` goes back to this project's chat.
-- `prefix+,` and `prefix+.` go to the previous or next project.
-
-Herdr's sidebar starts hidden, since the panel does its job; `prefix+b` shows it.
-`tandem status --watch` works in any terminal.
+requests. In Tern you don't have to ask: the panel beside each project's chat shows what every
+agent is doing, and a click on a row jumps to it (see below). `tandem status --watch` works in any
+terminal.
 
 ![tandem status in a terminal: Needs you comes first; Running tasks are grouped under muted project headings, with stage and elapsed time before each objective; PRs show check progress bars; and a weekly summary follows](docs/images/status.svg)
 
@@ -198,25 +189,22 @@ green is done. Piped output and `NO_COLOR` give the same layout as plain text.
 
 ### In Tern
 
-[Tern](https://stencil.so/tern) gives Tandem a native panel with clickable task and PR rows,
-project switching, brief approval beside your chat, and PRs with CI, tours and comments under
-their diff lines. Comments on Tandem's PRs go straight to the worker as fix requests. When
-reviewing someone else's PR, choose the comments and verdict, then click Post to send the review.
-Tern's inbox brings you questions, new draft PRs and stuck tasks.
+[Tern](https://stencil.so/tern) is Tandem's terminal. It gives Tandem a native panel with
+clickable task and PR rows, project switching, brief approval beside your chat, and PRs with CI,
+tours and comments under their diff lines. Comments on Tandem's PRs go straight to the worker as
+fix requests. When reviewing someone else's PR, choose the comments and verdict, then click Post
+to send the review. Tern's inbox brings you questions, new draft PRs and stuck tasks.
 The panel bell counts unread Tandem alerts. Click it or activate the project's inbox entry to
 read them and return to the conversation; clearing Tern's inbox alone leaves this bell unchanged.
 The Tern iOS app is **UNTESTED** with Tandem.
 
-Install Tern and sign in with your Stencil account, then choose **Tern** during Tandem setup.
-Tern is a closed beta, so you need access as well as an account. Setup offers it only after
-confirming that it is installed and signed in; the check may briefly open its own window.
-Herdr remains the default. Ask Tandem's chat to change your terminal later, after finishing or
-stopping existing tasks.
+Install Tern and sign in with your Stencil account before you run Tandem. Tern is a closed beta,
+so you need access as well as an account. Tandem never asks which terminal to use. If Tern is
+missing or Tandem can't link into it, Tandem stops with one message saying it needs Tern.
 
-Tandem asks separately before hiding Tern's sidebar and adding shortcuts for Board, PRs, Usage
-and switching projects. Decline and you can still use the panel buttons and command palette.
-Setup preserves custom keys; use the palette if a shortcut is already assigned elsewhere.
-Choosing Herdr again restores settings Tandem changed, keeping any edits you made afterward.
+Tandem asks separately before hiding Tern's sidebar and adding shortcuts for Board, PRs, Usage,
+Settings and switching projects. Decline and you can still use the panel buttons and command
+palette. Setup preserves custom keys; use the palette if a shortcut is already assigned elsewhere.
 
 - **Tasks:** click a task in the panel, follow a task link below Tandem's reply, or choose
   **Tandem: Open task…** in the command palette and search by title, id or stage. The task page
@@ -234,10 +222,36 @@ Choosing Herdr again restores settings Tandem changed, keeping any edits you mad
   takes you to the first waiting item; **Dismiss** or `Esc` returns to chat.
   A project stays visible while it is selected in any Tern window.
   A catch-up failure shows a warning and leaves the project open so you can keep working.
+- **Settings:** click the panel's Settings button, choose **Tandem: Settings** in the command
+  palette, or press `Cmd+Shift+,` if installed. Change models, repositories and what Tandem does
+  when it finds a bug in itself. Changes apply to new tasks; tasks already running keep the
+  settings they started with. **Tandem: Change models** and **Tandem: Add or edit repositories**
+  open Settings at that section.
 
 From Board or Usage, press `Esc` or click **← Orchestrator** to return to the project's chat.
 Pressing `Cmd+Shift+B` again from Board also closes it.
+
+If a view fails before changing anything, Tern says "The Tandem view did not open and nothing
+changed. Open it again." If Tandem can't tell whether a view opened, it pauses new views for that
+project rather than risk a duplicate. **← Orchestrator** still takes you back to the chat, and
+`tandem fix` lists the paused view so you can clear it.
 [Terminal reference](docs/reference/terminal.md) covers the details.
+
+### In Herdr
+
+[Herdr](https://herdr.dev/docs/install/) 0.8.2 or newer still works when you set
+`terminal = "herdr"` in `~/.tandem/settings.toml`. Setup never offers it. Switch only when no task
+is unfinished. A narrow panel beside each project's chat shows what every agent is doing, and
+Enter on a row jumps to it. The tab bar counts what needs you (`● 2 need you`), and when something
+new does, Herdr shows a notification. A few keys work from any pane, even inside an agent:
+
+- `prefix+t` opens the panel as a popup (Esc closes it). Closing the side panel loses nothing;
+  `prefix+t` or running `tandem` brings it back.
+- `prefix+0` goes back to this project's chat.
+- `prefix+,` and `prefix+.` go to the previous or next project.
+
+Herdr's sidebar starts hidden, since the panel does its job; `prefix+b` shows it. Herdr has no
+setup panel, so the chat walks through setup (see [Install and first run](#install-and-first-run)).
 
 ## Requirements
 
@@ -245,8 +259,8 @@ Pressing `Cmd+Shift+B` again from Board also closes it.
 - `git`
 - [Bun](https://bun.com/docs/installation)
 - [Oh My Pi (OMP)](https://github.com/can1357/oh-my-pi), set up with your model provider
-- [Herdr](https://herdr.dev/docs/install/) 0.8.2 or newer, or [Tern](https://stencil.so/tern),
-  to hold the agent panes (Tern requires closed-beta access and a Stencil account)
+- [Tern](https://stencil.so/tern), where Tandem's agents run (closed-beta access and a Stencil
+  account), or [Herdr](https://herdr.dev/docs/install/) 0.8.2 or newer if you opt into it
 - [Treehouse](https://github.com/kunchenguid/treehouse), which creates worktrees
 - Optional: [`gh`](https://cli.github.com/), signed in, for pull requests and PR watch
 - Optional: `lavish-axi` for presentations, `TYPESAFE_API_KEY` for Jev
@@ -266,12 +280,13 @@ cd tandem
 ./setup.sh
 ```
 
-The script installs Tandem's tools, including Herdr, and configures your saved terminal choice.
-For Herdr, it updates versions older than 0.8.2 and offers the panel, keys, tab-bar summary and
-notifications, showing the changes before asking. Install Tern separately and choose it during
-first-run setup to get its native views; Tandem asks separately about Tern's global sidebar and
-shortcuts. Read [setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep
-Bun's global bin directory on your `PATH`.
+The script installs Tandem's tools (it still includes Herdr, which Tandem uses only if you opt
+into it) and links Tandem's views into Tern. It stops with a plain message if Tern isn't
+installed. Tandem asks separately about Tern's global sidebar and shortcuts. With
+`terminal = "herdr"` in your settings, it instead updates Herdr when older than 0.8.2 and offers
+the panel, keys, tab-bar summary and notifications, showing the changes before asking. Read
+[setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep Bun's global bin
+directory on your `PATH`.
 
 Then, from any folder:
 
@@ -279,42 +294,39 @@ Then, from any folder:
 tandem
 ```
 
-The first run opens Tandem's own chat with a welcome popup. With Lavish installed, Tandem opens a
-one-page setup in your browser. It has four steps:
+The first run opens Tandem's own chat in Tern with your setup beside it. Ask the chat about any
+setting while you go; it answers questions and leaves the choices to the setup. The setup opens on
+a summary: the models Tandem will use, the repositories it will work in (with what each validates
+with), and what happens when Tandem finds a bug in itself. Press **Start** (or Enter) to accept
+it, or **Customize** to go through four steps:
 
-1. **Models** — choose a model and thinking level for each job from the OMP catalogue, and
-   choose Herdr or Tern when Tern is ready.
-2. **Repos** — choose discovered checkouts, scan another code folder, or add a checkout by its exact
-   path. Review and edit the validation and install commands for each.
-3. **Self-improvement** — choose whether Tandem should investigate its own recurring problems and
-   offer a fix or draft an issue.
-4. **Review** — check the complete answer, including which selected providers Tandem may spend on.
+1. **Models:** each job (planning, research, coding, review, mockups) has a recommended model and
+   thinking level with a hint on what to look for. Choose any model that runs on your machine, or
+   **Use recommended models** to start over.
+2. **Repositories:** add checkouts by name. For each one, set the validation commands Tandem runs
+   to test every change and the setup commands that prepare a task's worktree, usually installing
+   dependencies. Tandem suggests commands from the repository's `package.json` scripts. Every
+   repository needs at least one validation command, and Start stays disabled until it has one.
+3. **Bug reports:** choose whether Tandem drafts an issue, opens a task to fix it, or does
+   nothing when it finds a bug in itself.
+4. **Review:** check the models, repositories and bug-report choice together, then press Start.
 
-Save and continue is your one consent to apply the models and selected providers, code folders,
-self-improvement and terminal choices, and selected repository settings, then open a chat for each selected repo.
-Tandem validates the answer against the current machine before it saves anything; the coordinator
-posts a fixed success or error status in chat. The page only reports that the request was submitted
-and saving is in progress until that status arrives. Chat-based setup keeps its own approval step.
-You do not choose MCP servers or a worker-skill set in onboarding:
-coordinators and child workers use the skills and MCP servers OMP loads for their checkout and user
-configuration. OMP's own configuration still controls what is available; Tandem does not grant
-every skill or server that might exist elsewhere.
-Without Lavish, the chat walks through the same four decisions. It checks your tools, helps you pick
-models, asks where you keep code and which repos to set up, then shows the checks and install step
-it found for each repo for you to confirm or change. It asks before saving settings and opening the
-project's own chat. Leave halfway and it picks up where you stopped. Ask it to change how Tandem
-works, too; it tries settings first and makes code changes as ordinary tasks. After that, plain
-`tandem` from any folder reopens Tandem's chat and every saved project with its previous chat.
+Start is your one consent to apply the models and providers, code folders, bug-report choice and
+repository settings, then open a chat for each repository. Tandem validates the answer against the
+current machine before it saves anything, and the chat says "Setup saved" when it is done. Your
+choices stay in place as you move between steps. You do not choose MCP servers or a worker-skill
+set: coordinators and child workers use the skills and MCP servers OMP loads for their checkout
+and user configuration. OMP's own configuration still controls what is available; Tandem does not
+grant every skill or server that might exist elsewhere.
+
+Change any of it later from Settings (see [In Tern](#in-tern)). Herdr has no setup panel, so there
+the chat walks through the same decisions. It checks your tools, helps you pick models, asks where
+you keep code and which repos to set up, then shows the checks and install step it found for each
+repo for you to confirm or change. It asks before saving settings and opening the project's own
+chat. Leave halfway and it picks up where you stopped. Ask it to change how Tandem works, too; it
+tries settings first and makes code changes as ordinary tasks. After that, plain `tandem` from any
+folder reopens Tandem's chat and every saved project with its previous chat.
 `tandem /path/to/repo` still works.
-
-The Repos step lists checkouts Tandem found before you type; click one to add it. If yours isn't
-listed, **Choose another folder…** opens the macOS folder picker and scans the folder read-only. If
-the picker is unavailable, enter a folder path (such as `~/code`) instead. The page refreshes with
-matches and restores the draft choices; keep the page open while the search result arrives. You can
-also add a checkout by its exact path when scanning did not find it. Search requests do not save
-folders or settings: roots are saved alongside existing ones only after you choose Save and continue
-on the Review stage.
-Ask for help in Lavish's Conversation panel and Tandem answers there without making you save first.
 
 ## Commands
 
@@ -328,7 +340,7 @@ Ask for help in Lavish's Conversation panel and Tandem answers there without mak
 | `tandem memory [NAME]` | This project's workstreams; with a name, its catch-up and where its notes file is |
 | `tandem specialists` | This project's specialists, where each comes from, and any file problems (exits 1 on a problem) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
-| `tandem fix` | Clean up leftovers from a crash or failed launch (asks first) |
+| `tandem fix` | Clean up leftovers from a crash or failed launch, including paused Tern views and panes Tandem stopped touching (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
 | `tandem config [PATH]` | Open the project's settings file |
 | `tandem welcome` | Show the welcome message again |

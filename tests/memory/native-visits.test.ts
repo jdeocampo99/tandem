@@ -1,16 +1,26 @@
 import { expect, test } from "bun:test";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { nativeViewText } from "../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
-import { repositoryKey } from "../../src/config/repositories.ts";
 import {
   dismissNativeCatchUp,
   maybeShowCatchUp,
   recordNativeVisibility,
   visitNativeProject,
 } from "../../src/memory/native-visits.ts";
+import {
+  projectStoreDirectory,
+  readProjectState,
+  withProjectLock,
+} from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
+
+async function savedVisit(home: string, project: string) {
+  const visit = (await readProjectState(home, project))?.visit;
+  if (visit === undefined) throw new Error("no visit was saved");
+  return visit;
+}
 
 test("returning after an hour shows changed work once; short visits and dismissed work stay quiet", async () => {
   const home = await mkdtemp("/tmp/tdm-visit-");
@@ -50,9 +60,7 @@ test("returning after an hour shows changed work once; short visits and dismisse
       ),
     ).toBe(false);
     expect(opened).toBe(1);
-    const saved = JSON.parse(
-      await readFile(join(home, "native-visits", `${repositoryKey(input.project)}.json`), "utf8"),
-    );
+    const saved = await savedVisit(home, input.project);
     expect(saved.previousSignature).toBe("changed-later");
   } finally {
     await rm(home, { recursive: true, force: true });
@@ -75,9 +83,7 @@ test("a failed catch-up open does not acknowledge its changed signature", async 
         throw new Error("unknown open outcome");
       }),
     ).rejects.toThrow("unknown open outcome");
-    const saved = JSON.parse(
-      await readFile(join(home, "native-visits", `${repositoryKey(input.project)}.json`), "utf8"),
-    );
+    const saved = await savedVisit(home, input.project);
     expect(saved.previousSignature).toBe("before");
     expect(saved.lastOpenedAt).toBe(input.now);
   } finally {
@@ -103,39 +109,28 @@ test("the project trigger stays quiet without a publication and preserves visits
     },
   };
   let attempts = 0;
+  const base = terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" }), {
+    terminal: "herdr",
+  });
   const terminal = {
-    ...terminalBackend(async () => ({ code: 0, stdout: "", stderr: "" })),
+    ...base,
     name: "tern" as const,
-    openView: async () => {
-      attempts++;
-      return { opened: false, warnings: ["uncertain native outcome"] };
-    },
+    views: viewsWith(base, {
+      open: async () => {
+        attempts++;
+        return { opened: false, warnings: ["uncertain native outcome"] };
+      },
+    }),
   };
   try {
     expect(await maybeShowCatchUp(terminal, { home, record })).toBe(false);
     const before = { home, project, now: "2030-01-02T10:00:00Z", signature: "before" };
     await visitNativeProject(before, async () => {});
-    const path = nativeViewsPath(home, project);
-    await mkdir(join(path, ".."), { recursive: true });
-    await writeFile(
-      path,
-      nativeViewText("panel", {
-        version: 1,
-        project,
-        writtenAt: before.now,
-        changeSignature: "after",
-        tasks: {},
-        briefs: {},
-        pullRequests: {},
-        projects: [],
-      }),
-    );
+    await publishFixture(home, project, { writtenAt: before.now, changeSignature: "after" });
     await expect(
       maybeShowCatchUp(terminal, { home, record, now: "2030-01-02T11:00:00Z" }),
     ).rejects.toThrow("uncertain native outcome");
-    const saved = JSON.parse(
-      await readFile(join(home, "native-visits", `${repositoryKey(project)}.json`), "utf8"),
-    );
+    const saved = await savedVisit(home, project);
     expect(saved.previousSignature).toBe("before");
     expect(saved.lastOpenedAt).toBe(before.now);
     expect(attempts).toBe(1);
@@ -190,7 +185,7 @@ test("visibility heartbeats skip writes within a minute; transitions capture dep
     now: "2030-01-02T09:00:00Z",
     signature: "start",
   };
-  const path = join(home, "native-visits", `${repositoryKey(input.project)}.json`);
+  const path = join(projectStoreDirectory(home, input.project), "state.json");
   try {
     await visitNativeProject(input, async () => {});
     const original = await readFile(path, "utf8");
@@ -201,11 +196,13 @@ test("visibility heartbeats skip writes within a minute; transitions capture dep
       expect((await lstat(path)).ino).toBe(inode);
     }
     await recordNativeVisibility({ ...input, now: "2030-01-02T09:01:00Z", heartbeat: true });
-    expect(JSON.parse(await readFile(path, "utf8")).lastVisibleAt).toBe("2030-01-02T09:01:00Z");
+    expect(JSON.parse(await readFile(path, "utf8")).visit.lastVisibleAt).toBe(
+      "2030-01-02T09:01:00Z",
+    );
     await recordNativeVisibility({ ...input, now: "2030-01-02T09:01:05Z", signature: "departure" });
     const departed = await readFile(path, "utf8");
     const departureInode = (await lstat(path)).ino;
-    expect(JSON.parse(departed)).toMatchObject({
+    expect(JSON.parse(departed).visit).toMatchObject({
       lastVisibleAt: "2030-01-02T09:01:05Z",
       previousSignature: "departure",
     });
@@ -219,18 +216,14 @@ test("visibility heartbeats skip writes within a minute; transitions capture dep
   }
 });
 
-test("old opening-only records have no known last-visible time and stay quiet", async () => {
+test("a visit without a known last-visible time stays quiet", async () => {
   const home = await mkdtemp("/tmp/tdm-visibility-");
   const project = "/fixture/project";
   try {
-    await mkdir(join(home, "native-visits"));
-    await writeFile(
-      join(home, "native-visits", `${repositoryKey(project)}.json`),
-      JSON.stringify({
-        version: 1,
-        project,
-        lastOpenedAt: "2030-01-02T09:00:00Z",
-        previousSignature: "old",
+    await withProjectLock(home, project, async (store) =>
+      store.write({
+        ...(await store.read()),
+        visit: { lastOpenedAt: "2030-01-02T09:00:00Z", previousSignature: "old" },
       }),
     );
     expect(

@@ -25,7 +25,7 @@
   background: rgba(210, 170, 60, 0.12);
 }
 .brief-new {
-  color: #77bd87;
+  color: light-dark(#2f7d45, #77bd87);
   font-size: 10px;
   padding: 0 6px;
 }

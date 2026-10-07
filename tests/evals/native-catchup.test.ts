@@ -1,16 +1,13 @@
 import { expect, test } from "bun:test";
-import { readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
-import { z } from "zod";
-import { readNativeBundle } from "../../src/board/native-file.ts";
-import { NativeViewsPublisher } from "../../src/board/native-publish.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
+import { stat } from "node:fs/promises";
+import { NativeViewsPublisher } from "../../src/board/native-read.ts";
 import { boardView } from "../../src/board/view.ts";
-import { repositoryKey } from "../../src/config/repositories.ts";
 import { maybeShowCatchUp } from "../../src/memory/native-visits.ts";
+import { readProjectState, viewIndexPath } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
 import { state } from "../board/fixtures.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { seedScenarioTask, withScenario } from "./scenario.ts";
 
 for (const changed of [true, false]) {
@@ -23,20 +20,29 @@ for (const changed of [true, false]) {
         worktree: { path: world.repoPath },
       };
       const opened: TerminalView[] = [];
+      const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
       const terminal: TerminalBackend = {
-        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-        openView: async (input) => {
-          opened.push(input.view);
-          return { opened: true, warnings: [] };
-        },
+        ...base,
+        views: viewsWith(base, {
+          open: async (input) => {
+            opened.push(input.view);
+            return { opened: true, warnings: [] };
+          },
+        }),
       };
       const input = () => ({ home: world.home, record, now: world.clock() });
       const visitedAt = world.clock();
-      const visitPath = join(world.home, "native-visits", `${repositoryKey(world.repoPath)}.json`);
-      const savedVisit = async () =>
-        z
-          .object({ lastOpenedAt: z.string(), previousSignature: z.string().optional() })
-          .parse(JSON.parse(await readFile(visitPath, "utf8")));
+      const savedVisit = async () => {
+        const visit = (await readProjectState(world.home, world.repoPath))?.visit;
+        return visit === undefined
+          ? undefined
+          : {
+              lastOpenedAt: visit.lastOpenedAt,
+              ...(visit.previousSignature === undefined
+                ? {}
+                : { previousSignature: visit.previousSignature }),
+            };
+      };
       const publish = async () => {
         const publisher = new NativeViewsPublisher({
           home: world.home,
@@ -55,10 +61,12 @@ for (const changed of [true, false]) {
           sessions: new Map(),
         });
         await publisher.settle();
-        return readNativeBundle(world.home, world.repoPath);
+        const shown = (await readProjectState(world.home, world.repoPath))?.published;
+        if (shown === undefined) throw new Error("the publisher stored no publication");
+        return shown;
       };
 
-      await expect(stat(nativeViewsPath(world.home, world.repoPath))).rejects.toHaveProperty(
+      await expect(stat(viewIndexPath(world.home, world.repoPath))).rejects.toHaveProperty(
         "code",
         "ENOENT",
       );

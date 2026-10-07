@@ -1,4 +1,4 @@
-// The real Tandem CLI behind the plugin's tandem.sh and native-input.sh in workflows-native.test.ts.
+// The real Tandem CLI behind the plugin's tandem.sh in workflows-native.test.ts.
 // Tern commands reach the test's isolated daemon and every other program is refused. Each
 // coordinator pane runs a stand-in shell, so its inspection reports the recorded harness process.
 import { appendFile } from "node:fs/promises";
@@ -6,10 +6,9 @@ import { join } from "node:path";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { discoverCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
-import { withNativeInput } from "../../../src/terminal/native-input.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../../src/terminal-backend/contract.ts";
-import { isolatedRunner } from "./native-window.ts";
+import { isolatedRunner, setupRunner } from "./native-window.ts";
 
 const root = process.env.TANDEM_WORKFLOW_ROOT;
 if (process.env.TANDEM_HOME === undefined || !root?.startsWith("/private/tmp/tdm-"))
@@ -32,7 +31,7 @@ const spawn: CommandRunner = async (request) => {
   ]);
   return { stdout, stderr, code };
 };
-const run = isolatedRunner(spawn, log);
+const run = setupRunner(isolatedRunner(spawn, log), log);
 const records = (await discoverCoordinatorRecords({ home })).records.map((entry) => entry.record);
 const base = terminalBackend(run, { terminal: "tern", home });
 const terminal: TerminalBackend = {
@@ -77,11 +76,5 @@ async function tandem(argv: readonly string[]): Promise<number> {
   return outcome.exitCode;
 }
 
-const [first, verb, id, ...context] = process.argv.slice(2);
-const code =
-  first === "--stdin-input"
-    ? await withNativeInput(await Bun.stdin.text(), (path) =>
-        tandem(["native", verb ?? "", id ?? "", "--input", path, ...context]),
-      )
-    : await tandem(process.argv.slice(2));
-process.exit(code);
+// `native act` reads its action envelope from this process's stdin, as from Tern.
+process.exit(await tandem(process.argv.slice(2)));

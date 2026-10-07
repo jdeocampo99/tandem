@@ -1,8 +1,15 @@
 import { expect, test } from "bun:test";
 import type { RepoPolicy } from "../../src/contracts.ts";
 import type { ModelRecord } from "../../src/harness/contract.ts";
-import { renderSetupHtml } from "../../src/onboarding/setup-render.ts";
-import { buildSetupView, type SetupViewInput } from "../../src/onboarding/setup-view.ts";
+import {
+  buildSetupView,
+  priceLevel,
+  recommend,
+  SETUP_ROLE_COPY,
+  type SetupModel,
+  type SetupView,
+  type SetupViewInput,
+} from "../../src/onboarding/setup-view.ts";
 
 const catalogue: readonly ModelRecord[] = [
   {
@@ -26,24 +33,20 @@ const saved: RepoPolicy["models"] = {
 };
 
 const input: SetupViewInput = {
-  tern: { status: "missing" },
+  mode: "setup",
   generatedAt: "2026-09-26T12:00:00.000Z",
   homeFolder: "/Users/me",
   ompCatalogue: catalogue,
   claudeCode: "not-installed",
-  searchedFolders: ["/Users/me/code", "/srv/git"],
   repos: [
-    {
-      path: "/Users/me/code/web",
-      setUp: false,
-    },
+    { path: "/Users/me/code/web", setUp: false },
     {
       path: "/Users/me/code/api",
       repo: "acme/api",
       setUp: false,
       details: {
         validationCommands: ["bun run check", "bun run test"],
-        scripts: ["check", "test"],
+        scriptCommands: ["bun run check", "bun run typecheck", "bun run test"],
         setupCommands: ["bun install --frozen-lockfile"],
         lockfile: "bun.lock",
       },
@@ -52,20 +55,37 @@ const input: SetupViewInput = {
   ],
 };
 
-test("every job starts empty on a first run and all catalogue models are available", () => {
+test("every job starts without a saved pick and all catalogue models are available", () => {
   const view = buildSetupView(input);
   expect(view.roles.map((role) => role.name)).toEqual([
     "Planning",
     "Research",
     "Coding",
     "Review",
-    "Visual mockups",
+    "Mockups",
   ]);
   expect(view.roles.every((role) => role.pick === undefined)).toBe(true);
-  expect(view.roles[0]?.example).toBe("Claude Fable 5.1 on high");
   expect(view.models[0]?.thinking).toEqual(["low", "high", "max"]);
   expect(view.models[1]?.name).toBe("gpt");
   expect(view.selfImprovement).toBe("fix");
+});
+
+test("each role shows its hint from the shared role copy", () => {
+  const view = buildSetupView(input);
+  expect(view.roles.map((role) => role.hint)).toEqual([
+    "your smartest model",
+    "cheap and fast",
+    "strong at code, high effort",
+    "smart, and different from Coding",
+    "cheap and fast",
+  ]);
+  for (const role of view.roles) expect(role.hint).toBe(SETUP_ROLE_COPY[role.id].hint);
+});
+
+test("a role the Balanced profile cannot fill has no recommendation", () => {
+  const view = buildSetupView({ ...input, ompCatalogue: [] });
+  expect(view.roles.every((role) => role.recommended === undefined)).toBe(true);
+  expect(view.harnesses[1]?.unavailable).toContain("No models yet");
 });
 
 test("saved choices remain available across providers while invalid model or thinking choices clear", () => {
@@ -103,11 +123,6 @@ test("pickers group Claude Code's models before OMP's, and only offer Claude Cod
   const missing = buildSetupView(input);
   expect(missing.models.map((model) => model.harness)).toEqual(["omp", "omp"]);
   expect(missing.harnesses[0]?.unavailable).toBe("Not installed on this computer.");
-  expect(missing.presets.map((preset) => [preset.id, preset.status])).toEqual([
-    ["claude-codex", "disabled"],
-    ["all-claude-code", "disabled"],
-    ["all-omp", "disabled"],
-  ]);
 });
 
 test("a saved Claude Code choice is kept only while Claude Code is ready", () => {
@@ -122,69 +137,129 @@ test("a saved Claude Code choice is kept only while Claude Code is ready", () =>
   expect(scoutPick({ setting: "disableAllHooks", source: "managed" })).toBeUndefined();
 });
 
-test("repositories say where their commands came from, with the home folder as ~", () => {
+test("price levels come from one table of output-price ceilings", () => {
+  expect(priceLevel({ output: 3 })).toBe("$");
+  expect(priceLevel({ output: 20 })).toBe("$");
+  expect(priceLevel({ output: 20.01 })).toBe("$$");
+  expect(priceLevel({ output: 60 })).toBe("$$");
+  expect(priceLevel({ output: 75 })).toBe("$$$");
   const view = buildSetupView(input);
-  expect(view.searchedFolders).toEqual(["~/code", "/srv/git"]);
-  const [api, tandem, web] = view.repos;
+  expect(view.models.map((model) => model.priceLevel)).toEqual(["$$", undefined]);
+});
+
+test("set-up repositories and candidates list their commands, suggestions, and sources", () => {
+  const view = buildSetupView(input);
+  expect(view.repos.map((repo) => repo.name)).toEqual(["tandem"]);
+  const [api, web] = view.candidates;
   expect(api).toMatchObject({
     name: "api",
     shownPath: "~/code/api",
     repo: "acme/api",
     validationCommands: ["bun run check", "bun run test"],
-    install: "bun install --frozen-lockfile",
+    setupCommands: ["bun install --frozen-lockfile"],
+    suggestions: ["bun run typecheck"],
+    detectedFrom: "package.json scripts and bun.lock",
   });
-  expect(api?.validationSource).toBe(
-    "Found in package.json scripts: check, test. Edit if these aren't what you run before merging.",
+  expect(web).toMatchObject({
+    name: "web",
+    validationCommands: [],
+    setupCommands: [],
+    suggestions: [],
+  });
+  expect(web?.detectedFrom).toBeUndefined();
+});
+
+test("a repository with nothing to suggest or detect names no source", () => {
+  const view = buildSetupView({
+    ...input,
+    repos: [
+      {
+        path: "/Users/me/code/plain",
+        setUp: false,
+        details: { validationCommands: ["make check"], scriptCommands: [], setupCommands: [] },
+      },
+    ],
+  });
+  expect(view.candidates[0]?.suggestions).toEqual([]);
+  expect(view.candidates[0]?.detectedFrom).toBeUndefined();
+});
+
+const flagship: ModelRecord = {
+  selector: "openai-codex/flagship",
+  id: "flagship",
+  provider: "openai-codex",
+  reasoning: true,
+  thinking: ["low", "medium", "high", "max"],
+  cost: { input: 10, output: 50 },
+};
+
+const recommendedModels = (view: SetupView) =>
+  Object.fromEntries(
+    view.roles.map((role) => [
+      role.id,
+      `${role.recommended?.model.model} ${role.recommended?.model.thinking}`,
+    ]),
   );
-  expect(api?.installSource).toBe("Picked from bun.lock.");
-  expect(tandem?.setUp).toBe(true);
-  expect(web?.validationSource).toStartWith("Could not inspect this repository:");
-  expect(web?.installSource).toStartWith("Could not inspect this repository:");
+
+test("with Claude Code ready, Coding follows the Balanced profile and Review is Opus", () => {
+  const view = buildSetupView({ ...input, claudeCode: "ready", ompCatalogue: [flagship] });
+  expect(recommendedModels(view)).toEqual({
+    coordinator: "claude-code/fable high",
+    scout: "claude-code/sonnet medium",
+    implementer: "openai-codex/flagship max",
+    reviewer: "claude-code/opus high",
+    presentation: "claude-code/sonnet low",
+  });
+  expect(view.roles.map((role) => role.recommended?.reason)).toEqual([
+    "Its plans steer every other role.",
+    "Research is mostly reading, so speed matters more than depth.",
+    "Most of the time and cost is here.",
+    "A second model catches mistakes the first one misses.",
+    "Drawing a page needs little reasoning.",
+  ]);
 });
 
-test("the page is one self-contained document with the shared components inlined", () => {
-  const html = renderSetupHtml(buildSetupView(input));
-  expect(html.startsWith("<!doctype html>")).toBe(true);
-  expect(html).toContain("<title>Tandem setup</title>");
-  expect(html).toContain("--sunk: #23232e;");
-  expect(html).not.toContain("/*{{");
-  expect(html).toContain("window.TandemUI");
-  expect(html).not.toContain("{{");
-  const data = /<script type="application\/json" id="setup-data">([\s\S]*?)<\/script>/.exec(html);
-  expect(JSON.parse(data?.[1] ?? "null")).toEqual(buildSetupView(input));
+test("with Claude Code ready and no Balanced Coding pick, Coding is Opus and Review is Fable", () => {
+  const view = buildSetupView({ ...input, claudeCode: "ready", ompCatalogue: [] });
+  expect(recommendedModels(view)).toEqual({
+    coordinator: "claude-code/fable high",
+    scout: "claude-code/sonnet medium",
+    implementer: "claude-code/opus high",
+    reviewer: "claude-code/fable high",
+    presentation: "claude-code/sonnet low",
+  });
 });
 
-test("names from disk cannot close the data script", () => {
-  const hostile = "</script><img src=x onerror=alert(1)>";
-  const html = renderSetupHtml(
-    buildSetupView({
-      ...input,
-      repos: [...input.repos, { path: hostile, setUp: false }],
+test("without Claude Code, every role takes the Balanced profile's pick with the same reasons", () => {
+  const view = buildSetupView({ ...input, claudeCode: "not-installed", ompCatalogue: [flagship] });
+  expect(recommendedModels(view)).toEqual({
+    coordinator: "openai-codex/flagship high",
+    scout: "openai-codex/flagship medium",
+    implementer: "openai-codex/flagship max",
+    reviewer: "openai-codex/flagship max",
+    presentation: "openai-codex/flagship low",
+  });
+  expect(view.roles.map((role) => role.recommended?.reason)).toEqual([
+    "Its plans steer every other role.",
+    "Research is mostly reading, so speed matters more than depth.",
+    "Most of the time and cost is here.",
+    "A second model catches mistakes the first one misses.",
+    "Drawing a page needs little reasoning.",
+  ]);
+});
+
+test("a recommended thinking level the model lacks moves to the nearest one it supports", () => {
+  const lowOrHigh = ["claude-code/fable", "claude-code/opus", "claude-code/sonnet"].map(
+    (selector): SetupModel => ({
+      selector,
+      harness: "claude-code",
+      name: selector,
+      provider: "claude-code",
+      thinking: ["low", "high"],
     }),
   );
-  expect(html).not.toContain("<img");
-  expect(html.toLowerCase().match(/<\/script>/g)).toHaveLength(3);
-});
-
-for (const tern of [
-  { status: "missing" },
-  { status: "signedOut" },
-  { status: "unknown", reason: "Tern could not start." },
-] as const) {
-  test(`${tern.status} Tern does not replace a saved terminal choice`, () => {
-    const view = buildSetupView({ ...input, terminal: "tern", tern });
-    expect(view.ternReady).toBe(false);
-    expect(view.terminal).toBe("tern");
-    expect(view.terminalReason).toContain("Keeping the saved Tern choice.");
-    const firstSetup = buildSetupView({ ...input, tern });
-    expect(firstSetup.terminal).toBe("herdr");
-    expect(firstSetup.terminalReason).toContain("Using Herdr.");
-  });
-}
-
-test("setup offers Tern only with confirmed readiness", () => {
-  const view = buildSetupView({ ...input, terminal: "tern", tern: { status: "ready" } });
-  expect(view.ternReady).toBe(true);
-  expect(view.terminal).toBe("tern");
-  expect(view.terminalReason).toBeUndefined();
+  const recommended = recommend(true, { status: "unresolved", roles: {}, gaps: [] }, lowOrHigh);
+  // Medium sits one step from both; the lighter level wins the tie.
+  expect(recommended.scout?.model).toEqual({ model: "claude-code/sonnet", thinking: "low" });
+  expect(recommended.coordinator?.model).toEqual({ model: "claude-code/fable", thinking: "high" });
 });

@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { viewFileText } from "../../native/view-files.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -200,8 +200,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await mkdir(join(home, "native-views"));
       const panel = panelFixture(root);
       await writeFile(
-        nativeViewsPath(home, root),
-        nativeViewText("panel", {
+        viewIndexPath(home, root),
+        viewFileText("index", {
           version: 1,
           project: root,
           writtenAt: new Date().toISOString(),

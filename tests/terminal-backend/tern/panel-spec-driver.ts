@@ -2,14 +2,16 @@
 // Invoked only by the private copy of tandem.sh in panel-spec-native.test.ts.
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { z } from "zod";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { viewFileText } from "../../native/view-files.ts";
+import { viewsOf } from "../views.ts";
 
 const home = process.env.TANDEM_HOME;
 if (!home?.startsWith("/private/tmp/tdm-panel-spec-"))
@@ -31,12 +33,16 @@ const run: CommandRunner = async (request) => {
 const records = await listCoordinatorRecords(home, "fixture");
 const base = ternBackend(run, { home });
 const catchUpFailure = await Bun.file(join(home, "fixture-catchup-failure")).exists();
+const views = viewsOf(base);
 const terminal = {
   ...base,
-  openView: async (input: Parameters<typeof base.openView>[0]) => {
-    if (catchUpFailure && input.view.kind === "catchup")
-      throw new Error("Fixture catch-up unavailable");
-    return base.openView(input);
+  views: {
+    ...views,
+    open: async (input: Parameters<typeof views.open>[0]) => {
+      if (catchUpFailure && input.view.kind === "catchup")
+        throw new Error("Fixture catch-up unavailable");
+      return views.open(input);
+    },
   },
   inspect: async (target: Parameters<typeof base.inspect>[0]) => {
     const result = await base.inspect(target);
@@ -54,15 +60,17 @@ const terminal = {
     };
   },
 };
-await writeFile(join(home, "actions.log"), `${process.argv.slice(2).join("\n")}\n`, { flag: "a" });
+const envelope = await Bun.stdin.text();
+await writeFile(join(home, "actions.log"), `${envelope}\n`, { flag: "a" });
 const outcome = await runTerminal(process.argv.slice(2), {
   cwd: records[0]?.repoPath ?? home,
   processEnvironment: process.env,
   run,
   terminal,
+  input: Readable.from([envelope]),
 });
 for (const record of records) {
-  const path = nativeViewsPath(home, record.repoPath);
+  const path = viewIndexPath(home, record.repoPath);
   const envelope = z
     .object({ model: z.record(z.unknown()) })
     .parse(JSON.parse(await readFile(path, "utf8")));
@@ -73,7 +81,7 @@ for (const record of records) {
   const count = await nativeAlertCounts(home, record.repoPath);
   await writeFile(
     path,
-    nativeViewText("panel", {
+    viewFileText("index", {
       ...envelope.model,
       writtenAt: new Date().toISOString(),
       panel: { ...panel, header: { ...panel.header, bellCount: count.unread } },

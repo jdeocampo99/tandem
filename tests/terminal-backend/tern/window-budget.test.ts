@@ -11,17 +11,14 @@ test("window hooks defer cold imports and serialize one process launch per callb
       new URL("../../../tern-plugin/window.luau", import.meta.url),
       "utf8",
     );
-    const navigation = await readFile(
-      new URL("../../../tern-plugin/navigation.luau", import.meta.url),
-      "utf8",
-    );
+    const rt = await readFile(new URL("../../../tern-plugin/rt.luau", import.meta.url), "utf8");
     const checks = await readFile(new URL("./window-budget.luau", import.meta.url), "utf8");
     const path = join(root, "window.luau");
     await writeFile(
       path,
       checks.replace(
         "-- ENTRY_POINT",
-        `loadNavigation=function()\n${navigation}\nend\ndo\n${window.replaceAll("require(", "loadModule(")}\nend`,
+        `loadRt=function()\n${rt}\nend\ndo\n${window.replaceAll("require(", "loadModule(")}\nend`,
       ),
     );
     const child = Bun.spawn([luauBinary(), path], { stdout: "pipe", stderr: "pipe" });

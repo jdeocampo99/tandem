@@ -7,6 +7,7 @@ import {
   configureTernPluginSettings,
   restoreTernPluginSettings,
 } from "../../../src/terminal-backend/tern/plugin.ts";
+import { recordedActions, recordingCli } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -49,10 +50,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
     await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
       recursive: true,
     });
-    await writeFile(
-      join(plugin, "tandem.sh"),
-      `#!/bin/sh\nprintf '%s\\n' "$@" >> '${join(root, "actions.log")}'\n`,
-    );
+    await writeFile(join(plugin, "tandem.sh"), recordingCli(join(root, "actions.log")));
     // Read only schema metadata and the synthetic keymap, never the whole environment/settings tree.
     await writeFile(
       join(plugin, "window.luau"),
@@ -182,8 +180,9 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
         String(board[0] + board[2] / 2),
         String(board[1] + board[3] / 2),
       );
+      const sent = () => recordedActions(join(root, "actions.log"));
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes(`native\nboard\n--pane\n`),
+        (await sent()).some(({ action }) => action.verb === "open" && action.ref.kind === "board"),
       );
       expect(await readFile(prefs, "utf8")).toBe(original);
       await close();
@@ -192,9 +191,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       await open();
       await run("ctl", "--control", control, "key", "cmd+1");
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes(
-          "native\nproject\n1\n--pane\n",
-        ),
+        (await sent()).some(({ action }) => action.verb === "project" && action.target === 1),
       );
       expect(JSON.parse(await readFile(prefs, "utf8")).keybinds["cmd+shift+b"]).toBe("palette");
       await close();

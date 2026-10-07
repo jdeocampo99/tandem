@@ -1,21 +1,22 @@
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { basename, isAbsolute, join, relative } from "node:path";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
-import { readNativeBundle } from "../../../src/board/native-file.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { runTerminal } from "../../../src/main.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { readProjectState, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import { createTandemService, type TandemService } from "../../../src/service/controller.ts";
-import { withNativeInput } from "../../../src/terminal/native-input.ts";
 import { installTerminalPlugin, terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { luauBinary } from "../../luau.ts";
 import type { ScenarioTernProject, ScenarioWorld } from "../scenario.ts";
+import { type Appearance, type Painted, paint } from "./paint.ts";
 
 const PLUGIN = fileURLToPath(new URL("../../../tern-plugin/", import.meta.url));
 const HOST = fileURLToPath(new URL("./host.luau", import.meta.url));
+const JSON_CODEC = fileURLToPath(new URL("./json.luau", import.meta.url));
 const FIRST_LUAU_PANE = 20001;
 const FIRST_LUAU_TAB = 30001;
 /** Staged route and launch timers use 1 ms; anything due this soon belongs to the current gesture. */
@@ -257,6 +258,7 @@ export type DetailView = Readonly<{ task: string } | { brief: string }>;
 
 export type CliRun = Readonly<{
   argv: readonly string[];
+  stdin: string | undefined;
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -289,6 +291,9 @@ export class TernParityHost {
   #next: number | undefined;
   readonly #scratch: string;
   readonly #epochMs: number;
+  /** How far the window's timers have advanced its clock past `#epochMs`. */
+  #advancedMs = 0;
+  readonly #startedMs = performance.now();
 
   private constructor(
     world: ScenarioWorld,
@@ -324,7 +329,7 @@ export class TernParityHost {
         modules: `local MODULES={${sources.join(",\n")}}\n`,
         entries: [manifest.host, manifest.window].map(moduleName),
       },
-      await readFile(HOST, "utf8"),
+      `${await readFile(JSON_CODEC, "utf8")}\n${await readFile(HOST, "utf8")}`,
       await mkdtemp("/tmp/tandem-parity-"),
     );
     world.routeTernOpen((path) => host.#route(path));
@@ -337,6 +342,13 @@ export class TernParityHost {
     await rm(this.#scratch, { recursive: true, force: true });
   }
 
+  /**
+   * Tandem's clock as the window sees it: ticket expiry compares the two, and the window's
+   * timers run ahead of wall time.
+   */
+  readonly #clock = (): number =>
+    this.#epochMs + this.#advancedMs + Math.floor(performance.now() - this.#startedMs);
+
   /** The scenario's commands, except that a lost browser reply fails after Tern acted. */
   readonly #run: CommandRunner = async (request) => {
     const result = await this.world.run(request);
@@ -348,7 +360,10 @@ export class TernParityHost {
 
   /** The panel opens the way a coordinator launch opens it, through the Tern backend. */
   async openPanel(project: ScenarioTernProject = this.project): Promise<number> {
-    const id = await terminalBackend(this.#run, { home: this.world.home }).openPanel({
+    const id = await terminalBackend(this.#run, {
+      home: this.world.home,
+      tern: { clock: this.#clock },
+    }).openPanel({
       coordinator: project.coordinator,
       cwd: project.worktree.path,
       project: project.repoPath,
@@ -394,7 +409,7 @@ export class TernParityHost {
       this.world.advanceClock(age);
       await service.nativeViewsIdle();
       const { model } = PublishedWarnings.parse(
-        JSON.parse(await readFile(nativeViewsPath(this.world.home, project.repoPath), "utf8")),
+        JSON.parse(await readFile(viewIndexPath(this.world.home, project.repoPath), "utf8")),
       );
       if (!model.warnings.some((warning) => warning.includes("refreshing"))) return;
     }
@@ -408,7 +423,7 @@ export class TernParityHost {
 
   /** The panel's published file stops parsing, as a torn or foreign write leaves it. */
   async corruptPanelView(): Promise<void> {
-    await writeFile(nativeViewsPath(this.world.home, this.project.repoPath), "{broken");
+    await writeFile(viewIndexPath(this.world.home, this.project.repoPath), "{broken");
   }
 
   /** A task page's published detail stops parsing. */
@@ -428,7 +443,7 @@ export class TernParityHost {
 
   #detail(view: DetailView): string {
     const file = "task" in view ? `task-${view.task}.json` : `brief-${view.brief}.json`;
-    return nativeDetailPath(this.world.home, this.project.repoPath, file);
+    return viewDetailPath(this.world.home, this.project.repoPath, file);
   }
 
   /**
@@ -438,7 +453,8 @@ export class TernParityHost {
    */
   async stepAway(away: ScenarioTernProject, minutes: number, changed: boolean): Promise<void> {
     const { home, repoPath } = this.world;
-    const signature = (await readNativeBundle(home, this.project.repoPath)).changeSignature;
+    const signature = (await readProjectState(home, this.project.repoPath))?.published
+      ?.changeSignature;
     await this.focus(Number(away.coordinator.paneId));
     await visitNativeProject(
       {
@@ -460,21 +476,17 @@ export class TernParityHost {
     const { home } = this.world;
     const questions: string[] = [];
     const printed: string[] = [];
-    const ready = await installTerminalPlugin(
-      home,
-      {
-        run: this.#run,
-        cwd: home,
-        binary: "tern",
-        env: { TERN_CONFIG_DIR: join(home, configDirectory) },
-        confirm: async (question) => {
-          questions.push(question);
-          return answer;
-        },
-        print: (text) => printed.push(text),
+    await installTerminalPlugin(home, {
+      run: this.#run,
+      cwd: home,
+      binary: "tern",
+      env: { TERN_CONFIG_DIR: join(home, configDirectory) },
+      confirm: async (question) => {
+        questions.push(question);
+        return answer;
       },
-      { status: "ready" },
-    );
+      print: (text) => printed.push(text),
+    });
     const settings: unknown = await readFile(
       join(home, configDirectory, "settings.json"),
       "utf8",
@@ -482,7 +494,7 @@ export class TernParityHost {
       (text) => JSON.parse(text),
       () => undefined,
     );
-    return { ready, questions, printed, settings };
+    return { questions, printed, settings };
   }
 
   /** Lets every open block poll its file again, as Tern's one-second watch timers do. */
@@ -576,47 +588,45 @@ export class TernParityHost {
 
   /**
    * The only transport later steps may change: Luau's argv and stdin run the real CLI
-   * in-process against the scenario home, exactly as `tandem.sh` and `native-input.sh` do.
+   * in-process against the scenario home, exactly as `tandem.sh` does.
    */
   async runCli(
     process: Readonly<{ argv: readonly string[]; stdin?: string | undefined }>,
   ): Promise<Readonly<{ exitCode: number; stdout: string; stderr: string }>> {
     const [shell, script, ...rest] = process.argv;
     if (shell !== "/bin/sh") throw new Error(`Tern plugin spawned ${shell}`);
+    if (script !== "tandem.sh") throw new Error(`Tern plugin ran unknown script ${script}`);
     const { world } = this;
     const stdout: string[] = [];
     const stderr: string[] = [];
-    const invoke = (argv: readonly string[]) =>
-      runTerminal(argv, {
-        cwd: PLUGIN,
-        processEnvironment: {
-          TANDEM_HOME: world.home,
-          TANDEM_SESSION: world.sessionId,
-          TANDEM_POOL_ROOT: world.poolRoot,
-        },
-        run: this.#run,
-        terminal: terminalBackend(this.#run, { home: world.home }),
-        createService: (options) =>
-          createTandemService({
-            ...options,
-            run: this.#run,
-            clock: world.clock,
-            idFactory: world.idFactory,
-          }),
-        stdout: (text) => stdout.push(text),
-        stderr: (text) => stderr.push(text),
-      });
-    let exitCode: number;
-    if (script === "tandem.sh") exitCode = (await invoke(rest)).exitCode;
-    else if (script === "native-input.sh") {
-      const [verb, id, ...context] = rest;
-      if (verb === undefined || id === undefined) throw new Error("native-input.sh needs a verb");
-      exitCode = await withNativeInput(
-        process.stdin ?? "",
-        async (path) => (await invoke(["native", verb, id, "--input", path, ...context])).exitCode,
-      );
-    } else throw new Error(`Tern plugin ran unknown script ${script}`);
-    const run = { argv: process.argv, exitCode, stdout: stdout.join(""), stderr: stderr.join("") };
+    const { exitCode } = await runTerminal(rest, {
+      cwd: PLUGIN,
+      processEnvironment: {
+        TANDEM_HOME: world.home,
+        TANDEM_SESSION: world.sessionId,
+        TANDEM_POOL_ROOT: world.poolRoot,
+        TANDEM_PROJECT_ROOTS: dirname(world.repoPath),
+      },
+      run: this.#run,
+      terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
+      createService: (options) =>
+        createTandemService({
+          ...options,
+          run: this.#run,
+          clock: world.clock,
+          idFactory: world.idFactory,
+        }),
+      input: Readable.from([process.stdin ?? ""]),
+      stdout: (text) => stdout.push(text),
+      stderr: (text) => stderr.push(text),
+    });
+    const run = {
+      argv: process.argv,
+      stdin: process.stdin,
+      exitCode,
+      stdout: stdout.join(""),
+      stderr: stderr.join(""),
+    };
     this.cli.push(run);
     return run;
   }
@@ -624,6 +634,9 @@ export class TernParityHost {
   async send(...commands: Command[]): Promise<Line> {
     const sync = await this.#sync();
     const appended = [...(sync === undefined ? [] : [sync]), ...commands];
+    for (const command of commands)
+      if (command.op === "advance" && typeof command.ms === "number")
+        this.#advancedMs += command.ms;
     this.#commands.push(...appended);
     const source = [
       this.#modules,
@@ -714,10 +727,10 @@ export class TernParityHost {
       cwd: block.cwd,
     }));
     const paneKey = JSON.stringify(panes);
-    const paths = [
-      ...(await listFiles(join(this.world.home, "native-views"), /\.json$/u)),
-      ...(await listFiles(join(this.world.home, "native-host"), /\.tandem-open\.json$/u)),
-    ];
+    const paths = await listFiles(
+      join(this.world.home, "tern"),
+      /^(index|task-.+|brief-.+|pr-.+|setup-.+)\.json$|\.ticket\.json$/u,
+    );
     const files: Record<string, string | boolean> = {};
     for (const path of paths) {
       const text = await readFile(path, "utf8").catch(() => undefined);
@@ -756,6 +769,12 @@ export class Screen {
 
   async render(): Promise<Rendered> {
     return (await this.#draw()).rendered;
+  }
+
+  /** Every string the block draws and its legibility in `appearance`. */
+  async paint(appearance: Appearance): Promise<readonly Painted[]> {
+    const { roots } = await this.#draw();
+    return roots.flatMap(([, root]) => paint(root, appearance));
   }
 
   async #draw(): Promise<Readonly<{ roots: Roots; rendered: Rendered }>> {

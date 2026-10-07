@@ -1,22 +1,17 @@
 import { expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeTaskFile, nativeViewText } from "../../../src/board/native-views.ts";
-import {
-  nativeDetailPath,
-  nativeViewsPath,
-  publishNativeViews,
-} from "../../../src/board/snapshot.ts";
+import { nativeTaskFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import {
-  blocks,
-  Created,
-  decode,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { blockArgs, parseBlockContext } from "../../../src/native/contract.ts";
+import { publishViews, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { blocks, Created, decode } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { openFiles, viewFileText } from "../../native/view-files.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
+import { recordedActions, recordingCli } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -49,12 +44,15 @@ type ControlNode = {
     });
     await writeFile(
       join(plugin, "tandem.sh"),
-      `#!/bin/sh\nfor arg do printf '%s\\0' "$arg"; done >> '${join(root, "actions.log")}'\nprintf '\\n' >> '${join(root, "actions.log")}'\nfor arg do if [ "$arg" = 'Reject this direction' ]; then printf 'Direction refused by saved task policy' >&2; exit 7; fi; done\n`,
+      recordingCli(join(root, "actions.log"), {
+        text: "Reject this direction",
+        reason: "Direction refused by saved task policy",
+      }),
     );
     const publication = taskScreenPublication(root);
-    await publishNativeViews(env.TANDEM_HOME, publication.bundle.project, async () => publication);
-    const file = nativeDetailPath(env.TANDEM_HOME, root, nativeTaskFile("102"));
-    const index = nativeViewsPath(env.TANDEM_HOME, root);
+    await publishViews(env.TANDEM_HOME, publication.bundle.project, async () => publication);
+    const file = viewDetailPath(env.TANDEM_HOME, root, nativeTaskFile("102"));
+    const index = viewIndexPath(env.TANDEM_HOME, root);
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
     const run = async (...args: string[]) => {
       const p = Bun.spawn([binary, ...args], { env, cwd: root, stdout: "pipe", stderr: "pipe" });
@@ -140,7 +138,7 @@ type ControlNode = {
         return { stdout, stderr, code };
       };
       const host = ternViewHost(
-        ternCommands(commandRunner, {
+        ternCli(commandRunner, {
           binary,
           environment: Object.fromEntries(
             Object.entries(env).filter(
@@ -148,7 +146,6 @@ type ControlNode = {
             ),
           ),
         }),
-        { clock: Date.now, wait: Bun.sleep, guard: async (_key, fn) => fn() },
       );
       const input = {
         coordinator: endpoint,
@@ -158,10 +155,12 @@ type ControlNode = {
       };
       await host.open(input, root, "panel", "panel", index);
       let opened = await host.open(input, root, "task", "task", file);
-      const launched = blocks(await ternCommands(commandRunner, { binary }).ls(root)).find(
+      const launched = blocks(await ternCli(commandRunner, { binary }).ls(root)).find(
         (entry) => entry.block.id === opened.paneId,
       );
-      expect(launched?.block.args).toEqual([file, endpoint.paneId, root, "", index]);
+      expect(launched?.block.args).toEqual(
+        blockArgs(file, { coordinator: endpoint.paneId, cwd: root, home: env.TANDEM_HOME, index }),
+      );
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       expect(JSON.stringify(await tree())).toContain("round 1 of 2");
       await ctl("shot", "03-task");
@@ -182,9 +181,7 @@ type ControlNode = {
       await click("PR");
       await until(async () => JSON.stringify(await tree()).includes("exact pane ownership"));
       await ctl("shot", "03-task-pr");
-      await publishNativeViews(env.TANDEM_HOME, root, async () =>
-        taskScreenPublication(root, true),
-      );
+      await publishViews(env.TANDEM_HOME, root, async () => taskScreenPublication(root, true));
       await until(async () => JSON.stringify(await tree()).includes("Reopen this PR"));
       expect(JSON.stringify(await tree())).toContain("PR changed or view unavailable");
       opened = await host.open(
@@ -205,23 +202,28 @@ type ControlNode = {
       expect(JSON.stringify(await tree())).toContain("Additional charges · unavailable");
       await ctl("shot", "03-task-cost");
       await click("Overview");
-      await writeFile(file, nativeViewText("task", taskScreenFixture(true)));
+      await writeFile(file, viewFileText("task", taskScreenFixture(true)));
       await until(async () => JSON.stringify(await tree()).includes("Restart"));
       await ctl("shot", "03b-task-stuck");
       await click("Restart");
+      const sent = () => recordedActions(join(root, "actions.log"));
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("native\0restart\x00102\0"),
+        (await sent()).some(({ action }) => action.verb === "restart" && action.taskId === "102"),
       );
       await click("Steer…");
       await ctl("type", JSON.stringify("Try a safer close guard 😀"));
       await ctl("key", "enter");
-      await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("Try a safer close guard 😀"),
-      );
-      const log = await readFile(join(root, "actions.log"), "utf8");
-      expect(log).toContain(`--cwd\0${root}\0`);
-      expect(log).toContain(`--home\0${env.TANDEM_HOME}\0`);
-      expect(log).toContain("steer\0--task\x00102\0--text\0Try a safer close guard 😀");
+      await until(async () => (await sent()).some(({ action }) => action.verb === "steer"));
+      const steer = (await sent()).find(({ action }) => action.verb === "steer");
+      expect(steer?.action).toEqual({
+        verb: "steer",
+        taskId: "102",
+        text: "Try a safer close guard 😀",
+      });
+      const origin = steer?.origin;
+      if (origin === undefined || !("ctx" in origin))
+        throw new Error("steer lost its block origin");
+      expect(parseBlockContext(origin.ctx)).toMatchObject({ cwd: root, home: env.TANDEM_HOME });
       await click("Steer…");
       await ctl("type", JSON.stringify("Reject this direction"));
       await ctl("key", "enter");
@@ -256,14 +258,14 @@ type ControlNode = {
         "return",
         index,
       );
-      const afterCancel = await ternCommands(commandRunner, { binary }).ls(root);
+      const afterCancel = await ternCli(commandRunner, { binary }).ls(root);
       expect(
         afterCancel.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === floatingPicker.paneId),
       ).toBe(false);
       expect(afterCancel.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === opened.paneId)).toBe(
         true,
       );
-      await writeFile(file, nativeViewText("task", taskScreenFixture()));
+      await writeFile(file, viewFileText("task", taskScreenFixture()));
       const previous = opened;
       opened = await host.open(
         { ...input, origin: { paneId: previous.paneId, cwd: root } },
@@ -272,7 +274,7 @@ type ControlNode = {
         "task",
         file,
       );
-      const replaced = await ternCommands(commandRunner, { binary }).ls(root);
+      const replaced = await ternCli(commandRunner, { binary }).ls(root);
       expect(replaced.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === previous.paneId)).toBe(
         false,
       );
@@ -280,15 +282,15 @@ type ControlNode = {
         true,
       );
       // The replacement settled, so it pauses no later open.
-      expect(
-        (await readdir(join(input.home, "native-host"))).filter((name) =>
-          name.endsWith(".intent.json"),
-        ),
-      ).toEqual([]);
+      expect((await openFiles(input.home)).filter((name) => name.endsWith(".ticket.json"))).toEqual(
+        [],
+      );
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       await click("← Orchestrator");
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("#orchestrator"),
+        (await sent()).some(
+          ({ action }) => action.verb === "open" && action.ref.kind === "orchestrator",
+        ),
       );
       await host.open(
         { ...input, origin: { paneId: opened.paneId, cwd: root } },
@@ -297,7 +299,7 @@ type ControlNode = {
         "return",
         index,
       );
-      const restored = await ternCommands(commandRunner, { binary }).ls(root);
+      const restored = await ternCli(commandRunner, { binary }).ls(root);
       expect(restored.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === endpoint.paneId)).toBe(
         true,
       );
@@ -314,11 +316,14 @@ type ControlNode = {
       await ctl("shot", "03-task-picker");
       await ctl("key", "enter");
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("native\0open\0task\x00102"),
+        (await sent()).some(
+          ({ action }) =>
+            action.verb === "open" && action.ref.kind === "task" && action.ref.taskId === "102",
+        ),
       );
       expect(picker.paneId).not.toBe(endpoint.paneId);
       await until(async () => {
-        const all = await ternCommands(commandRunner, { binary }).ls(root);
+        const all = await ternCli(commandRunner, { binary }).ls(root);
         return !all.sessions[0]?.tabs[0]?.blocks.some((b) => b.id === picker.paneId);
       });
       const missing = await host.open(
@@ -326,7 +331,7 @@ type ControlNode = {
         root,
         "task",
         "task",
-        nativeDetailPath(env.TANDEM_HOME, root, nativeTaskFile("103")),
+        viewDetailPath(env.TANDEM_HOME, root, nativeTaskFile("103")),
       );
       await until(async () => JSON.stringify(await tree()).includes("Task unavailable"));
       await click("← Orchestrator");
@@ -339,7 +344,7 @@ type ControlNode = {
       );
 
       const empty = taskScreenFixture(false, false);
-      await publishNativeViews(env.TANDEM_HOME, root, async () => ({
+      await publishViews(env.TANDEM_HOME, root, async () => ({
         ...publication,
         bundle: { ...publication.bundle, briefs: {}, pullRequests: {} },
         details: [

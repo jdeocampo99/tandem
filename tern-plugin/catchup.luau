@@ -1,31 +1,25 @@
 --!strict
-local views = require("./view-file")
 local components = require("./components")
-local navigation = require("./navigation")
+local rt = require("./rt")
 local screen = require("./screen")
 local ui = tern.ui
 
-type Model = {catchup: {merged: {{number: number, title: string, url: string}}, needsYou: {{key: string, name: string, text: string}}, blocked: {{key: string, name: string, reason: string}}, whereWeLeftOff: {{workstream: string, text: string}}}}
-type State = {view: views.View<Model>, args: {string}}
-local function parse(value: unknown): Model?
- if type(value) ~= "table" or type(value.catchup) ~= "table" then return nil end
- local c = value.catchup
- for _, key in {"merged", "needsYou", "blocked", "whereWeLeftOff"} do if type(c[key]) ~= "table" then return nil end end
- for _, pr in c.merged do if type(pr) ~= "table" or type(pr.number) ~= "number" or type(pr.title) ~= "string" or type(pr.url) ~= "string" then return nil end end
- for _, row in c.needsYou do if type(row) ~= "table" or type(row.key) ~= "string" or type(row.name) ~= "string" or type(row.text) ~= "string" then return nil end end
- for _, row in c.blocked do if type(row) ~= "table" or type(row.key) ~= "string" or type(row.name) ~= "string" or type(row.reason) ~= "string" then return nil end end
- for _, row in c.whereWeLeftOff do if type(row) ~= "table" or type(row.workstream) ~= "string" or type(row.text) ~= "string" then return nil end end
- return value :: Model
-end
+type State = {view: rt.Watch, args: {string}, origin: rt.Origin}
 local function section(title: string, rows: {Node}, tone: string?): Node
  if #rows == 0 then table.insert(rows, components.text("None", "muted")) end
  table.insert(rows, 1, ui.el("strong", {class="tdm-catchup-heading " .. (tone or ""), text=title}))
  return ui.el("div", {class="tdm-catchup-section"}, rows)
 end
+local function leave(state: State, cx: BlockCx, verb: string)
+ rt.act(cx, state.origin, {verb = verb}, function(outcome)
+  if outcome and outcome.status == "done" then cx:exit(0) end
+ end)
+end
 local block: BlockDef<State> = {
  init = function(cx, args, saved)
-  local state: State = {args=screen.args(args, saved), view=views.create(screen.path(args, saved), "panel", parse)}
-  views.refresh(state.view); views.watch(state.view, cx); return state
+  local restored = screen.args(args, saved)
+  local state: State = {args=restored, origin=rt.origin(restored), view=rt.watch(cx, screen.path(args, saved), "index")}
+  return state
  end,
  title = function() return "Welcome back · Tandem" end,
  view = function(state)
@@ -48,13 +42,13 @@ local block: BlockDef<State> = {
   table.insert(children, ui.el("div", {class="tdm-catchup-actions"}, buttons))
   return {main=ui.col({ui.el("div", {class="tdm-catchup-screen"}, children)})}
  end,
- key = function(state, key, cx) if key.name ~= "escape" then return false end navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"}, function() cx:exit(0) end); return true end,
+ key = function(state, key, cx) if key.name ~= "escape" then return false end leave(state, cx, "catchup-dismiss"); return true end,
  event = function(state, ev, cx)
   if ev.ev ~= "action" then return end
-  if ev.act == "dismiss" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-dismiss"}, function() cx:exit(0) end)
+  if ev.act == "dismiss" then leave(state, cx, "catchup-dismiss")
   elseif state.view.status == "ready" then
-   if ev.act == "open-needs" then navigation.run(navigation.origin(state.args), cx, {"board", "catchup-open-needs"}, function() cx:exit(0) end)
-   elseif ev.act == "merged" then navigation.run(navigation.origin(state.args), cx, {"board", "merged-link", ev.value}) end
+   if ev.act == "open-needs" then leave(state, cx, "catchup-open-needs")
+   elseif ev.act == "merged" then rt.act(cx, state.origin, {verb = "merged-link", url = ev.value}) end
   end
  end,
  save = function(state) return {args=state.args} end,

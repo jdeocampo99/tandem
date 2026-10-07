@@ -8,8 +8,6 @@ import {
   type SkillOrigin,
   type TaskRecord,
 } from "../contracts.ts";
-import { harnessOfSelector } from "../harness/contract.ts";
-import { harnessFor } from "../harness/resolve.ts";
 import { type MemoryShowResult, renderMemoryShow } from "../memory/view.ts";
 import { CATCH_UP_MAX_CHARS } from "../memory/workstream.ts";
 import { type PrWatchView, renderPrWatchView } from "../pr-watch/view.ts";
@@ -344,7 +342,7 @@ function summarizeOnboard(value: unknown, action: "onboard" | "setup"): string {
       lines.push("Pending role choices (every role is unselected until explicit answers):");
       lines.push(...summarizeModelAssignments(undefined, true).map((entry) => `- ${entry}`));
       lines.push(
-        "Call models to fetch the catalogue, the presets, and the proposed Balanced profile, then accept one, inspect and override any role or provider enablement, or choose Not now to pause without configure-models, project setup, or launch.",
+        "Call models to fetch the catalogue and the proposed Balanced profile, then accept it, inspect and override any role or provider enablement, or choose Not now to pause without configure-models, project setup, or launch.",
       );
     }
   } else if (modelSettings?.configured === true) {
@@ -594,33 +592,6 @@ function summarizeBalancedProposal(value: unknown): readonly string[] {
   return ["No suitable model was found for these roles:", ...reasons.map((entry) => `- ${entry}`)];
 }
 
-/** Each preset as one line the user can pick by name, or why it is unavailable. */
-function summarizeModelPresets(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || value.length === 0) return [];
-  const lines = [
-    "Presets (the user may name one in plain words, then change any role; recap shows each role's harness):",
-  ];
-  for (const preset of value.map((entry) => summaryRecord(entry))) {
-    const name = preset === undefined ? undefined : recordText(preset, "name");
-    if (preset === undefined || name === undefined) continue;
-    const models = summaryRecord(preset.models);
-    if (recordText(preset, "status") !== "ready" || models === undefined) {
-      lines.push(`- ${name}: unavailable. ${recordText(preset, "reason") ?? ""}`.trimEnd());
-      continue;
-    }
-    const roles = MODEL_ROLE_ORDER.map((role) => {
-      const spec = summaryRecord(models[role]);
-      const selector = spec === undefined ? undefined : recordText(spec, "model");
-      const thinking = spec === undefined ? undefined : recordText(spec, "thinking");
-      const harness =
-        selector === undefined ? "?" : harnessFor(harnessOfSelector(selector)).displayName;
-      return `${MODEL_ROLE_LABELS[role]} ${selector ?? "?"} ${thinking ?? "?"} (${harness})`;
-    });
-    lines.push(`- ${name}: ${roles.join("; ")}`);
-  }
-  return lines;
-}
-
 function summarizeModels(value: unknown): string {
   const record = summaryRecord(value);
   if (record === undefined) return boundedJson(value, ACTION_RESULT_MAX_CHARS);
@@ -649,7 +620,6 @@ function summarizeModels(value: unknown): string {
   } else {
     lines.push("Current model choices are unavailable.");
   }
-  lines.push(...summarizeModelPresets(record.presets));
   if (!Array.isArray(available)) {
     lines.push("The model list could not be loaded, so there is nothing to suggest.");
   } else if (available.length === 0) {
@@ -1071,9 +1041,6 @@ export function summarizeTandemActionValue(action: TandemAction["action"], value
   if (action === "onboard" || action === "setup") return summarizeOnboard(value, action);
   if (action === "find-repo") return summarizeFoundRepos(value);
   if (action === "check-tools") return summarizeToolChecks(value);
-  if (action === "setup-page" && typeof value === "string") {
-    return boundedOutput(value, ACTION_RESULT_MAX_CHARS);
-  }
   if (action === "save-code-folders" || action === "self-improvement") {
     return "Saved.";
   }

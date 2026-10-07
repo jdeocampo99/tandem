@@ -1,6 +1,6 @@
 --!strict
 -- Drawing/lifecycle glue for board, usage and catch-up. All actions go through the guarded CLI.
-local navigation = require("./navigation")
+local rt = require("./rt")
 local components = require("./components")
 local M = {}
 function M.args(args: {string}, saved: unknown): {string}
@@ -11,8 +11,10 @@ end
 function M.path(args: {string}, saved: unknown): string
  return M.args(args, saved)[1] or ""
 end
-function M.back(args: {string}, cx: BlockCx)
- navigation.back(navigation.origin(args), cx, function() cx:exit(0) end)
+function M.back(origin: rt.Origin, cx: BlockCx)
+ rt.act(cx, origin, {verb = "open", ref = {kind = "orchestrator"}}, function(outcome)
+  if outcome and outcome.status == "done" then cx:exit(0) end
+ end)
 end
 function M.header(title: string, detail: string?): Node
  return tern.ui.el("div", {class="tdm-screen-header"}, {

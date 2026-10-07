@@ -599,10 +599,14 @@ type Fixture = Readonly<{
   readonly service: TandemService;
 }>;
 
+/** Tandem defaults to Tern; these fixtures fake Herdr commands, so their homes say so. */
+const HERDR_SETTINGS = 'terminal = "herdr"\n';
+
 async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   const home = await mkdtemp(join(tmpdir(), "tandem-service-regression-"));
   const repoPath = join(home, "repo");
   await mkdir(repoPath, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const sourcePath = join(home, "clean-source");
   const commonPath = join(home, "git-common");
   if (options.sourceWorkspace === true) {
@@ -778,6 +782,8 @@ test("bound coordinators scope tasks by physical original identity and reject fo
   const home = join(root, "home");
   const original = join(root, "original");
   const source = join(root, "clean-source");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const other = join(root, "other");
   const originalAlias = join(root, "original-alias");
   await Promise.all([mkdir(original), mkdir(source), mkdir(other)]);
@@ -838,6 +844,8 @@ test("bound task creation normalizes clean input to the original identity and pe
   const original = join(root, "original");
   const source = join(root, "clean-source");
   const common = join(root, "git-common");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
   const runner = fakeRunner({ commonDirectory: common });
   const service = createTandemService({
@@ -869,6 +877,7 @@ test("bound task creation normalizes clean input to the original identity and pe
 test("bound setup inspects and saves a selected foreign checkout while ordinary onboarding stays source-bound", async () => {
   const setupAnswer = {
     tandemSetup: 1,
+    mode: "setup",
     models: Object.fromEntries(
       ["coordinator", "scout", "implementer", "reviewer", "presentation"].map((role) => [
         role,
@@ -882,7 +891,6 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         setupCommands: ["bun install --frozen-lockfile"],
       },
     ],
-    terminal: "herdr",
     selfImprovement: "off",
   };
   await withFixture(
@@ -892,9 +900,6 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
       runner: {
         ompModels: OMP_MODELS,
         projectLaunchResponse: commandResult(),
-        presentationOpenResponse: commandResult(
-          "session:\n  status: opened\n  url: http://127.0.0.1:4387/session/setup\n",
-        ),
       },
     },
     async ({ home, service, task, runnerState }) => {
@@ -920,47 +925,20 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
       expect(own.setupCommands.map((command) => command.name)).toContain(
         "pnpm install --frozen-lockfile",
       );
-      const opened = await service.openSetupPage(task.repoPath);
-      expect(opened.path).toBe(join(home, "setup", "tandem-setup.html"));
-      const page = await readFile(opened.path, "utf8");
-      const setupDataMatch = page.match(
-        /<script type="application\/json" id="setup-data">([\s\S]*?)<\/script>/,
-      );
-      expect(setupDataMatch).not.toBeNull();
-      const setupData = JSON.parse(setupDataMatch?.[1] ?? "") as {
-        repos: Array<{
-          path: string;
-          validationCommands: string[];
-          install: string;
-        }>;
-      };
+      const view = await service.setupView(task.repoPath, "setup");
       const foreignPath = await realpath(foreign);
-      const foreignView = setupData.repos.find((repo) => repo.path === foreignPath);
+      const foreignView = view.candidates.find((repo) => repo.path === foreignPath);
       expect(foreignView).toBeDefined();
       expect(foreignView?.validationCommands).toEqual(["bun run check"]);
-      expect(foreignView?.install).toBe("bun install --frozen-lockfile");
-      runnerState.queuePresentationResponse(
-        commandResult(
-          [
-            "session:",
-            "  status: feedback",
-            "prompts[1]{uid,prompt,selector,tag,text}:",
-            `  "1",${JSON.stringify(
-              JSON.stringify({
-                ...setupAnswer,
-                repositories: [{ ...setupAnswer.repositories[0], path: foreign }],
-              }),
-            )},button#next,tandem-setup,Tandem setup answer`,
-          ].join("\n"),
-        ),
-      );
+      expect(foreignView?.setupCommands).toEqual(["bun install --frozen-lockfile"]);
 
-      const pending = service.awaitSetupAnswer(task.repoPath, new AbortController().signal);
-      runnerState.releasePresentation();
-      const event = await pending;
-      expect(event.kind).toBe("answer");
-      if (event.kind !== "answer") throw new Error(`unexpected setup event: ${event.kind}`);
-      const saved = await service.applySetup(task.repoPath, event.answerId);
+      const saved = await service.saveSetup(
+        task.repoPath,
+        JSON.stringify({
+          ...setupAnswer,
+          repositories: [{ ...setupAnswer.repositories[0], path: foreign }],
+        }),
+      );
       expect(saved.complete).toBe(true);
       const config = await readFile(await centralConfigPath(foreign, home), "utf8");
       expect(config).toContain('"bun test"');
@@ -1018,6 +996,23 @@ test("bound setup inspects and saves a selected foreign checkout while ordinary 
         join(home, "pool"),
         "--no-attach",
       ]);
+
+      // Settings edits the saved repository's commands in place and opens nothing new.
+      const edited = await service.saveSetup(
+        task.repoPath,
+        JSON.stringify({
+          ...setupAnswer,
+          mode: "settings",
+          repositories: [
+            { path: foreign, validationCommands: ["bun test", "bun run lint"], setupCommands: [] },
+          ],
+        }),
+      );
+      expect(edited.complete).toBe(true);
+      expect(edited.opened).toEqual([]);
+      const after = await readFile(await centralConfigPath(foreign, home), "utf8");
+      expect(after).toContain('validationCommands = ["bun test", "bun run lint"]');
+      expect(after).toContain("setupCommands = []");
     },
   );
 });
@@ -1026,6 +1021,8 @@ test("looks skills up at creation, repository first, and pins them across a rest
   const home = join(root, "home");
   const repoPath = join(root, "repo");
   const personalHome = join(root, "personal");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const common = join(root, "git-common");
   await Promise.all([mkdir(repoPath, { recursive: true }), mkdir(common, { recursive: true })]);
   const repositorySkill = await writeSkill(
@@ -1123,7 +1120,10 @@ test("tasks pin only explicitly requested skills, ignoring legacy home worker sk
   ]);
   await writeSkill(join(personalHome, ".claude", "skills", "buildkite"), "Read Buildkite logs.");
   const tdd = await writeSkill(join(personalHome, ".claude", "skills", "tdd"), "Test first.");
-  await writeFile(join(home, "settings.toml"), 'workerSkills = ["buildkite", "tdd"]\n');
+  await writeFile(
+    join(home, "settings.toml"),
+    `${HERDR_SETTINGS}workerSkills = ["buildkite", "tdd"]\n`,
+  );
   const service = createTandemService({
     home,
     sessionId: "session-a",
@@ -1166,6 +1166,8 @@ test("new scouts persist a classified continuation and an explicit disposition s
   const original = join(root, "original");
   const source = join(root, "clean-source");
   const common = join(root, "git-common");
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   await Promise.all([mkdir(original), mkdir(source), mkdir(common)]);
   const runner = fakeRunner({ commonDirectory: common });
   const requests: ResearchContinuationRequest[] = [];
@@ -1352,6 +1354,7 @@ async function approvedBriefFixture(): Promise<
   const home = await mkdtemp(join(tmpdir(), "tandem-service-request-"));
   const repoPath = join(home, "repo");
   await mkdir(repoPath, { recursive: true });
+  await writeFile(join(home, "settings.toml"), HERDR_SETTINGS);
   const runner = fakeRunner();
   const service = createTandemService({
     home,

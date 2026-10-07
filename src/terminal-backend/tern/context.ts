@@ -10,9 +10,10 @@ export const TERN_CONTEXT: TerminalContext = {
     "TANDEM_TERN_WORKSPACE_ID",
   ],
   inheritedPane: (source) => {
-    if (source.TERN_PANE === undefined) return { status: "outside" };
-    const sessionId = source.TANDEM_SESSION;
     const workspaceId = source.TANDEM_TERN_WORKSPACE_ID;
+    // Tandem marks the panes it launches; any other Tern pane is the user's own shell.
+    if (source.TERN_PANE === undefined || workspaceId === undefined) return { status: "outside" };
+    const sessionId = source.TANDEM_SESSION;
     if (!sessionId || !workspaceId || !/^[1-9]\d*$/u.test(source.TERN_PANE))
       return {
         status: "invalid",

@@ -9,10 +9,12 @@ local function lazy(load: () -> BlockDef<unknown>): BlockDef<unknown>
  end
  return {
   init = function(cx, args, saved) return get().init(cx, args, saved) end,
-  view = function(state, cx) return get().view(state, cx) end,
+  view = function(state, cx) return require("./rt").draw(get().view, state, cx) end,
   title = function(state)
    local callback = get().title
-   return if callback then callback(state) else nil
+   if not callback then return nil end
+   local ok, title = pcall(callback, state)
+   return if ok then title else nil
   end,
   key = function(state, key, cx)
    local callback = get().key
@@ -40,5 +42,6 @@ tern.block.define("task-picker", lazy(function() return require("./task-picker")
 tern.block.define("board", lazy(function() return require("./board") end))
 tern.block.define("usage", lazy(function() return require("./usage") end))
 tern.block.define("catchup", lazy(function() return require("./catchup") end))
+tern.block.define("setup", lazy(function() return require("./setup") end))
 tern.block.define("brief", lazy(function() return require("./brief") end))
 tern.block.define("pr", lazy(function() return require("./pr") end))

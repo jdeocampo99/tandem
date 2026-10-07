@@ -1,51 +1,29 @@
 --!strict
 local ui = tern.ui
-local views = require("./view-file")
-local nav = require("./navigation")
-local models = require("./pr-model")
+local rt = require("./rt")
 local content = require("./pr-content")
 local components = require("./components")
-type State = { view: views.View<models.Model>, index: views.View<models.Index>?, content: content.State, cwd: string?, window: string, home: string, switcher: boolean }
+type State = { view: rt.Watch, index: rt.Watch?, content: content.State, origin: rt.Origin, switcher: boolean }
 local function invoke(s: State, cx: BlockCx): content.Invoke
- return function(verb, id, payload, done)
-  if not s.cwd or string.sub(s.cwd, 1, 1) ~= "/" or string.sub(s.home, 1, 1) ~= "/" then
-   local message = "The originating absolute cwd and native index path are required."
-   cx:toast("error", "Tandem couldn't run that action", message); s.content.diff.busy = false
-   if verb == "review-submit" and done then done({status=1,stdout="",stderr=message}) end
-   return
-  end
-  local json = verb == "pr-comment" or verb == "review-submit"
-  local argv = {"/bin/sh", if json then "native-input.sh" else "tandem.sh"}
-  if not json then table.insert(argv, "native") end
-  table.insert(argv, verb); table.insert(argv, id)
-  if verb == "open" and type(payload) == "string" then table.insert(argv, payload) end
-  table.insert(argv, "--pane"); table.insert(argv, string.format("%.0f", cx.pane))
-  table.insert(argv, "--cwd"); table.insert(argv, s.cwd)
-  if s.home ~= "" then table.insert(argv, "--home"); table.insert(argv, s.home) end
-  local window = s.window
-  if window and window ~= "" then table.insert(argv, "--window"); table.insert(argv, window) end
-  local ok, problem = pcall(function()
-   tern.process.run(argv, {cwd=".", stdin=if json then tern.json.encode(payload) else nil}, function(result)
-    s.content.diff.busy = false
-    if result.status ~= 0 then cx:toast("error", "Tandem couldn't run that action", result.stderr) end
-    if done and (result.status == 0 or verb == "review-submit") then done(result) end
-    if verb == "review-submit" and s.content.submitted then cx:exit(0); return end
-    cx:render()
-   end)
+ return function(action, done)
+  local sent = rt.act(cx, s.origin, action, function(outcome)
+   s.content.diff.busy = false
+   if done then done(outcome) end
+   if action.verb == "review-submit" and s.content.submitted then cx:exit(0); return end
+   cx:render()
   end)
-  if not ok then
-   s.content.diff.busy = false; cx:toast("error", "Tandem couldn't start that action", tostring(problem))
-   if verb == "review-submit" and done then done({status=1,stdout="",stderr=tostring(problem)}) end
+  if not sent then
+   s.content.diff.busy = false
+   if action.verb == "review-submit" and done then done(nil) end
   end
  end
 end
 local block: BlockDef<State> = {
  init = function(cx, args, _saved)
-  local origin = nav.origin(args)
-  local s: State = {view=views.create(origin.path, "pr", models.parse), content=content.create(), cwd=origin.cwd, window=origin.window, home=origin.home, switcher=false}
-  views.watch(s.view, cx)
-  local indexPath = nav.root(origin)
-  if indexPath ~= origin.path then s.index = views.create(indexPath, "panel", models.parseIndex); views.watch(s.index, cx) end
+  local path = args[1] or ""
+  local s: State = {view=rt.watch(cx, path, "pr"), content=content.create(), origin=rt.origin(args), switcher=false}
+  local indexPath = args[3] or ""
+  if indexPath ~= path then s.index = rt.watch(cx, indexPath, "index") end
   return s
  end,
  title = function(s) return if s.view.model then "#" .. s.view.model.header.number .. " ▾" else "Pull requests" end,
@@ -64,7 +42,7 @@ local block: BlockDef<State> = {
    end
   end
   table.insert(top, result.main)
-  return {main=ui.el("div", {class="tdm-pr-pane"},top),dock=result.dock}
+  return {main=ui.el("div", {},top),dock=result.dock}
  end,
  event = function(s, ev, cx)
   if ev.ev == "action" and ev.act == "pr-close" then cx:exit(0); return end
@@ -76,7 +54,7 @@ local block: BlockDef<State> = {
    local pr: typeof(entries[1])? = nil
    for _, entry in entries do if entry.header.repo .. "#" .. entry.header.number == ev.value then pr = entry end end
    if pr then
-    invoke(s, cx)("open", "pr", pr.header.repo .. "#" .. pr.header.number, function() cx:exit(0) end)
+    invoke(s, cx)({verb="open",ref={kind="pr",repo=pr.header.repo,number=pr.header.number}}, function(outcome) if outcome and outcome.status == "done" then cx:exit(0) end end)
     s.switcher = false
    end
    return

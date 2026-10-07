@@ -352,6 +352,7 @@ async function settledScoutFixture(options: FixtureOptions = {}): Promise<Fixtur
   const repoPath = join(home, "repo");
   const lease = leaseFor(home);
   await mkdir(repoPath, { recursive: true });
+  await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n');
   await mkdir(lease.path, { recursive: true });
   const clock = (): string => TIMESTAMP;
   const store = createTaskStore({ directory: join(home, "tasks"), clock, idFactory: () => "seed" });
@@ -621,7 +622,11 @@ test("a finished scout kept open for mockups is closed when building starts, kee
         idFactory: () => "unused",
       });
       await closeFinishedScoutPanes(
-        { store, runtimePath: runtimeFile(home), terminal: terminalBackend(run) },
+        {
+          store,
+          runtimePath: runtimeFile(home),
+          terminal: terminalBackend(run, { terminal: "herdr" }),
+        },
         "task-1",
       ).finally(stop);
 
@@ -644,7 +649,11 @@ test("closing finished scout panes leaves a scout that is not finished alone", a
       idFactory: () => "unused",
     });
     await closeFinishedScoutPanes(
-      { store, runtimePath: runtimeFile(home), terminal: terminalBackend(run) },
+      {
+        store,
+        runtimePath: runtimeFile(home),
+        terminal: terminalBackend(run, { terminal: "herdr" }),
+      },
       "task-1",
     );
     expect(world.closedPanes).toEqual([]);
@@ -831,6 +840,7 @@ test("scout completion releases resources in the same pass that writes the repor
   const repoPath = join(home, "repo");
   const lease = leaseFor(home);
   await mkdir(repoPath, { recursive: true });
+  await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n');
   await mkdir(lease.path, { recursive: true });
   const clock = (): string => TIMESTAMP;
   const store = createTaskStore({ directory: join(home, "tasks"), clock, idFactory: () => "seed" });

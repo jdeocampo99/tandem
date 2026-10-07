@@ -4,9 +4,16 @@ import { join } from "node:path";
 import { z } from "zod";
 import { markNativeAlertsRead, NativeAlerts } from "../../src/board/native-alerts.ts";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
-import { nativeDetailPath, nativeViewsPath, publishNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import { repositoryKey } from "../../src/config/repositories.ts";
+import { ViewFile } from "../../src/native/contract.ts";
+import {
+  projectStoreDirectory,
+  publishViews,
+  readProjectState,
+  viewDetailPath,
+  viewIndexPath,
+} from "../../src/native/store.ts";
 import { reviseRequestBriefRecord } from "../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
@@ -28,7 +35,7 @@ test("serialized brief detail exposes the exact native approval input for its di
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     const publication = await reader.read(
       {
@@ -39,14 +46,15 @@ test("serialized brief detail exposes the exact native approval input for its di
       },
       world.repoPath,
     );
-    await publishNativeViews(world.home, publication.bundle.project, async () => publication);
+    await publishViews(world.home, publication.bundle.project, async () => publication);
     const entry = publication.bundle.briefs[first.id];
     if (entry === undefined) throw new Error("Expected brief index");
     const detail = z
       .object({
-        version: z.literal(1),
+        v: z.literal(1),
         kind: z.literal("brief"),
-        revision: z.string().regex(/^[a-f0-9]{64}$/),
+        epoch: z.string().min(1),
+        seq: z.number().int().positive(),
         model: z.object({
           requestId: z.string(),
           revision: z.number(),
@@ -63,7 +71,7 @@ test("serialized brief detail exposes the exact native approval input for its di
       .strict()
       .parse(
         JSON.parse(
-          await readFile(nativeDetailPath(world.home, world.repoPath, entry.detailFile), "utf8"),
+          await readFile(viewDetailPath(world.home, world.repoPath, entry.detailFile), "utf8"),
         ),
       );
     expect(detail.kind).toBe("brief");
@@ -105,7 +113,7 @@ test("native bundle reads saved task inspection/timeline and writes an atomic pr
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -124,38 +132,35 @@ test("native bundle reads saved task inspection/timeline and writes an atomic pr
     expect(first.bundle.tasks[task.id]).not.toHaveProperty("progress");
     expect(commands).toEqual(["omp usage --json"]);
     expect(first.bundle.changeSignature).toBe(second.bundle.changeSignature);
-    await publishNativeViews(world.home, first.bundle.project, async () => first);
-    const path = nativeViewsPath(world.home, world.repoPath);
-    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      version: 1,
-      kind: "panel",
-      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
-      model: first.bundle,
-    });
+    await publishViews(world.home, first.bundle.project, async () => first);
+    const path = viewIndexPath(world.home, world.repoPath);
+    const index = ViewFile.parse(JSON.parse(await readFile(path, "utf8")));
+    expect(index).toEqual({ v: 1, kind: "index", epoch: index.epoch, seq: 2, model: first.bundle });
     expect((await stat(path)).mode & 0o777).toBe(0o600);
-    const detailPath = nativeDetailPath(world.home, world.repoPath, detail.file);
+    const detailPath = viewDetailPath(world.home, world.repoPath, detail.file);
+    // Details are written before the index that names them, so they take the lower seq.
     expect(JSON.parse(await readFile(detailPath, "utf8"))).toEqual({
-      version: 1,
+      v: 1,
       kind: "task",
-      revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      epoch: index.epoch,
+      seq: 1,
       model: detail.view.data,
     });
     expect((await stat(detailPath)).mode & 0o777).toBe(0o600);
-    expect((await readdir(join(world.home, "native-views"))).toSorted()).toEqual(
-      [
-        repositoryKey(world.repoPath),
-        `${repositoryKey(world.repoPath)}.json`,
-        `${repositoryKey(world.repoPath)}.lock`,
-      ].toSorted(),
-    );
+    expect(await readdir(join(world.home, "tern"))).toEqual([repositoryKey(world.repoPath)]);
+    expect((await readdir(projectStoreDirectory(world.home, world.repoPath))).toSorted()).toEqual([
+      "state.json",
+      "state.lock",
+      "views",
+    ]);
     const detailStat = await stat(detailPath);
     const bundleStat = await stat(path);
-    await publishNativeViews(world.home, first.bundle.project, async () => first);
+    await publishViews(world.home, first.bundle.project, async () => first);
     expect((await stat(detailPath)).ino).toBe(detailStat.ino);
     expect((await stat(detailPath)).mtimeMs).toBe(detailStat.mtimeMs);
     expect((await stat(path)).ino).toBe(bundleStat.ino);
     const taskView = detail.view;
-    await publishNativeViews(world.home, world.repoPath, async () => ({
+    await publishViews(world.home, world.repoPath, async () => ({
       bundle: first.bundle,
       details: [
         {
@@ -171,9 +176,10 @@ test("native bundle reads saved task inspection/timeline and writes an atomic pr
       ],
     }));
     expect((await stat(detailPath)).ino).not.toBe(detailStat.ino);
+    expect(ViewFile.parse(JSON.parse(await readFile(detailPath, "utf8"))).seq).toBe(3);
     expect((await stat(path)).ino).toBe(bundleStat.ino);
-    expect(nativeViewsPath(world.home, "/different/app")).not.toBe(
-      nativeViewsPath(world.home, "/work/app"),
+    expect(viewIndexPath(world.home, "/different/app")).not.toBe(
+      viewIndexPath(world.home, "/work/app"),
     );
   });
 });
@@ -192,7 +198,7 @@ test("provider refresh failure is visible and backs off while task data still pr
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -245,7 +251,7 @@ test("retained provider limits carry their original fetch time and failed-refres
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -298,7 +304,7 @@ test("slow remote usage never blocks native task snapshots and shutdown drains i
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -326,7 +332,7 @@ test("project switcher reads only other owners' published summaries without rewr
       home: world.home,
       clock: world.clock,
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
     });
     const snapshot = {
       version: 1 as const,
@@ -337,7 +343,7 @@ test("project switcher reads only other owners' published summaries without rewr
     const initial = await reader.read(
       snapshot,
       world.repoPath,
-      new Map([[world.repoPath, { terminal: "tern", sessionId: "own-session" }]]),
+      new Map([[world.repoPath, "own-session"]]),
     );
     const other = {
       bundle: {
@@ -354,15 +360,14 @@ test("project switcher reads only other owners' published summaries without rewr
       },
       details: [],
     };
-    await publishNativeViews(world.home, other.bundle.project, async () => other);
-    const path = nativeViewsPath(world.home, other.bundle.project);
+    await publishViews(world.home, other.bundle.project, async () => other);
+    const path = viewIndexPath(world.home, other.bundle.project);
     const before = await readFile(path, "utf8");
     const inode = (await stat(path)).ino;
     const publication = await reader.read(snapshot, world.repoPath);
     expect(
       publication.bundle.projects.find((project) => project.repoPath === "/another/app"),
     ).toMatchObject({
-      terminal: "tern",
       name: "Other app",
       running: 4,
       needsYou: 9,
@@ -372,23 +377,20 @@ test("project switcher reads only other owners' published summaries without rewr
     });
     expect(publication.bundle.panel.header.otherProjectsNeedYou).toBe(9);
     expect(publication.bundle.summary.repoPath).toBe(world.repoPath);
-    expect(initial.bundle.summary).toMatchObject({ terminal: "tern", sessionId: "own-session" });
-    const foreignSession = await reader.read(
-      snapshot,
-      world.repoPath,
-      new Map([[world.repoPath, { terminal: "herdr", sessionId: "own-session" }]]),
-    );
-    expect(foreignSession.bundle.summary).not.toHaveProperty("sessionId");
-    await publishNativeViews(world.home, publication.bundle.project, async () => publication);
+    expect(initial.bundle.summary).toMatchObject({ sessionId: "own-session" });
+    await publishViews(world.home, publication.bundle.project, async () => publication);
     expect(await readFile(path, "utf8")).toBe(before);
     expect((await stat(path)).ino).toBe(inode);
+    const otherState = join(projectStoreDirectory(world.home, other.bundle.project), "state.json");
+    const saved = JSON.parse(await readFile(otherState, "utf8"));
     await writeFile(
-      path,
+      otherState,
       JSON.stringify({
-        version: 1,
-        kind: "panel",
-        revision: "foreign-terminal",
-        model: { ...other.bundle, summary: { ...other.bundle.summary, terminal: "herdr" } },
+        ...saved,
+        published: {
+          ...saved.published,
+          summary: { ...saved.published.summary, terminal: "herdr" },
+        },
       }),
     );
     const unreadable = await reader.read(snapshot, world.repoPath);
@@ -409,7 +411,7 @@ test("native publication refuses cross-project details and escaping filenames be
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     const publication = await reader.read(
       {
@@ -423,18 +425,18 @@ test("native publication refuses cross-project details and escaping filenames be
     const detail = publication.details[0];
     if (detail === undefined) throw new Error("Expected detail");
     await expect(
-      publishNativeViews(world.home, world.repoPath, async () => ({
+      publishViews(world.home, world.repoPath, async () => ({
         ...publication,
         details: [{ ...detail, view: { ...detail.view, project: "/another/app" } }],
       })),
     ).rejects.toThrow("another project's detail");
     await expect(
-      publishNativeViews(world.home, world.repoPath, async () => ({
+      publishViews(world.home, world.repoPath, async () => ({
         ...publication,
         details: [{ ...detail, file: "task-../../escape.json" }],
       })),
     ).rejects.toThrow("filename");
-    await expect(stat(nativeViewsPath(world.home, world.repoPath))).rejects.toHaveProperty(
+    await expect(stat(viewIndexPath(world.home, world.repoPath))).rejects.toHaveProperty(
       "code",
       "ENOENT",
     );
@@ -460,7 +462,7 @@ test("publication prunes absent task/brief/PR details only in its own project an
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     try {
       const publication = await reader.read(
@@ -473,17 +475,17 @@ test("publication prunes absent task/brief/PR details only in its own project an
         world.repoPath,
       );
       expect(publication.retainedDetailFiles).toContain("pr-acme%2Fapp-4.json");
-      await publishNativeViews(world.home, publication.bundle.project, async () => publication);
-      const directory = join(world.home, "native-views", repositoryKey(world.repoPath));
+      await publishViews(world.home, publication.bundle.project, async () => publication);
+      const directory = join(projectStoreDirectory(world.home, world.repoPath), "views");
       const stale = ["task-deleted.json", "brief-deleted.json", "pr-acme%2Fapp-3.json"];
       for (const file of [...stale, "pr-acme%2Fapp-4.json", "notes.json", "task-write.json.tmp"])
         await writeFile(join(directory, file), "previous content");
-      const foreign = nativeDetailPath(world.home, "/another/app", "task-foreign.json");
-      await mkdir(join(world.home, "native-views", repositoryKey("/another/app")), {
+      const foreign = viewDetailPath(world.home, "/another/app", "task-foreign.json");
+      await mkdir(join(projectStoreDirectory(world.home, "/another/app"), "views"), {
         recursive: true,
       });
       await writeFile(foreign, "another owner's content");
-      await publishNativeViews(world.home, publication.bundle.project, async () => publication);
+      await publishViews(world.home, publication.bundle.project, async () => publication);
       for (const file of stale)
         await expect(stat(join(directory, file))).rejects.toHaveProperty("code", "ENOENT");
       expect(await readFile(join(directory, "pr-acme%2Fapp-4.json"), "utf8")).toBe(
@@ -495,13 +497,13 @@ test("publication prunes absent task/brief/PR details only in its own project an
         "previous content",
       );
       // When the entities disappear, even the last good cached detail goes away.
-      await publishNativeViews(world.home, world.repoPath, async () => ({
+      await publishViews(world.home, world.repoPath, async () => ({
         bundle: { ...publication.bundle, tasks: {}, briefs: {}, pullRequests: {} },
         details: [],
         retainedDetailFiles: [],
       }));
       expect((await readdir(directory)).toSorted()).toEqual(
-        ["notes.json", "task-write.json.tmp"].toSorted(),
+        ["index.json", "notes.json", "task-write.json.tmp"].toSorted(),
       );
       expect(await readFile(foreign, "utf8")).toBe("another owner's content");
     } finally {
@@ -551,6 +553,54 @@ test("panel bell reads successful native deliveries and ignores coordinator ackn
     expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(1);
     await markNativeAlertsRead(world.home, world.repoPath, 1);
     expect((await reader.read(snapshot, world.repoPath)).bundle.panel.header.bellCount).toBe(0);
+    await reader.settle();
+  });
+});
+
+test("a state written before the summary lost its terminal tag publishes again and keeps its cursors", async () => {
+  await withScenario({}, async (world) => {
+    const reader = new NativeViewsReader({
+      home: world.home,
+      clock: world.clock,
+      run: world.run,
+      terminal: terminalBackend(world.run),
+    });
+    const snapshot = {
+      version: 1 as const,
+      writtenAt: world.clock(),
+      board: boardView(state({ projects: [world.repoPath] }), world.clock()),
+      coordinators: [],
+    };
+    const publish = () =>
+      publishViews(world.home, world.repoPath, () => reader.read(snapshot, world.repoPath));
+    await publish();
+    const path = join(projectStoreDirectory(world.home, world.repoPath), "state.json");
+    const saved = JSON.parse(await readFile(path, "utf8"));
+    const alerts = { cursors: {}, drafts: {}, rows: [], routing: [], delivered: 3, read: 1 };
+    const visit = { lastOpenedAt: world.clock() };
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...saved,
+        alerts,
+        visit,
+        published: {
+          ...saved.published,
+          summary: { terminal: "tern", ...saved.published.summary },
+        },
+      }),
+    );
+    expect((await readProjectState(world.home, world.repoPath))?.published).toBeUndefined();
+    await publish();
+    const republished = await readProjectState(world.home, world.repoPath);
+    if (republished === undefined) throw new Error("Republication left no project state");
+    expect(republished).toMatchObject({ epoch: saved.epoch, alerts, visit });
+    expect(republished.seq).toBeGreaterThan(saved.seq);
+    expect(republished.published?.summary).toEqual(saved.published.summary);
+    const index = ViewFile.parse(
+      JSON.parse(await readFile(viewIndexPath(world.home, world.repoPath), "utf8")),
+    );
+    expect(index.seq).toBe(republished.seq);
     await reader.settle();
   });
 });

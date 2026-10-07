@@ -2,10 +2,10 @@ import { expect, test } from "bun:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
-import { nativeDetailPath, nativeViewsPath, publishNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { publishViews, viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { projectRequestBriefPane } from "../../src/requests/review-pane.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
@@ -13,9 +13,15 @@ import { RequestBriefWorkflow } from "../../src/requests/workflow.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { executeTandemAction } from "../../src/session/actions.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
-import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
+import type { TerminalBackend, ViewsCapability } from "../../src/terminal-backend/contract.ts";
 import { content, state } from "../board/fixtures.ts";
 import { type ScenarioWorld, withScenario } from "../evals/scenario.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
+
+function ternWith(world: ScenarioWorld, views: Partial<ViewsCapability>): TerminalBackend {
+  const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
+  return { ...base, views: viewsWith(base, views) };
+}
 
 async function fixture(world: ScenarioWorld, terminal: TerminalBackend) {
   const coordinator = {
@@ -57,14 +63,13 @@ async function fixture(world: ScenarioWorld, terminal: TerminalBackend) {
 for (const existing of [false, true]) {
   test(`interleaved brief publication survives an older tick with ${existing ? "revision 1" : "no brief"}`, async () => {
     await withScenario({ terminal: "tern" }, async (world) => {
-      const terminal: TerminalBackend = {
-        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-        openView: async (input) => ({
+      const terminal = ternWith(world, {
+        open: async (input) => ({
           opened: true,
           warnings: [],
           endpoint: { ...input.coordinator, paneId: "3001" },
         }),
-      };
+      });
       const { workflow } = await fixture(world, terminal);
       const reader = new NativeViewsReader({
         home: world.home,
@@ -86,7 +91,7 @@ for (const existing of [false, true]) {
         });
       const read = Promise.withResolvers<void>();
       const resume = Promise.withResolvers<void>();
-      const oldTick = publishNativeViews(world.home, world.repoPath, async () => {
+      const oldTick = publishViews(world.home, world.repoPath, async () => {
         const publication = await reader.read(snapshot, world.repoPath);
         read.resolve();
         await resume.promise;
@@ -105,7 +110,7 @@ for (const existing of [false, true]) {
         resume.resolve();
         await oldTick;
         const projected = await projection;
-        const detailPath = nativeDetailPath(world.home, world.repoPath, "brief-req-native.json");
+        const detailPath = viewDetailPath(world.home, world.repoPath, "brief-req-native.json");
         const expected = {
           kind: "brief",
           model: {
@@ -120,12 +125,10 @@ for (const existing of [false, true]) {
         expect(JSON.parse(await readFile(detailPath, "utf8"))).toMatchObject(expected);
         expect(projected.record.reviewPane?.renderedPath).toBe(detailPath);
         // A delayed tick still carries the old board input, but builds details from fresh SQLite.
-        await publishNativeViews(world.home, world.repoPath, () =>
-          reader.read(snapshot, world.repoPath),
-        );
+        await publishViews(world.home, world.repoPath, () => reader.read(snapshot, world.repoPath));
         expect(JSON.parse(await readFile(detailPath, "utf8"))).toMatchObject(expected);
         expect(
-          JSON.parse(await readFile(nativeViewsPath(world.home, world.repoPath), "utf8")),
+          JSON.parse(await readFile(viewIndexPath(world.home, world.repoPath), "utf8")),
         ).toMatchObject({
           model: { briefs: { "req-native": { revision: revised.record.draft.revision } } },
         });
@@ -145,13 +148,15 @@ for (const action of ["approve", "abandon", "closeReview"] as const) {
   test(`${action} under Tern quarantines a foreign Herdr receipt without closing any pane`, async () => {
     await withScenario({ terminal: "tern" }, async (world) => {
       let closes = 0;
-      const { workflow, coordinator, store } = await fixture(world, {
-        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-        closeView: async () => {
-          closes++;
-          return { closed: true, warnings: [] };
-        },
-      });
+      const { workflow, coordinator, store } = await fixture(
+        world,
+        ternWith(world, {
+          close: async () => {
+            closes++;
+            return { closed: true, warnings: [] };
+          },
+        }),
+      );
       const drafted = await workflow.draft({
         repoPath: world.repoPath,
         content: content("Review the brief after switching terminals"),
@@ -197,14 +202,13 @@ for (const action of ["approve", "abandon", "closeReview"] as const) {
 
 test("every direct brief projector caller uses native hosting in Tern", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
-    const opens: Parameters<TerminalBackend["openView"]>[0][] = [];
-    const terminal: TerminalBackend = {
-      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-      openView: async (input) => {
+    const opens: Parameters<ViewsCapability["open"]>[0][] = [];
+    const terminal = ternWith(world, {
+      open: async (input) => {
         opens.push(input);
         return { opened: true, warnings: [], endpoint: { ...input.coordinator, paneId: "3001" } };
       },
-    };
+    });
     const { workflow, coordinator } = await fixture(world, terminal);
     const draft = await workflow.draft({
       repoPath: world.repoPath,
@@ -244,15 +248,17 @@ test("every direct brief projector caller uses native hosting in Tern", async ()
 test("coordinator reviewRequestBrief action after feedback enters native hosting and never falls back to a pager", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-    const { workflow, coordinator } = await fixture(world, {
-      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-      openView: async (input) => ({
-        opened: true,
-        warnings: [],
-        endpoint: { ...input.coordinator, paneId: "3001" },
+    const { workflow, coordinator } = await fixture(
+      world,
+      ternWith(world, {
+        open: async (input) => ({
+          opened: true,
+          warnings: [],
+          endpoint: { ...input.coordinator, paneId: "3001" },
+        }),
+        close: async () => ({ closed: true, warnings: [] }),
       }),
-      closeView: async () => ({ closed: true, warnings: [] }),
-    });
+    );
     const draft = await workflow.draft({
       repoPath: world.repoPath,
       content: content("Review the brief after native feedback"),
@@ -292,19 +298,18 @@ test("coordinator reviewRequestBrief action after feedback enters native hosting
 for (const action of ["approve", "request-changes", "abandon"] as const) {
   test(`automatic Tern brief projection binds revisions and retires its native split on ${action}`, async () => {
     await withScenario({ terminal: "tern" }, async (world) => {
-      const opens: Parameters<TerminalBackend["openView"]>[0][] = [];
-      const closes: Parameters<TerminalBackend["closeView"]>[0][] = [];
-      const terminal: TerminalBackend = {
-        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-        openView: async (input) => {
+      const opens: Parameters<ViewsCapability["open"]>[0][] = [];
+      const closes: Parameters<ViewsCapability["close"]>[0][] = [];
+      const terminal = ternWith(world, {
+        open: async (input) => {
           opens.push(input);
           return { opened: true, warnings: [], endpoint: { ...input.coordinator, paneId: "3001" } };
         },
-        closeView: async (input) => {
+        close: async (input) => {
           closes.push(input);
           return { closed: true, warnings: [] };
         },
-      };
+      });
       const { workflow, coordinator, worktree } = await fixture(world, terminal);
       const first = await workflow.draft({
         repoPath: world.repoPath,
@@ -324,7 +329,7 @@ for (const action of ["approve", "request-changes", "abandon"] as const) {
       expect(next.record.reviewPane?.renderedRevision).toBe(2);
       const file = JSON.parse(await readFile(next.record.reviewPane?.renderedPath ?? "", "utf8"));
       expect(file).toMatchObject({
-        version: 1,
+        v: 1,
         kind: "brief",
         model: {
           revision: 2,
@@ -376,15 +381,7 @@ for (const action of ["approve", "request-changes", "abandon"] as const) {
 
 test("Herdr workflow keeps projecting through the legacy shell pane", async () => {
   await withScenario({}, async (world) => {
-    const { workflow } = await fixture(world, {
-      ...terminalBackend(world.run),
-      openView: async () => {
-        throw new Error("Herdr must not open native views");
-      },
-      closeView: async () => {
-        throw new Error("Herdr must not close native views");
-      },
-    });
+    const { workflow } = await fixture(world, terminalBackend(world.run, { terminal: "herdr" }));
     const drafted = await workflow.draft({
       repoPath: world.repoPath,
       content: content("Let users review their brief in Tern"),
@@ -400,17 +397,19 @@ test("uncertain native close preserves approval and quarantines the projection w
   await withScenario({ terminal: "tern" }, async (world) => {
     let opens = 0;
     let closes = 0;
-    const { workflow } = await fixture(world, {
-      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-      openView: async (input) => {
-        opens++;
-        return { opened: true, warnings: [], endpoint: { ...input.coordinator, paneId: "3001" } };
-      },
-      closeView: async () => {
-        closes++;
-        throw new Error("close outcome unknown; quarantine");
-      },
-    });
+    const { workflow } = await fixture(
+      world,
+      ternWith(world, {
+        open: async (input) => {
+          opens++;
+          return { opened: true, warnings: [], endpoint: { ...input.coordinator, paneId: "3001" } };
+        },
+        close: async () => {
+          closes++;
+          throw new Error("close outcome unknown; quarantine");
+        },
+      }),
+    );
     const drafted = await workflow.draft({
       repoPath: world.repoPath,
       content: content("Let users review their brief in Tern"),
@@ -433,13 +432,15 @@ test("uncertain native close preserves approval and quarantines the projection w
 test("an unknown native opening propagates once and leaves the exact draft durable", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     let opens = 0;
-    const { workflow } = await fixture(world, {
-      ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
-      openView: async () => {
-        opens++;
-        throw new Error("open outcome unknown; quarantine and keep resources");
-      },
-    });
+    const { workflow } = await fixture(
+      world,
+      ternWith(world, {
+        open: async () => {
+          opens++;
+          throw new Error("open outcome unknown; quarantine and keep resources");
+        },
+      }),
+    );
     await expect(
       workflow.draft({
         repoPath: world.repoPath,

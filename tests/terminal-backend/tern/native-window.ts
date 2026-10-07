@@ -1,10 +1,11 @@
-import { appendFile, cp, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import { ActionEnvelope } from "../../../src/native/contract.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../../src/terminal-backend/contract.ts";
 import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin.ts";
@@ -59,12 +60,33 @@ export type TernWindowOptions = Readonly<{
   /** Tandem home; defaults to `<root>/home`. */
   home?: string;
   /**
-   * A bun script that answers the plugin's `tandem.sh` and `native-input.sh` in the copied plugin,
-   * so clicks reach a test boundary. `native-input.sh` calls it with `--stdin-input` first.
+   * A bun script that answers the plugin's `tandem.sh` in the copied plugin, so clicks reach a
+   * test boundary. A click arrives as `native act` with its envelope on stdin.
    */
   driver?: string;
   size?: readonly [number, number];
 }>;
+
+/**
+ * A `tandem.sh` that appends each click's action envelope to `log`, one per line, and answers
+ * `done`. A click whose envelope contains `refuse` text is refused with `reason` instead.
+ */
+export function recordingCli(log: string, refuse?: Readonly<{ text: string; reason: string }>) {
+  const refusal =
+    refuse === undefined
+      ? ""
+      : `case "$input" in *'${refuse.text}'*) printf '{"status":"refused","notice":{"code":"failed","text":"${refuse.reason}"}}'; exit 0;; esac\n`;
+  return `#!/bin/sh\ninput="$(cat)"\nprintf '%s\\n' "$input" >> '${log}'\n${refusal}printf '{"status":"done"}'\n`;
+}
+
+/** The envelopes a `recordingCli` received, in click order. */
+export async function recordedActions(log: string): Promise<readonly ActionEnvelope[]> {
+  const text = await readFile(log, "utf8").catch(() => "");
+  return text
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => ActionEnvelope.parse(JSON.parse(line)));
+}
 
 export function flatten(nodes: readonly ControlNode[]): readonly ControlNode[] {
   return nodes.flatMap((node) => [node, ...flatten(node.children ?? [])]);
@@ -90,6 +112,37 @@ export function isolatedRunner(run: CommandRunner, log: string): CommandRunner {
   };
 }
 
+const SETUP_MODELS = JSON.stringify({
+  models: [
+    {
+      selector: "openai-codex/flagship",
+      id: "flagship",
+      provider: "openai-codex",
+      name: "Flagship",
+      reasoning: true,
+      thinking: ["low", "medium", "high", "max"],
+      contextWindow: 400_000,
+      cost: { input: 10, output: 50 },
+    },
+  ],
+});
+
+/**
+ * What setup reaches beyond Tern and Git: OMP's model listing answers one canned model, and opening
+ * a saved project's chat is logged instead of launching a coordinator. Nothing else gets through.
+ */
+export function setupRunner(run: CommandRunner, log: string): CommandRunner {
+  return async (request) => {
+    if (request.argv[0] === "omp" && request.argv[1] === "models")
+      return { code: 0, stdout: SETUP_MODELS, stderr: "" };
+    if (request.argv[0] === "env" && request.argv.includes("--no-attach")) {
+      await appendFile(log, `open-project ${JSON.stringify(request.argv)}\n`);
+      return { code: 0, stdout: "", stderr: "" };
+    }
+    return run(request);
+  };
+}
+
 /**
  * Starts an isolated Tern daemon and control window with a private config dir, plugin copy and
  * Tandem home, runs `body`, then quits the window and stops the daemon, also on failure.
@@ -103,7 +156,8 @@ export async function withTernWindow(
   const plugin = join(root, "plugin");
   const control = join(root, "w.sock");
   const shots = join(root, "shots");
-  const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
+  // A window started through a PATH symlink to Tern.app never answers `ctl account`.
+  const binary = await realpath(Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern");
   const env = {
     HOME: root,
     USER: "tandem-test",
@@ -133,9 +187,6 @@ export async function withTernWindow(
   if (options.driver !== undefined) {
     const exec = `#!/bin/sh\nTANDEM_WORKFLOW_ROOT='${root}' exec '${process.execPath}' '${options.driver}'`;
     await writeFile(join(plugin, "tandem.sh"), `${exec} "$@"\n`, { mode: 0o755 });
-    await writeFile(join(plugin, "native-input.sh"), `${exec} --stdin-input "$@"\n`, {
-      mode: 0o755,
-    });
   }
 
   const run: CommandRunner = async (request) => {

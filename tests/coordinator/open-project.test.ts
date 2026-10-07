@@ -1,17 +1,17 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../src/adapters/commands.ts";
-import { nativeViewText } from "../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
-import { repositoryKey } from "../../src/config/repositories.ts";
 import type { CommandRequest } from "../../src/contracts.ts";
 import { openProject, openProjectCommand } from "../../src/coordinator/open-project.ts";
 import { listCoordinatorRecords, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
+import { readProjectState } from "../../src/native/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
+import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { saveCoordinator } from "./fake-workspace-order.ts";
 
 const input = {
@@ -82,7 +82,11 @@ test("an opened project's workspace is brought forward", async () => {
       if (request.argv[0] === "env") await saveCoordinator(home, repo, "w-api");
       return { code: 0, stdout: "", stderr: "" };
     };
-    const opened = await openProject(run, terminalBackend(run), { ...input, repoPath: repo, home });
+    const opened = await openProject(run, terminalBackend(run, { terminal: "herdr" }), {
+      ...input,
+      repoPath: repo,
+      home,
+    });
     expect(opened).toEqual({ focused: true });
     expect(ran.at(-1)).toEqual(["herdr", "--session", "tandem", "workspace", "focus", "w-api"]);
   } finally {
@@ -96,9 +100,9 @@ test("a failed open names the project and the front door's reason", async () => 
     requests.push(request);
     return { code: 1, stdout: "", stderr: "tandem: Herdr is not running\n" };
   };
-  await expect(openProject(failing, terminalBackend(failing), input)).rejects.toThrow(
-    "Tandem could not open /code/app: Herdr is not running",
-  );
+  await expect(
+    openProject(failing, terminalBackend(failing, { terminal: "herdr" }), input),
+  ).rejects.toThrow("Tandem could not open /code/app: Herdr is not running");
   expect(requests).toHaveLength(1);
 });
 
@@ -129,21 +133,7 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         },
       };
       await saveCoordinatorRecord(home, record);
-      const path = nativeViewsPath(home, repo);
-      await mkdir(join(path, ".."), { recursive: true });
-      await writeFile(
-        path,
-        nativeViewText("panel", {
-          version: 1,
-          project: repo,
-          writtenAt: new Date().toISOString(),
-          changeSignature: "after",
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          projects: [],
-        }),
-      );
+      await publishFixture(home, repo, { changeSignature: "after" });
       await visitNativeProject(
         {
           home,
@@ -153,15 +143,16 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         },
         async () => {},
       );
-      const visitPath = join(home, "native-visits", `${repositoryKey(repo)}.json`);
-      const previousVisit = await readFile(visitPath, "utf8");
+      const visit = async () => JSON.stringify((await readProjectState(home, repo))?.visit);
+      const previousVisit = await visit();
       const events: string[] = [];
       const run = async () => {
         events.push("launch --no-attach");
         return { code: 0, stdout: "", stderr: "" };
       };
+      const base = terminalBackend(run, { terminal: "herdr" });
       const terminal = {
-        ...terminalBackend(run),
+        ...base,
         name: "tern" as const,
         focusWorkspace: async () => {
           events.push("focus");
@@ -169,14 +160,16 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
             ? { focused: true as const }
             : { focused: false as const, code: 1, detail: "offline" };
         },
-        openView: async (view: Parameters<ReturnType<typeof terminalBackend>["openView"]>[0]) => {
-          events.push(view.view.kind);
-          expect(view.coordinator).toEqual(record.endpoint);
-          expect(view.origin).toEqual({ paneId: "101", cwd: record.worktree.path });
-          if (outcome === "ambiguous-window") throw new Error(warning);
-          if (outcome === "unavailable") return { opened: false, warnings: [] };
-          return { opened: true, warnings: [] };
-        },
+        views: viewsWith(base, {
+          open: async (view) => {
+            events.push(view.view.kind);
+            expect(view.coordinator).toEqual(record.endpoint);
+            expect(view.origin).toEqual({ paneId: "101", cwd: record.worktree.path });
+            if (outcome === "ambiguous-window") throw new Error(warning);
+            if (outcome === "unavailable") return { opened: false, warnings: [] };
+            return { opened: true, warnings: [] };
+          },
+        }),
       };
       expect(await openProject(run, terminal, { ...input, home, repoPath: repo })).toEqual({
         focused,
@@ -188,7 +181,7 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
         focused ? ["launch --no-attach", "focus", "catchup"] : ["launch --no-attach", "focus"],
       );
       if (warning !== undefined) {
-        expect(await readFile(visitPath, "utf8")).toBe(previousVisit);
+        expect(await visit()).toBe(previousVisit);
       }
     } finally {
       await rm(root, { recursive: true, force: true });

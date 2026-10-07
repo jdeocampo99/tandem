@@ -6,15 +6,18 @@ import { recordPath } from "../../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import type { TerminalView } from "../../../src/terminal-backend/contract.ts";
+import { ternEndpoint } from "../../../src/terminal-backend/identity.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import {
   Created,
   decode,
   Listing,
   TernOutcomeUnknownError,
+  TernQuarantinedError,
 } from "../../../src/terminal-backend/tern/protocol.ts";
 import {
   scenarioRuntimeTask,
@@ -22,6 +25,7 @@ import {
   seedScenarioTask,
   withScenario,
 } from "../../evals/scenario.ts";
+import { viewsOf } from "../views.ts";
 
 test("Tern port pins identity and observable outcomes through a pane lifecycle", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
@@ -264,7 +268,7 @@ test("notifications require the injected durable endpoint even after a backend c
   });
 });
 
-test("an uncertain helper creation retains both panes and prevents blind retry", async () => {
+test("an uncertain helper creation retains both panes", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     let helperCreates = 0;
     const terminal = ternBackend(async (request) => {
@@ -282,7 +286,6 @@ test("an uncertain helper creation retains both panes and prevents blind retry",
       role: "coordinator" as const,
       generation: 0,
     };
-    await expect(terminal.createWorkspace(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     await expect(terminal.createWorkspace(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     expect(helperCreates).toBe(1);
     const snapshot = await world.snapshot();
@@ -332,7 +335,7 @@ test("native views without a recorded coordinator refuse before any terminal eff
     ];
     for (const view of views) {
       await expect(
-        terminal.openView({
+        viewsOf(terminal).open({
           coordinator,
           cwd: world.repoPath,
           home: world.home,
@@ -421,15 +424,55 @@ test("wrong block acknowledgement quarantines resources and prevents blind retri
       }
       return result;
     };
-    const terminal = ternBackend(run);
+    // A fresh backend per call stands for a fresh process; only the durable record refuses.
+    const terminal = () => ternBackend(run, { home: world.home });
     const target = { endpoint, cwd: world.repoPath, keys: ["ctrl+c"] };
-    await expect(terminal.sendKeys(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-    await expect(terminal.sendKeys(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-    await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
-      TernOutcomeUnknownError,
+    await expect(terminal().sendKeys(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    await expect(terminal().sendKeys(target)).rejects.toBeInstanceOf(TernQuarantinedError);
+    await expect(terminal().close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
+      TernQuarantinedError,
     );
     expect(writes).toBe(1);
     expect(world.paneIsPresent(endpoint.paneId)).toBe(true);
+  });
+});
+
+test("a window-scoped close never forgets the quarantine of a pane another window holds", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const endpoint = world.openPane({ paneId: "46", cwd: world.repoPath });
+    // The pane lives in another window, so a listing scoped to this window does not show it.
+    const run: CommandRunner = async (request) => {
+      const result = await world.run(request);
+      if (request.argv[1] === "send") return { ...result, stdout: '{"block":47}' };
+      if (request.argv[1] !== "ls" || !request.argv.includes("--window")) return result;
+      const listing = decode(result.stdout, Listing, "fixture listing");
+      for (const session of listing.sessions)
+        for (const tab of session.tabs)
+          tab.blocks = tab.blocks.filter((block) => block.id !== endpoint.paneId);
+      return { ...result, stdout: JSON.stringify(listing) };
+    };
+    const terminal = ternBackend(run, { home: world.home });
+    await expect(
+      terminal.sendKeys({ endpoint, cwd: world.repoPath, keys: ["ctrl+c"] }),
+    ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    const quarantined = async () =>
+      (await terminal.quarantinedPanes(world.home)).flatMap((pane) =>
+        pane.status === "readable" ? [pane.endpoint.paneId] : [],
+      );
+    expect(await quarantined()).toEqual([endpoint.paneId]);
+    const close = { verb: "close", endpoint: ternEndpoint(endpoint), cwd: world.repoPath } as const;
+    const windowed = ternCli(run, { home: world.home, windowKey: "this-window" });
+    for (const view of [{ program: "tandem.brief", args: [] }, undefined])
+      expect(await windowed.mutate({ ...close, ...(view === undefined ? {} : { view }) })).toEqual({
+        absent: true,
+      });
+    expect(await quarantined()).toEqual([endpoint.paneId]);
+    world.removePane(endpoint.paneId);
+    await ternCli(run, { home: world.home }).mutate({
+      ...close,
+      view: { program: "tandem.brief", args: [] },
+    });
+    expect(await quarantined()).toEqual([]);
   });
 });
 
@@ -467,13 +510,13 @@ test("a failed mutation retains its pane and is never retried", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const endpoint = world.openPane({ paneId: "42", cwd: world.repoPath });
     world.failAt({ boundary: "tern", action: "tern close" });
-    const terminal = ternBackend(world.run);
-    await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
+    const terminal = () => ternBackend(world.run, { home: world.home });
+    await expect(terminal().close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
       TernOutcomeUnknownError,
     );
     expect(world.paneIsPresent(endpoint.paneId)).toBe(true);
-    await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
-      TernOutcomeUnknownError,
+    await expect(terminal().close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
+      TernQuarantinedError,
     );
     expect(world.trace().filter((event) => event.action === "tern close")).toHaveLength(1);
   });
@@ -528,34 +571,37 @@ test("a killed session with an unconfirmed tab times out and quarantines another
     let now = 0;
     let kills = 0;
     let killedSession: string | undefined;
-    const terminal = ternBackend(
-      async (request) => {
-        if (request.argv[1] === "kill") {
-          kills++;
-          killedSession = request.argv[3];
-          return { code: 0, stdout: JSON.stringify({ session: request.argv[3] }), stderr: "" };
-        }
-        const result = await world.run(request);
-        if (killedSession !== undefined && request.argv[1] === "ls") {
-          const listing = decode(result.stdout, Listing, "unconfirmed cleanup");
-          const retained = listing.sessions.find((session) => session.id === killedSession);
-          if (retained !== undefined)
-            retained.tabs.push({ id: "80000000", name: null, blocks: [] });
-          return { ...result, stdout: JSON.stringify(listing) };
-        }
-        return result;
-      },
-      {
-        clock: () => now,
-        wait: async (milliseconds) => {
-          now += milliseconds;
+    const terminal = () =>
+      ternBackend(
+        async (request) => {
+          if (request.argv[1] === "kill") {
+            kills++;
+            killedSession = request.argv[3];
+            return { code: 0, stdout: JSON.stringify({ session: request.argv[3] }), stderr: "" };
+          }
+          const result = await world.run(request);
+          if (killedSession !== undefined && request.argv[1] === "ls") {
+            const listing = decode(result.stdout, Listing, "unconfirmed cleanup");
+            const retained = listing.sessions.find((session) => session.id === killedSession);
+            if (retained !== undefined)
+              retained.tabs.push({ id: "80000000", name: null, blocks: [] });
+            return { ...result, stdout: JSON.stringify(listing) };
+          }
+          return result;
         },
-      },
-    );
+        {
+          home: world.home,
+          clock: () => now,
+          wait: async (milliseconds) => {
+            now += milliseconds;
+          },
+        },
+      );
     const target = { endpoint, cwd: world.repoPath };
-    await expect(terminal.close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    await expect(terminal().close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     expect(now).toBe(5_000);
-    await expect(terminal.close(target)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    // The closed pane is proven absent, so a later close settles without another kill.
+    await terminal().close(target);
     expect(kills).toBe(1);
     expect(world.trace().filter((event) => event.action === "tern close")).toHaveLength(1);
   });

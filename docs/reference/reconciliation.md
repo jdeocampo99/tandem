@@ -31,8 +31,8 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
 
 - **Scan (read-only):** every coordinator record in every session directory, whether Herdr still
   answers for each, the checkout behind each unanswered record, every pool's leases, terminal tasks
-  with unsettled cleanup, existing quarantine notes, unreadable record files, and native view
-  opens the terminal still retains.
+  with unsettled cleanup, existing quarantine notes, unreadable record files, native view
+  opens the terminal still retains, and Tern panes it quarantined after an unknown outcome.
 - **Plan:** a pure function of the scan, so nothing is classified from a resource Tandem changed.
 
 ### Classification
@@ -57,13 +57,25 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
 - Unreadable record file: listed with path and reason, never deleted.
 - Quarantine note: removed only when no record names its lease and Treehouse, re-read under the
   repository lock, no longer holds it. Kept when its lease cannot be read.
-- Retained native view open (Tern, under `<home>/native-host/`): an open whose outcome was never
+- Retained native view open (Tern, under `<home>/tern/<projectKey>/open/`): an open whose outcome was never
   proved, which pauses new native views for its coordinator. Listed with its view kind and why
   (no receipt, a failure after layout changes, or a done receipt without exact block proof).
   Applying abandons it only under that coordinator's open lock, while the record is unchanged,
   after the terminal proves the coordinator pane exactly present or exactly gone again. A
-  detached or otherwise inconclusive answer keeps it. Abandoning removes only the record, ticket
-  and receipt; no pane is closed and nothing is reopened. An unreadable record is listed and kept.
+  detached or otherwise inconclusive answer keeps it. Abandoning removes only the ticket and its
+  receipt; no pane is closed and nothing is reopened. An unreadable ticket is listed and kept. A
+  receipt that arrives after its ticket was abandoned is removed by the next recovery. If the
+  retained opens cannot be listed at all, the scan reports that as a `native-open` failure and
+  still covers every other resource.
+- Quarantined Tern pane (under `<home>/tern-quarantine/`): a pane whose last Tandem effect
+  (`run`, `send`, `rename`, `split`, `close`, `killSession` or an alert write) ended with an
+  unknown outcome, so every Tandem process refuses to touch it. Listed with the operation, the
+  pane key, the time and the reason. Applying clears the record only under its own lock, while
+  the record is unchanged, after the terminal proves the exact pane gone or idle again. A busy
+  pane, or a detached or otherwise inconclusive answer, keeps it. Clearing removes only the
+  record; the pane is never closed. An unreadable record is listed and kept. If the records
+  cannot be listed at all, the scan reports a `tern-quarantine` failure and still covers
+  everything else.
 
 ### Superseded worktrees (`freeable`)
 
@@ -89,7 +101,7 @@ It does not recover stuck tasks; [central recovery](recovery.md#central-recovery
   quarantine it. A second apply cleans nothing.
 - `--json` is `schemaVersion` 3 with `mode`, `home`, and `cleaned`, `retained`, `quarantined`,
   `failed`, `freeable` lists of entries (kind, id, repository, session, path, reason). Version 3
-  added the `native-open` kind.
+  added the `native-open` kind; the additive `tern-quarantine` kind came later without a bump.
 - The human view prints one line per thing; a task line includes its lease's worktree number, so a
   task-held lease is never listed separately.
 - Exit is non-zero only when the scan or an apply failed, never for a deliberate retain.

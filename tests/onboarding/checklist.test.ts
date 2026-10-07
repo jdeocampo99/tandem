@@ -1,6 +1,5 @@
 import { expect, test } from "bun:test";
 import {
-  chatAsksSetupQuestions,
   type OnboardingFacts,
   onboardingContext,
   onboardingQuestion,
@@ -9,20 +8,16 @@ import {
 
 const fresh: OnboardingFacts = {
   modelsChosen: false,
-  terminalChosen: true,
   codeFolders: [],
   projects: [],
   selfImprovementChosen: false,
-  setupPage: "unavailable",
 };
 
 const done: OnboardingFacts = {
   modelsChosen: true,
-  terminalChosen: true,
   codeFolders: ["/Users/me/code"],
   projects: ["/Users/me/code/api"],
   selfImprovementChosen: true,
-  setupPage: "unavailable",
 };
 
 test("setup walks the fixed choices before repositories", () => {
@@ -38,7 +33,6 @@ test("the chat reads only the current step's guidance, and nothing once setup is
   const halfway = {
     ...fresh,
     modelsChosen: true,
-    terminalChosen: true,
     codeFolders: ["/Users/me/code"],
   };
   const context = onboardingContext(halfway) ?? "";
@@ -49,41 +43,15 @@ test("the chat reads only the current step's guidance, and nothing once setup is
 });
 
 test("plain-choice steps have fixed wording; open-ended steps have none", () => {
-  expect(onboardingQuestion("self-improvement", fresh)?.hidden).toContain("self-improvement");
-  expect(onboardingQuestion("models", fresh)).toBeUndefined();
-  expect(onboardingQuestion("repositories", fresh)).toBeUndefined();
+  expect(onboardingQuestion("self-improvement")?.hidden).toContain("self-improvement");
+  expect(onboardingQuestion("models")).toBeUndefined();
+  expect(onboardingQuestion("repositories")).toBeUndefined();
 });
 
-test("while Lavish is there, the setup page comes first and the chat keeps its steps as fallback", () => {
-  const ready = onboardingContext({ ...fresh, setupPage: "ready" }) ?? "";
-  expect(ready).toStartWith("Setup is unfinished. When the user wants to set up, call setup-page");
-  expect(ready).toContain("Current step: Choose models");
-  const open = onboardingContext({ ...fresh, setupPage: "open" }) ?? "";
-  expect(open).toContain("The setup page is open; its answer reaches you by itself.");
-  expect(chatAsksSetupQuestions({ ...fresh, setupPage: "ready" })).toBe(false);
-  expect(chatAsksSetupQuestions({ ...fresh, setupPage: "open" })).toBe(false);
-  expect(chatAsksSetupQuestions({ ...fresh, setupPage: "done" })).toBe(true);
-  expect(onboardingContext({ ...done, setupPage: "ready" })).toBeUndefined();
+test("with the setup block open the chat answers questions instead of asking them", () => {
+  const guidance = onboardingContext(fresh, true);
+  expect(guidance).toContain("The setup block is open beside this chat");
+  expect(guidance).toContain('"Setup saved." message');
+  expect(guidance).not.toContain("Current step:");
+  expect(onboardingContext(done, true)).toBeUndefined();
 });
-
-test("a saved model setup still asks for an explicit terminal choice", () => {
-  const facts = { ...done, terminalChosen: false, tern: { status: "ready" as const } };
-  expect(remainingOnboardingSteps(facts)).toEqual(["terminal"]);
-  expect(onboardingContext(facts)).toContain("terminal-setting");
-  expect(onboardingQuestion("terminal", facts)?.text).toContain("Herdr or Tern");
-});
-
-for (const tern of [
-  { status: "missing" },
-  { status: "signedOut" },
-  { status: "unknown", reason: "Tern could not start." },
-] as const) {
-  test(`${tern.status} Tern is never offered in chat setup`, () => {
-    const facts = { ...done, terminalChosen: false, tern };
-    const question = onboardingQuestion("terminal", facts);
-    expect(question?.text).toContain("Using Herdr.");
-    expect(question?.text).not.toContain("Herdr or Tern");
-    expect(question?.hidden).toContain("with herdr");
-    expect(onboardingContext(facts)).toContain(question?.text ?? "missing");
-  });
-}

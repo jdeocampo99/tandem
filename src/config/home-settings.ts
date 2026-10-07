@@ -11,7 +11,7 @@ import { assertKnownKeys, deduplicateStrings, isRecord, readNonEmptyString } fro
  * each use and never pinned to a task; an absent file means every default.
  */
 export type HomeSettings = Readonly<{
-  /** Absent until onboarding chooses a terminal; composition defaults to Herdr. */
+  /** Absent means Tern; only an explicit `terminal = "herdr"` selects Herdr. */
   readonly terminal?: TerminalName;
   /** What Tandem does when it looks into its own problems; see {@link SelfImprovementMode}. */
   readonly selfImprovement: SelfImprovementMode;
@@ -171,15 +171,7 @@ export function readHomeSettingsSync(home: string): HomeSettings {
   }
 }
 
-export function readTerminalName(value: unknown): TerminalName {
+function readTerminalName(value: unknown): TerminalName {
   if (value === "herdr" || value === "tern") return value;
   throw new TypeError('terminal must be "herdr" or "tern"');
-}
-
-/** Caller holds the state lock and proves no active task or owned operation spans the switch. */
-export async function saveTerminalChoice(
-  home: string,
-  terminal: TerminalName,
-): Promise<HomeSettings> {
-  return saveHomeSetting(home, "terminal", JSON.stringify(readTerminalName(terminal)));
 }

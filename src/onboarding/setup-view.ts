@@ -1,50 +1,53 @@
 import { basename } from "node:path";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
-import { type ModelPreset, modelPresets } from "../config/model-presets.ts";
+import {
+  type BalancedProfileProposal,
+  discoveredProviders,
+  resolveBalancedProfile,
+} from "../config/operating-profile.ts";
 import {
   type AgentRole,
   type IsoTimestamp,
   MODEL_ROLE_ORDER,
   type ModelSpec,
   type RepoPolicy,
-  type TerminalName,
   THINKING_LEVELS,
   type ThinkingLevel,
 } from "../contracts.ts";
 import { type ClaudeCodeAvailability, modsOffReason } from "../harness/claude-code/availability.ts";
 import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harness/contract.ts";
-import type { TerminalAvailability } from "../terminal-backend/contract.ts";
-import { ternFallbackReason } from "../terminal-backend/setting.ts";
-import type { SetupPageDraft } from "./setup-answer.ts";
 
 /**
- * The setup page's view model: everything the page shows and every choice it offers, assembled
- * from saved state and read-only discovery. Pure; src/onboarding/setup-page.ts gathers the facts.
+ * The setup block's view model: everything it shows and every choice it offers, assembled from
+ * saved state and read-only discovery. Pure; src/onboarding/setup-workflow.ts gathers the facts.
  */
-export type SetupSearchStatus = Readonly<{ kind: "ok" | "error"; message: string }>;
+export const SETUP_MODES = ["setup", "settings"] as const;
+export type SetupMode = (typeof SETUP_MODES)[number];
+
+/**
+ * The Settings tab to show first, set only by a publication that opens Settings at one; an
+ * absent section leaves the block where it is.
+ */
+export const SETUP_SECTIONS = ["models", "repositories", "bug-reports"] as const;
+export type SetupSection = (typeof SETUP_SECTIONS)[number];
 
 export type SetupView = Readonly<{
   schemaVersion: 1;
+  mode: SetupMode;
   generatedAt: IsoTimestamp;
   /** Claude Code's models first, then OMP's, so each harness is one run in the pickers. */
   models: readonly SetupModel[];
   harnesses: readonly SetupHarness[];
-  presets: readonly ModelPreset[];
   roles: readonly SetupRole[];
-  /** What each thinking level means, in a word or two. */
-  thinkingNotes: Readonly<Record<ThinkingLevel, string>>;
-  /** The folders crawled for repositories, with the home folder shown as `~`. */
-  searchedFolders: readonly string[];
-  /** Explicit folders selected in this open page, not saved until final approval. */
-  pendingFolders: readonly string[];
+  /** What each thinking level means, in a word or two, from the lightest level to the heaviest. */
+  thinkingLevels: readonly Readonly<{ level: ThinkingLevel; note: string }>[];
+  /** Checkouts already set up, which the user may edit or remove. */
   repos: readonly SetupRepo[];
+  /** Discovered checkouts not set up yet, which "Add repository" offers. */
+  candidates: readonly SetupRepo[];
   selfImprovement: SelfImprovementMode;
-  terminal: TerminalName;
-  ternReady: boolean;
-  terminalReason?: string;
-  draft?: SetupPageDraft;
-  searchStatus?: SetupSearchStatus;
+  section?: SetupSection;
 }>;
 
 /** One harness's group in the model pickers; `unavailable` says why it offers no models. */
@@ -54,6 +57,8 @@ export type SetupHarness = Readonly<{
   note: string;
   unavailable?: string;
 }>;
+
+export type PriceLevel = "$" | "$$" | "$$$";
 
 export type SetupModel = Readonly<{
   selector: string;
@@ -65,6 +70,8 @@ export type SetupModel = Readonly<{
   context?: number;
   /** Catalogue price per million tokens, descriptive only. */
   cost?: Readonly<{ input: number; output: number }>;
+  /** Where `cost` falls on {@link PRICE_LEVEL_CEILINGS}; absent when the catalogue has no price. */
+  priceLevel?: PriceLevel;
 }>;
 
 export type SetupRole = Readonly<{
@@ -73,14 +80,14 @@ export type SetupRole = Readonly<{
   what: string;
   /** A CSS color token, such as `--tandem`. */
   color: string;
-  hintLead: string;
-  hintRest: string;
+  /** One short phrase on what to look for in this role's model. */
+  hint: string;
   /** The thinking level a new pick starts at, moved to the nearest one the model supports. */
   thinking: ThinkingLevel;
-  /** An example setup, plain text only; never a choice or a recommendation. */
-  example: string;
   /** The saved choice, when it is still in the catalogue. */
   pick?: ModelSpec;
+  /** The Balanced profile's choice for this role, with its reason; absent when none fits. */
+  recommended?: Recommendation;
 }>;
 
 export type SetupRepo = Readonly<{
@@ -90,16 +97,17 @@ export type SetupRepo = Readonly<{
   repo?: string;
   setUp: boolean;
   validationCommands: readonly string[];
-  /** Where the validation commands came from, for the line under them. */
-  validationSource: string;
-  install: string;
-  installSource: string;
+  setupCommands: readonly string[];
+  /** Checks package.json offers that `validationCommands` does not run yet. */
+  suggestions: readonly string[];
+  /** What the commands were found in, such as "package.json scripts and bun.lock". */
+  detectedFrom?: string;
   inspectionError?: string;
 }>;
 export type SetupRepoDetails = Readonly<{
   validationCommands: readonly string[];
-  /** The package.json scripts behind `validationCommands`. */
-  scripts: readonly string[];
+  /** The commands that run the package.json check scripts, whether or not they are validated. */
+  scriptCommands: readonly string[];
   setupCommands: readonly string[];
   /** The lockfile behind `setupCommands`. */
   lockfile?: string;
@@ -113,6 +121,7 @@ export type SetupRepoFacts = Readonly<{
 }>;
 
 export type SetupViewInput = Readonly<{
+  mode: SetupMode;
   generatedAt: IsoTimestamp;
   /** The user's home folder, shown as `~`. */
   homeFolder: string;
@@ -120,64 +129,48 @@ export type SetupViewInput = Readonly<{
   ompCatalogue: readonly ModelRecord[];
   claudeCode: ClaudeCodeAvailability;
   savedModels?: RepoPolicy["models"];
-  searchedFolders: readonly string[];
-  pendingFolders?: readonly string[];
   repos: readonly SetupRepoFacts[];
-  /** Saved mode; absent when the user never chose, so the page starts at fix. */
+  /** Saved mode; absent when the user never chose, so setup starts at fix. */
   selfImprovement?: SelfImprovementMode;
-  terminal?: TerminalName;
-  tern: TerminalAvailability;
-  draft?: SetupPageDraft;
-  searchStatus?: SetupSearchStatus;
 }>;
 
-type RoleCopy = Omit<SetupRole, "id" | "pick">;
+type RoleCopy = Omit<SetupRole, "id" | "pick" | "recommended">;
 
 export const SETUP_ROLE_COPY: Readonly<Record<AgentRole, RoleCopy>> = {
   coordinator: {
     name: "Planning",
-    what: "talks with you, plans, decides",
+    what: "Plans work and talks with you",
     color: "--tandem",
-    hintLead: "Use your smartest model.",
-    hintRest: "Its mistakes spread to everything else.",
+    hint: "your smartest model",
     thinking: "high",
-    example: "Claude Fable 5.1 on high",
   },
   scout: {
     name: "Research",
-    what: "reads code and answers questions",
+    what: "Reads code and answers questions",
     color: "--research",
-    hintLead: "Mid-tier is plenty.",
-    hintRest: "Speed matters more than depth.",
+    hint: "cheap and fast",
     thinking: "medium",
-    example: "GPT-6 Luna on high",
   },
   implementer: {
     name: "Coding",
-    what: "writes the changes",
+    what: "Writes the changes",
     color: "--implement",
-    hintLead: "A model good at code, at high or max effort.",
-    hintRest: "Most of the time and cost is here.",
+    hint: "strong at code, high effort",
     thinking: "high",
-    example: "GPT-6 Luna on max",
   },
   reviewer: {
     name: "Review",
-    what: "checks the work",
+    what: "Checks the changes",
     color: "--review",
-    hintLead: "A smart model, ideally not the one that coded.",
-    hintRest: "A second model catches different mistakes.",
+    hint: "smart, and different from Coding",
     thinking: "high",
-    example: "Claude Opus 5.5 on high",
   },
   presentation: {
-    name: "Visual mockups",
-    what: "draws mockups and diagrams",
+    name: "Mockups",
+    what: "Draws mockups and diagrams",
     color: "--merged",
-    hintLead: "Fast and cheap is fine.",
-    hintRest: "Drawing a page needs little reasoning.",
+    hint: "cheap and fast",
     thinking: "low",
-    example: "Claude Sonnet 5 on low",
   },
 };
 
@@ -191,6 +184,102 @@ export const THINKING_NOTES: Readonly<Record<ThinkingLevel, string>> = {
   max: "hardest, slow",
   auto: "model decides",
 };
+
+type Recommendation = Readonly<{ model: ModelSpec; reason: string }>;
+
+const RECOMMENDATION_REASONS: Readonly<Record<AgentRole, string>> = {
+  coordinator: "Its plans steer every other role.",
+  scout: "Research is mostly reading, so speed matters more than depth.",
+  implementer: "Most of the time and cost is here.",
+  reviewer: "A second model catches mistakes the first one misses.",
+  presentation: "Drawing a page needs little reasoning.",
+};
+
+/**
+ * What each role runs on when Claude Code is ready. Coding comes from the Balanced profile when it
+ * resolves, a different model family than Review; without it Coding runs on Opus and Review moves
+ * to Fable so the two still differ.
+ */
+const CLAUDE_CODE_PICKS = {
+  coordinator: { model: "claude-code/fable", thinking: "high" },
+  scout: { model: "claude-code/sonnet", thinking: "medium" },
+  reviewer: { model: "claude-code/opus", thinking: "high" },
+  presentation: { model: "claude-code/sonnet", thinking: "low" },
+  implementerWithoutBalanced: { model: "claude-code/opus", thinking: "high" },
+  reviewerWithoutBalanced: { model: "claude-code/fable", thinking: "high" },
+} as const satisfies Readonly<Record<string, ModelSpec>>;
+
+/** The supported level closest to `wanted`; a lighter one wins a tie. */
+function nearestThinking(
+  wanted: ThinkingLevel,
+  supported: readonly ThinkingLevel[],
+): ThinkingLevel {
+  const position = (level: ThinkingLevel) => THINKING_LEVELS.indexOf(level);
+  let best = wanted;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const level of supported) {
+    const distance = Math.abs(position(level) - position(wanted));
+    if (distance < bestDistance) {
+      best = level;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/** One recommendation per role; a role is absent when neither Claude Code nor Balanced fills it. */
+export function recommend(
+  claudeCodeReady: boolean,
+  balanced: BalancedProfileProposal,
+  models: readonly SetupModel[],
+): Readonly<Partial<Record<AgentRole, Recommendation>>> {
+  const fromBalanced = (role: AgentRole): ModelSpec | undefined => balanced.roles[role]?.model;
+  const picks: Partial<Record<AgentRole, ModelSpec>> = {};
+  if (claudeCodeReady) {
+    const coding = fromBalanced("implementer");
+    picks.coordinator = CLAUDE_CODE_PICKS.coordinator;
+    picks.scout = CLAUDE_CODE_PICKS.scout;
+    picks.implementer = coding ?? CLAUDE_CODE_PICKS.implementerWithoutBalanced;
+    picks.reviewer =
+      coding === undefined ? CLAUDE_CODE_PICKS.reviewerWithoutBalanced : CLAUDE_CODE_PICKS.reviewer;
+    picks.presentation = CLAUDE_CODE_PICKS.presentation;
+  } else {
+    for (const role of MODEL_ROLE_ORDER) {
+      const pick = fromBalanced(role);
+      if (pick !== undefined) picks[role] = pick;
+    }
+  }
+  const recommended: Partial<Record<AgentRole, Recommendation>> = {};
+  for (const role of MODEL_ROLE_ORDER) {
+    const pick = picks[role];
+    if (pick === undefined) continue;
+    const supported = models.find((model) => model.selector === pick.model)?.thinking;
+    recommended[role] = {
+      model: {
+        model: pick.model,
+        thinking:
+          supported === undefined || supported.includes(pick.thinking)
+            ? pick.thinking
+            : nearestThinking(pick.thinking, supported),
+      },
+      reason: RECOMMENDATION_REASONS[role],
+    };
+  }
+  return recommended;
+}
+
+/**
+ * The dearest output price, in dollars per million tokens, that still earns each level; anything
+ * above the last ceiling is `$$$`. Output tokens are what an agent writing code mostly pays for.
+ */
+const PRICE_LEVEL_CEILINGS: readonly Readonly<{ level: PriceLevel; maxOutput: number }>[] = [
+  { level: "$", maxOutput: 20 },
+  { level: "$$", maxOutput: 60 },
+];
+
+export function priceLevel(cost: Readonly<{ output: number }>): PriceLevel {
+  return PRICE_LEVEL_CEILINGS.find((ceiling) => cost.output <= ceiling.maxOutput)?.level ?? "$$$";
+}
 
 function claudeCodeUnavailable(claudeCode: Exclude<ClaudeCodeAvailability, "ready">): string {
   return claudeCode === "not-installed"
@@ -207,14 +296,19 @@ export function setupCatalogue(
 }
 
 export function buildSetupView(input: SetupViewInput): SetupView {
-  const fallbackReason = ternFallbackReason(input.tern);
-  const terminalReason =
-    input.terminal === "tern"
-      ? fallbackReason?.replace(/Using Herdr\.$/u, "Keeping the saved Tern choice.")
-      : fallbackReason;
   const models = setupCatalogue(input.ompCatalogue, input.claudeCode).map(setupModel);
+  // Claude Code never spends on its own, so the Balanced profile reads OMP's providers alone.
+  const balanced = resolveBalancedProfile({
+    catalogue: input.ompCatalogue,
+    enabledProviders: new Set(discoveredProviders(input.ompCatalogue)),
+  });
+  const recommendations = recommend(input.claudeCode === "ready", balanced, models);
+  const repos = [...input.repos]
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map((repo) => setupRepo(repo, input.homeFolder));
   return {
     schemaVersion: 1,
+    mode: input.mode,
     generatedAt: input.generatedAt,
     models,
     harnesses: [
@@ -231,29 +325,24 @@ export function buildSetupView(input: SetupViewInput): SetupView {
         name: "OMP",
         note: "Models from OMP's catalogue, billed by each provider.",
         ...(input.ompCatalogue.length === 0
-          ? { unavailable: "No models yet. Configure a provider in OMP, then reopen this page." }
+          ? { unavailable: "No models yet. Configure a provider in OMP, then reopen setup." }
           : {}),
       },
     ],
-    presets: modelPresets({ ompCatalogue: input.ompCatalogue, claudeCode: input.claudeCode }),
     roles: MODEL_ROLE_ORDER.map((id) => {
       const pick = savedPick(input.savedModels?.[id], models);
-      return { id, ...SETUP_ROLE_COPY[id], ...(pick === undefined ? {} : { pick }) };
+      const recommended = recommendations[id];
+      return {
+        id,
+        ...SETUP_ROLE_COPY[id],
+        ...(pick === undefined ? {} : { pick }),
+        ...(recommended === undefined ? {} : { recommended }),
+      };
     }),
-    thinkingNotes: THINKING_NOTES,
-    searchedFolders: input.searchedFolders.map((folder) => shownPath(folder, input.homeFolder)),
-    pendingFolders: (input.pendingFolders ?? []).map((folder) =>
-      shownPath(folder, input.homeFolder),
-    ),
-    repos: [...input.repos]
-      .sort((left, right) => left.path.localeCompare(right.path))
-      .map((repo) => setupRepo(repo, input.homeFolder)),
+    thinkingLevels: THINKING_LEVELS.map((level) => ({ level, note: THINKING_NOTES[level] })),
+    repos: repos.filter((repo) => repo.setUp),
+    candidates: repos.filter((repo) => !repo.setUp),
     selfImprovement: input.selfImprovement ?? "fix",
-    terminal: input.terminal ?? "herdr",
-    ternReady: input.tern.status === "ready",
-    ...(terminalReason === undefined ? {} : { terminalReason }),
-    ...(input.draft === undefined ? {} : { draft: input.draft }),
-    ...(input.searchStatus === undefined ? {} : { searchStatus: input.searchStatus }),
   };
 }
 
@@ -265,7 +354,9 @@ function setupModel(record: ModelRecord): SetupModel {
     provider: record.provider,
     thinking: THINKING_LEVELS.filter((level) => record.thinking.includes(level)),
     ...(record.contextWindow === undefined ? {} : { context: record.contextWindow }),
-    ...(record.cost === undefined ? {} : { cost: record.cost }),
+    ...(record.cost === undefined
+      ? {}
+      : { cost: record.cost, priceLevel: priceLevel(record.cost) }),
   };
 }
 
@@ -290,28 +381,20 @@ function setupRepo(repo: SetupRepoFacts, homeFolder: string): SetupRepo {
     ...(repo.inspectionError === undefined ? {} : { inspectionError: repo.inspectionError }),
   };
   if (details === undefined) {
-    const reason = repo.inspectionError ?? "No inspection data was returned.";
-    return {
-      ...base,
-      validationCommands: [],
-      validationSource: `Could not inspect this repository: ${reason}`,
-      install: "",
-      installSource: `Could not inspect this repository: ${reason}`,
-    };
+    return { ...base, validationCommands: [], setupCommands: [], suggestions: [] };
   }
-  const install = details.setupCommands[0] ?? "";
+  const sources = [
+    ...(details.scriptCommands.length > 0 ? ["package.json scripts"] : []),
+    ...(details.lockfile === undefined ? [] : [details.lockfile]),
+  ];
   return {
     ...base,
     validationCommands: details.validationCommands,
-    validationSource:
-      details.validationCommands.length > 0
-        ? `Found in package.json scripts: ${details.scripts.join(", ")}. Edit if these aren't what you run before merging.`
-        : "None found in package.json. Add the commands you run before merging.",
-    install,
-    installSource:
-      install.length > 0 && details.lockfile !== undefined
-        ? `Picked from ${details.lockfile}.`
-        : "No lockfile found, so nothing is installed. Add one if the repo needs it.",
+    setupCommands: details.setupCommands,
+    suggestions: details.scriptCommands.filter(
+      (command) => !details.validationCommands.includes(command),
+    ),
+    ...(sources.length === 0 ? {} : { detectedFrom: sources.join(" and ") }),
   };
 }
 

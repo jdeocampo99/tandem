@@ -124,7 +124,7 @@ function claudeCodeDependencies(
   let clock = 0;
   return {
     run: world.run,
-    terminal: terminalBackend(world.run),
+    terminal: terminalBackend(world.run, { terminal: "herdr" }),
     startPersistent: async () => undefined,
     runInteractive: async () => {
       throw new Error("a headless launch runs the coordinator in a Herdr pane");

@@ -14,14 +14,24 @@ export function assertTerminalEndpoint(terminal: TerminalName, endpoint: Endpoin
   if (endpoint.terminal !== terminal) {
     throw new EndpointOwnershipError(
       endpoint,
-      `quarantined ${endpoint.terminal} endpoint under ${terminal}; switch back to inspect it`,
+      `it is a ${endpoint.terminal} pane but this Tandem home uses ${terminal}; set terminal = "${endpoint.terminal}" in Tandem's settings.toml to manage it`,
     );
   }
+}
+
+declare const ternIdentity: unique symbol;
+/** A Tern endpoint whose terminal tag was checked here. Tern mutations accept nothing else. */
+export type TernEndpoint = Endpoint & Readonly<{ terminal: "tern"; [ternIdentity]: true }>;
+
+export function ternEndpoint(endpoint: Endpoint): TernEndpoint {
+  assertTerminalEndpoint("tern", endpoint);
+  return endpoint as TernEndpoint;
 }
 
 /** Apply terminal ownership before every port operation that accepts a durable endpoint. */
 export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend {
   const check = (endpoint: Endpoint) => assertTerminalEndpoint(backend.name, endpoint);
+  const views = backend.views;
   return {
     ...backend,
     inspect: async (target) => {
@@ -64,13 +74,20 @@ export function guardTerminalIdentity(backend: TerminalBackend): TerminalBackend
       check(input.coordinator);
       return backend.isPanelOpen(input);
     },
-    closeView: async (input) => {
-      check(input.coordinator);
-      return backend.closeView(input);
-    },
-    openView: async (input) => {
-      check(input.coordinator);
-      return backend.openView(input);
-    },
+    ...(views === undefined
+      ? {}
+      : {
+          views: {
+            ...views,
+            open: async (input) => {
+              check(input.coordinator);
+              return views.open(input);
+            },
+            close: async (input) => {
+              check(input.coordinator);
+              return views.close(input);
+            },
+          },
+        }),
   };
 }

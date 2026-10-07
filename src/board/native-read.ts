@@ -4,8 +4,10 @@ import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
 import { harnessOfSelector } from "../harness/contract.ts";
 import { readOmpUsageLimits } from "../harness/omp/usage-limits.ts";
 import { nativeCatchUpView } from "../memory/native-view.ts";
+import { recordNativePublication } from "../memory/native-visits.ts";
 import { listWorkstreams, memoryPath, memoryRoot } from "../memory/store.ts";
 import { catchUpView, recentWork } from "../memory/workstream.ts";
+import { publishViews, readProjectSummaries } from "../native/store.ts";
 import { type CachedPullRequest, type PrPaneView, prPaneView } from "../pr-review/native-view.ts";
 import { reviewPostNotes } from "../pr-review/render.ts";
 import { latestRound, prReviewRunDiffPath } from "../pr-review/state.ts";
@@ -15,6 +17,7 @@ import { briefView } from "../requests/native-view.ts";
 import { createRequestBriefStore } from "../requests/store.ts";
 import { activeRuntimeJob, currentPrimaryJobs, taskRuntime } from "../runtime/activity.ts";
 import { withStateTransaction } from "../runtime/database.ts";
+import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import { defaultIdFactory, readRuntimeState, runtimeFile } from "../runtime/persistence.ts";
 import { usageDisplay } from "../runtime/usage-display.ts";
 import { createRequestUsageLedger, readTaskUsage } from "../runtime/usage-ledger.ts";
@@ -34,7 +37,7 @@ import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { parseWorkerJob } from "../workers/jobs.ts";
 import { readWorkerActivity } from "../workers/worker-activity.ts";
 import { nativeBoardView } from "./native.ts";
-import { nativeAlertCounts } from "./native-alerts.ts";
+import { NativeAlerts, nativeAlertCounts } from "./native-alerts.ts";
 import {
   type NativeProjectSummary,
   type NativeViewsPublication,
@@ -45,7 +48,7 @@ import {
   nativeTaskFile,
 } from "./native-views.ts";
 import { type NativeTaskSummary, nativePanelView } from "./panel.ts";
-import { type BoardSnapshot, readNativeProjectSummaries } from "./snapshot.ts";
+import type { BoardSnapshot } from "./snapshot.ts";
 
 export type NativeReadDependencies = Readonly<{
   home: string;
@@ -75,7 +78,8 @@ export class NativeViewsReader {
   async read(
     snapshot: BoardSnapshot,
     project: string,
-    sessions: ReadonlyMap<string, Readonly<{ terminal: string; sessionId: string }>> = new Map(),
+    /** Session id by repository, for coordinators that host native views. */
+    sessions: ReadonlyMap<string, string> = new Map(),
   ): Promise<NativeViewsPublication> {
     const deps = this.#deps;
     const now = deps.clock();
@@ -301,9 +305,8 @@ export class NativeViewsReader {
     const ownPanel = nativePanelView({ snapshot, project, now, tasks: summaries, bellCount: 0 });
     const count = (title: string) =>
       ownPanel.sections.find((section) => section.title === title)?.count ?? 0;
-    const session = sessions.get(project);
+    const sessionId = sessions.get(project);
     const summary: NativeProjectSummary = {
-      terminal: "tern",
       repoPath: project,
       name: basename(project),
       writtenAt: now,
@@ -311,9 +314,9 @@ export class NativeViewsReader {
       needsYou: count("Needs you"),
       ready: count("Ready"),
       done: count("Recently done"),
-      ...(session?.terminal === "tern" ? { sessionId: session.sessionId } : {}),
+      ...(sessionId === undefined ? {} : { sessionId }),
     };
-    const other = await readNativeProjectSummaries(deps.home, project);
+    const other = await readProjectSummaries(deps.home, project);
     warnings.push(...other.warnings);
     const projects = nativeSummaryProjects([summary, ...other.summaries], project, now);
     const briefViews = Object.fromEntries(
@@ -513,4 +516,101 @@ function taskSummary(
           },
         }),
   };
+}
+
+type PublicationInput = Readonly<{
+  snapshot: BoardSnapshot;
+  project: string;
+  sessions: ReadonlyMap<string, string>;
+}>;
+
+/** One background writer per coordinator. Slow reads coalesce ticks to the newest snapshot. */
+export class NativeViewsPublisher {
+  readonly #deps: NativeReadDependencies;
+  readonly #reader: NativeViewsReader;
+  readonly #alerts: NativeAlerts;
+  #pending: PublicationInput | undefined;
+  #running: Promise<void> = Promise.resolve();
+  #busy = false;
+  #closed = false;
+
+  constructor(deps: NativeReadDependencies) {
+    this.#deps = deps;
+    this.#reader = new NativeViewsReader(deps);
+    this.#alerts = new NativeAlerts(deps);
+  }
+
+  schedule(input: PublicationInput): void {
+    if (this.#closed) return;
+    this.#pending = input;
+    if (this.#busy) return;
+    this.#busy = true;
+    this.#running = Promise.resolve().then(async () => {
+      try {
+        while (this.#pending !== undefined) {
+          const next = this.#pending;
+          this.#pending = undefined;
+          try {
+            const sessionId = next.sessions.get(next.project);
+            if (sessionId !== undefined) {
+              await this.#recoverOpens();
+              await this.#alerts.observe(next.snapshot, next.project, sessionId);
+            }
+            const view = await publishViews(this.#deps.home, next.project, () =>
+              this.#reader.read(next.snapshot, next.project, next.sessions),
+            );
+            await recordNativePublication({
+              home: this.#deps.home,
+              project: next.project,
+              signature: view.bundle.changeSignature,
+            });
+          } catch (error) {
+            await appendDiagnosticEvent(
+              this.#deps.home,
+              {
+                event: "native-views-publish-failed",
+                details: { errorClass: error instanceof Error ? error.name : typeof error },
+              },
+              this.#deps.clock,
+            );
+          }
+        }
+      } finally {
+        this.#busy = false;
+      }
+    });
+  }
+
+  /** A late receipt settles its paused open here, without waiting for the user's next click. */
+  async #recoverOpens(): Promise<void> {
+    try {
+      await this.#deps.terminal.views?.recover(this.#deps.home);
+    } catch (error) {
+      await appendDiagnosticEvent(
+        this.#deps.home,
+        {
+          event: "native-open-recovery-failed",
+          details: { errorClass: error instanceof Error ? error.name : typeof error },
+        },
+        this.#deps.clock,
+      );
+    }
+  }
+
+  /** Resolves once queued publications and the remote reads they started have finished. */
+  async idle(): Promise<void> {
+    let running: Promise<void>;
+    do {
+      running = this.#running;
+      await running;
+    } while (running !== this.#running);
+    await this.#reader.idle();
+  }
+
+  /** Finish the last queued publication, then drain provider/GitHub cache reads. */
+  async settle(): Promise<void> {
+    this.#closed = true;
+    await this.#running;
+    await this.#reader.settle();
+  }
 }

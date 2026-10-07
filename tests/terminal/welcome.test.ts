@@ -29,7 +29,7 @@ test("Enter in the welcome popup asks the Tandem coordinator to start onboarding
   const done = runWelcome({
     input,
     stdout: (text) => printed.push(text),
-    terminal: terminalBackend(run),
+    terminal: terminalBackend(run, { terminal: "herdr" }),
     environment: popup,
     cwd: "/tmp",
   });
@@ -51,7 +51,7 @@ test("the prompt is typed into the pane when Herdr sees no agent there", async (
   const done = runWelcome({
     input,
     stdout: () => undefined,
-    terminal: terminalBackend(run),
+    terminal: terminalBackend(run, { terminal: "herdr" }),
     environment: popup,
     cwd: "/tmp",
   });
@@ -69,7 +69,7 @@ test("Esc closes the welcome popup without sending anything", async () => {
   const done = runWelcome({
     input,
     stdout: () => undefined,
-    terminal: terminalBackend(run),
+    terminal: terminalBackend(run, { terminal: "herdr" }),
     environment: popup,
     cwd: "/tmp",
   });
@@ -84,7 +84,7 @@ test("outside the popup, tandem welcome only prints the message", async () => {
   await runWelcome({
     input: keyboard(),
     stdout: (text) => printed.push(text),
-    terminal: terminalBackend(run),
+    terminal: terminalBackend(run, { terminal: "herdr" }),
     environment: {},
     cwd: "/tmp",
   });
@@ -104,7 +104,7 @@ test("every welcome line fits inside the popup without wrapping", async () => {
   const done = runWelcome({
     input,
     stdout: (text) => printed.push(text),
-    terminal: terminalBackend(recorder().run),
+    terminal: terminalBackend(recorder().run, { terminal: "herdr" }),
     environment: popup,
     cwd: "/tmp",
   });

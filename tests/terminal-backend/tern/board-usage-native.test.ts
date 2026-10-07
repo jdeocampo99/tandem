@@ -2,17 +2,20 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { parseBlockContext } from "../../../src/native/contract.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
-import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/view-intent.ts";
+import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { viewsOf } from "../views.ts";
+import { recordedActions } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (enabled ? test : test.skip)(
@@ -24,7 +27,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     const control = join(root, "w.sock");
     const home = join(root, "home");
     const project = join(root, "repo");
-    const path = nativeViewsPath(home, project);
+    const path = viewIndexPath(home, project);
     const log = join(root, "actions.log");
     const fail = join(root, "fail-action");
     const binary = Bun.which("tern") ?? "/Applications/Tern.app/Contents/MacOS/tern";
@@ -46,12 +49,12 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       recursive: true,
     });
     await mkdir(join(home, "native-views"));
-    await writeFile(path, nativeViewText("panel", { ...nativeScreensFixture(), project }), {
+    await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }), {
       mode: 0o600,
     });
     await writeFile(
       join(plugin, "tandem.sh"),
-      `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\nif [ -f '${fail}' ]; then printf 'isolated action failure\\n' >&2; exit 1; fi\n`,
+      `#!/bin/sh\ninput="$(cat)"\nprintf '%s\\n' "$input" >> '${log}'\nif [ -f '${fail}' ]; then printf 'isolated action failure\\n' >&2; exit 1; fi\nprintf '{"status":"done"}'\n`,
     );
     const daemon = Bun.spawn([binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET], {
       env,
@@ -157,8 +160,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       });
       // An open fired during the window's startup tick either opens or fails cleanly with
       // nothing changed; it never pauses the opens below.
-      await backend
-        .openView({ coordinator, cwd: project, home, origin, view: { kind: "board" } })
+      await viewsOf(backend)
+        .open({ coordinator, cwd: project, home, origin, view: { kind: "board" } })
         .catch((error: unknown) => {
           if (!(error instanceof NativeViewNotOpenedError)) throw error;
         });
@@ -174,7 +177,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         ["catchup", "Where we left off"],
       ] as const) {
         expect(
-          (await backend.openView({ coordinator, cwd: project, home, origin, view: { kind } }))
+          (await viewsOf(backend).open({ coordinator, cwd: project, home, origin, view: { kind } }))
             .opened,
         ).toBe(true);
         const viewPane = blocks(decode(await run("ls", "--json"), Listing, "fixture listing")).find(
@@ -204,7 +207,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           const writtenAt = "2030-01-02T12:02:00Z";
           await writeFile(
             path,
-            nativeViewText("panel", {
+            viewFileText("index", {
               ...fixture,
               writtenAt,
               warnings,
@@ -222,19 +225,17 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           expect(stale).toContain("View updated at 2030-01-02 12:02:00 UTC");
           expect(stale.indexOf(warning)).toBeLessThan(stale.indexOf("cost today"));
           if (shots) console.log(await ctl("shot", "usage-stale"));
-          await writeFile(path, nativeViewText("panel", fixture));
+          await writeFile(path, viewFileText("index", fixture));
           await until(async () => !(await ctl("tree")).includes(warning));
         }
         if (kind === "catchup") {
           await writeFile(fail, "fail");
           await ctl("key", "escape");
           actionCount += 1;
-          await until(
-            async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
-          );
+          await until(async () => (await recordedActions(log)).length === actionCount);
           await until(async () => (await ctl("tree")).includes("isolated action failure"));
           await Bun.sleep(100);
-          expect((await readFile(log, "utf8")).match(/--pane/g)?.length).toBe(actionCount);
+          expect((await recordedActions(log)).length).toBe(actionCount);
           expect(
             blocks(decode(await run("ls", "--json"), Listing, "failed action")).some(
               (entry) => entry.block.id === viewPane,
@@ -252,9 +253,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         // A status-0 shell action exits its own block; the guarded backend return is proven separately.
         await ctl("key", "escape");
         actionCount += 1;
-        await until(
-          async () => (await readFile(log, "utf8")).match(/--pane/g)?.length === actionCount,
-        );
+        await until(async () => (await recordedActions(log)).length === actionCount);
         await until(
           async () =>
             !blocks(decode(await run("ls", "--json"), Listing, "callback exit")).some(
@@ -262,16 +261,16 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
             ),
         );
         expect(await readFile(log, "utf8")).toContain(
-          kind === "catchup" ? "catchup-dismiss" : `${path}#orchestrator`,
+          kind === "catchup" ? '"catchup-dismiss"' : '"orchestrator"',
         );
         const remaining = blocks(decode(await run("ls", "--json"), Listing, "fixture return"));
         expect(remaining.some((entry) => entry.block.id === viewPane)).toBe(false);
         expect(remaining.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
       }
-      await writeFile(path, nativeViewText("panel", { ...nativeScreensFixture(), project }));
+      await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }));
       expect(
         (
-          await backend.openView({
+          await viewsOf(backend).open({
             coordinator,
             cwd: project,
             home,
@@ -286,7 +285,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       if (!toggled) throw new Error("Toggle board is missing");
       expect(
         (
-          await backend.openView({
+          await viewsOf(backend).open({
             coordinator,
             cwd: project,
             home,
@@ -322,7 +321,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       if (!catchupPane) throw new Error("Automatic catch-up did not create its view");
       expect(
         (
-          await backend.openView({
+          await viewsOf(backend).open({
             coordinator,
             cwd: project,
             home,
@@ -347,7 +346,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           (entry) => entry.block.program === "tandem.catchup",
         ),
       ).toBe(false);
-      const browser = await backend.openView({
+      const browser = await viewsOf(backend).open({
         coordinator,
         cwd: project,
         home,
@@ -355,10 +354,13 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         view: { kind: "browser", url: "https://example.invalid/pull/281" },
       });
       expect(browser.opened).toBe(true);
-      const actions = await readFile(log, "utf8");
-      expect(actions.match(/--pane/g)?.length).toBe(actionCount);
-      expect(actions).toContain(`--cwd\n${project}`);
-      expect(actions).toContain(`--home\n${home}`);
+      const actions = await recordedActions(log);
+      expect(actions).toHaveLength(actionCount);
+      for (const { origin } of actions)
+        expect("ctx" in origin && parseBlockContext(origin.ctx)).toMatchObject({
+          cwd: project,
+          home,
+        });
     } catch (error) {
       console.error(await readFile(join(root, "window.log"), "utf8").catch(() => ""));
       throw error;

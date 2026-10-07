@@ -92,8 +92,9 @@ assigned to new work.
 
 ## Terminal backends
 
-Herdr and Tern are the two supported terminal backends, selected through
-`src/terminal-backend/compose.ts`. Both use the same terminal port and endpoint ownership
+Tern is the default terminal; Herdr is the other supported backend, used only when settings say
+`terminal = "herdr"`. `src/terminal-backend/compose.ts` selects one. Both use the same terminal
+port and endpoint ownership
 checks. Tern adds daemon-hosted native views; it does not change task policy, approval or
 recovery. See [terminal.md](terminal.md) for selection, resource mapping, process proof,
 foreign-endpoint quarantine, native hosting and global-settings consent.

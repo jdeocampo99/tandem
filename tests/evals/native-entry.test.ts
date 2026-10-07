@@ -1,18 +1,20 @@
 import { expect, test } from "bun:test";
-import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { NativeAlerts, nativeAlertCounts } from "../../src/board/native-alerts.ts";
-import { nativeViewText } from "../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
-import { repositoryKey } from "../../src/config/repositories.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
 import { visitNativeProject } from "../../src/memory/native-visits.ts";
+import { Outcome } from "../../src/native/contract.ts";
+import { projectStoreDirectory, readProjectState, viewIndexPath } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../src/terminal-backend/contract.ts";
 import { state } from "../board/fixtures.ts";
+import { publishFixture } from "../native/view-files.ts";
+import { viewsWith } from "../terminal-backend/views.ts";
 import { withScenario } from "./scenario.ts";
 
 for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
@@ -48,20 +50,7 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
         worktree: lease,
       });
       await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-      await mkdir(join(world.home, "native-views"));
-      await writeFile(
-        nativeViewsPath(world.home, world.repoPath),
-        nativeViewText("panel", {
-          version: 1,
-          project: world.repoPath,
-          writtenAt: new Date().toISOString(),
-          changeSignature: "after",
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          projects: [],
-        }),
-      );
+      await publishFixture(world.home, world.repoPath, { changeSignature: "after" });
       const baseline = {
         home: world.home,
         project: world.repoPath,
@@ -71,8 +60,9 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
       await visitNativeProject(baseline, async () => {});
       const focused: string[] = [];
       let opens = 0;
+      const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
       const terminal: TerminalBackend = {
-        ...terminalBackend(world.run, { terminal: "tern", home: world.home }),
+        ...base,
         notify: async () => {},
         focusAgent: async (input) => {
           focused.push(input.paneId);
@@ -81,11 +71,13 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
           expect(input.originCoordinator).toEqual(endpoint);
           return failure !== "focus";
         },
-        openView: async (input) => {
-          expect(input.view).toEqual({ kind: "catchup" });
-          opens++;
-          return { opened: failure !== "catchup", warnings: ["fixture catch-up failure"] };
-        },
+        views: viewsWith(base, {
+          open: async (input) => {
+            expect(input.view).toEqual({ kind: "catchup" });
+            opens++;
+            return { opened: failure !== "catchup", warnings: ["fixture catch-up failure"] };
+          },
+        }),
       };
       const alerts = new NativeAlerts({
         home: world.home,
@@ -122,84 +114,83 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
         world.sessionId,
       );
       const output: string[] = [];
-      const result = await runTerminal(
-        [
-          "native",
-          "project",
-          "entry",
-          "--pane",
-          "102",
-          "--cwd",
-          lease.path,
-          "--window",
-          "isolated-window",
-        ],
-        {
-          cwd: world.repoPath,
-          processEnvironment: {
-            TANDEM_HOME: world.home,
-            TANDEM_SESSION: world.sessionId,
-            TANDEM_POOL_ROOT: world.poolRoot,
-          },
-          terminal,
-          run: world.run,
-          stdout: (text) => output.push(text),
-          stderr: () => {},
+      const result = await runTerminal(["native", "act"], {
+        input: Readable.from([
+          JSON.stringify({
+            v: 1,
+            origin: { pane: "102", cwd: lease.path, window: "isolated-window" },
+            action: { verb: "visit", event: "entry" },
+          }),
+        ]),
+        cwd: world.repoPath,
+        processEnvironment: {
+          TANDEM_HOME: world.home,
+          TANDEM_SESSION: world.sessionId,
+          TANDEM_POOL_ROOT: world.poolRoot,
         },
+        terminal,
+        run: world.run,
+        stdout: (text) => output.push(text),
+        stderr: () => {},
+      });
+      expect(result.exitCode).toBe(0);
+      const outcome = Outcome.parse(JSON.parse(output.join("")));
+      expect(outcome.status).toBe(
+        failure === "focus" || failure === "helper-moved" ? "refused" : "done",
       );
-      expect(result.exitCode).toBe(failure === "focus" || failure === "helper-moved" ? 1 : 0);
       expect(focused).toEqual(failure === "helper-moved" ? [] : ["101"]);
       expect(opens).toBe(failure === "focus" || failure === "helper-moved" ? 0 : 1);
       if (failure === "catchup")
-        expect(JSON.parse(output.join(""))).toEqual({
-          entered: true,
-          warnings: ["Project opened, but catch-up is unavailable: fixture catch-up failure"],
+        expect(outcome.notice).toEqual({
+          code: "catch-up-unavailable",
+          text: "Project opened, but catch-up is unavailable: fixture catch-up failure",
         });
       expect((await nativeAlertCounts(world.home, world.repoPath)).unread).toBe(
         failure === "focus" || failure === "helper-moved" ? 1 : 0,
       );
-      const visit = JSON.parse(
-        await readFile(
-          join(world.home, "native-visits", `${repositoryKey(world.repoPath)}.json`),
-          "utf8",
-        ),
-      );
-      expect(visit.previousSignature).toBe(failure === "none" ? "after" : "before");
+      const visit = (await readProjectState(world.home, world.repoPath))?.visit;
+      expect(visit?.previousSignature).toBe(failure === "none" ? "after" : "before");
       if (failure === "none") {
         const lastVisibleAt = new Date(Date.now() - 120_000).toISOString();
         await visitNativeProject(
           { ...baseline, signature: "after", now: lastVisibleAt },
           async () => {},
         );
-        const path = join(world.home, "native-visits", `${repositoryKey(world.repoPath)}.json`);
+        const path = join(projectStoreDirectory(world.home, world.repoPath), "state.json");
         let saved = await readFile(path, "utf8");
         let inode = (await lstat(path)).ino;
-        const viewPath = nativeViewsPath(world.home, world.repoPath);
+        const viewPath = viewIndexPath(world.home, world.repoPath);
         const view = await readFile(viewPath, "utf8");
         const viewInode = (await lstat(viewPath)).ino;
         for (let heartbeat = 0; heartbeat < 2; heartbeat++) {
-          const pulse = await runTerminal(
-            ["native", "project", "visible", "--pane", "101", "--cwd", lease.path],
-            {
-              cwd: world.repoPath,
-              processEnvironment: {
-                TANDEM_HOME: world.home,
-                TANDEM_SESSION: world.sessionId,
-                TANDEM_POOL_ROOT: world.poolRoot,
-              },
-              terminal,
-              run: world.run,
-              stdout: () => {},
-              stderr: () => {},
+          const pulsed: string[] = [];
+          const pulse = await runTerminal(["native", "act"], {
+            input: Readable.from([
+              JSON.stringify({
+                v: 1,
+                origin: { pane: "101", cwd: lease.path },
+                action: { verb: "visit", event: "visible" },
+              }),
+            ]),
+            cwd: world.repoPath,
+            processEnvironment: {
+              TANDEM_HOME: world.home,
+              TANDEM_SESSION: world.sessionId,
+              TANDEM_POOL_ROOT: world.poolRoot,
             },
-          );
+            terminal,
+            run: world.run,
+            stdout: (text) => pulsed.push(text),
+            stderr: () => {},
+          });
           expect(pulse.exitCode).toBe(0);
+          expect(Outcome.parse(JSON.parse(pulsed.join(""))).status).toBe("done");
           if (heartbeat === 0) {
             const advanced = await readFile(path, "utf8");
-            expect(Date.parse(JSON.parse(advanced).lastVisibleAt)).toBeGreaterThan(
+            expect(Date.parse(JSON.parse(advanced).visit.lastVisibleAt)).toBeGreaterThan(
               Date.parse(lastVisibleAt),
             );
-            expect(JSON.parse(advanced).previousSignature).toBe("after");
+            expect(JSON.parse(advanced).visit.previousSignature).toBe("after");
             saved = advanced;
             inode = (await lstat(path)).ino;
           }

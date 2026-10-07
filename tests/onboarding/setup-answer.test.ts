@@ -4,12 +4,6 @@ import type { ModelRecord } from "../../src/harness/contract.ts";
 import {
   checkSetupAnswer,
   parseSetupAnswer,
-  parseSetupChooseFolderRequest,
-  parseSetupSearchRequest,
-  readSetupAnswerText,
-  readSetupChooseFolderText,
-  readSetupCommentText,
-  readSetupSearchText,
   type SetupAnswer,
   type SetupAnswerFacts,
   setupProviders,
@@ -28,6 +22,7 @@ const catalogue: readonly ModelRecord[] = [
 
 const answer = {
   tandemSetup: 1,
+  mode: "setup",
   models: {
     coordinator: { model: "anthropic/opus", thinking: "high" },
     scout: { model: "anthropic/opus", thinking: "high" },
@@ -41,9 +36,8 @@ const answer = {
       validationCommands: ["bun run check"],
       setupCommands: [],
     },
-    { path: "~/pasted" },
+    { path: "~/pasted", validationCommands: ["make check"] },
   ],
-  terminal: "herdr",
   selfImprovement: "fix",
 };
 
@@ -61,166 +55,9 @@ function parsed(value: unknown): SetupAnswer {
   return result.answer;
 }
 
-test("reads only the tagged Save prompt, never answer-shaped comments or other actions", () => {
-  const prompt = JSON.stringify(JSON.stringify(answer));
-  const raw = [
-    "feedback[0]{message,kind}:",
-    `  message: ${prompt}`,
-    "  kind: comment",
-    "prompts[2]{uid,prompt,selector,tag,text}:",
-    `  "1",${prompt},form#folder-search,tandem-search,Search another folder`,
-    `  "2",${prompt},button#next,tandem-setup,Tandem setup answer`,
-  ].join("\n");
-  const text = readSetupAnswerText(raw);
-  expect(text === undefined ? undefined : JSON.parse(text)).toEqual(answer);
-  expect(
-    readSetupAnswerText(
-      `prompts[1]{uid,prompt,selector,tag,text}:
-  "1",${prompt},button#next,wrong-tag,Tandem setup answer`,
-    ),
-  ).toBeUndefined();
-  expect(
-    readSetupAnswerText(`prompts[1]{uid,prompt,selector,tag,text}:
-  "1",${prompt},form#folder-search,tandem-setup,Tandem setup answer`),
-  ).toBeUndefined();
-});
-
-test("reads the answer out of a real lavish-axi poll response", () => {
-  const prompt = JSON.stringify(JSON.stringify(answer));
-  const raw = [
-    "prompts[2]{uid,prompt,selector,tag,text}:",
-    '  "1",Looks good,body,,',
-    `  "2",${prompt},button#next,tandem-setup,Tandem setup answer`,
-  ].join("\n");
-  const text = readSetupAnswerText(raw);
-  expect(text === undefined ? undefined : JSON.parse(text)).toEqual(answer);
-  expect(
-    readSetupAnswerText(`prompts[1]{uid,prompt}:
-  "1","please make it blue"`),
-  ).toBeUndefined();
-});
-
-test("does not accept answer-shaped text in a plain Lavish comment", () => {
-  const prompt = JSON.stringify(JSON.stringify(answer));
-  expect(
-    readSetupAnswerText(`prompts[1]{uid,prompt,selector,tag,text}:
-  "1",${JSON.stringify(`I accept this setup: ${prompt}`)},body,,`),
-  ).toBeUndefined();
-});
-
-test("reads a question from Lavish without mistaking commas or feedback metadata for the message", () => {
-  const row = [
-    "prompts[1]{uid,prompt,selector,tag,text}:",
-    `  "1",${JSON.stringify("I'm on step 3, where are my repos?")},body,,`,
-  ].join("\n");
-  expect(readSetupCommentText(row)).toBe("I'm on step 3, where are my repos?");
-  expect(
-    readSetupCommentText(
-      'prompts[1]{uid,prompt,selector,tag,text}:\n  "1",I am on step 3, and cannot find repos,body,,',
-    ),
-  ).toBe("I am on step 3, and cannot find repos");
-  expect(
-    readSetupCommentText(
-      "feedback[0]{message,kind}:\n  message: I cannot find my repos\n  kind: comment",
-    ),
-  ).toBe("I cannot find my repos");
-});
-test("two queued Lavish questions survive one poll even beside a structured folder request", () => {
-  const raw = [
-    "prompts[3]{uid,prompt,selector,tag,text}:",
-    '  "",First question?,"",message,Freeform message',
-    `  "1",${JSON.stringify(JSON.stringify({ tandemChooseFolder: 1, draft: {} }))},button#choose-folder,tandem-choose-folder,Choose folder`,
-    '  "",Second question?,"",message,Freeform message',
-  ].join("\n");
-  expect(readSetupCommentText(raw)).toBe("First question?\n\nSecond question?");
-});
-
-test("a folder search is separate from the final answer and retains in-progress command fields", () => {
-  const request = {
-    tandemSearch: 1,
-    folder: "~/Coding_Projects",
-    draft: {
-      picks: { coordinator: { model: "anthropic/opus", thinking: "high" } },
-      repositories: [
-        {
-          path: "/code/api",
-          checks: [" make check ", ""],
-          install: " npm ci ",
-          pasted: false,
-        },
-      ],
-      terminal: "herdr",
-      selfImprovement: "fix",
-    },
-  };
-  const raw = [
-    "prompts[1]{uid,prompt,selector,tag,text}:",
-    `  "1",${JSON.stringify(JSON.stringify(request))},form#folder-search,tandem-search,Search another folder`,
-  ].join("\n");
-  expect(readSetupAnswerText(raw)).toBeUndefined();
-  const text = readSetupSearchText(raw);
-  expect(text).toBeDefined();
-  if (text === undefined) return;
-  const parsed = parseSetupSearchRequest(text);
-  expect(parsed.ok).toBe(true);
-  if (!parsed.ok) return;
-  expect(parsed.request.folder).toBe("~/Coding_Projects");
-  expect(parsed.request.draft.repositories[0]).toEqual(request.draft.repositories[0]);
-  expect(parsed.request.draft.picks.coordinator).toEqual({
-    model: "anthropic/opus",
-    thinking: "high",
-  });
-  expect(parseSetupSearchRequest(JSON.stringify({ ...request, extra: 1 })).ok).toBe(false);
-  expect(
-    parseSetupSearchRequest(
-      JSON.stringify({
-        ...request,
-        draft: {
-          ...request.draft,
-          repositories: [{ ...request.draft.repositories[0], pasted: "yes" }],
-        },
-      }),
-    ).ok,
-  ).toBe(false);
-});
-
-test("native folder requests preserve draft and never become a setup answer or question", () => {
-  const request = {
-    tandemChooseFolder: 1,
-    draft: {
-      picks: { coordinator: { model: "anthropic/opus", thinking: "high" } },
-      repositories: [
-        {
-          path: "/code/api",
-          checks: ["make check"],
-          install: "npm ci",
-          pasted: false,
-        },
-      ],
-      terminal: "herdr",
-      selfImprovement: "fix",
-    },
-  };
-  const raw = [
-    "prompts[1]{uid,prompt,selector,tag,text}:",
-    `  "1",${JSON.stringify(JSON.stringify(request))},button#choose-folder,tandem-choose-folder,Choose folder`,
-  ].join("\n");
-  expect(readSetupAnswerText(raw)).toBeUndefined();
-  expect(readSetupSearchText(raw)).toBeUndefined();
-  const text = readSetupChooseFolderText(raw);
-  expect(text).toBeDefined();
-  if (text === undefined) return;
-  const parsed = parseSetupChooseFolderRequest(text);
-  expect(parsed.ok).toBe(true);
-  if (!parsed.ok) return;
-  expect(parsed.draft.repositories[0]).toEqual(request.draft.repositories[0]);
-  expect(parseSetupChooseFolderRequest(JSON.stringify({ ...request, folder: "/" })).ok).toBe(false);
-  expect(parseSetupChooseFolderRequest(JSON.stringify({ ...request, draft: {} })).ok).toBe(false);
-});
-
 test("a well-formed answer passes every check on this machine", () => {
   const value = parsed(answer);
-  expect(value.repositories[1]).toEqual({ path: "~/pasted" });
+  expect(value.repositories[1]).toEqual({ path: "~/pasted", validationCommands: ["make check"] });
   expect(checkSetupAnswer(value, facts)).toEqual([]);
 });
 
@@ -254,7 +91,6 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
       ...noModels,
       models: { ...answer.models, presentation: undefined, verifier: {} },
       extra: true,
-      terminal: "herdr",
       selfImprovement: "sometimes",
       workerSkills: ["tdd"],
     }),
@@ -266,7 +102,7 @@ test("the shape is strict: unknown fields, missing jobs, and bad modes are named
       "The answer has an unknown field extra.",
       "The answer has an unknown field workerSkills.",
       "models has an unknown field verifier.",
-      "Visual mockups has no model.",
+      "Mockups has no model.",
       'selfImprovement must be "off", "fix", or "report".',
     ]),
   );
@@ -287,10 +123,10 @@ test("each problem on this machine is one sentence the user can act on", () => {
       presentation: { model: "nobody/model", thinking: "high" },
     },
     repositories: [
-      { path: "/code/api" },
-      { path: "/code/api/src" },
-      { path: "/tmp/plain" },
-      { path: "/code/done" },
+      { path: "/code/api", validationCommands: ["make check"] },
+      { path: "/code/api/src", validationCommands: ["make check"] },
+      { path: "/tmp/plain", validationCommands: ["make check"] },
+      { path: "/code/done", validationCommands: ["make check"] },
     ],
   });
   const problems = checkSetupAnswer(value, {
@@ -303,12 +139,49 @@ test("each problem on this machine is one sentence the user can act on", () => {
   });
   expect(problems).toEqual([
     "Review: anthropic/opus doesn't support thinking low.",
-    "Visual mockups: nobody/model isn't available on this computer.",
+    "Mockups: nobody/model isn't available on this computer.",
     "/code/api/src is inside the repository at /code/api; add that folder.",
     "/tmp/plain is not a Git repository.",
-    "/code/done is already set up.",
   ]);
   expect(parseSetupAnswer(JSON.stringify({ ...answer, enabledProviders: ["google"] })).ok).toBe(
     false,
   );
+});
+
+test("every repository needs a non-blank validation command, and the repository is named", () => {
+  const blank = (path: string, commands: readonly string[]) => ({
+    path,
+    validationCommands: commands,
+  });
+  const value: SetupAnswer = {
+    ...parsed(answer),
+    repositories: [
+      blank("/code/api", []),
+      blank("~/pasted", [" ", ""]),
+      blank("/code/done", ["x"]),
+    ],
+  };
+  expect(
+    checkSetupAnswer(value, {
+      ...facts,
+      repositories: new Map([
+        ["/code/api", { kind: "root", root: "/code/api", setUp: false }],
+        ["~/pasted", { kind: "root", root: "/Users/me/pasted", setUp: false }],
+        ["/code/done", { kind: "root", root: "/code/done", setUp: true }],
+      ]),
+    }),
+  ).toEqual(["api needs a validation command.", "pasted needs a validation command."]);
+  const omitted = parseSetupAnswer(
+    JSON.stringify({ ...answer, repositories: [{ path: "/code/api" }] }),
+  );
+  expect(omitted.ok && omitted.answer.repositories).toEqual([
+    { path: "/code/api", validationCommands: [] },
+  ]);
+});
+
+test("setup needs a repository; settings may have none", () => {
+  const none = { ...parsed(answer), repositories: [] };
+  expect(checkSetupAnswer(none, facts)).toEqual(["Add at least one repository."]);
+  expect(checkSetupAnswer({ ...none, mode: "settings" }, facts)).toEqual([]);
+  expect(parseSetupAnswer(JSON.stringify({ ...answer, mode: "later" })).ok).toBe(false);
 });

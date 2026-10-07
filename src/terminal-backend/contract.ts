@@ -1,5 +1,6 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { AgentRole, Endpoint, TerminalName } from "../contracts.ts";
+import type { SetupMode } from "../onboarding/setup-view.ts";
 import type { ToolCheck } from "../onboarding/tools.ts";
 
 /** A pane Tandem owns, and the directory the backend's commands run from. */
@@ -73,7 +74,8 @@ export type TerminalView =
     }>
   | Readonly<{ kind: "task" | "pr"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>
-  | Readonly<{ kind: "pr"; repo: string; number: number }>;
+  | Readonly<{ kind: "pr"; repo: string; number: number }>
+  | Readonly<{ kind: "setup"; mode: SetupMode }>;
 
 /** Presentation context from the initiating view; it grants no pane ownership. */
 export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
@@ -93,18 +95,77 @@ export type RetainedViewOpen =
     }>
   | Readonly<{ status: "unreadable"; path: string; reason: string }>;
 
+/** A pane whose last Tandem effect ended with an unknown outcome, so Tandem refuses to touch it. */
+export type QuarantinedPane =
+  | Readonly<{
+      status: "readable";
+      path: string;
+      /** The record exactly as listed, so a clear never removes one that changed since. */
+      record: string;
+      key: string;
+      operation: string;
+      reason: string;
+      at: string;
+      endpoint: Endpoint;
+      cwd: string;
+    }>
+  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+
 export type OpenViewResult = Readonly<{
   opened: boolean;
   warnings: readonly string[];
   /** Exact native brief split identity, for its request workflow's scoped retirement. */
   endpoint?: Endpoint;
-  fallback?: "brief-review";
 }>;
 
-/** Installation and account readiness proved before offering a terminal in setup. */
-export type TerminalAvailability =
-  | Readonly<{ status: "missing" | "signedOut" | "ready" }>
-  | Readonly<{ status: "unknown"; reason: string }>;
+/**
+ * Native views hosted beside a coordinator. A terminal that cannot host them omits the capability,
+ * so callers branch on its presence rather than on the terminal's name.
+ */
+export type ViewsCapability = Readonly<{
+  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
+   * Supplied origin window/pane context must be honored or refused; never target another window.
+   * A windowId is an opaque control window key. Without it, derive the unique owning control
+   * window from the exact origin pane or refuse ambiguous mutation; never select the first window.
+   */
+  open(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      view: TerminalView;
+      origin?: ViewOrigin;
+    }>,
+  ): Promise<OpenViewResult>;
+  /** Retires only the originating native brief split. The caller owns revision/action policy.
+   * Missing panes count as closed; foreign, busy and unknown outcomes retain the pane.
+   * This never retires a process-oriented Markdown reviewPane or the conversation.
+   */
+  close(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      origin: ViewOrigin & Readonly<{ paneId: string }>;
+      view: Extract<TerminalView, { kind: "brief" }>;
+    }>,
+  ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
+  /** Settles every retained native view open under `home` whose outcome is now proved. */
+  recover(home: string): Promise<void>;
+  /**
+   * Native view opens under `home` whose outcome was never proved, read without changing them.
+   * Throws when the opens themselves cannot be listed.
+   */
+  retained(home: string): Promise<readonly RetainedViewOpen[]>;
+  /**
+   * Removes one retained open's records, never a pane, under that open's lock: only while the
+   * record is unchanged and `conclusive` re-proves its coordinator's state.
+   */
+  abandon(
+    open: Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>,
+    conclusive: () => Promise<boolean>,
+  ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
+}>;
 
 /** The last proven window width, and any limitation that prevented fitting the panel. */
 export type PanelFitResult = Readonly<{
@@ -256,45 +317,21 @@ export type TerminalBackend = Readonly<{
       }>,
   ): Promise<boolean>;
 
-  /** Opens a brief/PR split or replaces the main area with a task view beside this coordinator.
-   * Supplied origin window/pane context must be honored or refused; never target another window.
-   * A windowId is an opaque control window key. Without it, derive the unique owning control
-   * window from the exact origin pane or refuse ambiguous mutation; never select the first window.
-   * Unsupported presentations return an explicit warning and never type into the conversation.
-   */
-  openView(
-    input: Readonly<{
-      coordinator: Endpoint;
-      cwd: string;
-      home: string;
-      view: TerminalView;
-      origin?: ViewOrigin;
-    }>,
-  ): Promise<OpenViewResult>;
-
-  /** Retires only the originating native brief split. The caller owns revision/action policy.
-   * Missing panes count as closed; foreign, busy and unknown outcomes retain the pane.
-   * This never retires a process-oriented Markdown reviewPane or the conversation.
-   */
-  closeView(
-    input: Readonly<{
-      coordinator: Endpoint;
-      cwd: string;
-      home: string;
-      origin: ViewOrigin & Readonly<{ paneId: string }>;
-      view: Extract<TerminalView, { kind: "brief" }>;
-    }>,
-  ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
-  /** Native view opens under `home` whose outcome was never proved, read without changing them. */
-  retainedViewOpens(home: string): Promise<readonly RetainedViewOpen[]>;
+  /** Native view hosting; absent when the terminal has none. */
+  views?: ViewsCapability | undefined;
   /**
-   * Removes one retained open's records, never a pane, under that open's lock: only while the
-   * record is unchanged and `conclusive` re-proves its coordinator's state.
+   * Panes Tandem refuses to touch because an effect there ended with an unknown outcome, read
+   * without changing them. Throws when the records themselves cannot be listed.
    */
-  abandonViewOpen(
-    open: Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>,
+  quarantinedPanes(home: string): Promise<readonly QuarantinedPane[]>;
+  /**
+   * Removes one pane's quarantine record, never the pane, under the record's lock: only while
+   * the record is unchanged and `conclusive` re-proves the pane gone or idle.
+   */
+  clearPaneQuarantine(
+    pane: Extract<QuarantinedPane, Readonly<{ status: "readable" }>>,
     conclusive: () => Promise<boolean>,
-  ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
+  ): Promise<"cleared" | "settled" | "changed" | "unproven">;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;
@@ -311,6 +348,11 @@ export type TerminalBackend = Readonly<{
   notify(target: SessionTarget & Readonly<{ title: string; body: string }>): Promise<void>;
   /** Opens Tandem's welcome view; accepting it prompts the agent in `paneId`. */
   openWelcome(target: SessionTarget & Readonly<{ paneId: string }>): Promise<void>;
+  /**
+   * Opens Tandem's setup block beside the coordinator in `paneId`, which must already have its
+   * published view; false when this terminal has no native blocks and setup runs in the chat.
+   */
+  openSetup(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
   /** Submits a prompt to the agent in a pane, or types it and presses Enter when none is known. */
   promptAgent(target: SessionTarget & Readonly<{ paneId: string; text: string }>): Promise<void>;
   /** Opens Tandem's panel beside the coordinator, without focus; its pane id. */

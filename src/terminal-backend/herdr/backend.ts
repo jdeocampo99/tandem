@@ -45,28 +45,9 @@ export function herdrBackend(
 ): TerminalBackend {
   return {
     name: "herdr",
-    openView: async ({ view, origin }) =>
-      origin?.windowId !== undefined
-        ? {
-            opened: false,
-            warnings: ["Herdr cannot target an opaque Tern control window key."],
-          }
-        : {
-            opened: false,
-            ...(view.kind === "brief" ? { fallback: "brief-review" as const } : {}),
-            warnings: [
-              view.kind === "brief"
-                ? "Opening Tandem's existing request review pane in Herdr."
-                : `Herdr cannot display a native ${view.kind} view. Use the conversation or tandem status instead.`,
-            ],
-          },
-    closeView: async () => ({
-      closed: false,
-      warnings: ["Herdr has no native brief split; retire its owned request review pane instead."],
-    }),
-    retainedViewOpens: async () => [],
-    abandonViewOpen: async () => {
-      throw new Error("Herdr keeps no native view opens to abandon");
+    quarantinedPanes: async () => [],
+    clearPaneQuarantine: async () => {
+      throw new Error("Herdr keeps no pane quarantine records to clear");
     },
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),
@@ -93,6 +74,8 @@ export function herdrBackend(
     checkInstall: (target) => checkInstall(run, target),
     notify: (target) => notify(run, target),
     openWelcome: (target) => openWelcome(run, target),
+    // Herdr has no native blocks, so setup runs in the coordinator's chat.
+    openSetup: async () => false,
     promptAgent: (target) => promptAgent(run, target),
     openPanel: (input) => openPanel(run, input),
     isPanelOpen: (input) => isPanelOpen(run, input),

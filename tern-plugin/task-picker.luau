@@ -1,20 +1,10 @@
 --!strict
 local ui = tern.ui
-local views = require('./view-file')
 local fields = require('./text-field')
-local navigation = require('./navigation')
+local rt = require('./rt')
 local components = require('./components')
 type Task = { taskId: string, title: string, stage: string, model: string? }
-type Model = { project: string, tasks: { [string]: Task } }
-type State = { origin: navigation.Origin, view: views.View<Model>, field: fields.Field, cwd: string, busy: boolean, selected: number }
-local function parse(value: unknown): Model?
- if type(value) ~= 'table' or type(value.project) ~= 'string' or type(value.tasks) ~= 'table' then return nil end
- for id, task in value.tasks do
-  if type(id) ~= 'string' or type(task) ~= 'table' or task.taskId ~= id or not string.match(id, '^[%w_-]+$')
-   or type(task.title) ~= 'string' or type(task.stage) ~= 'string' or (task.model ~= nil and type(task.model) ~= 'string') then return nil end
- end
- return value :: Model
-end
+type State = { origin: rt.Origin, view: rt.Watch, field: fields.Field, selected: number }
 local function choices(state: State): { Task }
  local rows = {}
  if not state.view.model then return rows end
@@ -27,26 +17,17 @@ local function choices(state: State): { Task }
  return rows
 end
 local function open(state: State, cx: BlockCx, id: string)
- if state.busy or state.view.status ~= 'ready' or not state.view.model or not state.view.model.tasks[id] then return end
- if string.sub(state.cwd, 1, 1) ~= '/' or string.sub(state.origin.home, 1, 1) ~= '/' then cx:toast('error', 'Task picker unavailable', 'An absolute originating cwd and index path are required.'); return end
- local argv = { '/bin/sh', 'tandem.sh', 'native', 'open', 'task', id, '--pane', string.format('%.0f', cx.pane), '--cwd', state.cwd }
- if state.origin.home ~= '' then table.insert(argv, '--home'); table.insert(argv, state.origin.home) end
- local window = state.origin.window
- if window and window ~= '' then table.insert(argv, '--window'); table.insert(argv, window) end
- state.busy = true
- local ok, problem = pcall(function()
-  tern.process.run(argv, { cwd = '.' }, function(result)
-   state.busy = false
-   if result.status ~= 0 then cx:toast('error', 'Task could not open', result.stderr); cx:render() else cx:exit(0) end
-  end)
- end)
- if not ok then state.busy = false; cx:toast('error', 'Task could not open', tostring(problem)) end
+ if state.view.status ~= 'ready' or not state.view.model or not state.view.model.tasks[id] then return end
+ rt.act(cx, state.origin, { verb = 'open', ref = { kind = 'task', taskId = id } }, function(outcome)
+  if outcome and outcome.status == 'done' then cx:exit(0) else cx:render() end
+ end, rt.PICKER)
+end
+local function back(state: State, cx: BlockCx)
+ rt.act(cx, state.origin, { verb = 'open', ref = { kind = 'orchestrator' } })
 end
 local block: BlockDef<State> = {
  init = function(cx, args)
-  local origin = navigation.origin(args)
-  local state = { origin = origin, view = views.create(args[1] or '', 'panel', parse), field = fields.create(), cwd = origin.cwd, busy = false, selected = 1 }
-  views.refresh(state.view); views.watch(state.view, cx)
+  local state = { origin = rt.origin(args), view = rt.watch(cx, args[1] or '', 'index'), field = fields.create(), selected = 1 }
   return state
  end,
  title = function() return 'Open task…' end,
@@ -59,11 +40,11 @@ local block: BlockDef<State> = {
    }))
   end
   if #choices(state) == 0 then table.insert(rows, components.text('No matching tasks.', 'muted')) end
-  return { main = ui.el('div', { class = 'tt-picker' }, rows) }
+  return { main = ui.el('div', {}, rows) }
  end,
  event = function(state, event, cx)
   if event.ev == 'focus' then return end
-  if event.ev == 'action' and event.act == 'cancel' then navigation.back(state.origin, cx); return end
+  if event.ev == 'action' and event.act == 'cancel' then back(state, cx); return end
   if event.ev == 'action' and event.act == 'open' and event.value then open(state, cx, event.value) end
  end,
  key = function(state, key, cx)
@@ -71,7 +52,7 @@ local block: BlockDef<State> = {
   local outcome = fields.key(state.field, key)
   if outcome == 'submit' then local first = choices(state)[state.selected]; if first then open(state, cx, first.taskId) end
   elseif outcome == 'changed' then state.selected = 1; cx:render()
-  elseif outcome == 'cancel' then navigation.back(state.origin, cx) end
+  elseif outcome == 'cancel' then back(state, cx) end
   return outcome ~= 'ignored'
  end,
 }

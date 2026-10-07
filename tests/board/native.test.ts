@@ -1,11 +1,9 @@
 import { expect, test } from "bun:test";
-import { z } from "zod";
 import { nativeBoardView } from "../../src/board/native.ts";
 import {
   nativeChangeSignature,
   nativePrFile,
   nativeSummaryProjects,
-  nativeViewText,
 } from "../../src/board/native-views.ts";
 import {
   type NativeTaskSummary,
@@ -21,36 +19,8 @@ import { content, NOW, state, watch } from "./fixtures.ts";
 
 const PROJECT = "/work/app";
 
-test("native envelope revisions change with model content and stay stable across key order and kinds", () => {
-  const schema = z
-    .object({ version: z.literal(1), kind: z.string(), revision: z.string(), model: z.unknown() })
-    .strict();
-  const first = schema.parse(
-    JSON.parse(nativeViewText("task", { header: { title: "Before", id: "task-1" }, rows: [1, 2] })),
-  );
-  const reordered = schema.parse(
-    JSON.parse(nativeViewText("task", { rows: [1, 2], header: { id: "task-1", title: "Before" } })),
-  );
-  expect(reordered).toEqual(first);
-  const changed = schema.parse(
-    JSON.parse(nativeViewText("task", { header: { title: "After", id: "task-1" }, rows: [1, 2] })),
-  );
-  expect(changed.revision).not.toBe(first.revision);
-  const movedRow = schema.parse(
-    JSON.parse(nativeViewText("task", { header: { title: "Before", id: "task-1" }, rows: [2, 1] })),
-  );
-  expect(movedRow.revision).not.toBe(first.revision);
-  for (const kind of ["panel", "task", "brief", "pr"] as const) {
-    const file = schema.parse(JSON.parse(nativeViewText(kind, first.model)));
-    expect(file.kind).toBe(kind);
-    expect(file.revision).toBe(first.revision);
-  }
-  expect(() => nativeViewText("task", { invalid: Number.NaN })).toThrow("finite JSON");
-});
-
 test("published summaries keep stale project counts visible but never expose a stale focus session", () => {
   const summary = {
-    terminal: "tern" as const,
     repoPath: PROJECT,
     name: "app",
     writtenAt: NOW,
@@ -274,14 +244,9 @@ test("native panel keeps an active task with a draft PR running and shows model 
 });
 
 test("switcher distinguishes projects by path and reports offline, needs-you, current and shortcuts", () => {
-  const rows = nativeProjectSwitcher(
-    snapshot,
-    PROJECT,
-    new Map([[PROJECT, { terminal: "tern", sessionId: "session-2" }]]),
-  );
+  const rows = nativeProjectSwitcher(snapshot, PROJECT, new Map([[PROJECT, "session-2"]]));
   const current = rows.find((row) => row.current);
   expect(current).toMatchObject({
-    terminal: "tern",
     repoPath: PROJECT,
     running: 1,
     needsYou: 3,
@@ -290,14 +255,8 @@ test("switcher distinguishes projects by path and reports offline, needs-you, cu
   });
   expect(current?.status).toBe("1 running · 3 needs you");
   expect(rows.find((row) => !row.current)?.offline).toBe(true);
-  for (const terminal of ["herdr", "unknown"]) {
-    const foreign = nativeProjectSwitcher(
-      snapshot,
-      PROJECT,
-      new Map([[PROJECT, { terminal, sessionId: "session-2" }]]),
-    );
-    expect(foreign.find((row) => row.current)).not.toHaveProperty("sessionId");
-  }
+  const sessionless = nativeProjectSwitcher(snapshot, PROJECT, new Map());
+  expect(sessionless.find((row) => row.current)).not.toHaveProperty("sessionId");
 });
 
 test("board is view-only with no duplicate active PR card and preserves review stops and links", () => {

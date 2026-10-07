@@ -45,7 +45,7 @@ function dependencies(
   run: CommandRunner = world.run,
 ): RequestReviewPaneDependencies {
   return {
-    terminal: terminalBackend(run),
+    terminal: terminalBackend(run, { terminal: "herdr" }),
     home: world.home,
     sessionId: world.sessionId,
     parentWorkspaceId: undefined,

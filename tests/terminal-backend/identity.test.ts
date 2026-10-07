@@ -55,7 +55,10 @@ for (const [chosen, selection] of [
         worktree: lease,
       });
       expect(result.outcome).toBe("quarantined");
-      expect(result.reason).toContain(`${endpoint.terminal} endpoint under ${chosen}`);
+      expect(result.reason).toContain(
+        `it is a ${endpoint.terminal} pane but this Tandem home uses ${chosen}`,
+      );
+      const views = terminal.views;
       for (const operation of [
         () => terminal.inspect({ endpoint, cwd: home }),
         () => terminal.close({ endpoint, cwd: home, force: true }),
@@ -66,22 +69,26 @@ for (const [chosen, selection] of [
         () =>
           terminal.splitBeside({ anchor: endpoint, cwd: home, role: "reviewer", generation: 0 }),
         () => terminal.openPanel({ coordinator: endpoint, cwd: home, project: home }),
-        () =>
-          terminal.closeView({
-            coordinator: endpoint,
-            cwd: home,
-            home,
-            origin: { paneId: "4" },
-            view: { kind: "brief", requestId: "req-1" },
-          }),
         () => terminal.isPanelOpen({ coordinator: endpoint, cwd: home, panelPaneId: "same" }),
-        () =>
-          terminal.openView({
-            coordinator: endpoint,
-            cwd: home,
-            home,
-            view: { kind: "task", taskId: "task" },
-          }),
+        ...(views === undefined
+          ? []
+          : [
+              () =>
+                views.close({
+                  coordinator: endpoint,
+                  cwd: home,
+                  home,
+                  origin: { paneId: "4" },
+                  view: { kind: "brief", requestId: "req-1" },
+                }),
+              () =>
+                views.open({
+                  coordinator: endpoint,
+                  cwd: home,
+                  home,
+                  view: { kind: "task", taskId: "task" },
+                }),
+            ]),
       ])
         await expect(operation()).rejects.toBeInstanceOf(EndpointOwnershipError);
       const recovery = await recoverEndpointFromLaunch(terminal, {

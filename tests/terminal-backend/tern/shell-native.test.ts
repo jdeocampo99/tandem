@@ -3,8 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { quoteShellArgument } from "../../../src/adapters/commands.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { paneMutation } from "../../../src/terminal-backend/tern/endpoints.ts";
-import { TERN_BINARY, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { TERN_BINARY } from "../../../src/terminal-backend/tern/cli.ts";
 
 const nativeTest = process.env.TANDEM_TERN_NATIVE === "1" ? test : test.skip;
 
@@ -75,7 +74,6 @@ for (const { startupDelay, attachedWindow } of [
           await Bun.sleep(50);
         }
         const terminal = ternBackend(run, { binary: TERN_BINARY });
-        const commands = ternCommands(run, { binary: TERN_BINARY });
         const session = { sessionId: "synthetic-shell-check", cwd: root };
         const coordinator = await terminal.createWorkspace({
           ...session,
@@ -121,11 +119,10 @@ for (const { startupDelay, attachedWindow } of [
           for (const endpoint of endpoints.slice(-2)) {
             // Read only synthetic Tandem context, bypassing runCommand's environment injection.
             const command = `printf '%s\\n' "$TANDEM_SESSION" "$TANDEM_TERN_WORKSPACE_ID" "$TERN_PANE" > ${quoteShellArgument(`${root}/${endpoint.paneId}.context`)}`;
-            await paneMutation(commands, { endpoint, cwd: root }, [
-              "run",
-              endpoint.paneId,
-              command,
-            ]);
+            await run({
+              argv: [TERN_BINARY, "run", endpoint.paneId, command, "--json"],
+              cwd: root,
+            });
           }
         }
         const proofDeadline = Date.now() + 10_000;

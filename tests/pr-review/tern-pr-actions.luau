@@ -27,10 +27,12 @@ tern.json={
  array=function(value) return value end,
  encode=function(value) return value end,
  decode=function(raw)
-  if raw == 'detail' then return {version=1,kind='pr',revision='revision',model=model} end
-  if raw == '{"posted":true,"url":"https://github.com/acme/app/pull/281#pullrequestreview-1"}' then return {posted=true,url='https://github.com/acme/app/pull/281#pullrequestreview-1'} end
-  if raw == '{"posted":false,"message":"PR head moved"}' then return {posted=false,message='PR head moved'} end
-  if raw == uncertainOutput then return {taskId='review-1',posted=false,message=uncertainMessage} end
+  if raw == 'detail' then return {v=1,kind='pr',epoch='store',seq=1,model=model} end
+  if raw == 'posted' then return {status='done',notice={code='review-posted',text='Posted: https://github.com/acme/app/pull/281#pullrequestreview-1'}} end
+  if raw == 'moved' then return {status='kept',notice={code='review-unconfirmed',text='PR head moved'}} end
+  if raw == 'done' then return {status='done'} end
+  if raw == uncertainOutput then return {status='kept',notice={code='review-unconfirmed',text=uncertainMessage}} end
+  if raw == 'feedback-saved' then return {status='kept',notice={code='feedback-saved',text='PR feedback was saved, but the worker could not start fixing: blocked'}} end
   error('Unreadable JSON')
  end,
 }
@@ -39,14 +41,15 @@ tern.process={run=function(argv,opts,callback)
  table.insert(pending,{argv=argv,opts=opts,callback=callback})
 end}
 local block = loadModule('./pr')
-local views = loadModule('./view-file')
 local content = loadModule('./pr-content')
 local cx={pane=123,render=function() end,exit=function(_,code) assert(code==0); exits+=1 end,
  toast=function(_,level,title,message) table.insert(toasts,{level=level,title=title,message=message}) end}
-local args={'/custom home/native-views/project/pr-review-1.json','42','/original repo','opaque-window','/custom home/native-views/project.json'}
+-- Tandem's launch context, which the block echoes back verbatim and never reads.
+local ctx='{"coordinator":"42","cwd":"/original repo","home":"/custom home","index":"/custom home/tern/0a1b/views/index.json","window":"opaque-window"}'
+local args={'/custom home/tern/0a1b/views/pr-review-1.json',ctx,'/custom home/tern/0a1b/views/index.json'}
 local function create()
  local state=block.init(cx,args,nil)
- assert(views.refresh(state.view) and state.view.status=='ready')
+ assert(state.view.status=='ready')
  block.view(state,cx)
  state.content.summary.text='My edited summary 日本語'
  state.content.diff.decisions.d1='post'
@@ -62,24 +65,27 @@ end
 local state=create()
 post(state); post(state)
 assert(#pending==1 and state.content.posting)
-assert(table.concat(pending[1].argv,'|')=='/bin/sh|native-input.sh|review-submit|review-1|--pane|123|--cwd|/original repo|--home|/custom home|--window|opaque-window')
-assert(pending[1].opts.stdin.reviewHead=='abc123' and pending[1].opts.stdin.reviewGeneration==0)
-assert(pending[1].opts.stdin.summary=='My edited summary 日本語')
+assert(table.concat(pending[1].argv,'|')=='/bin/sh|tandem.sh|native|act')
+local sent=pending[1].opts.stdin
+assert(sent.v==1 and sent.origin.pane=='123' and sent.origin.ctx==ctx)
+assert(sent.action.verb=='review-submit' and sent.action.taskId=='review-1')
+assert(sent.action.reviewHead=='abc123' and sent.action.reviewGeneration==0)
+assert(sent.action.submission.summary=='My edited summary 日本語')
 pending[1].callback({status=1,stdout='',stderr='CLI refused'})
 preserved(state)
 assert(toasts[#toasts].message=='CLI refused' and #pending==1)
 post(state)
 assert(#pending==2)
-pending[2].callback({status=0,stdout='{"posted":false,"message":"PR head moved"}',stderr=''})
+pending[2].callback({status=0,stdout='moved',stderr=''})
 preserved(state)
 assert(toasts[#toasts].message=='PR head moved' and #pending==2)
 local refusalMessage=toasts[#toasts].message
 post(state)
 pending[3].callback({status=0,stdout='malformed',stderr=''})
 preserved(state)
-assert(string.find(toasts[#toasts].message,'No posted review receipt') and #pending==3)
+assert(string.find(toasts[#toasts].message,'no outcome') and #pending==3)
 post(state)
-pending[4].callback({status=0,stdout='{"posted":true,"url":"https://github.com/acme/app/pull/281#pullrequestreview-1"}',stderr=''})
+pending[4].callback({status=0,stdout='posted',stderr=''})
 assert(state.content.submitted and not state.content.posting and exits==1 and #pending==4)
 post(state); assert(#pending==4)
 exits=0
@@ -89,10 +95,6 @@ post(failedStart)
 preserved(failedStart)
 assert(string.find(toasts[#toasts].message,'Could not spawn') and #pending==4)
 startFailure=false
-local invalidOrigin=create(); invalidOrigin.home=''
-post(invalidOrigin)
-preserved(invalidOrigin)
-assert(#pending==4)
 -- Service-owned uncertainty guidance remains distinct from a definite refusal.
 local uncertain=create()
 post(uncertain)
@@ -115,18 +117,19 @@ model.review.generation=0
 -- Embedded content records receipt success without closing its hosting task pane.
 local embedded=content.create(); content.view(embedded,model,true)
 local complete=nil
-content.event(embedded,model,true,{ev='action',act='pr-post'},cx,function(_,_,_,done) complete=done end)
+content.event(embedded,model,true,{ev='action',act='pr-post'},cx,function(_,done) complete=done end)
 assert(embedded.posting and complete~=nil)
-complete({status=0,stdout='{"posted":true,"url":"https://github.com/acme/app/pull/281#pullrequestreview-1"}',stderr=''})
+complete({status='done'})
 assert(embedded.submitted and not embedded.posting and exits==0)
--- The production renderer also carries custom home through its non-JSON shell path.
+-- Navigation travels the same transport and echoes the same context.
 block.event(uncertain,{ev='action',act='pr-task'},cx)
 assert(#pending==7)
-assert(table.concat(pending[7].argv,'|')=='/bin/sh|tandem.sh|native|open|task|review-1|--pane|123|--cwd|/original repo|--home|/custom home|--window|opaque-window')
-assert(pending[7].opts.stdin==nil)
-pending[7].callback({status=0,stdout='{}',stderr=''})
+assert(table.concat(pending[7].argv,'|')=='/bin/sh|tandem.sh|native|act')
+local opened=pending[7].opts.stdin
+assert(opened.origin.ctx==ctx and opened.action.verb=='open' and opened.action.ref.kind=='task' and opened.action.ref.taskId=='review-1')
+pending[7].callback({status=0,stdout='done',stderr=''})
 assert(exits==0 and #pending==7)
-print('PR action result, home forwarding and draft retention checks passed')
+print('PR action result, context echo and draft retention checks passed')
 
 local savedModel=table.clone(model)
 savedModel.header=table.clone(model.header)
@@ -145,7 +148,7 @@ content.event(replies.content,model,true,{ev='action',act='pr-reply',value='old-
 replies.content.diff.editor.text='Outdated reply'
 content.event(replies.content,model,true,{ev='action',act='pr-save'},cx,function() end)
 local payload=nil
-content.event(replies.content,model,true,{ev='action',act='pr-post'},cx,function(_,_,input) payload=input end)
+content.event(replies.content,model,true,{ev='action',act='pr-post'},cx,function(action) payload=action.submission end)
 assert(#payload.yours==0 and #payload.replies==2)
 assert(payload.replies[2].threadId=='old-thread' and payload.replies[2].commentId=='node-33' and payload.replies[2].replyTo==33)
 model.header.taskId=nil;model.review=nil;model.commentDestination='read-only';model.readOnlyReason='Read-only: no Tandem task'
@@ -154,11 +157,26 @@ assert(not content.event(readonly,model,true,{ev='action',act='pr-line',value='1
 assert(not content.event(readonly,model,true,{ev='action',act='pr-reply',value='old-thread'},cx,function() error('Read-only mutation') end))
 assert(not content.event(readonly,model,true,{ev='action',act='pr-post'},cx,function() error('Read-only mutation') end))
 local switch=block.init(cx,args,nil)
-views.refresh(switch.view)
 switch.index.status='ready';switch.index.model={pullRequests={external={header={repo='acme/app',number=282,title='Watched external PR'},detailFile='pr-282.json'}}}
 block.event(switch,{ev='action',act='pr-select',value='acme/app#282'},cx)
-assert(string.find(table.concat(pending[#pending].argv,'|'),'native|open|pr|acme/app#282|'))
+local selected=pending[#pending].opts.stdin.action
+assert(selected.verb=='open' and selected.ref.kind=='pr' and selected.ref.repo=='acme/app' and selected.ref.number==282)
 print('Exact thread replies and taskless read-only guards passed')
 
 for key in model do model[key]=nil end
 for key,value in savedModel do model[key]=value end
+
+-- Feedback the service saved but could not start is kept: it says so and clears the draft.
+model.commentDestination='worker'
+model.files={{path='port.ts',additions=1,deletions=0,commentCount=0,rows={{id='r1',row={kind='add',new=1,text='guard();'},drafts={},threads={}}}}}
+local fix=block.init(cx,args,nil); block.view(fix,cx)
+block.event(fix,{ev='action',act='pr-line',value='1'},cx)
+assert(fix.content.diff.editor~=nil)
+fix.content.diff.editor.text='Fix the guard'
+block.event(fix,{ev='action',act='pr-save'},cx)
+local fixRequest=pending[#pending]
+assert(fixRequest.opts.stdin.action.verb=='pr-comment' and fixRequest.opts.stdin.action.taskId=='review-1')
+fixRequest.callback({status=0,stdout='feedback-saved',stderr=''})
+assert(toasts[#toasts].level=='warning' and toasts[#toasts].title=='PR feedback saved')
+assert(fix.content.diff.editor==nil and fix.content.diff.yours[1].sent and fix.content.diff.yours[1].body=='Fix the guard')
+print('Saved PR feedback is kept without inviting a resend')

@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { nativeDetailPath, nativeViewsPath } from "../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../src/contracts.ts";
 import { launchCoordinator, launchCoordinatorUnlocked } from "../../src/coordinator/launch.ts";
 import { listCoordinatorQuarantineRecords } from "../../src/coordinator/quarantine.ts";
@@ -16,6 +15,8 @@ import {
   releaseCoordinatorLease,
 } from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
+import { blockArgs } from "../../src/native/contract.ts";
+import { viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "./scenario.ts";
 
@@ -29,13 +30,18 @@ test("startup rollback retains a quarantined coordinator lease after its convers
       if (owner !== undefined && usagePaneId === undefined) {
         if (owner.endpoint.terminalSessionId === undefined) throw new Error("missing Tern session");
         usagePaneId = "9903";
-        const index = nativeViewsPath(world.home, world.repoPath);
+        const index = viewIndexPath(world.home, world.repoPath);
         world.openPane({
           paneId: usagePaneId,
           cwd: owner.worktree.path,
           terminalSessionId: owner.endpoint.terminalSessionId,
           blockProgram: "tandem.usage",
-          blockArgs: [index, owner.endpoint.paneId, owner.worktree.path, "", index],
+          blockArgs: blockArgs(index, {
+            coordinator: owner.endpoint.paneId,
+            cwd: owner.worktree.path,
+            home: world.home,
+            index,
+          }),
         });
       }
       const result = await world.run(request);
@@ -222,7 +228,7 @@ for (const mode of [
       const record = (await listCoordinatorRecords(world.home, world.sessionId))[0];
       if (!record || record.endpoint.terminalSessionId === undefined)
         throw new Error("missing coordinator identity");
-      const index = nativeViewsPath(world.home, world.repoPath);
+      const index = viewIndexPath(world.home, world.repoPath);
       const views = [
         "brief",
         "board",
@@ -237,20 +243,22 @@ for (const mode of [
       ];
       for (const [i, kind] of views.entries()) {
         const file = ["brief", "task", "pr"].includes(kind)
-          ? nativeDetailPath(world.home, world.repoPath, `${kind}-reset.json`)
+          ? viewDetailPath(world.home, world.repoPath, `${kind}-reset.json`)
           : index;
         world.openPane({
           paneId: String(9001 + i),
           cwd: record.worktree.path,
           blockProgram: `tandem.${kind}`,
           terminalSessionId: record.endpoint.terminalSessionId,
-          blockArgs: [
+          blockArgs: blockArgs(
             mode === "foreign-file" && kind === "brief" ? "/foreign/brief-reset.json" : file,
-            record.endpoint.paneId,
-            record.worktree.path,
-            "",
-            index,
-          ],
+            {
+              coordinator: record.endpoint.paneId,
+              cwd: record.worktree.path,
+              home: world.home,
+              index,
+            },
+          ),
           ...(["board", "usage", "catchup"].includes(kind) ? {} : { anchor: record.endpoint }),
         });
       }

@@ -4,10 +4,10 @@ local models = require("./pr-model")
 local components = require("./components")
 local fields = require("./text-field")
 local diff = require("./pr-diff")
+local rt = require("./rt")
 local M = {}
 export type State = { tab: string, chapter: number, stop: number, diff: diff.State, summary: fields.Field?, verdict: string, head: string?, generation: number?, clock: number, epoch: number, posting: boolean, submitted: boolean, focus: string, prefix: string, identity: string? }
-export type ActionResult = {status: number, stdout: string, stderr: string}
-export type Invoke = (string, string, unknown?, ((ActionResult) -> ())?) -> ()
+export type Invoke = ({[string]: unknown}, ((rt.Outcome?) -> ())?) -> ()
 function M.create(): State
  return { tab = "Description", chapter = 1, stop = 1, diff = diff.create(), verdict = "comment", clock = tern.now(), epoch = os.time() * 1000, posting = false, submitted = false, focus = "comment", prefix = "main.content" }
 end
@@ -114,8 +114,9 @@ function M.view(s: State, model: models.Model, ready: boolean, prefix: string?, 
 end
 local function sender(s: State, model: models.Model, invoke: Invoke): diff.Send
  return function(mine, done)
-  local payload = if mine.reply then {reviewHead=model.header.head,replies=tern.json.array({{threadId=mine.reply.threadId,commentId=mine.reply.commentId,replyTo=mine.reply.replyTo,body=mine.body}})} else {comments=tern.json.array({{file=mine.file,line=mine.line,text=mine.body}})}
-  invoke("pr-comment", model.header.taskId :: string, payload, function() done() end)
+  local action = if mine.reply then {verb="pr-comment",taskId=model.header.taskId,reviewHead=model.header.head,replies=tern.json.array({{threadId=mine.reply.threadId,commentId=mine.reply.commentId,replyTo=mine.reply.replyTo,body=mine.body}})} else {verb="pr-comment",taskId=model.header.taskId,comments=tern.json.array({{file=mine.file,line=mine.line,text=mine.body}})}
+  -- A kept comment was saved; keeping its draft would invite sending the same feedback twice.
+  invoke(action, function(outcome) if outcome and (outcome.status == "done" or outcome.status == "kept") then done() end end)
  end
 end
 function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx: BlockCx, invoke: Invoke): boolean
@@ -125,7 +126,7 @@ function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx:
   if ev.act == "pr-tab" and table.find(model.tabs, ev.value) then s.tab = ev.value; return true
   elseif ev.act == "pr-url" then cx:open(model.header.url); return true
   elseif ev.act == "pr-log" then local check = model.checks[tonumber(ev.value) or 0]; if check and check.logUrl then cx:open(check.logUrl) end; return true
-  elseif ev.act == "pr-task" and model.header.taskId then invoke("open", "task", model.header.taskId); return true
+  elseif ev.act == "pr-task" and model.header.taskId then invoke({verb="open",ref={kind="task",taskId=model.header.taskId}}); return true
   elseif ev.act == "pr-unresolved" then s.tab = "Diff"; diff.jump(s.diff, model, cx, s.prefix .. ".body"); return true
   elseif ev.act == "pr-stop" then local c, stop = string.match(ev.value or "", "^(%d+):(%d+)$"); s.chapter, s.stop = tonumber(c) or 1, tonumber(stop) or 1; return true
   elseif ev.act == "pr-verdict" and table.find({"comment", "approve", "request-changes"}, ev.value) and valid and model.review and not model.review.posted and not s.posting and not s.submitted then s.verdict = ev.value; return true
@@ -138,17 +139,9 @@ function M.event(s: State, model: models.Model, ready: boolean, ev: UiEvent, cx:
     else table.insert(yours, {file=mine.file,line=mine.line,body=mine.body}) end
    end
    s.posting = true
-   invoke("review-submit", model.review.taskId, {tandemPrReview=1,reviewHead=s.head,reviewGeneration=s.generation,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours),replies=tern.json.array(replies)}, function(result)
+   invoke({verb="review-submit",taskId=model.review.taskId,reviewHead=s.head,reviewGeneration=s.generation,submission={tandemPrReview=1,verdict=s.verdict,summary=(s.summary :: fields.Field).text,drafts=tern.json.array(drafts),yours=tern.json.array(yours),replies=tern.json.array(replies)}}, function(outcome)
     s.posting = false
-    if result == nil or result.status ~= 0 then return end
-    local decoded, value = pcall(tern.json.decode, result.stdout)
-    if decoded and type(value) == "table" and value.posted == true then
-     s.submitted = true
-     if type(value.message) == "string" then cx:toast("info", "Review posted", value.message) end
-    else
-     local message = if decoded and type(value) == "table" and type(value.message) == "string" then value.message else "No posted review receipt was returned. Check the PR before trying again."
-     cx:toast("info", "Review wasn't confirmed as posted", message)
-    end
+    if outcome and outcome.status == "done" then s.submitted = true end
    end)
    return true
   end

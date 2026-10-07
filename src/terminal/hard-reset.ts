@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { access, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { parse, resolve } from "node:path";
 import { rememberedSetupPath } from "../config/environment.ts";
@@ -89,7 +89,7 @@ export async function applyHardReset(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     stdout(
-      `Could not stop every Tandem pane (${message}). Close any leftover Tandem panes in Herdr by hand.\n`,
+      `Could not stop every Tandem pane (${message}). Close any leftover Tandem panes by hand.\n`,
     );
   }
   for (const path of plan.remove) await rm(path, { recursive: true, force: true });
@@ -97,5 +97,20 @@ export async function applyHardReset(
   for (const repo of plan.repos) {
     await run({ argv: ["git", "-C", repo, "worktree", "prune"], cwd: repo });
   }
+  // A coordinator that is still running writes its state again as soon as it is deleted.
+  const survivors: string[] = [];
+  for (const path of plan.remove) {
+    if (
+      await access(path).then(
+        () => true,
+        () => false,
+      )
+    )
+      survivors.push(path);
+  }
+  if (survivors.length > 0)
+    throw new Error(
+      `Tandem is not reset: ${survivors.join(", ")} still exists because a Tandem process is still running and writing to it. Close every Tandem pane, then run \`tandem reset --hard\` again.`,
+    );
   stdout("Tandem is reset. Run `tandem` to onboard your projects again.\n");
 }

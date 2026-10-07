@@ -247,7 +247,6 @@ export function taskScreenPublication(project: string, review = false): NativeVi
     target: { kind: "task" as const, taskId: "102" },
   };
   const projectRow = {
-    terminal: "tern" as const,
     repoPath: project,
     name: "tandem",
     current: true,
@@ -262,7 +261,6 @@ export function taskScreenPublication(project: string, review = false): NativeVi
     project,
     writtenAt: at,
     summary: {
-      terminal: "tern",
       repoPath: project,
       name: "tandem",
       writtenAt: at,

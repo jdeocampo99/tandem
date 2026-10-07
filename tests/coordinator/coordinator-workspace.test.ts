@@ -235,7 +235,7 @@ test("closes a stopped owned pane when no other pane shares its workspace", asyn
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -276,7 +276,7 @@ test("closes its own pane but retains the workspace when an extra pane remains",
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -337,7 +337,7 @@ test("closes the recorded panel before the coordinator, so the panel never keeps
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -365,7 +365,11 @@ test("closes a lone panel left after the coordinator's pane already closed", asy
     );
 
     expect(
-      await retireCoordinatorWorkspace(terminalBackend(runner.run), join(root, "home"), record),
+      await retireCoordinatorWorkspace(
+        terminalBackend(runner.run, { terminal: "herdr" }),
+        join(root, "home"),
+        record,
+      ),
     ).toEqual({
       outcome: "closed",
     });
@@ -389,7 +393,7 @@ test("a panel Herdr closed but still lists is not counted as a pane keeping the 
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -415,7 +419,7 @@ test("a panel that cannot be closed retains the workspace instead of failing ret
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -446,7 +450,7 @@ test("a recorded panel id that now names another pane is left open and reported"
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -477,7 +481,7 @@ test("leaves a custom-labeled workspace and its pane completely untouched", asyn
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -500,7 +504,7 @@ test("treats an already-gone workspace as already clear", async () => {
     const runner = fakeRunner({}, {});
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -540,7 +544,7 @@ test("quarantines a pane whose foreground working directory no longer matches it
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );
@@ -580,7 +584,7 @@ test("quarantines a pane occupied by a foreign active process instead of the rec
     );
 
     const result = await retireCoordinatorWorkspace(
-      terminalBackend(runner.run),
+      terminalBackend(runner.run, { terminal: "herdr" }),
       join(root, "home"),
       record,
     );

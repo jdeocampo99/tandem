@@ -1,10 +1,12 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
+import { openFiles } from "../../native/view-files.ts";
+import { viewsOf } from "../views.ts";
 
 // A browser opening can never be proved or disproved later, and it is never re-invoked. A
 // process that dies right after `tern browser`, or a reply that never proves the new browser,
@@ -38,11 +40,7 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
       }
       if (verb === "browser") {
         // A crash here leaves no durable record behind.
-        expect(
-          (await readdir(join(home, "native-host"))).filter((name) =>
-            name.endsWith(".intent.json"),
-          ),
-        ).toEqual([]);
+        expect((await openFiles(home)).filter((name) => name.endsWith(".ticket.json"))).toEqual([]);
         expect(JSON.parse(request.argv[2] ?? "")).toEqual({
           op: "open",
           owner: 3,
@@ -115,18 +113,18 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
       });
       const terminal = ternBackend(run, { home, binary: "tern" });
       const open = (backend = terminal) =>
-        backend.openView({
+        viewsOf(backend).open({
           coordinator,
           cwd: repo,
           home,
           origin: { paneId: "3", cwd: repo },
           view: { kind: "browser", url: "https://example.invalid/pull/281" },
         });
-      const intents = async () =>
-        (await readdir(join(home, "native-host"))).filter((name) => name.endsWith(".intent.json"));
+      const tickets = async () =>
+        (await openFiles(home)).filter((name) => name.endsWith(".ticket.json"));
       if (mode === "confirmed") {
         expect(await open()).toEqual({ opened: true, warnings: [] });
-        expect(await intents()).toEqual([]);
+        expect(await tickets()).toEqual([]);
         expect(opens).toBe(1);
         return;
       }
@@ -134,7 +132,7 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
         "Tern did not confirm the PR opened in its browser. Tandem did not retry",
       );
       expect(opens).toBe(1);
-      expect(await intents()).toEqual([]);
+      expect(await tickets()).toEqual([]);
       expect(focuses).toEqual([]);
       // The user's next click is a new opening, in this process or a fresh one.
       expect(await open()).toEqual({ opened: true, warnings: [] });
@@ -143,7 +141,7 @@ for (const mode of ["failed-listing", "malformed-listing", "lost-ack", "confirme
         warnings: [],
       });
       expect(opens).toBe(3);
-      expect(await intents()).toEqual([]);
+      expect(await tickets()).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

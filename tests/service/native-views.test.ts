@@ -2,21 +2,21 @@ import { expect, test } from "bun:test";
 import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { nativeViewsPath } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
+import { viewIndexPath } from "../../src/native/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { state } from "../board/fixtures.ts";
 import { seedScenarioTask, withScenario } from "../evals/scenario.ts";
 
 const published = z.object({
-  version: z.literal(1),
-  kind: z.literal("panel"),
-  revision: z.string(),
+  v: z.literal(1),
+  kind: z.literal("index"),
+  seq: z.number().int().positive(),
   model: z.object({
     writtenAt: z.string(),
-    summary: z.object({ terminal: z.literal("tern"), sessionId: z.string() }),
+    summary: z.object({ sessionId: z.string() }),
     tasks: z.record(z.string(), z.object({ stage: z.string() })),
   }),
 });
@@ -53,10 +53,10 @@ for (const [terminal, homeTerminal, publishes] of [
       } finally {
         await service.shutdown();
       }
-      const path = nativeViewsPath(world.home, world.repoPath);
+      const path = viewIndexPath(world.home, world.repoPath);
       if (publishes) {
         const view = published.parse(JSON.parse(await readFile(path, "utf8")));
-        expect(view.model.summary).toEqual({ terminal: "tern", sessionId: endpoint.sessionId });
+        expect(view.model.summary).toEqual({ sessionId: endpoint.sessionId });
         expect((await stat(path)).mode & 0o777).toBe(0o600);
         await expect(stat(join(world.home, "native-visits"))).rejects.toHaveProperty(
           "code",
@@ -120,7 +120,7 @@ test("slow finished-task inspection leaves controller ticks free and coalesces p
       gate.resolve();
       await service.shutdown();
       const view = published.parse(
-        JSON.parse(await readFile(nativeViewsPath(world.home, world.repoPath), "utf8")),
+        JSON.parse(await readFile(viewIndexPath(world.home, world.repoPath), "utf8")),
       );
       expect(view.model.writtenAt).toBe(world.clock());
       expect(view.model.tasks[task.id]?.stage).toBe("completed");

@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 import { readFile, stat } from "node:fs/promises";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
 import { nativePrFile } from "../../src/board/native-views.ts";
-import { nativeDetailPath, publishNativeViews } from "../../src/board/snapshot.ts";
 import { boardView } from "../../src/board/view.ts";
+import { publishViews, viewDetailPath } from "../../src/native/store.ts";
 import {
   type CachedPullRequest,
   prMarkdownBlocks,
@@ -147,10 +147,10 @@ test("publication clock advances leave running CI detail bytes, inode and mtime 
       home: world.home,
       clock: world.clock,
       run: world.run,
-      terminal: terminalBackend(world.run),
+      terminal: terminalBackend(world.run, { terminal: "herdr" }),
     });
     const file = nativePrFile(cached.repo, cached.number);
-    const path = nativeDetailPath(world.home, world.repoPath, file);
+    const path = viewDetailPath(world.home, world.repoPath, file);
     const publish = async (pr: CachedPullRequest) => {
       const publication = await reader.read(
         {
@@ -162,7 +162,7 @@ test("publication clock advances leave running CI detail bytes, inode and mtime 
         world.repoPath,
       );
       const model = prPaneView({ cached: pr });
-      await publishNativeViews(world.home, world.repoPath, async () => ({
+      await publishViews(world.home, world.repoPath, async () => ({
         bundle: {
           ...publication.bundle,
           pullRequests: {

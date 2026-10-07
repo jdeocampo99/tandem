@@ -9,7 +9,6 @@ import type { NativeBoardView } from "./native.ts";
 import type { NativePanelView, NativeProjectRow, NativeTaskSummary } from "./panel.ts";
 
 export type NativeProjectSummary = Readonly<{
-  terminal: "tern";
   repoPath: string;
   name: string;
   writtenAt: string;
@@ -41,33 +40,6 @@ export type NativeViewsPublication = Readonly<{
   retainedDetailFiles?: readonly string[];
 }>;
 
-/** Writes the file envelope in docs/reference/native-views.md. Revisions describe only model content. */
-export function nativeViewText(kind: "panel" | NativeDetail["kind"], model: unknown): string {
-  const json = nativeModelJson(model);
-  const revision = createHash("sha256").update(json).digest("hex");
-  return `{"version":1,"kind":${JSON.stringify(kind)},"revision":${JSON.stringify(revision)},"model":${json}}\n`;
-}
-
-/** Canonical JSON keeps identical models stable across object construction order and restarts. */
-function nativeModelJson(value: unknown): string {
-  if (value === null || typeof value === "string" || typeof value === "boolean")
-    return JSON.stringify(value);
-  if (typeof value === "number" && Number.isFinite(value)) return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${Array.from(value, nativeModelJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const prototype: unknown = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null)
-      throw new TypeError("Native view models must contain plain JSON values");
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .filter((key) => record[key] !== undefined)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${nativeModelJson(record[key])}`)
-      .join(",")}}`;
-  }
-  throw new TypeError("Native view models must contain finite JSON values");
-}
-
 /** Relative to the project's detail directory. Encoding keeps opaque ids in one path segment. */
 export function nativeTaskFile(id: string): string {
   return `task-${encodeURIComponent(id)}.json`;
@@ -91,7 +63,6 @@ export function nativeSummaryProjects(
       const age = Date.parse(now) - Date.parse(summary.writtenAt);
       const offline = !Number.isFinite(age) || age < 0 || age > 10_000;
       return {
-        terminal: summary.terminal,
         repoPath: summary.repoPath,
         name: summary.name,
         current: summary.repoPath === project,

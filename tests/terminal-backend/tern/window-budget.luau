@@ -1,4 +1,4 @@
--- Execute the real window entrypoint and navigation helper. Expire every WindowCx;
+-- Execute the real window entrypoint and its transport, rt.luau. Expire every WindowCx;
 -- cold compilation costs 35 ms and process launch costs 40 ms in this guard VM.
 local hooks,commands,timers,processes,imports,toasts={},{},{},{},{},{}
 local active,cost,maximum,label=false,0,0,""
@@ -21,27 +21,28 @@ local function invoke(name,fn)
  fn(context)
  active=false; expire()
 end
-local response={}
+local response={status="done"}
 local tern={
  command=function(def) commands[def.id]=def end,
  on=function(name,fn) hooks[name]=fn end,
  route={open=function(fn) hooks.open=fn end,link=function(fn) hooks.link=fn end},
  timer=function(ms,fn) charge(1); table.insert(timers,{ms=ms,fn=fn}) end,
  getenv=function() charge(1); return "window" end,
- process={run=function(argv,_opts,fn)
+ process={run=function(argv,opts,fn)
   charge(40)
   if spawnFailure then error("spawn refused") end
-  table.insert(processes,{argv=argv,fn=fn})
+  table.insert(processes,{argv=argv,stdin=opts.stdin,fn=fn})
  end},
- json={decode=function(raw) charge(2); if raw=="malformed" then error("bad JSON") end; return response end},
+ -- The envelope stays a table here so checks can read the action it carries.
+ json={encode=function(value) charge(2); return value end,decode=function(raw) charge(2); if raw=="malformed" then error("bad JSON") end; return response end},
 }
-local loadNavigation
+local loadRt
 local function loadModule(name)
  if moduleFailure==name then charge(35); error("module refused") end
  if not imports[name] then charge(35); imports[name]=true end
- if name=="./navigation" then return loadNavigation() end
- assert(name=="./view-host")
- return {open=function(req,_cx) charge(5); assert(req.path=="/home/native-host/id.tandem-open.json"); return {handled=true} end}
+ if name=="./rt" then return loadRt() end
+ assert(name=="./layout")
+ return {open=function(req,_cx) charge(5); assert(req.path=="/home/tern/0a1b/open/ab12.cd34.ticket.json"); return {handled=true} end}
 end
 -- ENTRY_POINT
 assert(next(imports)==nil and #timers==0)
@@ -57,7 +58,8 @@ local function settle(status,stdout)
  invoke("process",function(context) pending.fn({status=status or 0,stdout=stdout or "ok",stderr="refused"},context) end)
  assert(cost==1,"process callback must only schedule one continuation")
  while tick() do end
- return pending.argv
+ assert(table.concat(pending.argv," ")=="/bin/sh tandem.sh native act")
+ return pending.stdin
 end
 for id,command in commands do
  if command.available then invoke("available",function() assert(command.available()==false) end) end
@@ -67,14 +69,14 @@ for id,command in commands do
  assert(#processes==1)
  settle()
 end
-response={entered=true,warnings={"Project opened, but catch-up is unavailable: fixture"}}
+response={status="done",notice={code="catch-up-unavailable",text="Project opened, but catch-up is unavailable: fixture"}}
 invoke("warning-command",commands.board.run); while tick() do end; settle()
 assert(toasts[#toasts].level=="warning")
-moduleFailure="./navigation"
-invoke("helper-failure",commands.board.run); while tick() do end; settle()
-assert(string.find(toasts[#toasts].message,"module refused"))
+moduleFailure="./rt"
+invoke("helper-failure",commands.board.run); while tick() do end
+assert(#processes==0 and string.find(toasts[#toasts].message,"module refused"))
 moduleFailure=nil
-response={}
+response={status="done"}
 invoke("failed-command",commands.usage.run); while tick() do end; settle(7)
 assert(toasts[#toasts].message=="refused")
 invoke("malformed-result",commands.prs.run); while tick() do end; settle(0,"malformed")
@@ -91,21 +93,21 @@ cwd="/project a"
 -- Origin remains the gesture's pane/cwd even if focus changes before launch.
 invoke("origin-capture",commands.board.run); selected,cwd=20,"/project b"
 while tick() do end
-local argv=settle()
-assert(table.find(argv,"10") and table.find(argv,"/project a"))
+local envelope=settle()
+assert(envelope.origin.pane=="10" and envelope.origin.cwd=="/project a" and envelope.origin.window=="window")
 for _,url in {"tandem://task/task-1","tandem://brief/brief-1","tandem://pr/282"} do
  invoke("route.link",function(context) assert(hooks.link({url=url},context).handled) end)
  while tick() do end; settle()
 end
 invoke("route.link:unrelated",function(context) assert(hooks.link({url="https://example.invalid"},context)==nil) end)
 invoke("route.open:unrelated",function(context) assert(hooks.open({path="/plain.txt"},context)==nil) end)
-moduleFailure="./view-host"
-invoke("route.open:load-failure",function(context) assert(hooks.open({path="/home/native-host/id.tandem-open.json"},context).handled) end)
+moduleFailure="./layout"
+invoke("route.open:load-failure",function(context) assert(hooks.open({path="/home/tern/0a1b/open/ab12.cd34.ticket.json"},context).handled) end)
 while tick() do end
 assert(string.find(toasts[#toasts].message,"module refused"))
 moduleFailure=nil
-invoke("route.open:ticket",function(context) assert(hooks.open({path="/home/native-host/id.tandem-open.json"},context).handled) end)
-assert(imports["./view-host"]==nil,"route must defer cold hosting load")
+invoke("route.open:ticket",function(context) assert(hooks.open({path="/home/tern/0a1b/open/ab12.cd34.ticket.json"},context).handled) end)
+assert(imports["./layout"]==nil,"route must defer cold hosting load")
 while tick() do end
 invoke("window_start",hooks.window_start); while tick() do end
 -- Burst focus queues away/entry pairs. Completion cannot launch the next process inline,
@@ -116,8 +118,8 @@ for id=21,45 do
 end
 local actions={}
 while #processes>0 do
- local args=settle(if #actions%3==0 then 7 else 0)
- table.insert(actions,args[5])
+ local envelope=settle(if #actions%3==0 then 7 else 0)
+ table.insert(actions,envelope.action.event)
 end
 assert(#actions==51 and actions[1]=="entry")
 for i=2,#actions,2 do assert(actions[i]=="away" and actions[i+1]=="entry") end
@@ -126,7 +128,7 @@ assert(#processes==0)
 local pulse=table.remove(timers,1)
 assert(pulse.ms==60000)
 invoke("heartbeat",pulse.fn); while tick() do end
-assert(settle()[5]=="visible")
+assert(settle().action.event=="visible")
 -- Queue launch failures settle one job per fresh timer and do not wedge later entries.
 spawnFailure=true; selected=46
 invoke("focus:spawn-failure",function(context) hooks.focus({},context) end)
@@ -135,7 +137,7 @@ assert(#processes==0)
 spawnFailure=false; selected=47
 invoke("focus:after-failure",function(context) hooks.focus({},context) end)
 while tick() do end
-assert(settle()[5]=="away" and settle()[5]=="entry")
+assert(settle().action.event=="away" and settle().action.event=="entry")
 -- A vanished window gets no context and never launches or retains a stale one.
 invoke("vanished-command",commands.board.run)
 local abandoned=table.remove(timers,#timers)

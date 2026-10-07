@@ -60,6 +60,7 @@ async function fixture(): Promise<Fixture> {
   const taskWorktree = join(poolRoot, "task-worktree");
   await mkdir(join(repo, ".git"), { recursive: true });
   await mkdir(home, { recursive: true });
+  await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
   await mkdir(taskWorktree, { recursive: true });
   const pool = fakePool({ repo, poolRoot, taskWorktreePath: taskWorktree });
   const model = defaultPolicy().models.coordinator;
@@ -78,7 +79,7 @@ async function fixture(): Promise<Fixture> {
   });
   const dependencies: CoordinatorLaunchDependencies = {
     run: pool.run,
-    terminal: terminalBackend(pool.run),
+    terminal: terminalBackend(pool.run, { terminal: "herdr" }),
     startPersistent: async () => undefined,
     runInteractive: async () => {
       throw new Error("headless launches never attach interactively");
@@ -103,7 +104,7 @@ async function fixture(): Promise<Fixture> {
     reconcile: async (apply, discard = false, freeSuperseded = false) =>
       reconcileTandemResources({
         run: pool.run,
-        terminal: terminalBackend(pool.run),
+        terminal: terminalBackend(pool.run, { terminal: "herdr" }),
         home,
         poolRoot,
         repoPaths: [repo],
@@ -562,6 +563,7 @@ test("the plan classifies each observed resource without touching any of them", 
     settledQuarantineIds: [],
     failures: [],
     nativeOpens: [],
+    quarantinedPanes: [],
   });
   expect(plan.items.map((item) => item.action)).toEqual([
     "retain",
@@ -1016,7 +1018,7 @@ test("the scan reads every session under the home, not just one", async () => {
 
     const observation = await scanTandemResources({
       run: test.pool.run,
-      terminal: terminalBackend(test.pool.run),
+      terminal: terminalBackend(test.pool.run, { terminal: "herdr" }),
       home: test.home,
       poolRoot: test.poolRoot,
       repoPaths: [test.repo],

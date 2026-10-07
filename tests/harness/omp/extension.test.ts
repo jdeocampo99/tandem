@@ -379,6 +379,8 @@ test("a tick that only waited out the state lock leaves the Herdr status alone; 
     { error: new StoreLockTimeoutError("/home", 5_000), reportsBlocked: false },
     { error: new Error("state database unreadable"), reportsBlocked: true },
   ];
+  const home = await mkdtemp(join(tmpdir(), "tandem-extension-tick-"));
+  await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
   for (const failure of failures) {
     const handlers = new Map<string, LifecycleHandler>();
     const states: string[] = [];
@@ -419,6 +421,7 @@ test("a tick that only waited out the state lock leaves the Herdr status alone; 
       service,
       run,
       processEnvironment: {
+        TANDEM_HOME: home,
         HERDR_ENV: "1",
         HERDR_SESSION: "tandem-session",
         HERDR_PANE_ID: "pane-coordinator",
@@ -431,4 +434,5 @@ test("a tick that only waited out the state lock leaves the Herdr status alone; 
 
     expect(states.includes("blocked"), failure.error.message).toBe(failure.reportsBlocked);
   }
+  await rm(home, { recursive: true, force: true });
 });

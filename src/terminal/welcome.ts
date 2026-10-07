@@ -12,7 +12,7 @@ You approve each step.
 
 prefix+t shows status anytime.`;
 
-/** What Enter sends to the Tandem coordinator; its setup context has it open the setup page. */
+/** What Enter sends to the Tandem coordinator; its setup context starts onboarding. */
 export const WELCOME_PROMPT = "Onboard me to Tandem";
 
 /**

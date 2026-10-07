@@ -111,7 +111,6 @@ export function nativeScreensFixture(): NativeViews {
     writtenAt,
     changeSignature: "after",
     summary: {
-      terminal: "tern",
       repoPath: project,
       name: "tandem",
       writtenAt,

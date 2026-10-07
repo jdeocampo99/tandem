@@ -2,22 +2,23 @@ import { expect, test } from "bun:test";
 import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeBriefFile, nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeDetailPath, nativeViewsPath } from "../../../src/board/snapshot.ts";
+import { nativeBriefFile } from "../../../src/board/native-views.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
+import { parseBlockArgs, parseBlockContext } from "../../../src/native/contract.ts";
+import { viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
-import {
-  blocks,
-  TernOutcomeUnknownError,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { blocks, TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { viewsOf } from "../views.ts";
+import { recordedActions, recordingCli } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -54,7 +55,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     // A synthetic CLI records action argv; this proof never reaches the user's task store or GitHub.
     await writeFile(
       join(plugin, "tandem.sh"),
-      `#!/bin/sh\nprintf '%s\\n' "$@" >> '${join(root, "actions.log")}'\nif [ "$2" = "usage" ]; then printf 'fixture action refused\\n' >&2; exit 7; fi\n`,
+      recordingCli(join(root, "actions.log"), {
+        text: '"usage"',
+        reason: "fixture action refused",
+      }),
     );
     // Task layout fixture; the registered board renderer is exercised through the real host.
     await writeFile(
@@ -135,11 +139,11 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await ctl("account", "signed-in");
       await Bun.sleep(500);
       await mkdir(join(home, "native-views"));
-      const path = nativeViewsPath(home, root);
+      const path = viewIndexPath(home, root);
       const panel = panelFixture(root);
       await writeFile(
         path,
-        nativeViewText("panel", {
+        viewFileText("index", {
           version: 1,
           project: root,
           writtenAt: new Date().toISOString(),
@@ -189,9 +193,10 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       const fresh = ternBackend(run, { home, environment: env });
       expect(await fresh.openPanel(panelInput)).toBe(pane);
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
+        blocks(await ternCli(run, { environment: env }).ls(root)).filter(
           (entry) =>
-            entry.block.program === "tandem.panel" && entry.block.args?.[1] === coordinator.paneId,
+            entry.block.program === "tandem.panel" &&
+            parseBlockArgs(entry.block.args)?.ctx.coordinator === coordinator.paneId,
         ),
       ).toHaveLength(1);
       expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(true);
@@ -218,7 +223,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       };
       await writeFile(
         path,
-        nativeViewText("panel", {
+        viewFileText("index", {
           ...envelope.model,
           panel: { ...panel, footer: undefined },
         }),
@@ -230,20 +235,22 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       const row = visit((await ctl("tree")).tree as Node[], "tdp-row")?.rect;
       if (!row) throw new Error("task row missing");
       await ctl("click", String((row[0] ?? 0) + 80), String((row[1] ?? 0) + 12));
-      await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("brief\ntern"),
-      );
-      const argv = await readFile(join(root, "actions.log"), "utf8");
-      expect(argv).toContain(
-        `native\nopen\nbrief\ntern\n--home\n${home}\n--pane\n${pane}\n--cwd\n${root}`,
-      );
+      const sent = () => recordedActions(join(root, "actions.log"));
+      await until(async () => (await sent()).length > 0);
+      const clicked = (await sent())[0];
+      expect(clicked?.action).toEqual({ verb: "open", ref: { kind: "brief", requestId: "tern" } });
+      expect(clicked?.origin.pane).toBe(String(pane));
+      const origin = clicked?.origin;
+      expect(
+        origin !== undefined && "ctx" in origin && parseBlockContext(origin.ctx),
+      ).toMatchObject({ home, cwd: root });
       await ctl("key", "down");
       await ctl("key", "enter");
       await until(async () =>
-        (await readFile(join(root, "actions.log"), "utf8")).includes("open\ntask\nadapter"),
-      );
-      expect(await readFile(join(root, "actions.log"), "utf8")).toContain(
-        "native\nopen\ntask\nadapter",
+        (await sent()).some(
+          ({ action }) =>
+            action.verb === "open" && action.ref.kind === "task" && action.ref.taskId === "adapter",
+        ),
       );
 
       const limit = visit((await ctl("tree")).tree as Node[], "tdp-limit")?.rect;
@@ -252,21 +259,17 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await until(async () => JSON.stringify(await ctl("tree")).includes("fixture action refused"));
       expect(JSON.stringify(await ctl("tree"))).toContain("Tandem couldn't run that action");
       // Busy conversation must survive task replacement and return with exactly the same endpoint.
-      const host = ternViewHost(ternCommands(run, { environment: env }), {
-        clock: Date.now,
-        wait: Bun.sleep,
-        guard: async (_key, operation) => operation(),
-      });
+      const host = ternViewHost(ternCli(run, { environment: env }));
       const brief = await host.open(
         { coordinator, cwd: root, home, view: { kind: "brief", requestId: "req-native" } },
         root,
         "brief",
         "split",
-        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+        viewDetailPath(home, root, nativeBriefFile("req-native")),
       );
       await ctl("key", "escape");
       await Bun.sleep(200);
-      const exited = blocks(await ternCommands(run, { environment: env }).ls(root)).find(
+      const exited = blocks(await ternCli(run, { environment: env }).ls(root)).find(
         (entry) => entry.block.id === brief.paneId,
       );
       expect(exited).toBeUndefined();
@@ -291,7 +294,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         root,
         "brief",
         "split",
-        nativeDetailPath(home, root, nativeBriefFile("req-native")),
+        viewDetailPath(home, root, nativeBriefFile("req-native")),
       );
       expect(
         await host.close(
@@ -306,7 +309,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         ),
       ).toEqual({ closed: true, warnings: [] });
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === reopened.paneId,
         ),
       ).toBe(false);
@@ -337,7 +340,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         path,
       );
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === task.paneId,
         ),
       ).toBe(false);
@@ -375,7 +378,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         path,
       );
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).find(
+        blocks(await ternCli(run, { environment: env }).ls(root)).find(
           (entry) => entry.block.id === board.paneId,
         )?.tab.id,
       ).not.toBe(coordinator.tabId);
@@ -392,7 +395,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         ),
       ).toBe(true);
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === behindBoard.paneId,
         ),
       ).toBe(false);
@@ -400,7 +403,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         true,
       );
       expect(
-        blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+        blocks(await ternCli(run, { environment: env }).ls(root)).some(
           (entry) => entry.block.id === board.paneId,
         ),
       ).toBe(false);
@@ -414,7 +417,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         if (full === undefined) throw new Error("missing repeated root result");
         expect(new Set(repeated.map((result) => result.paneId)).size).toBe(1);
         expect(
-          blocks(await ternCommands(run, { environment: env }).ls(root)).filter(
+          blocks(await ternCli(run, { environment: env }).ls(root)).filter(
             (entry) => entry.block.program === `tandem.${kind}`,
           ),
         ).toHaveLength(1);
@@ -423,26 +426,23 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           await ctl("shot", "12-usage-reused");
           expect(JSON.stringify(await ctl("tree"))).toContain("Opus");
           const originalCli = await readFile(join(plugin, "tandem.sh"), "utf8");
-          const warningFile = join(root, "safe-return.json");
-          await writeFile(
-            warningFile,
-            JSON.stringify({
-              opened: true,
-              warnings: [
-                "Returned to your conversation. The uncertain view and recovery record were kept. Use Tern's tab switcher to continue.",
-              ],
-            }),
-          );
+          const kept = JSON.stringify({
+            status: "kept",
+            notice: {
+              code: "view-kept",
+              text: "Returned to your conversation. The uncertain view and recovery record were kept. Use Tern's tab switcher to continue.",
+            },
+          });
           await writeFile(
             join(plugin, "tandem.sh"),
-            `#!/bin/sh\nif [ "$2" = "view-file" ]; then cat '${warningFile}'; exit 0; fi\n${originalCli.replace("#!/bin/sh\n", "")}`,
+            `#!/bin/sh\nprintf '%s' '${kept.replaceAll("'", "'\\''")}'\n`,
           );
           await ctl("key", "escape");
           await until(async () =>
             JSON.stringify(await ctl("tree")).includes("Tandem kept an uncertain view"),
           );
           expect(
-            blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+            blocks(await ternCli(run, { environment: env }).ls(root)).some(
               (entry) => entry.block.id === full.paneId,
             ),
           ).toBe(true);
@@ -463,7 +463,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           path,
         );
         expect(
-          blocks(await ternCommands(run, { environment: env }).ls(root)).some(
+          blocks(await ternCli(run, { environment: env }).ls(root)).some(
             (entry) => entry.block.id === full.paneId,
           ),
         ).toBe(false);
@@ -557,14 +557,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         view: { kind: "browser", url: "https://example.invalid/pull/281" } as const,
       };
       await expect(
-        ternBackend(browserRunner, { home, environment: env }).openView(browserInput),
+        viewsOf(ternBackend(browserRunner, { home, environment: env })).open(browserInput),
       ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
       await expect(
-        ternBackend(browserRunner, { home, environment: env }).openView(browserInput),
+        viewsOf(ternBackend(browserRunner, { home, environment: env })).open(browserInput),
       ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
       expect(browserOpens).toBe(1);
       await ctl("shot", "10-browser-quarantined");
-      const safeReturn = await fresh.openView({
+      const safeReturn = await viewsOf(fresh).open({
         coordinator,
         cwd: root,
         home,

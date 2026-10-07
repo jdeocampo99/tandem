@@ -5,7 +5,7 @@ The durable request brief, how approval binds to one revision, and the read-only
 Code: src/requests/brief.ts, src/requests/store.ts, src/requests/store-codec.ts,
 src/requests/workflow.ts, src/requests/review-pane.ts, src/requests/markdown.ts,
 src/requests/plain-language.ts, src/requests/native-view.ts,
-src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
+src/native/actions.ts, tern-plugin/brief.luau
 
 ## Brief record
 
@@ -40,7 +40,7 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 - An explicit, human-confirmed decision in the main conversation or an Approve click in the native
   brief view records request id, revision, content digest, and agreement digest. The native click
   is the user's confirmation, like Submit on the PR review page; it needs no second dialog or
-  `--yes`. `tandem native brief-approve REQUEST_ID --input FILE` requires `briefRevision`,
+  `--yes`. the `brief-approve` action of `tandem native act` requires `briefRevision`,
   `contentDigest`, and `agreementDigest` copied from the displayed view. All must match the current
   durable draft inside the approval compare-and-swap. A stale click records nothing and never
   approves a revision the user did not see. Conversation approval still requires the exact id,
@@ -57,13 +57,14 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 
 ## Review pane
 
-- In Tern, `reviewPane: true` publishes the native brief detail and calls `terminal.openView`
+- With a terminal that hosts native views (Tern), `reviewPane: true` publishes the native brief
+  detail and calls `terminal.views.open`
   beside the recorded coordinator. Exact block evidence reuses the split across revisions;
   the existing `reviewPane` receipt holds its native endpoint, detail path and shown revision.
   That endpoint records only the brief's terminal, session, workspace, tab, pane, role and
   generation identity. The coordinator's `notificationPane` stays on its own endpoint for alerts.
-  Approval, abandonment and current-revision request changes retire it through scoped `closeView`.
-  Unknown opening outcomes keep the host's durable intent and resources quarantined; no legacy
+  Approval, abandonment and current-revision request changes retire it through scoped `views.close`.
+  Unknown opening outcomes keep the host's durable ticket and resources quarantined; no legacy
   shell pane or automatic retry follows. Unknown closure leaves approval or feedback standing
   and quarantines the receipt. Tiny in-chat fixes still open no pane.
 - A review receipt tagged for another terminal is quarantined with a plain warning before any
@@ -108,7 +109,7 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 
 ## Native brief feedback
 
-- `tandem native brief-comment REQUEST_ID --input FILE` and `brief-request-changes` carry the
+- The `brief-request-changes` action carries the
   displayed `briefRevision`, `contentDigest`, and `agreementDigest`, plus optional overall `text`
   and `comments: [{lineId, text}]`. Copy each stable string `lineId` from the displayed
   `briefView.lines[].id`; numeric Markdown line anchors are refused. At least
@@ -131,9 +132,9 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 
 ## Native brief pane
 
-- `tandem native open brief REQUEST_ID` opens `tandem.brief` beside the verified project's
-  conversation. All native actions include `--pane ID --cwd ABSOLUTE_PATH [--window KEY]`;
-  JSON inputs use the private immutable transport in [terminal.md](terminal.md#native-views-and-actions).
+- An `open` action for a brief opens `tandem.brief` beside the verified project's
+  conversation. Every native action is one envelope on the stdin of `tandem native act`, with the
+  context the block was launched with as its origin (see [control.md](control.md#native-view-actions)).
 - The pane shows the title, revision, change count and NEW lines. Hover `+` opens a line editor;
   Comment saves a local pending card under that line. Those cards and the optional overall text
   are sent on Request changes. Local drafts never write the task store, and a new view revision
@@ -144,7 +145,6 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
 - Approve sends exactly the displayed `{briefRevision,contentDigest,agreementDigest}` to
   `brief-approve`; it excludes pending feedback. The click is the approval, with no second
   dialog. Request changes sends that same binding plus `text?` and `comments:[{lineId,text}]`.
-  `brief-comment` is also available through the CLI for feedback without closing the pane.
 - After durable approval or delivered request changes, the CLI retires only the originating
   native brief split, and only if the current draft still matches the displayed revision and
   both digests. A changed draft stays open with a warning. Closure proves the exact program,
@@ -152,7 +152,10 @@ src/terminal/cli-view-actions.ts, tern-plugin/brief.luau
   projection records its Tern-tagged endpoint, detail path and shown revision in `reviewPane`
   without creating a legacy Markdown pane.
 - Approval prompts the verified coordinator to continue. Request changes delivers the user's
-  feedback to that conversation. If notification or closure fails after completion, the CLI
-  returns success with warnings; the renderer disables further submission on that retained pane.
-  Never resubmit to repair a display or notification failure. A nonzero result shows stderr as
-  a toast and causes no automatic retry. The local × closes only its block.
+  feedback to that conversation. If the brief changed meanwhile, the outcome is `kept` with
+  `brief-left-open`: the feedback was delivered, the current brief stays open, and the toast
+  reads "Brief left open", never "completed". If notification or closure fails after
+  completion, the outcome carries a `brief-warning` notice; the renderer disables further
+  submission on that retained pane. Never resubmit to repair a display or notification failure.
+  A refused outcome shows its reason as an error toast and causes no automatic retry. The local
+  × closes only its block.

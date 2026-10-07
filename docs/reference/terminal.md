@@ -1,45 +1,58 @@
 # Terminal backends
 
 Tandem supports Herdr and Tern on macOS. The terminal port owns panes, focus, process proof,
-native hosting and alerts; task policy and durable state remain in TypeScript.
+native view hosting and alerts. Task policy and durable state stay in TypeScript.
 The Tern iOS app is **UNTESTED** with Tandem.
 
-Start here for terminal behavior. [Tern view hosting](tern-views.md) defines the Luau API,
-layout tickets and renderer lifecycle. [Native view data](native-views.md) defines the JSON
-models and publication. Approval and posting remain in [request briefs](request-briefs.md)
-and [PR review](pr-review.md).
+Start here for terminal behavior. [Native views](native-views.md) covers the Tern views: their
+store, contracts, click transport, staged opens and every screen. Approval and posting stay in
+[request briefs](request-briefs.md) and [PR review](pr-review.md).
 
-Code: `src/terminal-backend/contract.ts`, `compose.ts`, `identity.ts`, `setting.ts`,
-`herdr/`, `tern/`; `tern-plugin/`; `src/terminal/native-renderers.ts`, `native-input.ts`.
-Tests mirror these domains under `tests/terminal-backend/` and `tests/terminal/`.
+Code: `src/terminal-backend/contract.ts`, `compose.ts`, `identity.ts`, `herdr/`, `tern/`. Tests
+mirror these under `tests/terminal-backend/`.
 
 ## Choosing a terminal
 
-`<home>/settings.toml` stores the top-level `terminal = "herdr"` or `terminal = "tern"`.
-An absent key selects Herdr. `compose.ts` alone selects the implementation, reading the saved
-choice before operations and caching each adapter's uncertain-effect guard. Injected callers
-can supply a fixed choice with the same identity guards.
+Tern is the default terminal. `<home>/settings.toml` stores an optional top-level `terminal`;
+an absent key selects Tern, and only `terminal = "herdr"` selects Herdr. `compose.ts` alone
+selects the implementation (`savedTerminal`), reading the saved choice before operations and
+caching each adapter's uncertain-effect guard. Injected callers can supply a fixed choice with the
+same identity guards. Tern is a closed beta and requires a signed-in Stencil account.
 
-Chat setup, the setup page and direct interactive onboarding offer Tern only when `probeTern`
-returns `ready`. Its other results are `missing`, `signedOut` and `unknown` with a reason;
-new setup explains the result and uses Herdr. A previously saved choice remains selected when
-readiness is unavailable; saving unrelated page settings does not switch terminals. Selecting
-"Not now" in direct onboarding saves Herdr. The `terminal-setting` action rechecks Tern before
-saving a changed choice. Tern is a closed beta and requires a signed-in Stencil account.
+No setup surface asks about the terminal or offers Herdr: chat setup, the native setup block and
+direct terminal onboarding take the saved choice as given. Herdr is a working backend for anyone
+who writes `terminal = "herdr"` into the file by hand. Tandem has no action that switches it and
+does not check for unfinished work when the file changes, so edit it only while no task is
+unfinished: endpoints belong to the terminal that created them.
 
-The probe resolves `tern` from PATH, then `/Applications/Tern.app/Contents/MacOS/tern`.
-It checks the version and the account gate in its own temporary configuration, daemon socket,
-Tandem home and control window. A headless account is synthetic and cannot prove sign-in.
-The probe's own window may briefly appear in front. It closes that window and aborts and awaits
-its owned processes, without hiding the app or touching other windows. The check has an
-eight-second budget, with one second for control-window shutdown; timeout or failed cleanup
-returns `unknown`. A version string alone does not mean ready.
+Tandem does not probe Tern. A missing or unusable Tern shows at link time:
+`installTerminalPlugin` (every `tandem` command except `update`, and `setup.sh`) resolves `tern`
+as described under [Plugin consent and restoration](#plugin-consent-and-restoration) and throws
+`TernRequiredError` when Tern is missing or the package cannot be linked or become ready. Its one
+plain message says Tandem needs Tern and where to install it. With Herdr selected it restores
+Tern's preferences instead and never touches the plugin.
 
-Switching terminals is refused under the state lock while any task is unfinished, including
-paused, blocked, ready or awaiting approval, or tasks/presentations retain active jobs,
-endpoints, reservations, pending endpoint launches or quarantined operations. Availability is
-checked outside the lock; the live-work guard runs immediately before saving. Finish or safely
-stop the existing work through normal task controls before choosing the other terminal.
+## The terminal port
+
+`TerminalBackend` in `src/terminal-backend/contract.ts` is every pane, workspace and session
+effect Tandem has: inspect, run, send keys, interrupt, close, create and split, list, focus,
+notify, the panel, the welcome view and the setup block (`openSetup`, which Herdr answers with
+`false` so setup runs in the chat). Every operation that names a pane takes its full identity
+and refuses a pane whose session, workspace or tab no longer match. Failures a caller decides on
+are typed: `EndpointOwnershipError` for a missing or foreign pane and `EndpointBusyError` for an
+active worker. Herdr (`herdr/`) and Tern (`tern/`) implement it. `compose.ts` alone picks one.
+
+Native view hosting is the port's optional `views` capability (`ViewsCapability`): `open`,
+`close`, `recover`, `retained` and `abandon`. Tern provides it. Herdr omits it, and callers branch
+on `terminal.views` rather than on the terminal's name. Without `views`:
+
+- a native open is refused with Herdr's unsupported-view reason,
+- a brief opens in its request review pane,
+- arrival notifications go through `notify` instead of native alerts, and
+- the coordinator publishes no native views.
+
+`quarantinedPanes` and `clearPaneQuarantine` expose Tern's durable pane quarantine to
+`tandem fix`. Herdr returns none.
 
 ## Tern mapping
 
@@ -61,19 +74,29 @@ process evidence, recheck the process and exact pane, then write sanitized OSC 7
 tty. They never send notification commands through an interactive agent's input. Missing,
 ambiguous, foreign or busy helpers refuse delivery without choosing a substitute.
 
-Native alerts cover needs you, done (a new draft PR) and stuck. A private, locked per-project
-delivery cursor is saved before sending; repeated ticks, relaunches and unknown delivery outcomes
-do not resend a claimed transition. The first snapshot establishes a baseline. Tern groups
-alerts from one helper into one inbox entry, with a count and the latest title/body. Activation
-first selects the helper tab, then the CLI proves its recorded identity and focuses the real
-coordinator with its panel in the originating window. Failed focus leaves alerts unread.
-The panel bell counts confirmed Tandem deliveries since its private user read cursor, including
-brief and PR-watch alerts. Opening the panel bell or activating the owned inbox entry marks
-only deliveries captured before navigation as read; later arrivals remain unread. Coordinator
-acknowledgements and Tern's built-in inbox clear control do not clear this cursor.
-See [bell/read semantics](tern-views.md#panel-bell-and-user-read-semantics).
-Worker OMP completion/error/ask notifications are disabled;
-coordinator ask notifications remain enabled. See [transition delivery](tern-views.md#transition-delivery).
+Native alerts cover needs you, done (a new draft PR) and stuck. The helper prints
+`OSC 777;notify;<title>;<body>`. The UTF-8 wire sequence is `\u001b]777;notify;TITLE;BODY\u0007`
+(ESC, `]`, the payload, BEL). The kind selects the title prefix and is not an extra OSC field.
+`BODY` is the task's displayed title or summary:
+
+| Kind | Title prefix |
+| --- | --- |
+| `needs-you` | `Tandem: Needs you` |
+| `done` | `Tandem: Done` |
+| `stuck` | `Tandem: Stuck` |
+
+Title and body are single-line plain text: semicolons and C0, DEL and C1 control characters
+(including ESC, BEL and newlines) become spaces before framing. A private, locked per-project
+delivery cursor is saved before sending. Repeated ticks, relaunches and unknown delivery outcomes
+do not resend a claimed transition. The first snapshot establishes a baseline. Tern groups alerts
+from one helper into one inbox entry, with a count and the latest title and body, and a waiting
+badge on the helper's tab. Activation first selects the helper tab. The window focus hook then
+sends a `visit` entry, and the CLI proves the recorded helper, session and coordinator and focuses
+that coordinator with its panel in the originating window. Titles never grant ownership. Failed
+focus leaves alerts unread and runs no catch-up. The panel bell counts confirmed Tandem deliveries
+since its own read cursor. See [the panel bell](native-views.md#panel-bell-and-read-cursor) and
+[transition alerts](native-views.md#transition-alerts). Worker OMP completion, error and ask
+notifications are disabled. Coordinator ask notifications stay enabled.
 
 ## Identity, close and recovery guards
 
@@ -98,7 +121,7 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   authorizes force; force still requires ownership and exact acknowledgement.
   Project close checks both coordinator and recorded alert helper before closing either.
   Before retiring a recorded coordinator, it also proves every claimed native view's program,
-  all five arguments, project model paths, exact native session/tab/block and idle process state.
+  all three launch arguments, project model paths, exact native session/tab/block and idle process state.
   It closes the conversation first, then rechecks and closes each view by exact id, including
   Brief, Board and Usage tabs, and finally the alert helper. Unrelated panes remain open.
   Unknown view-close acknowledgements or absence proofs retain the lease and a durable
@@ -119,155 +142,66 @@ coordinator ask notifications remain enabled. See [transition delivery](tern-vie
   a tab, including a retained empty session. An absent stored id permits a new session with a
   collision-safe name. Matching names never permit reuse. The alert helper is likewise reused
   only by its recorded identity in that session.
-- Failed mutation responses, malformed acknowledgements and unconfirmed verification can follow
-  a completed effect. They raise `TernOutcomeUnknownError`; the local guard blocks blind repeats
-  and durable recovery retains ownership/resources. Never infer non-commit from a nonzero exit.
-  Inspect saved state and use [central recovery](recovery.md), rather than clearing the owner.
+- Every Tern effect goes through `mutate(op)` in `tern/cli.ts`, the only module that runs the
+  Tern CLI (including `tern plugin`) or writes the alert helper's tty.
+  Biome forbids importing the command runner, `node:child_process` or the `Bun` global anywhere
+  else under `tern/` (`process-reader.ts`, which runs `ps` for the process proof, is the one
+  exception for `Bun`). The op union is closed
+  (`focus`, `run`, `send`, `rename`, `split`, `newTab`, `newSession`, `close`, `killSession`,
+  `open`, `browser`, `notify`) and takes only a `TernEndpoint`, which `identity.ts` narrows from a
+  tag-checked endpoint. Each op rechecks the exact id, proves destructive targets idle, reads the
+  durable quarantine, spawns, then checks the acknowledged id (the receipt for `open`).
 
-Native hosting adds a private coordinator-bound intent lock, unique layout ticket and receipt.
-It proves the exact program, all five launch arguments and placement, refusing duplicate matches
-and conflicting detached/window evidence. A supplied window key must contain the exact origin
-and coordinator; without one, exactly one attached window is required. Unknown openings retain
-their fence and resources across fresh CLI calls; a host failure with zero applied layout effects
-settles instead and the user can open again. Native layout recovery requires exact block
-evidence; task replacement also proves the previous task pane absent. Browser opens keep no
-durable record: nothing can prove an uncertain one later and it is never re-invoked, so it never
-pauses other opens. Native and panel closes prove the full arguments and idle state again
-immediately before closing; failed verification quarantines the outcome. `tandem fix` lists
-retained opens and, with `--yes`, abandons one only after proving its coordinator exactly present
-or gone, through the port's `retainedViewOpens`/`abandonViewOpen` (Herdr has none).
+## Quarantine and `tandem fix`
 
-Panels and root Board, Usage and Catch-up views reuse one exact existing block under the opening
-lock, checking all five arguments and intended placement. Duplicate, detached or foreign-window
-matches refuse reuse. Root views focus the proven pane without another layout opening. If an
-uncertain intent cannot be settled, Orchestrator return can still focus the exact conversation
-and show a warning while preserving every view, ticket and fence.
-See [hosting lifecycle](tern-views.md#native-hosting-and-renderer-launch-api).
+Besides coordinator quarantine notes, two durable Tern records make Tandem leave a resource alone
+after an unknown outcome. Both live in files, so every later click and every coordinator process
+sees them. `tandem fix` lists both and,
+with `--yes`, removes one only after proving it safe. Never infer non-commit from a nonzero exit.
+Inspect saved state and use [central recovery](recovery.md), rather than clearing the owner. See
+[reconciliation](reconciliation.md#tandem-fix) for how `tandem fix` classifies each item.
 
-The plugin's `route.open` consumes private tickets immediately, then reads and lays them out
-through one-shot timer stages with a fresh `WindowCx`. This keeps work within Tern's 50 ms
-callback budget. Each effect rechecks exact panes; focus and block creation share one callback.
-Back rechecks the previous task before docking or closing, and every close waits for the pane's
-absence. Failed stages never retry; every exit writes a done or failed receipt with the count of
-applied effects. See [window integration](tern-views.md#window-integration).
+### Quarantined panes
 
-## Native views and actions
+Failed mutation responses, malformed acknowledgements and unconfirmed verification can follow a
+completed effect. They raise `TernOutcomeUnknownError`. For `run`, `send`, `rename`, `split`,
+`close`, `killSession` and `notify`, `mutate` then writes a record to
+`<home>/tern-quarantine/<sha256(key)>.json`. The record holds the pane key, operation, reason,
+time, exact endpoint and cwd. A brief close, panel close or view-retirement close records against
+the view pane it targeted. While a record exists, every later op on that pane, in any process,
+refuses with `TernQuarantinedError` before spawning. Ops also refuse when the pane or its owning
+coordinator has a coordinator quarantine note. A focus is idempotent and records nothing. Opens
+record their own outcome as a ticket, and creations as their launch reservation.
 
-Tern uses daemon-hosted Luau blocks (hosting decision B). TypeScript computes models, reads
-GitHub/provider data and applies policy; Luau draws, keeps transient drafts and invokes the CLI.
-Only `src/terminal-backend/tern/` calls the Tern CLI or parses its JSON. Only
-`src/harness/omp/` imports `@oh-my-pi/*`.
+A record goes away in two ways:
 
-Every published view is `{version:1,kind,revision,model}`. The root has `kind:"panel"` and
-`model:NativeViews`; task/brief/PR details contain their domain model directly. Use
-`nativeViewsPath` and `nativeDetailPath` to locate them. Missing or invalid files preserve the
-last readable display but disable revision-bound actions. These derived files never authorize
-an approval or post.
+- A close that finds its pane absent from an exact scoped listing with no detached blocks returns
+  absent. When the listing covers every window, it drops the record, so replacing a coordinator
+  or helper still succeeds. A window-scoped listing cannot see other windows, so it keeps the
+  record.
+- `tandem fix` lists every record through `quarantinedPanes`. With `--yes`, it clears one through
+  `clearPaneQuarantine` only after proving its pane gone or idle at the exact id. The pane itself
+  is never closed.
 
-All blocks receive exactly five strings:
-`{modelPath, coordinatorPaneId, coordinatorCwd, windowKeyOrEmpty, indexPath}`.
-Argument five is the root index path. `navigation.origin` derives `home` from that path's
-`<home>/native-views/<project>.json` location. It passes the renderer's own pane id on actions,
-along with the supplied cwd, optional window key and derived custom-home flag.
+### Paused view opens
 
-Actions run once as `tandem native <verb> ... --pane <decimal id> --cwd <absolute path>
-[--window <key>]`. The CLI validates project and origin ownership before acting. JSON actions
-use `native-input.sh` and `src/terminal/native-input.ts`: stdin becomes one unique immutable UTF-8
-file in a private 0700 directory, created exclusively as 0600 then made 0400. The caller deletes
-it after the invocation settles. Exit zero means done or cancelled; nonzero stderr becomes a
-toast. No renderer retries, including when feedback was saved or a post may have reached GitHub.
+A staged open whose outcome was never proved keeps its ticket under
+`<home>/tern/<projectKey>/open/`. While that ticket stays, every new native view for its
+coordinator is refused. Returning to the orchestrator still focuses the conversation and warns
+that new views stay paused. The click, the coordinator's publication tick (`views.recover`) and
+`tandem fix` all decide retained tickets, so a late receipt lifts the pause without another
+click. See [staged opens](native-views.md#staged-opens) for the state machine.
 
-The registered screens and action handlers are in `tern-plugin/host.luau`, `plugin.toml` and
-`src/terminal/native-renderers.ts`. The hosting API also supports layout kinds before their
-renderer is registered; that alone does not make a screen available. The panel always shows
-PRs, Board and usage buttons independently of shortcut consent.
+`tandem fix` lists each paused open through `views.retained`, with its view kind and the reason
+it is unproven. With `--yes`, it abandons one through `views.abandon` only after proving its
+coordinator exactly present or exactly gone. Abandoning removes the ticket and its receipt. No
+pane is closed and nothing is reopened.
 
-### Registered screens
+## Native views
 
-The package registers Panel, Welcome, Task, Task picker, Brief, PR, Board, Usage and Catch-up.
-`native prs` selects a project's published PR and opens that PR pane; New request focuses and
-prompts the verified coordinator. Project switching and published-detail navigation are implemented.
-The dropdown targets each online row by `repo:ABSOLUTE_REPO_PATH`, including rows after nine;
-the CLI checks its unique published identity, freshness, availability and coordinator ownership.
-Numeric targets 1–9 remain the keyboard shortcut slots, while previous/next wrap the list.
-Cached watched PRs without a task open read-only by `repo#number`.
-
-### Task page, picker and reply links
-
-`native open task ID` opens the task in the coordinator's same recorded tab. The live
-conversation is floated and hidden, preserving its endpoint and process. Opening another task
-replaces only the proven task block; Orchestrator restores the conversation before closing it.
-Unrelated pictures in picture refuse task replacement. The sidebar panel stays available.
-
-- The header shows the task's model, elapsed time, branch, current activity and stage track,
-  including skipped validation/review stages and the fix-round budget.
-- All six tabs remain visible. Overview has the objective, worker to-dos and five recent events;
-  Brief shows saved lines and opens the separate pane for approval/comments; Progress shows
-  the timeline, validation evidence and findings. Diff and PR embed the shared PR controls,
-  guarded by matching task/index/detail data and the displayed HEAD. Missing related data has
-  an empty state. Cost shows the recorded receipt, with unknown samples explicitly unavailable.
-- Blocked tasks offer Restart through central recovery and Steer into the worker-message
-  editor. Send invokes `native steer --task ID --text TEXT`; failed commands retain the unsent
-  message and show stderr, with no retry. Successful sends clear the editor. Orchestrator
-  return remains available when detail files are unreadable; data-bound actions are disabled.
-- **Tandem: Open task…** in the palette invokes `native open-task`, proving the running Tern
-  coordinator before opening a disposable split with the root index. Search matches title,
-  id or stage without case sensitivity; results sort by title. Arrows select, Enter or a click
-  opens the task, and success closes the picker. Cancel/Escape closes only the picker, retaining
-  an existing task page or returning focus to the conversation.
-
-OMP and Claude Code coordinator adapters append a compact OSC 8 reference row after assistant
-replies mention a known project task, brief or PR. Task references require an explicit task id;
-PR references require an explicit PR number, native route or saved PR URL with one owning task.
-Titles, bare counts, issue numbers, duplicate identities and foreign records do not resolve.
-Only an unambiguous inherited Tern pane context enables the row; OMP also requires interactive
-TUI mode. Routes `tandem://task/ID`, `tandem://brief/ID` and `tandem://pr/NUMBER` invoke the
-ordinary native open action with the current focused pane/cwd. The CLI rechecks project and
-ownership at click time. See [task hosting](tern-views.md#task-page-and-picker) and
-[task models](native-views.md#task-page).
-
-### Board, Usage and Catch-up
-
-- `native board` opens a full-window tab with four view-only lanes: Working, Needs you,
-  In review and Ready to merge. Cards show harness, title, branch, reason, age, model, cost,
-  linked PR and any stuck flag. There is no drag, task creation or merge control. Unknown
-  branches, models and prices stay explicit. PR clicks resolve the card's saved identity
-  against the originating project's current root model and open Tern's browser.
-- `native usage` opens a full-window tab. Provider/account limits come first, with 5-hour and
-  weekly meters, reset labels, original fetch timestamps and refresh warnings. Then come
-  today's cost, agent time and finished-task count, weekly spend, model-cost charts for today
-  and this week, and stage times. TypeScript supplies labels and chart widths; unknown limits,
-  unpriced usage and unreadable ledger rows never become invented zero totals.
-  Quota labels use whole percentages; the numeric meters retain provider precision.
-- Board toggles back from its exact originating Board block. Escape or Orchestrator returns
-  from Board/Usage through the guarded CLI, restoring the conversation and retiring only that
-  idle view. Last readable data remains visible on a file error, with a warning; data-bound
-  links/actions require a ready view, while returning remains available.
-- Catch-up opens on project entry, including inbox activation, after **1+ hour** since last
-  visibility, only with a known prior signature and a meaningful change. First visits,
-  unchanged work and timer-only repaints stay quiet. The full-window card lists merged PRs,
-  Needs you, blocked work and saved workstream notes. Dismiss/Escape returns to the conversation;
-  Open what needs me returns, then opens the first saved brief, task or inbox destination.
-- Private locked `<home>/native-visits/<repositoryKey>.json` records retain entry history,
-  `lastVisibleAt` and signature. Serialized focus transitions and once-minute selected-project
-  heartbeats capture visibility; a locked throttle shared across windows skips samples less
-  than a minute apart. Transitions can update sooner. Duplicate/backwards samples never move
-  timestamps backwards. Heartbeats change only these presentation records, preserving task
-  authority and root/detail files. Polls and panel opening never advance the visit; first
-  publication fills a missing signature only. Dismissal acknowledges after confirmed navigation.
-- Visibility means the selected project in a Tern window. Another active macOS application
-  does not mark it away. Another window's heartbeats keep the project visible; closing its last
-  window uses the last persisted heartbeat, which can lag by almost two minutes after a
-  transition. Continuous work followed by an immediate switch back stays quiet.
-- A catch-up failure never fails launch, reconnect, open-project, project switching or inbox
-  entry. Shared `tryShowCatchUp` preserves successful navigation, shows a warning and leaves
-  the failed visit unacknowledged. Launch/reconnect carry `catchUpWarning` separately from
-  `panelFailure`; the front door prints it. Open-project returns warnings to the conversation;
-  native entry/switch warnings appear as Tern toasts. Ownership, launch and focus failures
-  retain their usual errors. No catch-up failure selects another window or retries an opening.
-
-See [screen actions](tern-views.md#board-usage-and-catch-up-actions) for CLI subactions and
-[view models](native-views.md#board) for data and accounting contracts.
+Tern hosts Tandem's views as daemon-hosted Luau blocks. TypeScript computes the models, reads
+GitHub and provider data and applies policy. Luau draws, keeps transient drafts and sends clicks
+through `tandem native act`. [Native views](native-views.md) is the reference for all of it.
 
 ## Tern 0.5.0 facts and limits
 
@@ -303,10 +237,11 @@ Plugin list, link and reload resolve an explicit executable override first, then
 injected `PATH` (or the process `PATH`), then the macOS app bundle executable. PATH-only
 installs work without a bundle.
 
-Selecting ready Tern consents to linking Tandem's native view package. One separate question
+Linking Tandem's native view package needs no question: Tern is the terminal. One separate question
 asks before setting global `tabs_autohide=true` and adding global shortcuts. Declining leaves
 the settings byte-identical and remembers the decision. Palette commands and panel header
-buttons remain available. To reconsider, choose Herdr, then Tern again in setup.
+buttons remain available. To reconsider, set `terminal = "herdr"` and start Tandem, which
+restores the settings, then remove that line to be asked again.
 
 Link, consent, reload and restoration run under one machine-wide lock, `tandem-setup.lock`, in
 Tern's config directory next to `settings.json`. That directory holds the plugin links and the
@@ -315,10 +250,11 @@ re-reads the catalog and links only when the package is absent; a caller that wa
 first caller's recorded decision and asks nothing. A waiting caller gives up after five minutes.
 Restoration with no record returns without taking the lock.
 
-The shortcuts cover Board (⌘⇧B), PRs (⌘⇧P), Usage (⌘⇧U), projects (⌘1–9) and previous/next
-project (⌘⇧[ / ⌘⇧]). Explicit custom bindings, modifier/physical-key aliases and sequences are
-preserved. Alternate keymap presets are preserved as a whole; setup reports skipped keys or
-the preset. Window commands register no default chords. New windows read the saved mappings.
+The shortcuts cover Board (⌘⇧B), PRs (⌘⇧P), Usage (⌘⇧U), Settings (⌘⇧,), projects (⌘1–9) and
+previous/next project (⌘⇧[ / ⌘⇧]). Explicit custom bindings, modifier/physical-key aliases and
+sequences are preserved. Alternate keymap presets are preserved as a whole; setup reports
+skipped keys or the preset. Window commands register no default chords. New windows read the
+saved mappings.
 
 Before applying approved changes, the private `settings.json.tandem.json` record saves the
 decision, exact added key/action pairs, original keybind-table presence and sidebar's original

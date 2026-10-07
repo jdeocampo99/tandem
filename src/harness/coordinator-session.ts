@@ -7,8 +7,10 @@ import {
   type TandemEnvironmentSource,
 } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
+import { canonicalPath } from "../coordinator/record.ts";
 import { refreshCoordinatorSourceUnlocked } from "../coordinator/source.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
+import { publishViews } from "../native/store.ts";
 import { briefLanguageChecker } from "../requests/plain-language.ts";
 import { appendCoordinatorUsage } from "../runtime/usage-ledger.ts";
 import { issueDraftChecker } from "../self-improvement/issue-draft.ts";
@@ -26,7 +28,7 @@ import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
 } from "../tasks/research-continuation-classifier.ts";
-import { installTerminalPlugin, terminalBackend } from "../terminal-backend/compose.ts";
+import { terminalBackend } from "../terminal-backend/compose.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -54,7 +56,6 @@ function createCoordinatorService(
   options: CoordinatorOptions,
   environment: TandemBoundaryEnvironment,
   environmentSnapshot: TandemEnvironmentSource,
-  host: SessionDeps["host"],
 ): TandemService {
   if (options.service !== undefined) return options.service;
   const jevConfig = researchContinuationClassifierConfig(environmentSnapshot);
@@ -63,24 +64,6 @@ function createCoordinatorService(
   return createService({
     home: environment.home,
     sessionId: environment.sessionId,
-    installTerminalPlugin: (readiness) =>
-      installTerminalPlugin(
-        environment.home,
-        {
-          run: options.run ?? runCommand,
-          cwd: environment.repo,
-          confirm: (question) => host.confirm("Tandem's Tern integration", question),
-          env: {
-            ...(environmentSnapshot.TERN_CONFIG_DIR === undefined
-              ? {}
-              : { TERN_CONFIG_DIR: environmentSnapshot.TERN_CONFIG_DIR }),
-            ...(environmentSnapshot.TERN_DAEMON_SOCKET === undefined
-              ? {}
-              : { TERN_DAEMON_SOCKET: environmentSnapshot.TERN_DAEMON_SOCKET }),
-          },
-        },
-        readiness,
-      ),
     ...(environment.parentWorkspaceId === undefined
       ? {}
       : { parentWorkspaceId: environment.parentWorkspaceId }),
@@ -123,6 +106,10 @@ export function bindCoordinator(
     sessionId: harness.sessionId,
   });
   const terminal = terminalBackend(options.run ?? runCommand, { home: environment.home });
+  let service: TandemService | undefined;
+  // One service per session: the setup block reads the same one the conversation uses.
+  const coordinatorService = (): TandemService =>
+    (service ??= createCoordinatorService(options, environment, environmentSnapshot));
   const session = new CoordinatorSession({
     host: harness.host,
     clock: { now: () => Date.now(), monotonic: () => performance.now() },
@@ -136,8 +123,7 @@ export function bindCoordinator(
     }),
     logError: harness.logError,
     environment,
-    createService: () =>
-      createCoordinatorService(options, environment, environmentSnapshot, harness.host),
+    createService: coordinatorService,
     realpath: (path) => realpath(path),
     isTandemCheckout: () => isTandemCheckout(environment.repo),
     openWelcome: async () => {
@@ -145,6 +131,24 @@ export function bindCoordinator(
         throw new Error("the coordinator is not running in a Tandem Herdr pane");
       }
       await terminal.openWelcome({
+        sessionId: environment.sessionId,
+        cwd: harness.cwd,
+        paneId: environment.coordinatorPaneId,
+      });
+    },
+    openSetup: async () => {
+      // Herdr has no native blocks; its setup runs in the chat, and nothing is published for it.
+      if (terminal.views === undefined) return false;
+      if (environment.coordinatorPaneId === undefined) {
+        throw new Error("the coordinator is not running in a Tandem Tern pane");
+      }
+      const setup = await coordinatorService().setupView(environment.repo, "setup");
+      await publishViews(
+        environment.home,
+        await canonicalPath(environment.repo, "repoPath"),
+        async () => ({ setup }),
+      );
+      return terminal.openSetup({
         sessionId: environment.sessionId,
         cwd: harness.cwd,
         paneId: environment.coordinatorPaneId,

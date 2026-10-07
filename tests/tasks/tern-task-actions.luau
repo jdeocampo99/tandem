@@ -7,15 +7,15 @@ local taskModel = {
  overview={summary='Review the port',todos={},done=0,total=0,recent={}},
  progress={events={},unreadableEvents=0,checks={},findings={}},message={placeholder='Message the worker…'},
 }
-local taskPath='/custom home/native-views/project/task-review-1.json'
-local indexPath='/custom home/native-views/project.json'
-local prPath='/custom home/native-views/project/pr-review-1.json'
+local taskPath='/custom home/tern/0a1b/views/task-review-1.json'
+local indexPath='/custom home/tern/0a1b/views/index.json'
+local prPath='/custom home/tern/0a1b/views/pr-review-1.json'
 local decodeReceipt=tern.json.decode
 tern.fs.read=function(path) return path end
 tern.json.decode=function(raw)
- if raw==taskPath then return {version=1,kind='task',revision='task-revision',model=taskModel} end
- if raw==indexPath then return {version=1,kind='panel',revision='index-revision',model={briefs={},pullRequests={['acme/app#281']={header=model.header,detailFile='pr-review-1.json'}}}} end
- if raw==prPath then return {version=1,kind='pr',revision='pr-revision',model=model} end
+ if raw==taskPath then return {v=1,kind='task',epoch='store',seq=1,model=taskModel} end
+ if raw==indexPath then return {v=1,kind='index',epoch='store',seq=2,model={briefs={},pullRequests={['acme/app#281']={header=model.header,detailFile='pr-review-1.json'}}}} end
+ if raw==prPath then return {v=1,kind='pr',epoch='store',seq=3,model=model} end
  return decodeReceipt(raw)
 end
 local function hasText(node,label)
@@ -25,7 +25,7 @@ local function hasText(node,label)
  return false
 end
 local function taskCreate()
- local s=taskBlock.init(cx,{taskPath,'42','/original repo','opaque-window',indexPath})
+ local s=taskBlock.init(cx,{taskPath,ctx,indexPath})
  assert(s.view.status=='ready' and s.index.status=='ready')
  taskBlock.view(s,cx)
  taskBlock.event(s,{ev='action',act='tab',value='PR'},cx)
@@ -46,12 +46,14 @@ end
 local taskState=taskCreate()
 local before=#pending
 taskPost(taskState); taskPost(taskState)
-assert(#pending==before+1 and taskState.prContent.posting and taskState.busy)
-assert(table.concat(pending[#pending].argv,'|')=='/bin/sh|native-input.sh|review-submit|review-1|--pane|123|--cwd|/original repo|--home|/custom home|--window|opaque-window')
-assert(pending[#pending].opts.stdin.reviewHead=='abc123' and pending[#pending].opts.stdin.reviewGeneration==0)
-pending[#pending].callback({status=0,stdout='{"posted":false,"message":"PR head moved"}',stderr=''})
+assert(#pending==before+1 and taskState.prContent.posting and taskState.origin.busy)
+assert(table.concat(pending[#pending].argv,'|')=='/bin/sh|tandem.sh|native|act')
+local sent=pending[#pending].opts.stdin
+assert(sent.origin.ctx==ctx and sent.action.verb=='review-submit')
+assert(sent.action.reviewHead=='abc123' and sent.action.reviewGeneration==0)
+pending[#pending].callback({status=0,stdout='moved',stderr=''})
 taskPreserved(taskState)
-assert(not taskState.busy and toasts[#toasts].message=='PR head moved' and #pending==before+1)
+assert(not taskState.origin.busy and toasts[#toasts].message=='PR head moved' and #pending==before+1)
 taskBlock.event(taskState,{ev='action',act='tab',value='Diff'},cx)
 taskBlock.view(taskState,cx)
 taskBlock.event(taskState,{ev='action',act='tab',value='PR'},cx)
@@ -60,26 +62,21 @@ taskPost(taskState)
 assert(#pending==before+2 and taskState.prContent.posting)
 pending[#pending].callback({status=7,stdout='',stderr='Review refused'})
 taskPreserved(taskState)
-assert(not taskState.busy and toasts[#toasts].message=='Review refused' and #pending==before+2)
+assert(not taskState.origin.busy and toasts[#toasts].message=='Review refused' and #pending==before+2)
 startFailure=true
 taskPost(taskState)
 taskPreserved(taskState)
-assert(not taskState.busy and string.find(toasts[#toasts].message,'Could not spawn') and #pending==before+2)
+assert(not taskState.origin.busy and string.find(toasts[#toasts].message,'Could not spawn') and #pending==before+2)
 startFailure=false
-taskState.origin.home=''
+taskState.origin.busy=true
 taskPost(taskState)
 taskPreserved(taskState)
 assert(#pending==before+2)
-taskState.origin.home='/custom home'
-taskState.busy=true
-taskPost(taskState)
-taskPreserved(taskState)
-assert(#pending==before+2)
-taskState.busy=false
+taskState.origin.busy=false
 taskPost(taskState)
 assert(#pending==before+3)
-pending[#pending].callback({status=0,stdout='{"posted":true,"url":"https://github.com/acme/app/pull/281#pullrequestreview-1"}',stderr=''})
-assert(taskState.prContent.submitted and not taskState.prContent.posting and not taskState.busy and exits==0)
+pending[#pending].callback({status=0,stdout='posted',stderr=''})
+assert(taskState.prContent.submitted and not taskState.prContent.posting and not taskState.origin.busy and exits==0)
 assert(hasText(taskBlock.view(taskState,cx).main,'Review already posted'))
 taskPost(taskState); assert(#pending==before+3) -- The task remains open without a retry.
 print('Embedded task review completion checks passed')

@@ -84,7 +84,7 @@ const SOURCE_NAMES: Readonly<Record<SettingsSource, string>> = {
   local: "this project's .claude/settings.local.json",
 };
 
-/** The plain-English reason a preset or picker gives for mods being off. */
+/** The plain-English reason the model picker gives for mods being off. */
 export function modsOffReason(off: ModsOff): string {
   const effect =
     off.setting === "disableSideloadFlags"

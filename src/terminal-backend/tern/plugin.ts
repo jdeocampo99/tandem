@@ -4,16 +4,15 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { AdapterCommandError, AdapterProtocolError } from "../../adapters/primitives.ts";
-import type { CommandRunner } from "../../contracts.ts";
+import { AdapterProtocolError } from "../../adapters/primitives.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
+import { type TernRunner, ternPlugin } from "./cli.ts";
 
 export const TANDEM_TERN_PLUGIN = "tandem";
 export const TERN_PLUGIN_DIRECTORY = fileURLToPath(
   new URL("../../../tern-plugin", import.meta.url),
 );
-export const TERN_APP_BINARY = "/Applications/Tern.app/Contents/MacOS/tern";
 
 // A waiting caller sits behind another caller's consent question, which a person answers.
 const SETUP_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
@@ -27,7 +26,7 @@ const catalogSchema = z.object({
 });
 
 export type TernPluginDependencies = Readonly<{
-  run: CommandRunner;
+  run: TernRunner;
   cwd: string;
   binary?: string;
   directory?: string;
@@ -48,6 +47,7 @@ const TERN_PLUGIN_KEYS: Readonly<Record<string, string>> = {
   "cmd+shift+b": "plugin.tandem.board",
   "cmd+shift+p": "plugin.tandem.prs",
   "cmd+shift+u": "plugin.tandem.usage",
+  "cmd+shift+,": "plugin.tandem.settings",
   ...Object.fromEntries(
     Array.from({ length: 9 }, (_, index) => [
       [`cmd+${index + 1}`, `plugin.tandem.project-${index + 1}`],
@@ -86,23 +86,27 @@ const recordSchema = z
   })
   .strict();
 
-async function command(deps: TernPluginDependencies, args: readonly string[]) {
-  const binary =
-    deps.binary ??
-    Bun.which("tern", { PATH: deps.env?.PATH ?? process.env.PATH ?? "" }) ??
-    TERN_APP_BINARY;
-  const request = {
-    argv: [binary, "plugin", ...args, "--json"],
-    cwd: deps.cwd,
-    ...(deps.env === undefined ? {} : { env: deps.env }),
-  };
-  const result = await deps.run(request);
-  if (result.code !== 0) throw new AdapterCommandError("Tern plugin", request, result);
-  return result.stdout;
+/** Tandem cannot run without Tern, so a missing app and a failed link end in this one message. */
+export class TernRequiredError extends Error {
+  constructor(options?: ErrorOptions) {
+    super(
+      "Tandem needs Tern, which could not be used. Install Tern at /Applications/Tern.app, then try again.",
+      options,
+    );
+    this.name = "TernRequiredError";
+  }
+}
+
+async function pluginCommand(deps: TernPluginDependencies, args: readonly string[]) {
+  try {
+    return await ternPlugin(deps, args);
+  } catch (error) {
+    throw new TernRequiredError({ cause: error });
+  }
 }
 
 async function catalog(deps: TernPluginDependencies) {
-  const raw = await command(deps, ["list"]);
+  const raw = await pluginCommand(deps, ["list"]);
   try {
     return catalogSchema.parse(JSON.parse(raw));
   } catch {
@@ -423,7 +427,7 @@ export async function ensureTernPlugin(deps: TernPluginDependencies): Promise<bo
     if (before.plugins.some((plugin) => plugin.id === TANDEM_TERN_PLUGIN)) {
       if (!readyIn(before.plugins)) return false;
     } else {
-      await command(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
+      await pluginCommand(deps, ["link", deps.directory ?? TERN_PLUGIN_DIRECTORY]);
       if (!readyIn((await catalog(deps)).plugins)) return false;
     }
     printConfigureNotices(
@@ -446,7 +450,7 @@ function printConfigureNotices(deps: TernPluginDependencies, result: ConfigureRe
     );
   if (!result.configured)
     deps.print?.(
-      "Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To change this later, switch to Herdr and select Tern again in setup.\n",
+      `Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To be asked again, add terminal = "herdr" to Tandem's settings.toml, start Tandem once, then remove that line.\n`,
     );
 }
 
@@ -476,7 +480,7 @@ export function reloadTernPlugin(deps: TernPluginDependencies): Promise<boolean>
   return withSetupLock(settingsInput(deps), async () => {
     const before = await catalog(deps);
     if (!before.plugins.some((plugin) => plugin.id === TANDEM_TERN_PLUGIN)) return false;
-    await command(deps, ["reload"]);
+    await ternPlugin(deps, ["reload"]);
     if (!readyIn((await catalog(deps)).plugins))
       throw new Error("Tandem's Tern plugin failed to reload");
     return true;

@@ -1,14 +1,14 @@
 import { expect, test } from "bun:test";
-import { lstat, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { AdapterCommandError, AdapterProtocolError } from "../../../src/adapters/primitives.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { blockArgs } from "../../../src/native/contract.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import {
-  TernOutcomeUnknownError,
-  ternCommands,
-} from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { detailForView, ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
+import { openFiles } from "../../native/view-files.ts";
 
 const endpoint: Endpoint = {
   terminal: "tern",
@@ -49,9 +49,19 @@ for (const mode of [
   "foreign-return",
   "unsafe-id",
 ] as const)
-  test(`native opening ${mode} retains exact identity and never falls back to a title`, async () => {
+  test(`native opening ${mode} keeps exact identity and never falls back to a title`, async () => {
     const home = await mkdtemp("/tmp/tandem-host-test-");
-    const modelPath = nativeViewsPath(home, home);
+    const modelPath = viewIndexPath(home, home);
+    const argsFor = (coordinator = "3", window?: string) =>
+      blockArgs(modelPath, {
+        coordinator,
+        cwd: home,
+        home,
+        index: modelPath,
+        ...(window === undefined ? {} : { window }),
+      });
+    const tickets = async () =>
+      (await openFiles(home)).filter((name) => name.endsWith(".ticket.json"));
     const splitKind = mode.startsWith("brief-")
       ? "brief"
       : mode.startsWith("pr-")
@@ -139,15 +149,12 @@ for (const mode of [
                                     : splitKind !== undefined
                                       ? `tandem.${splitKind}`
                                       : "tandem.panel",
-                              args: [
-                                modelPath,
+                              args: argsFor(
                                 mode === "foreign-return" ? "999" : "3",
-                                home,
                                 moved && mode === "relaunch-other-window-args"
                                   ? "another-window"
-                                  : "",
-                                modelPath,
-                              ],
+                                  : undefined,
+                              ),
                             },
                           ]
                         : []),
@@ -159,7 +166,7 @@ for (const mode of [
                               cwd: home,
                               live: true,
                               program: "tandem.panel",
-                              args: [modelPath, "3", home, "", modelPath],
+                              args: argsFor(),
                             },
                           ]
                         : []),
@@ -177,7 +184,7 @@ for (const mode of [
                               cwd: home,
                               live: true,
                               program: "tandem.panel",
-                              args: [modelPath, "3", home, "", modelPath],
+                              args: argsFor(),
                             },
                           ],
                         },
@@ -201,7 +208,7 @@ for (const mode of [
                               cwd: home,
                               live: true,
                               program: "tandem.panel",
-                              args: [modelPath, "3", home, "", modelPath],
+                              args: argsFor(),
                             },
                           ],
                         },
@@ -219,7 +226,7 @@ for (const mode of [
                       cwd: home,
                       live: true,
                       program: "tandem.panel",
-                      args: [modelPath, "3", home, "", modelPath],
+                      args: argsFor(),
                     },
                   ]
                 : [],
@@ -238,7 +245,7 @@ for (const mode of [
         routePath = path;
         const ticket = JSON.parse(await readFile(path, "utf8"));
         expect((await lstat(path)).mode & 0o777).toBe(0o600);
-        expect(ticket.args).toEqual([modelPath, "3", home, "", modelPath]);
+        expect(ticket.args).toEqual(argsFor());
         created = true;
         if (
           ![
@@ -257,23 +264,14 @@ for (const mode of [
       }
       throw new Error(`unexpected ${verb}`);
     };
-    const quarantined = new Set<string>();
-    const host = ternViewHost(ternCommands(run, {}), {
-      clock: () => now,
-      wait: async (ms) => {
-        now += ms;
-      },
-      guard: async (key, operation, recoveredNativeOpen) => {
-        if (recoveredNativeOpen) quarantined.delete(key);
-        if (quarantined.has(key)) throw new TernOutcomeUnknownError(key, "quarantined");
-        try {
-          return await operation();
-        } catch (error) {
-          if (error instanceof TernOutcomeUnknownError) quarantined.add(key);
-          throw error;
-        }
-      },
-    });
+    const host = ternViewHost(
+      ternCli(run, {
+        clock: () => now,
+        wait: async (ms) => {
+          now += ms;
+        },
+      }),
+    );
     const open = () =>
       host.open(
         {
@@ -315,26 +313,21 @@ for (const mode of [
           moved = mode !== "relaunch-success";
         } else {
           await expect(first.openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-          expect(
-            (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-          ).toBe(true);
+          expect(await tickets()).toHaveLength(1);
           if (mode === "relaunch-no-exact-pane") created = false;
         }
         const before = effects;
         if (mode === "relaunch-detached" || mode.startsWith("relaunch-other-")) {
           await expect(fresh().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
           expect(created).toBe(true);
-          expect(
-            (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
-          ).toEqual([]);
-        } else if (mode === "relaunch-no-exact-pane") {
+          expect((await openFiles(home)).filter((name) => !name.endsWith(".lock"))).toEqual([]);
+        } else if (mode === "relaunch-no-exact-pane" || mode === "relaunch-missing-receipt") {
+          // A route Tern never answered stays retained whatever the listing shows.
           await expect(fresh().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
           expect(await Bun.file(routePath).exists()).toBe(true);
         } else {
           expect(await fresh().openPanel(input)).toBe("4");
-          expect(
-            (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
-          ).toEqual([]);
+          expect((await openFiles(home)).filter((name) => !name.endsWith(".lock"))).toEqual([]);
         }
         expect(effects).toBe(before);
       } else if (
@@ -357,17 +350,13 @@ for (const mode of [
           expect(effects).toBe(1);
           await expect(backend().openPanel(input)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
           expect(effects).toBe(1);
-          expect(
-            (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-          ).toBe(true);
+          expect(await tickets()).toHaveLength(1);
         } else {
           await expect(first.openPanel(input)).rejects.toBeInstanceOf(
             mode === "pre-focus-read-failed" ? AdapterCommandError : AdapterProtocolError,
           );
           expect(effects).toBe(0);
-          expect(
-            (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
-          ).toEqual([]);
+          expect((await openFiles(home)).filter((name) => !name.endsWith(".lock"))).toEqual([]);
           expect(await backend().openPanel(input)).toBe("4");
           const before = effects;
           expect(await first.openPanel(input)).toBe("4");
@@ -406,29 +395,14 @@ for (const mode of [
           ].includes(mode)
         ) {
           const before = effects;
-          if (
-            [
-              "verification-failed",
-              "verification-malformed",
-              "unknown",
-              "brief-unknown",
-              "pr-unknown",
-            ].includes(mode)
-          ) {
-            const recovered = await open();
-            expect(recovered.paneId).toBe("4");
-            if (mode === "brief-unknown")
-              expect(recovered.endpoint).toEqual({ ...endpoint, paneId: "4" });
+          if (["verification-failed", "verification-malformed"].includes(mode)) {
+            expect((await open()).paneId).toBe("4");
             expect(await Bun.file(routePath).exists()).toBe(false);
-            expect(
-              (await readdir(`${home}/native-host`)).filter((name) => !name.endsWith(".lock")),
-            ).toEqual([]);
+            expect((await openFiles(home)).filter((name) => !name.endsWith(".lock"))).toEqual([]);
           } else {
             await expect(open()).rejects.toBeInstanceOf(TernOutcomeUnknownError);
             expect(await Bun.file(routePath).exists()).toBe(true);
-            expect(
-              (await readdir(`${home}/native-host`)).some((name) => name.endsWith(".intent.json")),
-            ).toBe(true);
+            expect(await tickets()).toHaveLength(1);
           }
           expect(effects).toBe(before);
           expect(created).toBe(true);
@@ -440,23 +414,34 @@ for (const mode of [
   });
 
 test("PR detail navigation resolves the cached repository and number without requiring a task", () => {
-  const bundle = {
-    version: 1 as const,
-    project: "/fixture",
-    writtenAt: "2030-01-01",
-    tasks: {},
-    briefs: {},
-    projects: [],
-    pullRequests: {
-      "one/repo#42": { header: { repo: "one/repo", number: 42 }, detailFile: "pr-one.json" },
-      "two/repo#42": {
-        header: { repo: "two/repo", number: 42, taskId: "owned" },
-        detailFile: "pr-two.json",
-      },
+  const shown = {
+    summary: {
+      terminal: "tern" as const,
+      repoPath: "/fixture",
+      name: "fixture",
+      writtenAt: "2030-01-01T00:00:00.000Z",
+      running: 0,
+      needsYou: 0,
+      ready: 0,
+      done: 0,
     },
+    changeSignature: "fixture",
+    projects: [],
+    boardLinks: {},
+    merged: [],
+    needsYou: [],
+    tasks: [],
+    pullRequests: [
+      { repo: "one/repo", number: 42 },
+      { repo: "two/repo", number: 42, taskId: "owned" },
+    ],
   };
-  expect(detailForView(bundle, { kind: "pr", repo: "one/repo", number: 42 })).toBe("pr-one.json");
-  expect(detailForView(bundle, { kind: "pr", repo: "two/repo", number: 42 })).toBe("pr-two.json");
-  expect(detailForView(bundle, { kind: "pr", taskId: "owned" })).toBe("pr-two.json");
-  expect(detailForView(bundle, { kind: "pr", repo: "missing/repo", number: 42 })).toBeUndefined();
+  expect(detailForView(shown, { kind: "pr", repo: "one/repo", number: 42 })).toBe(
+    "pr-one%2Frepo-42.json",
+  );
+  expect(detailForView(shown, { kind: "pr", repo: "two/repo", number: 42 })).toBe(
+    "pr-two%2Frepo-42.json",
+  );
+  expect(detailForView(shown, { kind: "pr", taskId: "owned" })).toBe("pr-two%2Frepo-42.json");
+  expect(detailForView(shown, { kind: "pr", repo: "missing/repo", number: 42 })).toBeUndefined();
 });

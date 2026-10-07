@@ -593,6 +593,8 @@ test("CLI launches a clean coordinator while preserving dirty original source id
     const userSource = join(repo, "user-source.txt");
     await mkdir(repo, { recursive: true });
     await mkdir(cleanRepo, { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
     const expectedCleanRepo = await realpath(cleanRepo);
     await writeFile(userSource, "keep this edit\n", "utf8");
     const outputPath = await writeOmpProbe(root);
@@ -687,6 +689,8 @@ test("CLI checks a new Claude Code coordinator's plugins before starting anythin
     const poolRoot = join(root, "coordinator-pool");
     const cleanRepo = join(poolRoot, "coordinator-worktree");
     await mkdir(repo, { recursive: true });
+    await mkdir(join(root, "home"), { recursive: true });
+    await writeFile(join(root, "home", "settings.toml"), 'terminal = "herdr"\n', "utf8");
     const base = defaultPolicy();
     const policy = {
       ...base,
@@ -750,6 +754,8 @@ test("CLI reports a failed direct coordinator child as a nonzero outcome", async
     const cleanRepo = join(poolRoot, "coordinator-worktree");
     await mkdir(repo, { recursive: true });
     await mkdir(cleanRepo, { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
     const expectedCleanRepo = await realpath(cleanRepo);
     const outputPath = await writeOmpProbe(root, 7);
     const model = defaultPolicy().models.coordinator;
@@ -976,7 +982,7 @@ test("launchCoordinator cold-starts and relaunches a saved coordinator after its
       async () => {
         const dependencies = {
           run,
-          terminal: terminalBackend(run),
+          terminal: terminalBackend(run, { terminal: "herdr" }),
           startPersistent: async (spec: Readonly<{ cwd: string }>) => {
             startPersistentCalls += 1;
             serverDirectories.push(spec.cwd);
@@ -1085,7 +1091,7 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     });
     const first = await launchCoordinator(request, {
       run: firstRunner.run,
-      terminal: terminalBackend(firstRunner.run),
+      terminal: terminalBackend(firstRunner.run, { terminal: "herdr" }),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("first launch should use a Herdr workspace");
@@ -1108,7 +1114,7 @@ test("launchCoordinator reconnects to the pinned coordinator after the original 
     });
     const second = await launchCoordinator(request, {
       run: secondRunner.run,
-      terminal: terminalBackend(secondRunner.run),
+      terminal: terminalBackend(secondRunner.run, { terminal: "herdr" }),
       startPersistent: async () => {
         throw new Error("reconnect must not start another Herdr server");
       },
@@ -1149,6 +1155,8 @@ async function withRunningOmpCoordinator(
     const cleanRepo = join(poolRoot, "coordinator-worktree");
     await mkdir(repo, { recursive: true });
     await mkdir(cleanRepo, { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n', "utf8");
     await writeOmpProbe(root);
     const fixturePath = `${root}:/usr/bin:/bin`;
     const model = defaultPolicy().models.coordinator;
@@ -1182,7 +1190,7 @@ async function withRunningOmpCoordinator(
     const firstRunner = coordinatorRunner({ ...runnerInput, startServer: true });
     await launchCoordinator(request, {
       run: firstRunner.run,
-      terminal: terminalBackend(firstRunner.run),
+      terminal: terminalBackend(firstRunner.run, { terminal: "herdr" }),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("the first launch uses a Herdr workspace");
@@ -1263,7 +1271,7 @@ test("restartCoordinator checks a Claude Code replacement before closing the run
           { ...request, model: CLAUDE_CODE_COORDINATOR },
           {
             run: observed.run,
-            terminal: terminalBackend(observed.run),
+            terminal: terminalBackend(observed.run, { terminal: "herdr" }),
             startPersistent: async () => {
               throw new Error("a refused restart starts nothing");
             },
@@ -1327,7 +1335,7 @@ test("launchCoordinator retires the old generated workspace label before replaci
     const firstRunner = inner();
     const first = await launchCoordinator(request, {
       run: firstRunner.run,
-      terminal: terminalBackend(firstRunner.run),
+      terminal: terminalBackend(firstRunner.run, { terminal: "herdr" }),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("launch should use a Herdr workspace");
@@ -1471,7 +1479,7 @@ test("launchCoordinator retires the old generated workspace label before replaci
     };
     const dependencies = {
       run,
-      terminal: terminalBackend(run),
+      terminal: terminalBackend(run, { terminal: "herdr" }),
       startPersistent: async () => undefined,
       runInteractive: async () => {
         throw new Error("launch should use a Herdr workspace");
@@ -1539,7 +1547,7 @@ test("launchCoordinator rejects an unsafe reused coordinator lease without clean
         },
         {
           run: runner.run,
-          terminal: terminalBackend(runner.run),
+          terminal: terminalBackend(runner.run, { terminal: "herdr" }),
           startPersistent: async () => undefined,
           runInteractive: async () => {
             throw new Error("unsafe reuse must fail before launching");
@@ -1573,13 +1581,11 @@ test("safe cleanup is hands-off while destructive discard still requires --yes",
     mcpServers: unused,
     findRepo: unused,
     saveProjectRoots: unused,
-    configureTerminal: unused,
     saveSelfImprovement: unused,
     checkTools: unused,
     onboardingFacts: unused,
-    openSetupPage: unused,
-    awaitSetupAnswer: unused,
-    applySetup: unused,
+    setupView: unused,
+    saveSetup: unused,
     configureModels: unused,
     create: unused,
     list: unused,

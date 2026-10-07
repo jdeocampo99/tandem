@@ -144,7 +144,7 @@ test("a repository is found by folder name, GitHub name, owner/repo, or path", a
   expect(await find("nothing")).toEqual([]);
 });
 
-test("the setup page lists every checkout under the code folders once", async () => {
+test("setup lists every checkout under the code folders once", async () => {
   const { root } = await scratch();
   const api = await checkout(join(root, "work", "api"), {
     origin: "git@github.com:acme/backend.git",

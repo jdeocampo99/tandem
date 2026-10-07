@@ -1,24 +1,7 @@
 --!strict
-local files=require("./view-file")
-local nav=require("./navigation")
+local rt=require("./rt")
 type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,repo:string?,number:number?},pullRequest:{number:number,url:string}?}
-type Project={repoPath:string,name:string,status:string,current:boolean,needsYou:number,shortcut:string?,offline:boolean}
-type Panel={header:{title:string,otherProjectsNeedYou:number,bellCount:number,fiveHourLabel:string,fiveHour:{remainingPercent:number|string,resetInMs:number|string}?,projects:{Project}},sections:{{title:string,count:number,rows:{Row}}},footer:string?}
-type Bundle={panel:Panel}
-type State={file:files.View<Bundle>,origin:nav.Origin,dropdown:boolean,selected:number}
-local function parse(value:unknown): Bundle?
- if type(value)~="table" or type(value.panel)~="table" then return nil end
- local panel=value.panel
- if type(panel.header)~="table" or type(panel.header.title)~="string" or type(panel.header.projects)~="table" or type(panel.header.bellCount)~="number" or type(panel.header.fiveHourLabel)~="string" or type(panel.sections)~="table" then return nil end
- for _,section in panel.sections do
-  if type(section.title)~="string" or type(section.rows)~="table" or type(section.count)~="number" then return nil end
-  for _,row in section.rows do
-   if type(row.key)~="string" or type(row.title)~="string" or type(row.stage)~="string" or type(row.secondary)~="string" or type(row.target)~="table" then return nil end
-  end
- end
- for _,project in panel.header.projects do if type(project.repoPath)~="string" or type(project.name)~="string" or type(project.status)~="string" or type(project.needsYou)~="number" then return nil end end
- return value :: Bundle
-end
+type State={file:rt.Watch,origin:rt.Origin,dropdown:boolean,selected:number}
 local function el(class:string,children:{Node},action:string?,key:string?):Node
  return tern.ui.node("el",{class=class,key=key,actions=if action then {click=action} else nil},children)
 end
@@ -35,15 +18,13 @@ local function activate(state:State,cx:BlockCx,index:number)
  local row=rows(state)[index]
  if not row then return end
  local target=row.target
- if target.kind=="task" and target.taskId then nav.run(state.origin,cx,{"open","task",target.taskId})
- elseif target.kind=="brief" and target.requestId then nav.run(state.origin,cx,{"open","brief",target.requestId})
- elseif target.kind=="pr" and target.repo and target.number then nav.run(state.origin,cx,{"open","pr",target.repo .. "#" .. tostring(target.number)}) end
+ if target.kind=="task" and target.taskId then rt.act(cx,state.origin,{verb="open",ref={kind="task",taskId=target.taskId}})
+ elseif target.kind=="brief" and target.requestId then rt.act(cx,state.origin,{verb="open",ref={kind="brief",requestId=target.requestId}})
+ elseif target.kind=="pr" and target.repo and target.number then rt.act(cx,state.origin,{verb="open",ref={kind="pr",repo=target.repo,number=target.number}}) end
 end
 local def:BlockDef<State> ={
  init=function(cx,args,_saved)
-  local origin=nav.origin(args)
-  local state={file=files.create(origin.path,"panel",parse),origin=origin,dropdown=false,selected=1}
-  files.watch(state.file,cx)
+  local state={file=rt.watch(cx,args[1] or "","index"),origin=rt.origin(args),dropdown=false,selected=1}
   return state
  end,
  title=function() return "Tandem panel" end,
@@ -60,7 +41,7 @@ local def:BlockDef<State> ={
    el("tdp-switch",name,"projects"),
    el("tdp-limit",{text(limit,"tdp-dim"),el("tdp-meter",{tern.ui.node("el",{class="tdp-meter-fill",grow=if meter and type(meter.remainingPercent)=="number" then 100-meter.remainingPercent else 0}),tern.ui.node("el",{grow=if meter and type(meter.remainingPercent)=="number" then meter.remainingPercent else 100})})},"usage"),
    el("tdp-icon",{text("🔔︎ " .. tostring(header.bellCount))},"inbox"),
-   el("tdp-icon",{text("⎇")},"prs"),el("tdp-icon",{text("▦")},"board")})
+   el("tdp-icon",{text("⎇")},"prs"),el("tdp-icon",{text("▦")},"board"),el("tdp-icon",{text("⚙")},"settings")})
   local body={head}
   if state.file.status~="ready" then table.insert(body,text("View unavailable · actions paused","tdp-unavailable")) end
   local index=0
@@ -106,10 +87,11 @@ local def:BlockDef<State> ={
   if index then state.selected=tonumber(index); activate(state,cx,state.selected); return end
   local urlIndex=string.match(command,"^url:(%d+)$")
   if urlIndex then local row=rows(state)[tonumber(urlIndex)]; if row and row.pullRequest then cx:open(row.pullRequest.url) end; return end
-  local project=string.match(command,"^project:(repo:/.*)$")
-  if project then nav.run(state.origin,cx,{"project",project}); state.dropdown=false
-  elseif command=="inbox" or command=="open-project" then nav.run(state.origin,cx,{"view-file",nav.root(state.origin) .. "#" .. command})
-  elseif command=="prs" or command=="board" or command=="usage" then nav.run(state.origin,cx,{command}) end
+  local project=string.match(command,"^project:repo:(/.*)$")
+  if project then rt.act(cx,state.origin,{verb="project",target={repoPath=project}}); state.dropdown=false
+  elseif command=="open-project" then rt.act(cx,state.origin,{verb="open-project"})
+  elseif command=="inbox" or command=="prs" or command=="board" or command=="usage" then rt.act(cx,state.origin,{verb="open",ref={kind=command}})
+  elseif command=="settings" then rt.act(cx,state.origin,{verb="open",ref={kind="setup",mode="settings"}}) end
  end,
 }
 return def

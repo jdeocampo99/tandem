@@ -1,15 +1,17 @@
 import { expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath, publishNativeViews } from "../../../src/board/snapshot.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { findRunningCoordinator } from "../../../src/coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { type Action, Outcome, parseBlockArgs } from "../../../src/native/contract.ts";
+import { publishViews, viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
-import { blocks, ternCommands } from "../../../src/terminal-backend/tern/protocol.ts";
+import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import { blocks } from "../../../src/terminal-backend/tern/protocol.ts";
+import { openFiles, viewFileText } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
@@ -51,6 +53,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       const child = Bun.spawn([...request.argv], {
         cwd: request.cwd,
         env: { ...env, ...request.env },
+        stdin: request.stdin === undefined ? "ignore" : new Blob([request.stdin]),
         stdout: "pipe",
         stderr: "pipe",
         timeout: request.timeoutMs ?? 30_000,
@@ -62,8 +65,8 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       ]);
       return { code, stdout, stderr };
     };
-    const checked = async (argv: string[], cwd = root) => {
-      const result = await run({ argv, cwd });
+    const checked = async (argv: string[], cwd = root, stdin?: string) => {
+      const result = await run({ argv, cwd, ...(stdin === undefined ? {} : { stdin }) });
       if (result.code !== 0)
         throw new Error(`${argv[1]} failed: ${result.stderr || result.stdout}`);
       return result.stdout;
@@ -152,7 +155,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         checked([process.execPath, join(checkout, "src/main.ts"), repo, "--no-attach"], repo);
       await frontDoor(a);
       const terminal = ternBackend(run, { home, environment: env });
-      const commands = ternCommands(run, { environment: env });
+      const commands = ternCli(run, { environment: env });
       const record = (await listCoordinatorRecords(home, env.TANDEM_SESSION)).find(
         (r) => r.repoPath === a,
       );
@@ -165,8 +168,8 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await mkdir(join(home, "native-views"), { recursive: true });
       const writePanelFixture = () =>
         writeFile(
-          nativeViewsPath(home, a),
-          nativeViewText("panel", {
+          viewIndexPath(home, a),
+          viewFileText("index", {
             version: 1,
             project: a,
             writtenAt: new Date().toISOString(),
@@ -242,7 +245,9 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       const second = records.find((r) => r.repoPath === b);
       if (second === undefined) throw new Error("second coordinator record missing");
       const initialSecondPanel = blocks(await commands.ls(b)).find(
-        (p) => p.block.program === "tandem.panel" && p.block.args?.[1] === second.endpoint.paneId,
+        (p) =>
+          p.block.program === "tandem.panel" &&
+          parseBlockArgs(p.block.args)?.ctx.coordinator === second.endpoint.paneId,
       );
       if (initialSecondPanel === undefined) throw new Error("initial second-project panel missing");
       await terminal.closePanel({
@@ -254,7 +259,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         blocks(await commands.ls(b)).some((p) => p.block.id === initialSecondPanel.block.id),
       ).toBe(false);
       const publish = async (project: string) =>
-        publishNativeViews(home, project, async () => {
+        publishViews(home, project, async () => {
           const fixture = nativeScreensFixture();
           const panel = panelFixture(project);
           const projects = records.map((r, index) => ({
@@ -311,34 +316,26 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await publish(a);
       await publish(b);
       const target = records.findIndex((r) => r.repoPath === b) + 1;
-      const nativeAction = (
-        verb: string,
-        args: string[],
+      const nativeAction = async (
+        action: Action,
         pane = record.endpoint.paneId,
         cwd = record.worktree.path,
-      ) =>
-        checked(
-          [
-            process.execPath,
-            join(checkout, "src/main.ts"),
-            "native",
-            verb,
-            ...args,
-            "--pane",
-            pane,
-            "--cwd",
-            cwd,
-            "--json",
-          ],
+      ) => {
+        const text = await checked(
+          [process.execPath, join(checkout, "src/main.ts"), "native", "act"],
           cwd,
+          JSON.stringify({ v: 1, origin: { pane, cwd }, action }),
         );
+        const outcome = Outcome.parse(JSON.parse(text));
+        if (outcome.status !== "done") throw new Error(`native act: ${text}`);
+        return text;
+      };
       await terminal.focusWorkspace({
         sessionId: env.TANDEM_SESSION,
         cwd: a,
         workspaceId: record.endpoint.workspaceId,
       });
-      const switched = await nativeAction("project", [String(target)]);
-      expect(JSON.parse(switched).project).toBe(b);
+      const switched = await nativeAction({ verb: "project", target });
       await writeFile(join(root, "project-switch-b.json"), switched);
       // Force a fresh route open after the switch, rather than reusing B's launch-time panel.
       const secondPanelId = await terminal.openPanel({
@@ -350,7 +347,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       const secondPanel = blocks(await commands.ls(b)).find((p) => p.block.id === secondPanelId);
       expect(secondPanel?.session.id).toBe(second.endpoint.terminalSessionId);
       expect(secondPanel?.block.program).toBe("tandem.panel");
-      expect(secondPanel?.block.args?.[1]).toBe(second.endpoint.paneId);
+      expect(parseBlockArgs(secondPanel?.block.args)?.ctx.coordinator).toBe(second.endpoint.paneId);
       await publish(b);
       await terminal.focusWorkspace({
         sessionId: env.TANDEM_SESSION,
@@ -360,7 +357,9 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await until(async () => (await ctl("tree")).includes("Tern backend adapter"));
       await ctl("shot", "03-project-b-panel");
       const catchup = blocks(await commands.ls(b)).find(
-        (p) => p.block.program === "tandem.catchup" && p.block.args?.[1] === second.endpoint.paneId,
+        (p) =>
+          p.block.program === "tandem.catchup" &&
+          parseBlockArgs(p.block.args)?.ctx.coordinator === second.endpoint.paneId,
       );
       expect(catchup).toBeDefined();
       if (catchup === undefined) throw new Error("automatic second-project catch-up missing");
@@ -369,7 +368,11 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await ctl("shot", "04-project-b-automatic-catchup");
       await writeFile(
         join(root, "board-b.json"),
-        await nativeAction("board", [], second.endpoint.paneId, second.worktree.path),
+        await nativeAction(
+          { verb: "open", ref: { kind: "board" } },
+          second.endpoint.paneId,
+          second.worktree.path,
+        ),
       );
       await publish(b);
       await until(async () => {
@@ -382,16 +385,16 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       const listing = await commands.ls(b);
       expect(
         blocks(listing).some(
-          (p) => p.block.program === "tandem.board" && p.block.args?.[1] === second.endpoint.paneId,
+          (p) =>
+            p.block.program === "tandem.board" &&
+            parseBlockArgs(p.block.args)?.ctx.coordinator === second.endpoint.paneId,
         ),
       ).toBe(true);
       expect(
-        blocks(listing).some((p) => p.block.args?.some((arg) => arg.endsWith(".tandem-open.json"))),
+        blocks(listing).some((p) => p.block.args?.some((arg) => arg.endsWith(".ticket.json"))),
       ).toBe(false);
       expect(
-        (await readdir(join(home, "native-host"))).filter((name) =>
-          /\.(?:intent|receipt|tandem-open)\.json$/u.test(name),
-        ),
+        (await openFiles(home)).filter((name) => /\.(?:ticket|receipt)\.json$/u.test(name)),
       ).toEqual([]);
       expect(await readFile(join(root, "logs", "tern.log"), "utf8")).not.toContain(
         "hook exceeded its budget",

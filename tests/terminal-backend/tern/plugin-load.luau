@@ -18,7 +18,8 @@ local function hit(name) callbackCount[name] = (callbackCount[name] or 0) + 1 en
 local function loadModule(name)
  assert(not loading, 'LOAD eagerly required ' .. name)
  imports[name] = (imports[name] or 0) + 1
- if name == './view-host' then return {open = function(req, cx) assert(req.path and cx); return {handled=true} end} end
+ if name == './layout' then return {open = function(req, cx) assert(req.path and cx); return {handled=true} end} end
+ if name == './rt' then return {draw = function(view, state, cx) return view(state, cx) end} end
  return {
   init = function(cx, args, saved) assert(cx.token and args[1]=='fixture' and saved=='saved'); hit('init'); return {token=cx.token} end,
   view = function(state, cx) assert(state.token==cx.token); hit('view'); return {main='view'} end,
@@ -33,10 +34,10 @@ end
 assert(openRoute and linkRoute and next(imports)==nil)
 local count=0
 for _,def in definitions do assert(type(def.init)=='function' and type(def.view)=='function'); count+=1 end
-assert(count==9)
+assert(count==10)
 count=0
 for _,def in commands do assert(type(def.run)=='function'); count+=1 end
-assert(count==16 and commands['new-request'] and commands['project-next'])
+assert(count==19 and commands['new-request'] and commands['project-next'] and commands['settings'])
 loading=false
 assert(openRoute({path='/unrelated.txt'}, {})==nil and next(imports)==nil)
 local cx={token='state'}
@@ -51,10 +52,10 @@ for id,def in definitions do
  def.init(cx,{'fixture'},'saved')
  assert(imports['./' .. id]==1, 'second pane reloaded its block')
 end
-for _,name in {'view','title','key','event','resize','save'} do assert(callbackCount[name]==9) end
-assert(callbackCount.init==18)
-assert(openRoute({path='/tmp/native-host/id.tandem-open.json'},{}).handled)
-assert(imports['./view-host']==nil)
+for _,name in {'view','title','key','event','resize','save'} do assert(callbackCount[name]==10) end
+assert(callbackCount.init==20)
+assert(openRoute({path='/tmp/tern/0a1b/open/ab12.cd34.ticket.json'},{}).handled)
+assert(imports['./layout']==nil)
 while #timers>0 do table.remove(timers,1)({}) end
-assert(imports['./view-host']==1)
+assert(imports['./layout']==1)
 print('Plugin LOAD is registration-only; lazy callbacks and cached definitions pass')

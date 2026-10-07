@@ -1,31 +1,17 @@
-import type { TerminalAvailability } from "../terminal-backend/contract.ts";
-import { ternFallbackReason } from "../terminal-backend/setting.ts";
-import type { SetupPageStatus } from "./setup-page.ts";
-
 /**
  * First-time setup, worked out from saved state so leaving halfway resumes at the next missing
  * step. Pure: the caller reads the facts and delivers what these return.
  */
 export type OnboardingFacts = Readonly<{
   readonly modelsChosen: boolean;
-  readonly terminalChosen: boolean;
-  /** Absent once the choice is saved; never grants a Tern offer. */
-  readonly tern?: TerminalAvailability;
   /** Folders saved for finding repositories by name. */
   readonly codeFolders: readonly string[];
   /** Saved projects other than the Tandem checkout. */
   readonly projects: readonly string[];
   readonly selfImprovementChosen: boolean;
-  /** Whether the setup page can be, or is, the way through setup in this session. */
-  readonly setupPage: SetupPageStatus;
 }>;
 
-export type OnboardingStep =
-  | "models"
-  | "terminal"
-  | "code-folders"
-  | "self-improvement"
-  | "repositories";
+export type OnboardingStep = "models" | "code-folders" | "self-improvement" | "repositories";
 
 /**
  * In the order setup walks them. The fixed-choice questions come before repositories, so the
@@ -34,7 +20,6 @@ export type OnboardingStep =
 export function remainingOnboardingSteps(facts: OnboardingFacts): readonly OnboardingStep[] {
   const steps: OnboardingStep[] = [];
   if (!facts.modelsChosen) steps.push("models");
-  if (!facts.terminalChosen) steps.push("terminal");
   if (facts.codeFolders.length === 0) steps.push("code-folders");
   if (!facts.selfImprovementChosen) steps.push("self-improvement");
   if (facts.projects.length === 0) steps.push("repositories");
@@ -43,9 +28,7 @@ export function remainingOnboardingSteps(facts: OnboardingFacts): readonly Onboa
 
 const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
   models:
-    "Choose models: call models, offer its presets by name (say why one is unavailable) and the Balanced profile, one line per role. They may pick a preset in plain words, then change any role. Recap all five roles with each one's harness, then configure-models; never list claude-code in enabledProviders.",
-  terminal:
-    "Offer Tern only when onboarding facts say ready. Otherwise use Herdr and explain the fallback reason in one line. Save the explicit choice with terminal-setting; availability is rechecked before saving. Never switch while tasks are running.",
+    "Choose models: call models and offer its recommended model for each role (the Balanced profile), one line per role. They may accept it or change any role. Recap all five roles with each one's harness, then configure-models; never list claude-code in enabledProviders.",
   "code-folders": "Ask which folders hold their repositories and save them with save-code-folders.",
   "self-improvement":
     "Tandem asked about looking into its own problems; when they answer, call self-improvement with off, fix, or report.",
@@ -53,27 +36,27 @@ const STEP_GUIDANCE: Readonly<Record<OnboardingStep, string>> = {
     "Ask which repositories to set up. For each: find-repo with the name or path (with several matches, ask which). Say in two lines which checks and install step it found; ask them to confirm or change those. Then setup with their answers, pr-watch-merging with how pull requests merge, and open-project.",
 };
 
-const SETUP_PAGE_FIRST =
-  "Setup is unfinished. When the user wants to set up, call setup-page first: one page covers every step. If it fails, set up here instead.";
-const SETUP_PAGE_OPEN =
-  "Setup is unfinished. The setup page is open; its answer reaches you by itself. Help with questions about any page step here without asking the user to save first. Only if the user would rather set up here:";
+const SETUP_BLOCK_GUIDANCE =
+  'The setup block is open beside this chat, where the user chooses models, repositories and what happens when Tandem finds a bug in itself. Their answers arrive by themselves as a "Setup saved." message, so do not ask the setup questions here or call the setup tools for them. Help with their questions about any setting: what each job does, models and thinking levels, validation and setup commands, the bug-report options. To change a setting they ask about, tell them to change it in the block.';
 
-/** What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done. */
-export function onboardingContext(facts: OnboardingFacts): string | undefined {
+/**
+ * What the Tandem coordinator reads each turn while setup is unfinished; nothing once it is done.
+ * While the setup block is open it leads, so the guidance says to answer questions, not to ask.
+ */
+export function onboardingContext(
+  facts: OnboardingFacts,
+  setupBlockOpen = false,
+): string | undefined {
   const [current, ...later] = remainingOnboardingSteps(facts);
   if (current === undefined) return undefined;
+  if (setupBlockOpen) return `Setup is unfinished. ${SETUP_BLOCK_GUIDANCE}`;
   const after = later.length === 0 ? "" : ` Then: ${later.join(", ")}.`;
-  const reason = current === "terminal" ? onboardingQuestion("terminal", facts)?.text : undefined;
-  const step = `Current step: ${STEP_GUIDANCE[current]}${reason === undefined ? "" : ` ${reason}`}${after}`;
-  if (facts.setupPage === "ready") return `${SETUP_PAGE_FIRST} ${step}`;
-  if (facts.setupPage === "open") return `${SETUP_PAGE_OPEN} ${step}`;
+  const step = `Current step: ${STEP_GUIDANCE[current]}${after}`;
   return `Setup is unfinished. ${step}`;
 }
 
-/** Whether setup's plain questions are asked in the chat: not while the setup page covers them. */
-export function chatAsksSetupQuestions(facts: OnboardingFacts): boolean {
-  return facts.setupPage === "unavailable" || facts.setupPage === "done";
-}
+export const SETUP_WELCOME_TEXT =
+  "Welcome to Tandem.\n\nYour setup is on the right. Add your repositories, check the recommended models, then press Start. Ask me here about any setting.";
 
 export type OnboardingQuestion = Readonly<{
   readonly text: string;
@@ -81,24 +64,7 @@ export type OnboardingQuestion = Readonly<{
   readonly hidden: string;
 }>;
 
-export function onboardingQuestion(
-  step: OnboardingStep,
-  facts: OnboardingFacts,
-): OnboardingQuestion | undefined {
-  if (step === "terminal") {
-    const reason = ternFallbackReason(
-      facts.tern ?? { status: "unknown", reason: "Tern has not been checked." },
-    );
-    return reason === undefined
-      ? {
-          text: "Which terminal should Tandem use: Herdr or Tern?",
-          hidden: "Call terminal-setting with the terminal the user chooses: herdr or tern.",
-        }
-      : {
-          text: `${reason} Save Herdr as your terminal?`,
-          hidden: "Call terminal-setting with herdr if the user agrees.",
-        };
-  }
+export function onboardingQuestion(step: OnboardingStep): OnboardingQuestion | undefined {
   if (step === "self-improvement") {
     return {
       text: "When a task keeps failing, should Tandem look into why? Off: never. Fix: it offers a fix for your approval. Report: it drafts a GitHub issue for you to file.",

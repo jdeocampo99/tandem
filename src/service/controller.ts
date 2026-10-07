@@ -6,7 +6,7 @@ import { runCommand } from "../adapters/commands.ts";
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import { releaseWorktree } from "../adapters/treehouse.ts";
-import { NativeViewsPublisher } from "../board/native-publish.ts";
+import { NativeViewsPublisher } from "../board/native-read.ts";
 import { readBoard } from "../board/read.ts";
 import { type BoardSnapshot, writeBoardSnapshot } from "../board/snapshot.ts";
 import { type BoardRow, type BoardView, needsYouNotice } from "../board/view.ts";
@@ -16,9 +16,7 @@ import {
   type SelfImprovementMode,
   saveProjectRoots,
   saveSelfImprovement,
-  saveTerminalChoice,
 } from "../config/home-settings.ts";
-import { type ModelPreset, modelPresets } from "../config/model-presets.ts";
 import {
   type JevSetting,
   type ModelSettings,
@@ -40,6 +38,7 @@ import {
   readCleanupCommands,
   resolveRepoPolicy,
   saveMergingChoice,
+  saveRepositoryCommands,
 } from "../config/repositories.ts";
 import { findSkills } from "../config/skills.ts";
 import type {
@@ -58,7 +57,6 @@ import type {
   TaskCommunicationView,
   TaskRecord,
   TaskTarget,
-  TerminalName,
 } from "../contracts.ts";
 import { withCoordinatorLaunchLock } from "../coordinator/lock.ts";
 import { openProject } from "../coordinator/open-project.ts";
@@ -80,12 +78,9 @@ import { catalogueHarness, harnessFor, runnableModels } from "../harness/resolve
 import { type MemoryWriteInput, ProjectMemory } from "../memory/service.ts";
 import type { MemoryShowResult } from "../memory/view.ts";
 import type { OnboardingFacts } from "../onboarding/checklist.ts";
-import {
-  type SetupApplyResult,
-  type SetupPageEvent,
-  type SetupPageOpened,
-  SetupPageWorkflow,
-} from "../onboarding/setup-page.ts";
+import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
+import type { SetupMode, SetupView } from "../onboarding/setup-view.ts";
+import { type SetupApplyResult, SetupWorkflow } from "../onboarding/setup-workflow.ts";
 import { checkTools, type ToolCheck } from "../onboarding/tools.ts";
 import { maintainPool } from "../pool/maintenance.ts";
 import type { PoolMaintenanceResult } from "../pool/policy.ts";
@@ -207,17 +202,8 @@ import {
   taskRollup,
 } from "../tasks/trace.ts";
 import { readRegisteredProjects } from "../terminal/projects.ts";
-import {
-  savedTerminalPreference,
-  terminalBackend,
-  ternAvailability,
-} from "../terminal-backend/compose.ts";
-import type { TerminalAvailability, TerminalBackend } from "../terminal-backend/contract.ts";
-import {
-  assertTerminalSwitch,
-  type TerminalChoiceResult,
-  ternFallbackReason,
-} from "../terminal-backend/setting.ts";
+import { terminalBackend } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { assertSourceUnchanged } from "../workers/checkout.ts";
 import type { ModelCatalogueSnapshot } from "../workers/execution-routing.ts";
 import { claimOf, ownsOperation } from "../workers/operation-claim.ts";
@@ -308,8 +294,6 @@ export type ModelOptionsResult = Readonly<{
   /** The Balanced profile resolved from `modelSettings.enabledProviders` against this catalogue. */
   readonly balancedProfile: BalancedProfileProposal;
   readonly claudeCode: ClaudeCodeAvailability;
-  /** One-click choices for all five roles; a disabled one says why in plain words. */
-  readonly presets: readonly ModelPreset[];
 }>;
 export type SourceRefreshResult = Readonly<{
   readonly head: string;
@@ -330,8 +314,6 @@ export type TandemServiceOptions = Readonly<{
   }>;
   /** Callback runs under coordinator launch-lock then task-store serialization; it must not reacquire the launch lock. */
   readonly refreshSource?: () => Promise<SourceRefreshResult>;
-  /** After a saved choice, configure Tern preferences or restore them for an explicit Herdr choice. */
-  readonly installTerminalPlugin?: (readiness: TerminalAvailability) => Promise<boolean>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
   readonly clock?: Clock;
@@ -375,27 +357,16 @@ export type TandemService = Readonly<{
   readonly findRepo: (name: string) => Promise<readonly FoundRepo[]>;
   /** Saves the folders the user keeps code in, for finding repositories by name. */
   readonly saveProjectRoots: (roots: readonly string[]) => Promise<HomeSettings>;
-  /** Saves the chosen terminal only when no active or uncertain work spans the switch. */
-  readonly configureTerminal: (terminal: TerminalName) => Promise<TerminalChoiceResult>;
   /** Saves the self-improvement mode the user chose during onboarding. */
   readonly saveSelfImprovement: (mode: SelfImprovementMode) => Promise<HomeSettings>;
   /** Checks the tools onboarding depends on, without changing anything. */
   readonly checkTools: () => Promise<readonly ToolCheck[]>;
   /** What first-time setup still needs, for the Tandem coordinator at `repoPath`. */
   readonly onboardingFacts: (repoPath: string) => Promise<OnboardingFacts>;
-  /** Builds the setup page for the Tandem coordinator at `repoPath` and opens it in Lavish. */
-  readonly openSetupPage: (repoPath: string) => Promise<SetupPageOpened>;
-  /**
-   * Waits for the open setup page's next feedback, showing `reply` in the browser first. A valid
-   * answer is stored for `applySetup`; an invalid one comes back with its problems.
-   */
-  readonly awaitSetupAnswer: (
-    repoPath: string,
-    signal: AbortSignal,
-    reply?: string,
-  ) => Promise<SetupPageEvent>;
-  /** Saves a validated setup answer and reports its complete or partial result. */
-  readonly applySetup: (repoPath: string, answerId: string) => Promise<SetupApplyResult>;
+  /** What the setup block shows for the Tandem coordinator at `repoPath`. */
+  readonly setupView: (repoPath: string, mode: SetupMode) => Promise<SetupView>;
+  /** Parses, revalidates, and saves a setup answer; reports its complete or partial result. */
+  readonly saveSetup: (repoPath: string, answerText: string) => Promise<SetupApplyResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
   /** Every specialist a new implementation task in this project could use, and any file problems. */
   readonly specialists: (repoPath: string) => Promise<SpecialistRegistry>;
@@ -599,7 +570,6 @@ type ServiceDependencies = Readonly<{
       }>
     | undefined;
   refreshSource: (() => Promise<SourceRefreshResult>) | undefined;
-  installTerminalPlugin: ((readiness: TerminalAvailability) => Promise<boolean>) | undefined;
   workerTimeoutMs: number | undefined;
   run: CommandRunner;
   terminal: TerminalBackend;
@@ -692,8 +662,7 @@ class TandemController {
   readonly #prWatch: PrWatcher;
   readonly #memory: ProjectMemory;
   readonly #selfImprovement: SelfImprovement;
-  readonly #setupPage: SetupPageWorkflow;
-  #onboardingTern: ReturnType<typeof ternAvailability> | undefined;
+  readonly #setup: SetupWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
@@ -719,22 +688,19 @@ class TandemController {
       traceTask: (taskId) => this.trace(taskId),
       createTask: (input) => this.create(input),
     });
-    this.#setupPage = new SetupPageWorkflow({
-      home: deps.home,
+    this.#setup = new SetupWorkflow({
       homeFolder: homedir(),
       run: deps.run,
       clock: deps.clock,
-      idFactory: deps.idFactory,
       models: (repoPath) => this.models(repoPath),
       roots: () => deps.projectRoots(),
       homeSettings: () => readHomeSettings(deps.home),
-      probeTern: () => ternAvailability(deps.run),
       registeredProjects: () => readRegisteredProjects(deps.home),
       inspectRepo: async (path) => {
         const onboarded = await this.setupOnboard(path, false);
         return {
           validationCommands: onboarded.validationCommands.map((command) => command.name),
-          scripts: onboarded.discovery.scripts,
+          scriptCommands: onboarded.discovery.commands,
           setupCommands: onboarded.setupCommands.map((command) => command.name),
           ...(onboarded.discovery.lockfile === undefined
             ? {}
@@ -743,12 +709,20 @@ class TandemController {
       },
       saveModels: (input) => this.configureModels(input),
       saveSelfImprovement: (mode) => saveSelfImprovement(deps.home, mode),
-      configureTerminal: (terminal) => this.configureTerminal(terminal),
       saveCodeFolders: (folders) => saveProjectRoots(deps.home, folders),
       setupRepo: (path, repo) =>
         this.setupOnboard(path, true, {
           validationCommands: repo.validationCommands,
           setupCommands: repo.setupCommands,
+        }),
+      updateRepoCommands: async (path, commands) =>
+        saveRepositoryCommands({
+          repoPath: (await this.setupTarget(path)).repoPath,
+          home: deps.home,
+          validationCommands: readTextList(commands.validationCommands, "validationCommands"),
+          ...(commands.setupCommands === undefined
+            ? {}
+            : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
         }),
       openProject: (path) => this.openProject(path),
     });
@@ -783,17 +757,19 @@ class TandemController {
     });
     this.#prReviews = createPrReviewWorkflow({
       home: deps.home,
-      ...(deps.terminal.name === "tern"
-        ? {
+      ...(deps.terminal.views === undefined
+        ? {}
+        : {
             openNativePage: async (task: TaskRecord) => {
+              const views = deps.terminal.views;
               const owned = await findRunningCoordinator(deps.run, deps.terminal, {
                 home: deps.home,
                 sessionId: deps.sessionId,
                 repoPath: task.repoPath,
               });
-              if (owned?.endpoint.terminal !== "tern")
+              if (views === undefined || owned === undefined)
                 throw new Error("Open this project's Tern coordinator before showing its review");
-              const result = await deps.terminal.openView({
+              const result = await views.open({
                 coordinator: owned.endpoint,
                 cwd: owned.worktree.path,
                 home: deps.home,
@@ -803,8 +779,7 @@ class TandemController {
               if (!result.opened)
                 throw new Error(result.warnings.join("; ") || "Native review did not open");
             },
-          }
-        : {}),
+          }),
       run: deps.run,
       clock: deps.clock,
       projectRoots: deps.projectRoots,
@@ -996,17 +971,14 @@ class TandemController {
           readTextList(roots, "projectRoots").map((root) => expandHome(root)),
         ),
       saveSelfImprovement: (mode) => saveSelfImprovement(this.#deps.home, mode),
-      configureTerminal: (terminal) => this.configureTerminal(terminal),
       checkTools: () =>
         checkTools(this.#deps.run, this.#deps.terminal, {
           cwd: this.#deps.home,
           sessionId: this.#deps.sessionId,
         }),
       onboardingFacts: (repoPath) => this.onboardingFacts(repoPath),
-      openSetupPage: (repoPath) => this.#setupPage.open(repoPath),
-      awaitSetupAnswer: (repoPath, signal, reply) =>
-        this.#setupPage.listen(repoPath, signal, reply),
-      applySetup: (repoPath, answerId) => this.#setupPage.apply(repoPath, answerId),
+      setupView: (repoPath, mode) => this.#setup.view(repoPath, mode),
+      saveSetup: (repoPath, answerText) => this.saveSetup(repoPath, answerText),
       inspect: (id) => this.inspect(id),
       trace: (id) => this.trace(id),
       traceSummary: () => this.traceSummary(),
@@ -1082,20 +1054,19 @@ class TandemController {
           })),
         };
         await writeBoardSnapshot(this.#deps.home, snapshot);
-        const ternRecords = records.filter((record) => record.endpoint.terminal === "tern");
+        const viewRecords = records.filter(
+          (record) => record.endpoint.terminal === this.#deps.terminal.name,
+        );
         const project =
           this.#deps.sourceWorkspace?.repoPath ??
-          ternRecords.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
+          viewRecords.find((record) => record.endpoint.paneId === this.#deps.coordinatorPaneId)
             ?.repoPath;
-        if (this.#deps.terminal.name === "tern" && project !== undefined) {
+        if (this.#deps.terminal.views !== undefined && project !== undefined) {
           this.#nativeViews.schedule({
             snapshot,
             project,
             sessions: new Map(
-              ternRecords.map((record) => [
-                record.repoPath,
-                { terminal: "tern", sessionId: record.endpoint.sessionId },
-              ]),
+              viewRecords.map((record) => [record.repoPath, record.endpoint.sessionId]),
             ),
           });
         }
@@ -1136,26 +1107,31 @@ class TandemController {
     };
   }
 
+  /** A checkout of the coordinator's own project is set up under its original path. */
+  private async setupTarget(
+    repoPath: string,
+  ): Promise<Readonly<{ repoPath: string; checkoutPath?: string }>> {
+    const sourceWorkspace = this.#deps.sourceWorkspace;
+    if (sourceWorkspace === undefined) return { repoPath };
+    const [requestedRoot, originalRoot, cleanRoot] = await Promise.all([
+      realpath(repoPath),
+      realpath(sourceWorkspace.repoPath),
+      realpath(sourceWorkspace.path),
+    ]);
+    if (requestedRoot !== originalRoot && requestedRoot !== cleanRoot) return { repoPath };
+    const source = await mapTaskSource(this.#deps.run, repoPath, sourceWorkspace);
+    return {
+      repoPath: source.repoPath,
+      ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
+    };
+  }
+
   async setupOnboard(
     repoPath: string,
     write = false,
     commands: SetupCommandEdits = {},
   ): Promise<OnboardRepoResult> {
-    let targetRepoPath = repoPath;
-    let checkoutPath: string | undefined;
-    const sourceWorkspace = this.#deps.sourceWorkspace;
-    if (sourceWorkspace !== undefined) {
-      const [requestedRoot, originalRoot, cleanRoot] = await Promise.all([
-        realpath(repoPath),
-        realpath(sourceWorkspace.repoPath),
-        realpath(sourceWorkspace.path),
-      ]);
-      if (requestedRoot === originalRoot || requestedRoot === cleanRoot) {
-        const source = await mapTaskSource(this.#deps.run, repoPath, sourceWorkspace);
-        targetRepoPath = source.repoPath;
-        checkoutPath = source.sourceRepoPath;
-      }
-    }
+    const { repoPath: targetRepoPath, checkoutPath } = await this.setupTarget(repoPath);
     return onboardRepo({
       repoPath: targetRepoPath,
       home: this.#deps.home,
@@ -1195,63 +1171,26 @@ class TandemController {
     return found.map((checkout) => ({ ...checkout, setUp: saved.has(checkout.path) }));
   }
 
-  private async configureTerminal(requested: TerminalName): Promise<TerminalChoiceResult> {
-    await this.#deps.store.exclusive(async () => {
-      assertTerminalSwitch(
-        this.#deps.terminal.name,
-        requested,
-        await this.#deps.store.list(),
-        await readRuntimeState(this.#deps.runtimePath),
-      );
-    });
-    const available =
-      requested === "tern" ? await ternAvailability(this.#deps.run) : { status: "ready" as const };
-    if (requested === "tern") this.#onboardingTern = Promise.resolve(available);
-    const reason = ternFallbackReason(available);
-    const terminal = available.status === "ready" ? requested : "herdr";
-    const selected = await this.#deps.store.exclusive(async () => {
-      const tasks = await this.#deps.store.list();
-      const state = await readRuntimeState(this.#deps.runtimePath);
-      assertTerminalSwitch(this.#deps.terminal.name, requested, tasks, state);
-      assertTerminalSwitch(this.#deps.terminal.name, terminal, tasks, state);
-      await saveTerminalChoice(this.#deps.home, terminal);
-      return { requested, terminal, ...(reason === undefined ? {} : { reason }) };
-    });
-    if (
-      (requested === "herdr" || selected.terminal === "tern") &&
-      this.#deps.installTerminalPlugin !== undefined &&
-      !(await this.#deps.installTerminalPlugin(available))
-    ) {
-      return {
-        ...selected,
-        reason:
-          "Tern selected. Tandem's views and shortcuts were left unchanged; run setup.sh to add them later.",
-      };
+  private async saveSetup(repoPath: string, answerText: string): Promise<SetupApplyResult> {
+    const parsed = parseSetupAnswer(answerText);
+    if (!parsed.ok) {
+      throw new Error(`The setup answer can't be saved: ${parsed.problems.join(" ")}`);
     }
-    return selected;
+    return this.#setup.apply(repoPath, parsed.answer);
   }
 
   private async onboardingFacts(repoPath: string): Promise<OnboardingFacts> {
-    const [models, settings, registered, tandem, setupPage] = await Promise.all([
+    const [models, settings, registered, tandem] = await Promise.all([
       readModelSettings({ repoPath, home: this.#deps.home }),
       readHomeSettings(this.#deps.home),
       readRegisteredProjects(this.#deps.home),
       realpath(repoPath),
-      this.#setupPage.status(),
     ]);
-    const terminalChosen = savedTerminalPreference(settings).chosen;
-    const probe = terminalChosen
-      ? undefined
-      : (this.#onboardingTern ?? ternAvailability(this.#deps.run));
-    if (probe !== undefined) this.#onboardingTern = probe;
     return {
       modelsChosen: models.configured,
-      terminalChosen,
-      ...(probe === undefined ? {} : { tern: await probe }),
       codeFolders: settings.projectRoots,
       projects: registered.filter((project) => project !== tandem),
       selfImprovementChosen: settings.selfImprovementChosen,
-      setupPage,
     };
   }
 
@@ -1324,7 +1263,6 @@ class TandemController {
         enabledProviders: new Set(modelSettings.enabledProviders),
       }),
       claudeCode,
-      presets: modelPresets({ ompCatalogue: availableModels, claudeCode }),
     };
   }
 
@@ -1642,10 +1580,10 @@ class TandemController {
     return this.#source.scopedTasks();
   }
 
-  /** Herdr arrival notifications; Tern consumes durable transitions through its native publisher. */
+  /** Arrival notifications for terminals without native views; those publish durable transitions. */
   async notifyNeedsYou(repoPath: string, rows: readonly BoardRow[]): Promise<void> {
     if (
-      this.#deps.terminal.name === "tern" ||
+      this.#deps.terminal.views !== undefined ||
       this.#deps.coordinatorPaneId === undefined ||
       rows.length === 0
     )
@@ -3023,7 +2961,6 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     poolRoot,
     sourceWorkspace,
     refreshSource,
-    installTerminalPlugin: options.installTerminalPlugin,
     workerTimeoutMs,
     run,
     terminal: terminalBackend(run, { home }),

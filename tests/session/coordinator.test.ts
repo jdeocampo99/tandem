@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { BoardRow } from "../../src/board/view.ts";
 import type { TaskRecord } from "../../src/contracts.ts";
 import { TANDEM_COORDINATOR_INSTRUCTIONS } from "../../src/instructions.ts";
+import { SETUP_WELCOME_TEXT } from "../../src/onboarding/checklist.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { runTandemCommand } from "../../src/session/actions.ts";
 import {
@@ -54,6 +55,7 @@ function coordinatorDeps(
     realpath: async (path) => path,
     isTandemCheckout: async () => false,
     openWelcome: async () => undefined,
+    openSetup: async () => false,
     readReport: async () => undefined,
     appendUsage: async () => undefined,
     compactTokens: 128_000,
@@ -684,6 +686,9 @@ function welcomeSession(
     tandemCheckout: boolean;
     projects: readonly string[];
     openWelcome?: () => Promise<void>;
+    openSetup?: () => Promise<boolean>;
+    /** Every setup step saved, so nothing is left to set up. */
+    finished?: boolean;
   }>,
 ) {
   const { host, effects } = recordingSessionHost();
@@ -694,14 +699,20 @@ function welcomeSession(
         tick: async () => [],
         list: async () => [],
         shutdown: async () => undefined,
-        onboardingFacts: async () => ({
-          modelsChosen: false,
-          terminalChosen: true,
-          codeFolders: [],
-          projects: options.projects.filter((project) => project !== "/repo"),
-          selfImprovementChosen: false,
-          setupPage: "unavailable",
-        }),
+        onboardingFacts: async () =>
+          options.finished === true
+            ? {
+                modelsChosen: true,
+                codeFolders: ["/code"],
+                projects: ["/code/app"],
+                selfImprovementChosen: true,
+              }
+            : {
+                modelsChosen: false,
+                codeFolders: [],
+                projects: options.projects.filter((project) => project !== "/repo"),
+                selfImprovementChosen: false,
+              },
         board: async () => ({
           now: "",
           projects: options.projects,
@@ -716,6 +727,7 @@ function welcomeSession(
       {
         host,
         isTandemCheckout: async () => options.tandemCheckout,
+        ...(options.openSetup === undefined ? {} : { openSetup: options.openSetup }),
         openWelcome:
           options.openWelcome ??
           (async () => {
@@ -767,4 +779,67 @@ test("when the popup cannot open, the welcome arrives in the chat without a mode
   expect(delivered[0]?.text).toBe(WELCOME_TEXT);
   expect(delivered[0]?.triggerTurn).toBe(false);
   await fallback.session.shutdown();
+});
+
+test("while setup is unfinished the setup block opens instead of the welcome, and leads the chat", async () => {
+  let blocks = 0;
+  const block = welcomeSession({
+    tandemCheckout: true,
+    projects: ["/repo"],
+    openSetup: async () => {
+      blocks += 1;
+      return true;
+    },
+  });
+  await block.session.sessionStart();
+  expect(blocks).toBe(1);
+  expect(block.opened()).toBe(0);
+  const delivered = block.effects.flatMap((effect) => (effect.type === "deliver" ? [effect] : []));
+  expect(delivered.map((effect) => effect.text)).toEqual([SETUP_WELCOME_TEXT]);
+  expect(delivered[0]?.triggerTurn).toBe(false);
+  const context = (await block.session.agentStart()).systemContext.join("\n");
+  expect(context).toContain("The setup block is open beside this chat");
+  expect(context).not.toContain("Current step:");
+  await block.session.shutdown();
+});
+
+test("a terminal without the setup block, or one that fails to open it, runs setup in the chat", async () => {
+  const without = welcomeSession({ tandemCheckout: true, projects: ["/repo"] });
+  await without.session.sessionStart();
+  expect(without.opened()).toBe(1);
+  expect((await without.session.agentStart()).systemContext.join("\n")).toContain(
+    "Current step: Choose models",
+  );
+  await without.session.shutdown();
+
+  const failing = welcomeSession({
+    tandemCheckout: true,
+    projects: ["/repo"],
+    openSetup: async () => {
+      throw new Error("Tern is not running");
+    },
+  });
+  await failing.session.sessionStart();
+  expect(failing.opened()).toBe(1);
+  expect((await failing.session.agentStart()).systemContext.join("\n")).not.toContain(
+    "The setup block is open",
+  );
+  await failing.session.shutdown();
+});
+
+test("once setup is finished the setup block stays closed and welcome behaves as before", async () => {
+  let blocks = 0;
+  const done = welcomeSession({
+    tandemCheckout: true,
+    projects: ["/repo"],
+    finished: true,
+    openSetup: async () => {
+      blocks += 1;
+      return true;
+    },
+  });
+  await done.session.sessionStart();
+  expect(blocks).toBe(0);
+  expect(done.opened()).toBe(1);
+  await done.session.shutdown();
 });

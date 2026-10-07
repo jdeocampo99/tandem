@@ -4,21 +4,22 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { NativeAlerts, nativeAlertCounts } from "../../../src/board/native-alerts.ts";
-import { nativeViewText } from "../../../src/board/native-views.ts";
-import { nativeViewsPath } from "../../../src/board/snapshot.ts";
 import { boardView } from "../../../src/board/view.ts";
 import { repositoryKey } from "../../../src/config/repositories.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { viewIndexPath } from "../../../src/native/store.ts";
 import { createTaskStore } from "../../../src/tasks/store.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
 import { state } from "../../board/fixtures.ts";
+import { viewFileText } from "../../native/view-files.ts";
 import { policy } from "../../session/fixtures.ts";
+import { recordedActions } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -201,8 +202,8 @@ const tree = z.object({ tree: z.array(node) });
           },
         };
         await writeFile(
-          nativeViewsPath(home, project.repo),
-          nativeViewText("panel", {
+          viewIndexPath(home, project.repo),
+          viewFileText("index", {
             version: 1,
             project: project.repo,
             writtenAt: new Date().toISOString(),
@@ -270,9 +271,14 @@ const tree = z.object({ tree: z.array(node) });
             .id === Number(tenth.endpoint.paneId),
       );
       await writeFile(join(root, "selected-state.json"), JSON.stringify(await ctl("state")));
-      expect(await readFile(join(home, "actions.log"), "utf8")).toContain(
-        `project\nrepo:${tenth.repo}`,
-      );
+      expect(
+        (await recordedActions(join(home, "actions.log"))).some(
+          ({ action }) =>
+            action.verb === "project" &&
+            typeof action.target === "object" &&
+            action.target.repoPath === tenth.repo,
+        ),
+      ).toBe(true);
       await ctl("shot", "03-tenth-selected");
       await terminal.focusAgent({
         sessionId: "fixture",
@@ -355,10 +361,10 @@ const tree = z.object({ tree: z.array(node) });
       }));
       await alerts.observe(brief, first.repo, "fixture");
       expect(await nativeAlertCounts(home, first.repo)).toEqual({ delivered: 3, unread: 3 });
-      const path = nativeViewsPath(home, first.repo);
+      const path = viewIndexPath(home, first.repo);
       const envelope = JSON.parse(await readFile(path, "utf8"));
       envelope.model.panel.header.bellCount = 3;
-      await writeFile(path, nativeViewText("panel", envelope.model));
+      await writeFile(path, viewFileText("index", envelope.model));
       await until(async () => JSON.stringify(await ctl("tree")).includes("🔔︎ 3"));
       await ctl("shot", "04-three-unread");
       await ctl("inbox");
@@ -397,11 +403,11 @@ const tree = z.object({ tree: z.array(node) });
       );
       const visitPath = join(home, "native-visits", `${repositoryKey(tenth.repo)}.json`);
       const visit = await readFile(visitPath, "utf8");
-      const destinationPath = nativeViewsPath(home, tenth.repo);
+      const destinationPath = viewIndexPath(home, tenth.repo);
       const latest = JSON.parse(await readFile(destinationPath, "utf8"));
       await writeFile(
         destinationPath,
-        nativeViewText("panel", { ...latest.model, changeSignature: "after" }),
+        viewFileText("index", { ...latest.model, changeSignature: "after" }),
       );
       await writeFile(join(home, "fixture-catchup-failure"), "fixture", {
         flag: "wx",

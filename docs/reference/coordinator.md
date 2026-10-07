@@ -80,59 +80,59 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   short `TANDEM_COORDINATOR_INSTRUCTIONS` (src/instructions.ts: follow the setup step it is given;
   try settings before code when the user wants Tandem changed, and route code changes through
   ordinary tasks in this project).
-- Setup is presented as four stages (src/onboarding/checklist.ts and the Lavish page): **Models**,
-  **Repos**, **Self-improvement**, and **Review**. The Repos stage includes choosing code folders,
-  selecting checkouts, and confirming validation and install commands. The page never asks the user
-  to choose MCP servers or worker skills; each coordinator and child worker uses the skills and MCP
-  servers OMP loads for its own checkout and user configuration. The Lavish Review Save is the user's
-  one consent to apply that complete answer; chat actions keep their own approval. Discovery and
-  checks change nothing.
+- In Tern, setup is the native `setup` block beside the coordinator's chat (`SetupView` in
+  src/onboarding/setup-view.ts, drawn by `tern-plugin/setup.luau`; the contract is in
+  [native-views.md](native-views.md#setup-and-settings)). It opens on a summary of **Models**
+  (tagged Recommended while every role runs its recommendation), **Repositories** (what each one
+  validates with) and what happens when Tandem finds a bug in itself. **Start** (Enter) saves the
+  summary as it stands; **Customize** walks four steps: **Models**, **Repositories**, **Bug
+  reports** and **Review**. Choices persist while the user moves between steps.
+  - Models: every role has a picker over every runnable model and a thinking level, with a hint
+    and one Recommended model ([harness.md](harness.md#model-recommendations)). **Use recommended
+    models** resets every role.
+  - Repositories: a list of the chosen checkouts, each marked with its validation commands or
+    "Needs a validation command", and **+ Add repository**, a name search over the checkouts found
+    under the code folders (`findCheckoutsByName`, `projectRoots` in src/repos/locate.ts). A
+    repository has editable validation commands and setup commands. Package scripts not yet used
+    are offered as suggestions, and the commands show what they were detected from. Every chosen
+    repository needs a validation command: Start and Save changes stay disabled until it has one,
+    and the bottom bar names the repository.
+  - Bug reports: **Draft an issue** (`report`), **Fix it** (`fix`) or **Do nothing** (`off`);
+    `fix` when the user never chose.
+  - The block never asks for a terminal, MCP servers or worker skills; each coordinator and child
+    worker uses the skills and MCP servers OMP loads for its own checkout and user configuration.
+  - **Start** is the user's one consent to apply that complete answer; chat actions keep their own
+    approval. Discovery and checks change nothing.
+- The block sends its answer as `setup-save`; `SetupAnswer` (src/onboarding/setup-answer.ts) is
+  parsed at the CLI boundary and `SetupWorkflow.apply` (src/onboarding/setup-workflow.ts)
+  revalidates it against this machine,
+  then saves in order: models with only their OMP providers (`configureModels`), `selfImprovement`,
+  code folders, then each repository's commands, followed by its chat (`open-project`). Code
+  folders are saved only when none are saved yet: the folders that hold a discovered checkout plus
+  the parent of any chosen checkout outside them. A failed step is reported and undoes nothing; a
+  repository whose settings failed is not opened. The coordinator posts a fixed status without a
+  model turn ("Setup saved. Chats for <repos> are open in the sidebar."), and the block shows
+  "You're all set" with the shortcuts.
+- Settings is the same block in `settings` mode, opened from the Tern palette ("Tandem: Settings",
+  "Tandem: Change models", "Tandem: Add or edit repositories"), `cmd+shift+,` or the panel's
+  Settings action. It has section tabs for Models, Repositories and Bug reports and saves through
+  the same `setup-save`.
 - Where setup stands is worked out from saved state (`onboardingFacts` in the service): saved model
   choices, saved code folders, saved projects other than the Tandem checkout, and a written
-  `selfImprovement`. Leaving halfway resumes at the first missing stage.
+  `selfImprovement`. Leaving halfway resumes at the first missing stage. The Tandem coordinator
+  opens the block at session start while any stage is missing. Herdr has no native blocks
+  (`openSetup` returns `false`), so there the chat runs the checklist of four steps
+  (src/onboarding/checklist.ts): models, code folders, self-improvement, repositories.
 - Fixed wording wherever a step allows, delivered by code without a model turn
   (src/session/onboarding-guide.ts): at each session start while setup is unfinished, the missing
-  tools (`checkTools`: Herdr, the welcome plugin, OMP, Git, a signed-in `gh`, each with the command
-  that fixes it) and `ONBOARDING_DONE_TEXT` once, after the action that finishes setup. Steps move
-  on after actions (a reconcile without a tick), never on the timer.
+  tools (`checkTools`: OMP, Git and a signed-in `gh`, plus Herdr and its welcome plugin when
+  Herdr is the terminal, each with the command that fixes it); in the chat checklist, the
+  plain-choice questions and `ONBOARDING_DONE_TEXT` once, after the action that finishes setup.
+  Steps move on after actions (a reconcile without a tick), never on the timer.
 - The model reads only the current step's guidance (`onboardingContext`) while setup is
-  unfinished, and nothing about setup once it is done.
-- The setup page comes first when `lavish-axi` is installed (`setupPage` in the facts:
-  `unavailable` without Lavish, `ready`, `open`, or `done` once this session's page was answered,
-  closed, or failed to open; src/onboarding/setup-page.ts). While it is `ready`, the guidance tells
-  the model to call `setup-page` (no approval) when the user wants to set up, with the chat steps as
-  the fallback; while it is `ready` or `open`, the plain-choice questions are not asked in the chat.
-  `unavailable` and `done` leave setup to the chat steps above.
-- `setup-page` builds one self-contained page from a pure view model (`buildSetupView` in
-  `src/onboarding/setup-view.ts`; `renderSetupHtml` with `setup-page.html`), writes it to
-  `<home>/setup/tandem-setup.html`, and opens it with `lavish-axi PATH --reopen` (the user asked for
-  it). Its four stages are Models, Repos, Self-improvement, and Review: models and thinking levels
-  come from the full OMP catalogue; Repos shows checkouts crawled from `projectRoots`, each with
-  discovered checks and install command; Self-improvement chooses `off`, `fix`, or `report`; Review
-  recaps the answer and the providers Tandem may spend on. There is no MCP-server or worker-skill
-  selection. OMP's own configuration scopes what the coordinator and child workers can load.
-- In Repos, the local name filter narrows discovered checkouts. **Choose another folder…** requests
-  the macOS folder picker, while the typed folder path is the fallback. Both scans are read-only,
-  reject broad roots, and preserve the unsaved draft. A selected checkout can also be added by its
-  exact path when discovery did not find it. Search results arrive through the open Lavish page:
-  keep it open, and do not assume the result is immediate. Back/Next remain available while the
-  request is in flight; when the rewritten page arrives it returns to Repos with the pre-request
-  draft restored, even if the user had navigated elsewhere in the meantime.
-- `setup-page` sends the final JSON answer directly through Lavish's `queuePrompt` /
-  `sendQueuedPrompts` path. Code receives it from the Lavish poll listener, checks it against the
-  current machine, stores a one-use answer id, and on the tagged Review Save applies it directly
-  without another model turn. The backend re-checks the answer before saving, then applies models
-  and only their selected providers (`configureModels`), `selfImprovement`, and code folders: if
-  none were saved, searched folders that hold a repository plus the parent of any selected repo
-  pasted from elsewhere; explicitly searched folders are appended to any existing saved roots,
-  never overwritten. The answer file carries those pending roots so a coordinator restart does not
-  lose them. Then each repository's `setup` with its validation and install commands is followed by
-  `open-project`. A failed step is reported and undoes nothing; a repository whose settings failed
-  is not opened. A stale or replaced answer id is refused. The coordinator posts a fixed success or
-  error status without a model turn. The page has no completion acknowledgement: after submission it
-  reports saving/request status and directs the user to chat. Plain comments from Lavish are relayed
-  to the coordinator and its reply is returned to the Conversation panel; a folder search is
-  answered in Lavish without a model turn.
+  unfinished, and nothing about setup once it is done. While the block is open, that guidance says
+  to answer questions about any setting and to leave the choices to the block, whose answers
+  arrive by themselves.
 - `find-repo` takes a name or a path; one match not yet set up also returns what `onboard` would
   (the proposal and how its pull requests merge), saving a call. A path (starting with `/`, `~`, or
   `.`) resolves to its Git root; a name matches a checkout under the code folders by folder name,
@@ -154,12 +154,13 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   separately from `panelFailure`, and the front door prints it. Native project/inbox entries
   return successful results with warning toasts. Launch/ownership/focus errors stay outside
   the optional catch-up boundary.
-- At each session start, while no saved project other than the Tandem checkout exists, it opens
-  the welcome popup: `herdr plugin pane open --plugin tandem.ui --entrypoint welcome` with
-  `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`
+- At each session start while setup is unfinished, it opens the setup block (above). Otherwise,
+  while no saved project other than the Tandem checkout exists, it opens the welcome: in Tern the
+  native welcome view, in Herdr the popup `herdr plugin pane open --plugin tandem.ui --entrypoint
+  welcome` with `TANDEM_WELCOME_PANE` set to its own pane. The popup runs `tandem welcome`
   (src/terminal/welcome.ts): Enter sends "Onboard me to Tandem" to that pane (`herdr agent
   prompt`, or `pane send-text` and Enter when Herdr sees no agent there); Esc or q closes it. When
-  the popup cannot open (plugin not linked, Herdr too old, no Tandem pane), the same text, plus
+  the welcome cannot open (plugin not linked, Herdr too old, no Tandem pane), the same text, plus
   what to type to start, is delivered in the chat without a model turn.
 - The plugin lives in `herdr-plugin/`; `setup.sh` links it (see [status.md](status.md)).
 
@@ -466,4 +467,6 @@ Owned by src/terminal/hard-reset.ts.
   pool worktree, including unpushed or unmerged work), the pool root when outside the home, and
   the remembered setup file only when it names that home.
 - Runs `git worktree prune` in each onboarded repository so deleted worktrees are unregistered.
+- Then checks that every deleted path is gone. A Tandem process it could not stop writes its home
+  again, so a path that still exists fails the reset with that path instead of reporting success.
 - Unreadable project records do not stop it. The next `tandem` onboards from scratch.

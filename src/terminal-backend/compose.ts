@@ -2,16 +2,10 @@ import { AdapterError } from "../adapters/primitives.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { type HomeSettings, readHomeSettingsSync } from "../config/home-settings.ts";
 import type { CommandRunner, TerminalName } from "../contracts.ts";
-import type {
-  SessionTarget,
-  TerminalAvailability,
-  TerminalBackend,
-  TerminalContext,
-} from "./contract.ts";
+import type { SessionTarget, TerminalBackend, TerminalContext } from "./contract.ts";
 import { type HerdrBackendOptions, herdrBackend } from "./herdr/backend.ts";
 import { HERDR_CONTEXT } from "./herdr/context.ts";
 import { assertTerminalEndpoint, guardTerminalIdentity } from "./identity.ts";
-import { probeTern } from "./tern/availability.ts";
 import { type TernBackendOptions, ternBackend, ternNotificationEndpoint } from "./tern/backend.ts";
 import { TERN_CONTEXT } from "./tern/context.ts";
 import {
@@ -19,10 +13,11 @@ import {
   reloadTernPlugin,
   restoreTernPluginPreferences,
   type TernPluginDependencies,
+  TernRequiredError,
 } from "./tern/plugin.ts";
 
 export type TerminalComposition = Readonly<{
-  /** Overrides saved settings; without either choice, Herdr is the default. */
+  /** Overrides saved settings; without either choice, Tern is the default. */
   terminal?: TerminalName;
   /** Explicit Tandem home supplies saved settings and durable notification ownership. */
   home?: string;
@@ -49,9 +44,9 @@ async function notificationEndpointFor(home: string, target: SessionTarget) {
   return ternNotificationEndpoint(owner);
 }
 
-/** The saved choice shown by onboarding; an absent preference keeps Herdr until confirmed. */
-export function savedTerminalPreference(settings: HomeSettings) {
-  return { terminal: settings.terminal ?? "herdr", chosen: settings.terminal !== undefined };
+/** An absent `terminal` setting means Tern; Herdr runs only when settings say so. */
+export function savedTerminal(settings: HomeSettings): TerminalName {
+  return settings.terminal ?? "tern";
 }
 
 /** The only place the saved terminal chooses an implementation. */
@@ -64,9 +59,7 @@ export function terminalBackend(
   const select = (): TerminalBackend => {
     const chosen =
       options.terminal ??
-      (options.home === undefined
-        ? "herdr"
-        : savedTerminalPreference(readHomeSettingsSync(options.home)).terminal);
+      (options.home === undefined ? "tern" : savedTerminal(readHomeSettingsSync(options.home)));
     const cached = backends.get(chosen);
     if (cached !== undefined) return cached;
     const home = options.home;
@@ -101,10 +94,11 @@ export function terminalBackend(
     get name() {
       return select().name;
     },
-    openView: (input) => select().openView(input),
-    closeView: (input) => select().closeView(input),
-    retainedViewOpens: (home) => select().retainedViewOpens(home),
-    abandonViewOpen: (open, conclusive) => select().abandonViewOpen(open, conclusive),
+    get views() {
+      return select().views;
+    },
+    quarantinedPanes: (home) => select().quarantinedPanes(home),
+    clearPaneQuarantine: (pane, conclusive) => select().clearPaneQuarantine(pane, conclusive),
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),
@@ -130,6 +124,7 @@ export function terminalBackend(
     checkInstall: (input) => select().checkInstall(input),
     notify: (input) => select().notify(input),
     openWelcome: (input) => select().openWelcome(input),
+    openSetup: (input) => select().openSetup(input),
     promptAgent: (input) => select().promptAgent(input),
     openPanel: (input) => select().openPanel(input),
     isPanelOpen: (input) => select().isPanelOpen(input),
@@ -178,25 +173,19 @@ export const terminalContext: TerminalContext = {
   welcomePaneId: (source) => inheritedContext(source)?.welcomePaneId(source),
 };
 
-/** Onboarding checks availability through the same terminal composition boundary. */
-export const ternAvailability = probeTern;
-
-/** Onboarding uses the same composition boundary as backend selection. */
+/**
+ * Links Tandem's views into Tern, unless settings explicitly choose Herdr, in which case Tern's
+ * preferences Tandem changed are restored. Throws when Tern cannot be used.
+ */
 export async function installTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
-  readiness?: TerminalAvailability,
-): Promise<boolean> {
-  const selected = savedTerminalPreference(readHomeSettingsSync(home));
-  if (selected.terminal !== "tern") {
-    if (selected.chosen) await restoreTernPluginPreferences(dependencies);
-    return true;
+): Promise<void> {
+  if (savedTerminal(readHomeSettingsSync(home)) === "herdr") {
+    await restoreTernPluginPreferences(dependencies);
+    return;
   }
-  const available = readiness ?? (await ternAvailability(dependencies.run));
-  if (available.status !== "ready") {
-    return false;
-  }
-  return ensureTernPlugin(dependencies);
+  if (!(await ensureTernPlugin(dependencies))) throw new TernRequiredError();
 }
 
 /** Refresh window bindings only for the selected terminal, after a successful update. */
@@ -204,8 +193,7 @@ export async function reloadTerminalPlugin(
   home: string,
   dependencies: TernPluginDependencies,
 ): Promise<boolean> {
-  const selected = savedTerminalPreference(readHomeSettingsSync(home));
-  if (selected.terminal === "tern") return reloadTernPlugin(dependencies);
-  if (selected.chosen) await restoreTernPluginPreferences(dependencies);
+  if (savedTerminal(readHomeSettingsSync(home)) === "tern") return reloadTernPlugin(dependencies);
+  await restoreTernPluginPreferences(dependencies);
   return false;
 }

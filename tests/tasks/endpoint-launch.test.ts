@@ -76,7 +76,10 @@ test("launch recovery tells same-titled workspaces apart by their worktree", asy
       { id: "workspace-mine", cwd: mine },
     ]);
 
-    const recovery = await recoverEndpointFromLaunch(terminalBackend(run), launchAt(mine));
+    const recovery = await recoverEndpointFromLaunch(
+      terminalBackend(run, { terminal: "herdr" }),
+      launchAt(mine),
+    );
 
     expect(recovery).toMatchObject({
       status: "recovered",
@@ -92,7 +95,10 @@ test("launch recovery stays ambiguous when same-titled workspaces share the work
       { id: "workspace-b", cwd: mine },
     ]);
 
-    const recovery = await recoverEndpointFromLaunch(terminalBackend(run), launchAt(mine));
+    const recovery = await recoverEndpointFromLaunch(
+      terminalBackend(run, { terminal: "herdr" }),
+      launchAt(mine),
+    );
 
     expect(recovery.status).toBe("ambiguous");
   });
