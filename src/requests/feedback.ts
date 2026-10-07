@@ -67,3 +67,16 @@ export function briefFeedbackPrompt(
     ...notes,
   ].join("\n\n");
 }
+
+const MAX_FEEDBACK_BYTES = 64_000;
+
+/** Refuses feedback whose encoding exceeds what one brief action may carry. */
+export function assertFeedbackSize(feedback: BriefFeedback): void {
+  if (Buffer.byteLength(JSON.stringify(feedback), "utf8") > MAX_FEEDBACK_BYTES)
+    throw new Error(`Brief feedback may not exceed ${MAX_FEEDBACK_BYTES} bytes`);
+}
+
+/** What the coordinator is told once the user's approval of the displayed draft is recorded. */
+export function briefApprovedPrompt(approved: ViewedBrief): string {
+  return `From the open review page:\nThe user approved brief ${approved.requestId}, revision ${approved.briefRevision}. Approval is already recorded for the displayed content and agreement. Continue the conversation under that approval.`;
+}
