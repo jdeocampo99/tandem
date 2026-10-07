@@ -246,10 +246,10 @@ interpolated into a shell command, and no input file is written.
 recorded coordinator session must list the pane. It then dispatches its verb table to the
 existing services and prints the outcome. The verbs are `open`, `open-project`, `project`,
 `visit`, `restart`, `steer`, `brief-approve`, `brief-request-changes`, `pr-comment`,
-`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link` and
-`setup-save`. `open` takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`,
+`review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link`,
+`setup-save` and `specialist-share`. `open` takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`,
 `orchestrator`, `inbox`, `task-picker`, `new-request` or `{kind:"setup", mode:"setup"|"settings"}`
-with an optional `section` (`models`, `repositories` or `bug-reports`).
+with an optional `section` (`models`, `repositories`, `specialists` or `bug-reports`).
 
 `done` means the click did what it asked. `kept` means part of it did not happen, typically a
 view that could not be closed or proved, and the originating view stays. `refused` means Tandem
@@ -1016,6 +1016,35 @@ chat). Then the model is published again and the coordinator gets one fixed mess
 Chats for <repos> are open in the sidebar." in setup mode, "Settings saved. New tasks will use
 them." in settings mode. A partly failed save is `kept` with notice code `setup-incomplete` and the
 failed steps. The coordinator then receives those steps instead.
+
+Settings has a Specialists tab (`tern-plugin/setup-specialists.luau`, a module `setup.luau` passes
+its state to). `SetupView.specialists` lists every team, Just-me and built-in specialist with its
+status words, revision (sha256 of the Just-me file's bytes) and the limits the block checks
+against, so the Luau holds no constants. The left pane groups TEAM, JUST ME and BUILT-IN with each
+row's label, one line of description and status; the right pane edits a Just-me or new
+specialist (name locked after its first save, multiline instructions, steps added, removed and
+reordered), shows team and built-in ones read-only, and offers Customize (an unsaved Just-me copy
+of a built-in) and Remove. Changes ride the same draft and the same Save: the answer carries
+`specialists: [{op:"create"|"update"|"remove", name, revision?, fields?}]`, one per name.
+`checkSetupAnswer` refuses the whole answer before any write when a revision is stale, a create
+clashes with a Just-me file or the reserved name, or a file would not read back as written; each
+change is then one step of `apply`, written by `changeHomeSpecialist` (only ever under
+`<home>/specialists`, never through a symbolic link). The block checks a subset of those rules
+inline; `tests/native/specialist-rules.test.ts` runs one table through both and pins the cases only
+TypeScript can see (whole-file size, frontmatter quoting, reading back).
+
+**Share with team…** appears in the bar for a saved Just-me specialist with nothing unsaved. Its
+sheet lists the registered repositories (those without a GitHub remote are disabled) and sends
+`specialist-share` with `name`, the shown `revision` and the chosen `repoPath`.
+`SetupWorkflow.shareSpecialist` re-reads the file, creates an implementation task through an
+internal create that never joins an open request, pinned to `general`, and leaves it awaiting
+approval; the coordinator is told which task to show the user. The outcome is `done` with notice
+code `specialist-shared`.
+
+The coordinator's `draft-specialist` action publishes Settings with `section: "specialists"` and
+a `chatDraft`. The block takes it once per newer file as an unsaved new specialist, or as an unsaved
+edit when Just me has that name, and shows "Drafted from chat. Review and save." with the request
+quoted. Nothing is written until Save.
 
 Settings is reached from the palette ("Tandem: Settings", "Tandem: Change models", "Tandem: Add or
 edit repositories"), `cmd+shift+,` (`plugin.tandem.settings`) and the panel header.

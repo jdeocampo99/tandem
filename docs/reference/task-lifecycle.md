@@ -250,6 +250,22 @@ fix-round steps and the brief section, `view.ts` the listing). The submit gate i
   `--json` prints the registry. It exits 1 when there is any problem, so it works as a check. The
   coordinator's read-only `specialists` action returns the same list from its clean checkout, so the
   two can differ until a change is committed and refreshed.
+- Creating from Settings (Tern): the Specialists tab of Settings creates, edits and removes Just-me
+  files (`<home>/specialists/<name>.md`) with the rest of the settings' Save. Tandem writes the
+  file in the format the parser reads and refuses the whole save before writing anything when a
+  file changed since Settings showed it, a name is taken or reserved, or the text would not read
+  back as written. `src/specialists/home-files.ts` is the only writer: atomic writes, create never
+  replaces a file, and a `specialists` folder that is a symbolic link (for example into a dotfiles
+  repository) is read-only. Tandem never writes a specialist into a repository.
+- Sharing: **Share with team…** in Settings starts an implementation task (pinned to `general`,
+  awaiting approval, never joined to an open request) that adds `.tandem/specialists/<name>.md`
+  with the exact saved content to the chosen registered repository in a pull request. The
+  coordinator asks the user to approve it; the team copy wins once merged.
+- Creating from chat: when the user asks for a specialist, the coordinator drafts it and calls
+  `draft-specialist` once. On Tern it opens Settings at Specialists with the draft unsaved and the
+  request quoted; nothing is written until the user saves. On Herdr the confirmation dialog shows
+  the full file and its path, and the file is created only after yes; a name Just me already has
+  is refused before the dialog.
 
 ## Interactive child terminals
 
