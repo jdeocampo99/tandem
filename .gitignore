@@ -9,3 +9,4 @@ coverage/
 dist/
 /evals/results/
 /evals/results-research-continuation/
+/.claude/worktrees/

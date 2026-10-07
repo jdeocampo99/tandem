@@ -1,0 +1,11 @@
+{
+  "gates": ["bun run check", "bun test", "bun run lint"],
+  "exclude": ["tern-plugin/**", "scripts/lint-ratchet.ts", "scripts/lint-ratchet/**"],
+  "debt": {
+    "source": "ratchet",
+    "baseline": "scripts/lint-ratchet/baseline.json",
+    "update": "bun run lint:ratchet --update",
+    "updateMoves": "bun run lint:ratchet --update --allow-moves"
+  },
+  "worktreeDir": ".claude/worktrees"
+}
