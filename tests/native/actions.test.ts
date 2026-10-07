@@ -1687,12 +1687,21 @@ test("returning from a task page by ← Orchestrator reports focus only from pan
     await host.screen(task).click("← Orchestrator");
     expect(world.paneIsPresent(String(task))).toBe(false);
     await host.focus(Number(project.coordinator.paneId));
-    const visits = host.cli
-      .slice(mark)
-      .filter((run) => ActionEnvelope.parse(JSON.parse(run.stdin ?? "")).action.verb === "visit")
-      .map((run) => Outcome.parse(JSON.parse(run.stdout)));
-    expect(visits.length).toBeGreaterThan(0);
-    expect(visits).toEqual(visits.map(() => ({ status: "done" })));
+    const visits = host.cli.slice(mark).flatMap((run) => {
+      const { action, origin } = ActionEnvelope.parse(JSON.parse(run.stdin ?? ""));
+      return action.verb === "visit"
+        ? [
+            {
+              event: action.event,
+              pane: origin.pane,
+              outcome: Outcome.parse(JSON.parse(run.stdout)),
+            },
+          ]
+        : [];
+    });
+    expect(visits).toEqual([
+      { event: "entry", pane: project.coordinator.paneId, outcome: { status: "done" } },
+    ]);
   });
 }, 60_000);
 

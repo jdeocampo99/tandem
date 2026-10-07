@@ -81,8 +81,9 @@ tern.route.open(function(req, cx)
  return nil
 end)
 
--- Lifecycle context carries only the pane/cwd. The CLI proves project/session ownership,
--- redirects the recorded alert helper, and owns all visit/read-cursor policy.
+-- Lifecycle context carries only the pane/cwd. The plugin drops jobs whose origin pane has
+-- closed; the CLI proves project/session ownership, redirects the recorded alert helper, and
+-- owns the rest of the visit/read-cursor policy.
 local previous: Origin? = nil
 local queue: {{origin: Origin, event: string}} = {}
 local busy = false
