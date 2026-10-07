@@ -1,0 +1,37 @@
+{
+  "$schema": "../../node_modules/@biomejs/biome/configuration_schema.json",
+  "root": true,
+  "files": {
+    "includes": [
+      "**/*",
+      "!node_modules",
+      "!dist",
+      "!evals/results",
+      "!evals/results-research-continuation",
+      "!.claude",
+      "!src/harness/claude-code/plugins/*/.claude-plugin/types"
+    ]
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": false,
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "error",
+        "noExcessiveLinesPerFunction": "error",
+        "useMaxParams": "error"
+      },
+      "style": {
+        "noNestedTernary": "error",
+        "noExcessiveLinesPerFile": "error"
+      },
+      "suspicious": {
+        "noUnnecessaryConditions": "error",
+        "noShadow": "error",
+        "noSkippedTests": "error"
+      }
+    }
+  }
+}

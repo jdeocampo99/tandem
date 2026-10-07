@@ -9,7 +9,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "bun test",
-    "lint": "biome check",
+    "lint": "biome check && bun scripts/lint-ratchet.ts",
+    "lint:ratchet": "bun scripts/lint-ratchet.ts",
     "format": "biome format --write",
     "start": "bun src/cli.ts"
   },
