@@ -139,8 +139,9 @@ notifications are disabled. Coordinator ask notifications stay enabled.
   acknowledgement followed by no tabs is known cleanup, with no repeated kill. Other uncertain
   cleanup polls for at most five seconds, then quarantines and retains resources.
 - Relaunch reuses only the stored `terminalSessionId`, rechecked immediately before creating
-  a tab, including a retained empty session. An absent stored id permits a new session with a
-  collision-safe name. Matching names never permit reuse. The alert helper is likewise reused
+  a tab, including a retained empty session. An absent stored id permits a new session named
+  after the project's folder (`music-app`), or `music-app 2`, `music-app 3` when that name is
+  taken. Matching names never permit reuse. The alert helper is likewise reused
   only by its recorded identity in that session.
 - Every Tern effect goes through `mutate(op)` in `tern/cli.ts`, the only module that runs the
   Tern CLI (including `tern plugin`) or writes the alert helper's tty.

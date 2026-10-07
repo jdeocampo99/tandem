@@ -198,6 +198,14 @@ already set; use the command palette if a shortcut is taken.
   when it finds a bug in itself. Changes apply to new tasks; tasks already running keep the
   settings they started with. **Tandem: Change models** and **Tandem: Add or edit repositories**
   open Settings at that section.
+- **Quit:** click the panel's ⏻ button, choose **Tandem: Quit** in the command palette, or run
+  `tandem quit` from another terminal. Tandem stops every project's coordinator and closes the
+  Tern sessions it opened, and leaves any pane that isn't Tandem's alone. Your tasks, worktrees,
+  branches, pull requests and chats stay. If tasks are working, Tandem first asks "N tasks are
+  working: … Quit anyway?" (in the panel the question appears over its header; in the palette
+  it is a notice, and **Tandem: Quit anyway** appears for a minute). Say no and nothing changes.
+  Quitting stops those workers; they restart where they can the next time you run `tandem`,
+  which also resumes your chats.
 
 From Board or Usage, press `Esc` or click **← Orchestrator** to return to the project's chat.
 Pressing `Cmd+Shift+B` again from Board also closes it.
@@ -317,6 +325,7 @@ folder reopens Tandem's chat and every saved project with its previous chat.
 | `tandem configure [PATH]` | Change models and project settings |
 | `tandem config [PATH]` | Open the project's settings file |
 | `tandem welcome` | Show the welcome message again |
+| `tandem quit` | Stop every coordinator and close the Tern sessions Tandem opened, keeping tasks, worktrees, PRs and chats (`--yes` stops working tasks without asking) |
 | `tandem reset` | Cancel all in-progress tasks and reopen fresh coordinators |
 | `tandem reset --hard` | Delete all Tandem state and start over |
 

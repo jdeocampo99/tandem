@@ -189,7 +189,7 @@ function assertNoLiveSelectedEndpoint(
   }
 }
 
-type ForceEndpoint = Readonly<{
+export type ForceEndpoint = Readonly<{
   readonly endpoint: Endpoint;
   readonly cwd: string;
   readonly job?: DurableJob;
@@ -225,7 +225,8 @@ function activeJobEndpoint(
   return endpoint;
 }
 
-async function proveForceEndpoint(
+/** Proves a recorded endpoint is Tandem's own: true when its pane is live, false once it is gone. */
+export async function proveForceEndpoint(
   terminal: TerminalBackend,
   entry: ForceEndpoint,
 ): Promise<boolean> {
@@ -281,7 +282,10 @@ async function proveForceEndpoint(
   return true;
 }
 
-async function forceCloseEndpoint(terminal: TerminalBackend, entry: ForceEndpoint): Promise<void> {
+export async function forceCloseEndpoint(
+  terminal: TerminalBackend,
+  entry: ForceEndpoint,
+): Promise<void> {
   if (!(await proveForceEndpoint(terminal, entry))) return;
   if (entry.job?.kind === "validation") {
     // The validation runner owns detached command groups and reaps them on interrupt.
@@ -336,14 +340,14 @@ function markForceTaskRuntime(
   });
 }
 
-type ResetScope = Readonly<{
+export type ResetScope = Readonly<{
   readonly home: string;
   readonly sessionId: string;
   readonly repoPaths: readonly string[];
 }>;
 
 /** Durable task and runtime state read once under the task store lock, with the tasks being reset. */
-type ResetSelection = Readonly<{
+export type ResetSelection = Readonly<{
   readonly tasks: readonly TaskRecord[];
   readonly tasksById: ReadonlyMap<string, TaskRecord>;
   readonly selectedTaskIds: ReadonlySet<string>;
@@ -369,7 +373,7 @@ function selectedTasks(selection: ResetSelection): readonly TaskRecord[] {
   return selection.tasks.filter((task) => selection.selectedTaskIds.has(task.id));
 }
 
-async function findLiveCoordinators(
+export async function findLiveCoordinators(
   run: CommandRunner,
   terminal: TerminalBackend,
   scope: ResetScope,
@@ -405,7 +409,7 @@ async function assertCleanCoordinatorSource(
   }
 }
 
-async function readResetSelection(
+export async function readResetSelection(
   scope: ResetScope,
   transaction: TaskStoreTransaction,
 ): Promise<ResetSelection> {
@@ -505,7 +509,7 @@ function addForceEndpoint(
 }
 
 /** Collects every endpoint a force reset must close, recovering endpoints of pending launches. */
-async function collectForceEndpoints(
+export async function collectForceEndpoints(
   terminal: TerminalBackend,
   sessionId: string,
   selection: ResetSelection,
@@ -764,7 +768,7 @@ async function settleForceResetRecords(
   await writeRuntimeState(runtimeFile(home), state);
 }
 
-async function closeForceCoordinators(
+export async function closeForceCoordinators(
   run: CommandRunner,
   terminal: TerminalBackend,
   scope: ResetScope,

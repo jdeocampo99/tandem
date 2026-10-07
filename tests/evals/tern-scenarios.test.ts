@@ -172,7 +172,7 @@ test("an unowned session with the project name gets a unique suffix and is never
     });
     expect(relaunched.endpoint.terminalSessionId).not.toBe(first.endpoint.terminalSessionId);
     const creates = calls.slice(before).filter((request) => request.argv[1] === "new");
-    expect(creates[0]?.argv.slice(1, 4)).toEqual(["new", "session", `${name}-1`]);
+    expect(creates[0]?.argv.slice(1, 4)).toEqual(["new", "session", `${name} 2`]);
     const final = await terminal.snapshot(target);
     expect(final).toHaveLength(3);
     for (const pane of unrelated) {

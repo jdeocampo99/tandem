@@ -139,6 +139,8 @@ local function show(cx: BlockCx | WindowCx, result: {status: number, stdout: str
   end
   return nil
  end
+ -- A `confirm` outcome is a question, not a result: the screen that asked puts it to the person.
+ if outcome.status == "confirm" then return outcome end
  local notice = outcome.notice
  if notice then
   local known = NOTICES[notice.code]

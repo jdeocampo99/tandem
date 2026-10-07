@@ -19,7 +19,7 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 | --- | --- |
 | `tandem` terminal command, onboarding, project selection | [main.ts](src/main.ts) → [terminal/](src/terminal/) |
 | Action CLI / JSON automation | [cli.ts](src/cli.ts) → [terminal/cli-application.ts](src/terminal/cli-application.ts), per-command handlers in [terminal/cli-commands.ts](src/terminal/cli-commands.ts) |
-| Launch, reconnect, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `reset.ts`, `workspace.ts`, `resources.ts`, `quarantine.ts`, `exclusivity.ts`, `reconcile.ts` |
+| Launch, reconnect, quit, reset, ownership | [coordinator/](src/coordinator/): `launch.ts`, `ownership.ts`, `registry.ts`, `restart.ts` (`tandem update`), `quit.ts` (`tandem quit`, built on `reset.ts`'s ownership proofs and closes), `reset.ts`, `workspace.ts`, `resources.ts`, `quarantine.ts`, `exclusivity.ts`, `reconcile.ts` |
 | The Tandem coordinator (Tandem's own chat), `open-project`, the welcome popup | [coordinator/tandem-checkout.ts](src/coordinator/tandem-checkout.ts), [coordinator/open-project.ts](src/coordinator/open-project.ts), [terminal/welcome.ts](src/terminal/welcome.ts), [herdr-plugin/](herdr-plugin/) |
 | First-time setup in the chat checklist (Herdr, or when the block cannot open): checklist, tool check, finding repos by name | [onboarding/](src/onboarding/): `checklist.ts` (pure; also the guidance while the setup block is open), `tools.ts`; [session/onboarding-guide.ts](src/session/onboarding-guide.ts); [repos/locate.ts](src/repos/locate.ts) (`findCheckoutsByName`, `projectRoots`) |
 | The native setup and settings block (first-time setup beside the Tandem coordinator; Settings from the palette, `cmd+shift+,` and the panel), `setup-save` | [onboarding/](src/onboarding/): `setup-view.ts` (pure `SetupView`: per-role recommendations and hints, per-repository commands and suggestions), `setup-answer.ts` (pure answer parsing and checks, including the validation-command gate), `setup-workflow.ts` (effects: gather facts, apply the answer); [tern-plugin/setup.luau](tern-plugin/setup.luau) and `setup.css` (the block); `open` of kind `setup` and the `setup-save` verb in [native/actions.ts](src/native/actions.ts); opened at session start by [session/coordinator.ts](src/session/coordinator.ts) (`openSetup` on the terminal port). Contract: [native-views.md](docs/reference/native-views.md#setup-and-settings) |
@@ -73,7 +73,9 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
 - Unknown owned-operation outcomes are quarantined with capacity/resources retained; never clear a
   reservation, replace a task, retry uncertain work, or change policy to bypass ownership. Reset is
   not recovery; `tandem reset` cancels all in-progress tasks across saved projects, and
-  `tandem reset --hard` deletes the whole Tandem home.
+  `tandem reset --hard` deletes the whole Tandem home. `tandem quit` is the non-destructive exit: it
+  closes only panes and Tern sessions Tandem's records prove it owns and leaves every task, worktree
+  and record for recovery.
 - Child agents run interactive OMP. Fresh reviewers are read-only; stop implementer mutation during
   validation/review. Validation runs separately without a model. No remote fleets. Exactly two harnesses, OMP and Claude Code; each role's model picks its harness.
 - When a session is bad or blocked, inspect durable state first with `tandem status TASK_ID --json`, then `restart` the task, which goes through central recovery; never manually edit SQLite/runtime state, reuse the worktree for a new task, or override unknown ownership.
@@ -124,7 +126,7 @@ Before changing behavior, read its contract in [docs/reference/](docs/reference/
 - Herdr/Tern selection, the terminal port, Tern mapping, mutation guards, setup and consent, quarantine and `tandem fix`: [terminal.md](docs/reference/terminal.md).
 - Native Tern views: store layout, contracts and their tests, click transport, staged opens, polling, every view and the Luau API: [native-views.md](docs/reference/native-views.md).
 - Roles, approvals, worker tools, what guards what: [operating-model.md](docs/reference/operating-model.md).
-- Launch, reconnect, `update`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
+- Launch, reconnect, `update`, `quit`, `reset`, coordinator ownership: [coordinator.md](docs/reference/coordinator.md).
 - Harnesses (OMP, Claude Code), how a role's model picks one, where it is recorded, the launch port, the Claude Code sidecar protocol: [harness.md](docs/reference/harness.md).
 - Onboarding, settings file, model choices, Jev routing, instruction provenance, skills: [policy.md](docs/reference/policy.md).
 - Task stages, fix rounds, research continuation, playbooks, child terminals: [task-lifecycle.md](docs/reference/task-lifecycle.md).

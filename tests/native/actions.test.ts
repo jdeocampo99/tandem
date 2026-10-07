@@ -1710,7 +1710,10 @@ test("returning from a task page by ← Orchestrator reports focus only from pan
   });
 }, 60_000);
 
-/** Fires every enabled control `open` draws, reopening the screen whenever a click closed it. */
+/**
+ * Fires every enabled control `open` draws, reopening the screen whenever a click closed it. The
+ * panel's quit button is left for the end of the walk: it ends the project's session.
+ */
 async function fireEvery(host: TernParityHost, open: () => Promise<number>): Promise<void> {
   // A new block draws its loading state until its first poll reads the view file.
   const ready = async () => {
@@ -1725,7 +1728,7 @@ async function fireEvery(host: TernParityHost, open: () => Promise<number>): Pro
     if (!host.world.paneIsPresent(String(pane))) pane = await ready();
     const { actions } = await host.screen(pane).render();
     const control = actions[index];
-    if (control === undefined) continue;
+    if (control === undefined || control.label === "⏻") continue;
     await host.send({ op: "action", pane, action: control.action });
     await host.settle();
   }
@@ -1821,10 +1824,11 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     await fireEvery(host, switcher);
     await switcher();
     await panel.click("+ Open another project…");
-    for (const { id } of await host.commands()) await host.command(id);
+    for (const { id } of await host.commands()) if (!id.startsWith("quit")) await host.command(id);
     for (const kind of ["task/port", `brief/${briefId}`, "pr/281"])
       await host.link(`tandem://${kind}`);
     await host.windowStart();
+    await panel.click("⏻");
     for (const { action } of envelopes(host)) verbs.add(action.verb);
   });
   await withParity(async ({ host, world, project }) => {

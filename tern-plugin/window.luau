@@ -2,6 +2,7 @@
 -- Window routing only. The CLI owns state, project lookup, opening views, and every action guard.
 -- Window callbacks have a 50 ms budget, so `rt` loads in a timer, never at LOAD or in a hook.
 type Origin = {pane: number, cwd: string, window: string?, busy: boolean}
+type Outcome = {status: string, notice: {code: string, text: string}?}
 
 -- The focused pane at the gesture, when it has an absolute cwd.
 local function focused(cx: WindowCx): Origin?
@@ -12,17 +13,17 @@ local function focused(cx: WindowCx): Origin?
  return {pane = pane, cwd = info.cwd, window = if window and window ~= "" then window else nil, busy = false}
 end
 
-local function act(origin: Origin, action: {[string]: unknown}, done: ((WindowCx) -> ())?, quiet: boolean?)
+local function act(origin: Origin, action: {[string]: unknown}, done: ((WindowCx, Outcome?) -> ())?, quiet: boolean?)
  tern.timer(1, function(loadCx)
   if not loadCx then return end
   local loaded, rt = pcall(function() return require("./rt") end)
   if not loaded then
    if not quiet then loadCx:toast("error", "Tandem couldn't start that action", tostring(rt)) end
-   if done then done(loadCx) end
+   if done then done(loadCx, nil) end
    return
   end
-  rt.act(loadCx, origin, action, function(_outcome, resultCx)
-   if done then done(resultCx :: WindowCx) end
+  rt.act(loadCx, origin, action, function(outcome, resultCx)
+   if done then done(resultCx :: WindowCx, outcome) end
   end, if quiet then rt.QUIET else rt.ACTION)
  end)
 end
@@ -56,6 +57,29 @@ for number = 1, 9 do
 end
 command("project-prev", "Tandem: Previous project", {verb = "project", target = "prev"}, false)
 command("project-next", "Tandem: Next project", {verb = "project", target = "next"}, false)
+
+-- Quit asks once when tasks are working. Tern has no modal, so the answer is a second palette
+-- command that exists only while the question stands.
+local asked = 0
+local quitPending = false
+local function quit(cx: WindowCx, confirmed: boolean)
+ local origin = focused(cx)
+ if not origin then
+  cx:toast("error", "Tandem couldn't run that action", "The originating pane and its absolute cwd are required.")
+  return
+ end
+ quitPending = false
+ act(origin, {verb = "quit", confirmed = confirmed}, function(resultCx, outcome)
+  if not outcome or outcome.status ~= "confirm" or not outcome.notice then return end
+  asked += 1
+  local mine = asked
+  quitPending = true
+  tern.timer(60000, function() if asked == mine then quitPending = false end end)
+  resultCx:toast("info", outcome.notice.text, "Choose “Tandem: Quit anyway” in the palette to quit now, or do nothing to stay.")
+ end)
+end
+tern.command({ id = "quit", title = "Tandem: Quit", run = function(cx) quit(cx, false) end })
+tern.command({ id = "quit-anyway", title = "Tandem: Quit anyway", available = function() return quitPending end, run = function(cx) quit(cx, true) end })
 
 -- `nativeLink` in src/native/contract.ts writes these; PR links carry a number only.
 tern.route.link(function(link, cx)

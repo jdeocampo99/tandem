@@ -679,6 +679,11 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("merged-link"), url: z.string().url() }).strict(),
   /** The setup block's answer: parsed by `parseSetupAnswer`, so its shape lives in one place. */
   z.object({ verb: z.literal("setup-save"), answer: z.record(z.string(), z.unknown()) }).strict(),
+  /**
+   * Quit Tandem: stop every coordinator and close the Tern sessions Tandem opened. Without
+   * `confirmed`, working tasks make it answer `confirm` and change nothing.
+   */
+  z.object({ verb: z.literal("quit"), confirmed: z.boolean() }).strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -690,7 +695,8 @@ export type ActionEnvelope = z.infer<typeof ActionEnvelope>;
 
 /**
  * What `rt.act` shows for an outcome. Each code has one toast title and level in `rt.luau`;
- * `failed` takes the title of the screen that asked.
+ * `failed` takes the title of the screen that asked. `quit-confirm` is no toast: it is the
+ * question of a `confirm` outcome, which the screen that asked puts to the person itself.
  */
 export const NOTICE_CODES = [
   "failed",
@@ -702,6 +708,7 @@ export const NOTICE_CODES = [
   "review-unconfirmed",
   "feedback-saved",
   "setup-incomplete",
+  "quit-confirm",
 ] as const;
 export const NoticeCode = z.enum(NOTICE_CODES);
 export type NoticeCode = z.infer<typeof NoticeCode>;
@@ -709,11 +716,13 @@ export type NoticeCode = z.infer<typeof NoticeCode>;
 /**
  * `done`: the click did what it asked. `kept`: part of it did not happen, typically a view that
  * could not be closed or proved, and the originating view stays. `refused`: Tandem refused the
- * click or it failed; the notice says why, and the user may try again.
+ * click or it failed; the notice says why, and the user may try again. `confirm`: nothing happened
+ * yet; the notice is a question the screen asks, and a yes sends the same action again with
+ * `confirmed` set.
  */
 export const Outcome = z
   .object({
-    status: z.enum(["done", "kept", "refused"]),
+    status: z.enum(["done", "kept", "refused", "confirm"]),
     notice: z
       .object({ code: NoticeCode, text: z.string().min(1) })
       .strict()

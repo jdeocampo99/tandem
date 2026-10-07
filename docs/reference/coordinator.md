@@ -1,18 +1,19 @@
-# Coordinator launch, update, and reset
+# Coordinator launch, update, quit, and reset
 
 How Tandem selects projects, launches and replaces coordinators, retires old panes and leases, keeps
-one coordinator per repository, and what `update`, `reset`, and `reset --hard` preserve or delete.
+one coordinator per repository, and what `update`, `quit`, `reset`, and `reset --hard` preserve or delete.
 
 Code: src/main.ts, src/terminal/arguments.ts, src/terminal/launch.ts, src/terminal/hard-reset.ts,
 src/config/environment.ts, src/coordinator/launch.ts, src/coordinator/ownership.ts,
 src/coordinator/registry.ts, src/coordinator/record.ts, src/coordinator/lock.ts,
 src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/quarantine.ts,
 src/coordinator/workspace.ts,
-src/coordinator/restart.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
+src/coordinator/restart.ts, src/coordinator/quit.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
 src/coordinator/renest.ts, src/harness/contract.ts (the launch port), src/harness/resolve.ts,
 src/harness/omp/launch.ts, src/harness/claude-code/launch.ts.
-Tests: tests/coordinator/, tests/harness/omp/launch.test.ts, tests/harness/claude-code/launch.test.ts,
-tests/evals/harness-scenarios.test.ts, tests/terminal/main.test.ts.
+Tests: tests/coordinator/, tests/evals/quit.test.ts, tests/harness/omp/launch.test.ts,
+tests/harness/claude-code/launch.test.ts, tests/evals/harness-scenarios.test.ts,
+tests/terminal/main.test.ts.
 
 ## Setting resolution
 
@@ -392,8 +393,9 @@ fix` re-nest (renest.ts):
 ## Self-pane guard
 
 `update` and `reset` refuse to run inside any recorded coordinator pane of the session
-(`assertNotInCoordinatorPane` in src/main.ts), since they would close it. Any other pane or a
-separate terminal is fine.
+(`assertNotInCoordinatorPane` in src/main.ts), since they would close it. `quit` has the same guard
+for every pane it would close, coordinator or worker (`insidePaneId` in quit.ts). Any other pane or
+a separate terminal is fine.
 
 ## `tandem update`
 
@@ -412,6 +414,60 @@ recovery.
 - Foreign, ambiguous, or missing ownership refuses before any close.
 - No restart path lets a coordinator restart itself. Per-task worker restart is a separate action;
   see [control](control.md).
+
+## `tandem quit`
+
+Stops every coordinator of this home and session and closes the terminal sessions Tandem created,
+keeping everything durable. Owned by quit.ts; the panel's ⏻ button and the palette's "Tandem: Quit"
+run the same code through `tandem native act` ([Quit](native-views.md#quit)). It takes no paths;
+`--yes` answers its one question.
+
+Scope and decisions:
+
+- Every project with a coordinator record in this session, the Tandem checkout included, at once.
+- **What runs** is decided apart from the effects. `readQuitPlan` reads the tasks and runtime under
+  the task-store lock and proves each coordinator (`findResetCoordinator`) and each recorded task
+  endpoint (the force-reset ownership proofs in reset.ts: native pane identity, process identity,
+  worker terminal identity) without changing anything. `workingTasks` then names the tasks whose
+  active job has a live pane; a job whose pane is already gone is not running.
+- Ambiguous ownership (a foreign-session endpoint, a pane that no longer proves its recorded
+  process or cwd, a pending launch that cannot be recovered) refuses before any close.
+- Quitting from inside a pane it would close (a coordinator, its alert helper, a worker) refuses
+  and names the other places to quit from.
+- With the terminal server not running, or nothing of Tandem's live, it says there is nothing to
+  quit and changes nothing.
+
+The question, asked only when a task is working:
+"N task(s) are working: TITLES. Quit anyway? They restart where they can next time you run tandem."
+Declining changes nothing. Without a terminal and without `--yes` it refuses, naming `--yes`.
+
+Effects, under the session's launch lock and the task-store lock (reset's locks, minus the
+presentation locks, since quit writes no presentation record):
+
+1. Close each coordinator through `closeForceCoordinators`: the exact owned close that reset uses,
+   so a Tern coordinator's native views and alert helper retire with it. Coordinators go first, so
+   no scheduler relaunches a worker that is about to die. A busy coordinator is closed too; its chat
+   resumes with `--continue`.
+2. Close each live recorded worker or validation pane with `forceCloseEndpoint`. Validation is
+   interrupted through its runner first so its detached commands are reaped.
+3. Under Tern, the close that empties a session also kills that session
+   (`killSession` in tern/cli.ts, which rechecks the exact id and emptiness). A session still
+   holding a pane Tandem does not own is never killed, and that pane is never closed. Under Herdr
+   the same owned closes remove each workspace when its last pane closes; quit never stops the
+   Herdr server.
+
+Quit does not touch tasks, runtime records, reservations, leases, worktrees, branches, PRs,
+coordinator records, conversations, or settings. A worker closed this way keeps its job record, and
+the next launch finds its pane gone and settles it as a [`lost-resource`](recovery.md#durable-operations-and-quarantine)
+failure that central recovery restarts; quit adds no pause state. The next `tandem` replaces each
+stopped coordinator and resumes its chat.
+
+Failure: quit stops at the first close that fails and reports how many coordinators and worker
+panes it had closed; running it again finishes, because closed panes are already gone.
+
+From the panel or palette the work runs in a detached `tandem quit --yes` whose output goes to
+`<home>/quit.log`, because the click's process lives in the session being killed. See
+[Quit](native-views.md#quit).
 
 ## `tandem reset`
 

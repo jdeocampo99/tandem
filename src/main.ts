@@ -7,6 +7,12 @@ import { readBoardSnapshot } from "./board/snapshot.ts";
 import { renderStatus, renderStatusLine, type StatusStyle } from "./board/terminal.ts";
 import type { TandemEnvironmentSource } from "./config/environment.ts";
 import type { CommandRunner } from "./contracts.ts";
+import {
+  quitHasNothingToStop,
+  quitQuestion,
+  quitTandem,
+  readQuitPlan,
+} from "./coordinator/quit.ts";
 import { type ReconcileReport, reconcileTandemResources } from "./coordinator/reconcile.ts";
 import { listCoordinatorRecords } from "./coordinator/registry.ts";
 import { type RenestReport, renestWorkspaces } from "./coordinator/renest.ts";
@@ -26,7 +32,11 @@ import {
   type TerminalRunResult,
 } from "./terminal/arguments.ts";
 import type { CliApplication, CliDependencies } from "./terminal/cli-application.ts";
-import { defaultRunInteractive, type RunInteractive } from "./terminal/cli-process.ts";
+import {
+  defaultRunInteractive,
+  type RunInteractive,
+  type StartPersistent,
+} from "./terminal/cli-process.ts";
 import { resolveTerminalEnvironment, type TerminalEnvironment } from "./terminal/environment.ts";
 import {
   fixCleanupCount,
@@ -101,6 +111,8 @@ Usage:
   tandem reset             Cancel all in-progress tasks and reopen fresh coordinators
                            Keeps onboarding, settings, task history, and your files
   tandem reset --hard      Delete all Tandem state and worktrees; next run onboards from scratch
+  tandem quit              Stop every coordinator and close the Tern sessions Tandem opened
+                           Keeps tasks, worktrees, PRs, and chats; the next tandem picks them up
   tandem configure [PATH]  Inspect or save repository settings
   tandem config [PATH]     Open the project's settings file in $VISUAL/$EDITOR
   tandem panel             What every agent is doing, and one key to get to it
@@ -111,7 +123,7 @@ Usage:
   tandem welcome           Show the welcome message again
 
 Options:
-  --yes                    Skip the confirmation (fix, reset)
+  --yes                    Skip the confirmation (fix, reset, quit)
   --json                   Machine-readable output (status, trace, report, watch, memory, fix)
   --watch                  Redraw every 2 seconds until Esc, q, or Ctrl-C (status)
   --line                   One line: what needs you, what's running, PRs (status)
@@ -137,6 +149,8 @@ export type TerminalMainDependencies = Readonly<{
   readonly stdout?: (text: string) => void;
   readonly stderr?: (text: string) => void;
   readonly resetCoordinators?: typeof resetCoordinators;
+  /** Starts the detached `tandem quit` a native Quit click hands its work to. */
+  readonly startQuit?: StartPersistent;
   /** The Tandem checkout, whose coordinator always opens; tests inject a temporary one. */
   readonly tandemCheckout?: string;
   /** The terminal Tandem drives; built from `run` when absent. */
@@ -645,6 +659,55 @@ async function handleHardReset({
   return { exitCode: 0, status: "reset" };
 }
 
+/**
+ * `tandem quit` stops every coordinator and closes the Tern sessions Tandem opened, keeping all
+ * tasks, worktrees, PRs, and chats. Working tasks make it ask first; stopped workers recover at
+ * the next launch like any lost worker.
+ */
+async function handleQuit({
+  invocation,
+  environment,
+  run,
+  terminal,
+  interaction,
+  stdout,
+}: Readonly<{
+  readonly invocation: TerminalInvocation;
+  readonly environment: TerminalEnvironment;
+  readonly run: CommandRunner;
+  readonly terminal: TerminalBackend;
+  readonly interaction: TerminalInteraction;
+  readonly stdout: (text: string) => void;
+}>): Promise<TerminalRunResult> {
+  const inherited = terminalContext.inheritedPane(environment.source);
+  const scope = {
+    home: environment.home,
+    sessionId: environment.sessionId,
+    ...(inherited.status === "inside" ? { insidePaneId: inherited.paneId } : {}),
+  };
+  const plan = await readQuitPlan(run, terminal, scope);
+  if (quitHasNothingToStop(plan)) {
+    stdout("Tandem isn't running; nothing to quit.\n");
+    return { exitCode: 0, status: "quit" };
+  }
+  if (
+    plan.working.length > 0 &&
+    !(await confirm(quitQuestion(plan.working), invocation, interaction))
+  ) {
+    stdout("Tandem quit cancelled; nothing was changed.\n");
+    return { exitCode: 0, status: "cancelled" };
+  }
+  const report = await quitTandem(run, terminal, scope);
+  stdout(
+    `Tandem quit: stopped ${report.coordinators.length} coordinator${report.coordinators.length === 1 ? "" : "s"} and closed ${report.closedPanes} worker pane${report.closedPanes === 1 ? "" : "s"}. Your tasks, worktrees, and chats are kept; run tandem to pick up where you left off.\n`,
+  );
+  for (const record of report.coordinators) {
+    const notice = workspaceRetirementNotice(record.repoPath, record.workspaceRetirement);
+    if (notice !== undefined) stdout(notice);
+  }
+  return { exitCode: 0, status: "quit" };
+}
+
 async function tandemProjectAmong(
   roots: readonly string[],
   tandemCheckout: string,
@@ -846,6 +909,7 @@ export async function runTerminal(
         ...(dependencies.createService === undefined
           ? {}
           : { createService: dependencies.createService }),
+        ...(dependencies.startQuit === undefined ? {} : { startQuit: dependencies.startQuit }),
       });
       stdout(`${JSON.stringify(outcome)}\n`);
       return { exitCode: 0, status: "native" };
@@ -946,6 +1010,9 @@ export async function runTerminal(
           interaction,
           stdout,
         });
+      }
+      if (invocation.command === "quit") {
+        return await handleQuit({ invocation, environment, run, terminal, interaction, stdout });
       }
       if (invocation.command === "reset" && invocation.hard) {
         return await handleHardReset({

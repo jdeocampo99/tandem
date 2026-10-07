@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runCommand } from "../adapters/commands.ts";
 import { markNativeAlertsRead, nativeAlertCounts } from "../board/native-alerts.ts";
 import {
@@ -7,6 +9,7 @@ import {
 } from "../config/environment.ts";
 import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
+import { quitHasNothingToStop, quitQuestion, readQuitPlan } from "../coordinator/quit.ts";
 import { type CoordinatorRecord, canonicalPath, pathIsWithin } from "../coordinator/record.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
@@ -33,6 +36,7 @@ import {
   environmentSource,
   serviceOptions,
 } from "../terminal/cli-application.ts";
+import { defaultStartPersistent, type StartPersistent } from "../terminal/cli-process.ts";
 import { terminalBackend } from "../terminal-backend/compose.ts";
 import type {
   OpenViewResult,
@@ -61,6 +65,8 @@ export type NativeActDependencies = Readonly<{
   terminal?: TerminalBackend;
   service?: TandemService;
   createService?: (options: TandemServiceOptions) => TandemService;
+  /** Starts the detached `tandem quit` that outlives the pane a quit click came from. */
+  startQuit?: StartPersistent;
 }>;
 
 type Origin = Readonly<{ paneId: string; cwd: string; windowId?: string }>;
@@ -71,6 +77,7 @@ type Act = Readonly<{
   origin: Origin;
   run: CommandRunner;
   terminal: TerminalBackend;
+  startQuit: StartPersistent;
   service: () => TandemService;
 }>;
 
@@ -132,6 +139,7 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
     const act: Act = {
       ...located,
       run,
+      startQuit: dependencies.startQuit ?? defaultStartPersistent,
       service: () => {
         if (dependencies.service !== undefined) return dependencies.service;
         created ??= (dependencies.createService ?? createTandemService)({
@@ -159,7 +167,7 @@ async function locate(
   envelope: ActionEnvelope,
   dependencies: NativeActDependencies,
   run: CommandRunner,
-): Promise<Omit<Act, "run" | "service">> {
+): Promise<Omit<Act, "run" | "service" | "startQuit">> {
   let home: string | undefined;
   let origin: Origin;
   if ("ctx" in envelope.origin) {
@@ -288,6 +296,7 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
     );
   },
   "setup-save": saveSetup,
+  quit,
 };
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
@@ -954,4 +963,26 @@ async function saveSetup(
   if (!result.complete)
     return notice("kept", "setup-incomplete", [result.message, ...warnings].join("\n"));
   return warnings.length === 0 ? DONE : notice("done", "setup-incomplete", warnings.join("\n"));
+}
+
+const QUIT_ENTRY = fileURLToPath(new URL("../main.ts", import.meta.url));
+
+/**
+ * Quitting closes the very session this click came from, so the work cannot run in this process,
+ * which lives and dies with the click. A working task asks first. Once answered, a detached
+ * `tandem quit --yes` does the work in its own session and logs to `<home>/quit.log`.
+ */
+async function quit(act: Act, action: Extract<Action, { verb: "quit" }>): Promise<Outcome> {
+  const { home, sessionId } = act.environment;
+  const plan = await readQuitPlan(act.run, act.terminal, { home, sessionId });
+  if (plan.working.length > 0 && !action.confirmed)
+    return notice("confirm", "quit-confirm", quitQuestion(plan.working));
+  if (quitHasNothingToStop(plan)) return DONE;
+  const started = await act.startQuit({
+    argv: [process.execPath, QUIT_ENTRY, "quit", "--yes", "--home", home, "--session", sessionId],
+    cwd: home,
+    log: join(home, "quit.log"),
+  });
+  if (started === undefined) throw new Error("Tandem could not start quitting");
+  return DONE;
 }
