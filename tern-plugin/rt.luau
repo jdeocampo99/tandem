@@ -29,6 +29,7 @@ local NOTICES: {[string]: {level: string, title: string}} = {
  ["review-unconfirmed"] = {level = "info", title = "Review wasn't confirmed as posted"},
  ["feedback-saved"] = {level = "warning", title = "PR feedback saved"},
  ["setup-incomplete"] = {level = "warning", title = "Setup saved with problems"},
+ ["origin-unproven"] = {level = "error", title = "Tandem refused that click"},
 }
 
 -- One view file a block draws (src/native/contract.ts `ViewFile`). `model` is the newest file

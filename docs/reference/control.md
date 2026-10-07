@@ -119,7 +119,9 @@ lives in `approvalPrompt` in src/session/actions.ts.
 ## CLI consent and output
 
 - `--yes` is explicit automation consent. It is not an interactive prompt; the CLI checks it and
-  proceeds or raises a consent error (`requireYes` in src/terminal/cli-commands.ts).
+  proceeds or raises a consent error (`requireYes` in src/terminal/cli-commands.ts). It does not
+  prove a person typed it: any shell of the same user, a worker's included, can pass it. See
+  [what guards the workflow](operating-model.md#what-guards-the-workflow).
 - Commands that need `--yes`: `configure-models`, `setup`, `onboard --write`, `approve`, `cancel`,
   `pr draft`, `pr publish`, `pr merge`/`merge`, and `cleanup --discard`. Safe cleanup does not.
 - `steer`, `answer`, and `messages` are not approval-bearing and get no extra consent prompt. All
@@ -141,7 +143,11 @@ The envelope is `{v: 1, origin, action}`. `origin` is either a block's exact dec
 the `ctx` it was launched with, echoed verbatim, or a window command's focused `pane`, absolute
 `cwd` and optional opaque `window` key. The pane must be listed by exactly one recorded
 coordinator session before the scoped service is created; context never grants ownership, and
-the coordinator is proven separately. Unreadable records and sessions whose pane listing fails
+the coordinator is proven separately. Approval-bearing verbs (`brief-approve`,
+`brief-request-changes`, `steer`, `restart`, `pr-comment`, `review-submit` and `setup-save`)
+also need the exact block Tandem opened for that subject, as Tern lists it. Any other origin, and
+every Herdr origin, is refused with `origin-unproven` before anything changes
+([approval-bearing clicks](native-views.md#approval-bearing-clicks)). Unreadable records and sessions whose pane listing fails
 are non-matches; when no readable, live candidate matches, the action is refused clearly.
 Missing or malformed origins are refused before any pane is read.
 
@@ -149,7 +155,7 @@ The outcome's `status` is `done` (the click did what it asked), `kept` (part of 
 happen and the originating view stays) or `refused` (Tandem refused it or it failed; nothing to
 undo). An optional `notice: {code, text}` explains it. The closed codes are `failed`,
 `view-kept`, `catch-up-unavailable`, `brief-warning`, `brief-left-open`, `review-posted`,
-`review-unconfirmed` and `feedback-saved`; `rt.luau` maps each to one toast title. No action is
+`review-unconfirmed`, `feedback-saved`, `setup-incomplete` and `origin-unproven`; `rt.luau` maps each to one toast title. No action is
 retried, and a `kept` outcome never invites a repeat.
 
 `src/native/actions.ts` dispatches one handler per verb:

@@ -77,6 +77,9 @@ export type TerminalView =
   | Readonly<{ kind: "pr"; repo: string; number: number }>
   | Readonly<{ kind: "setup"; mode: SetupMode }>;
 
+/** The views whose blocks carry the user's approval-bearing clicks; see `ViewsCapability.isView`. */
+export type ProvableView = Extract<TerminalView, { taskId: string } | { kind: "brief" | "setup" }>;
+
 /** Presentation context from the initiating view; it grants no pane ownership. */
 export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
 
@@ -150,6 +153,22 @@ export type ViewsCapability = Readonly<{
       view: Extract<TerminalView, { kind: "brief" }>;
     }>,
   ): Promise<Readonly<{ closed: boolean; warnings: readonly string[] }>>;
+  /**
+   * Whether `origin.paneId` is the exact native block of `view` this coordinator's views launched
+   * for `home` and `cwd`, with `origin.windowId` as its window key: a read that changes nothing.
+   * Only the terminal's own record of which program a pane runs, with which launch arguments,
+   * satisfies it; a pane id, a cwd or an echoed context never does. The coordinator's own pane is
+   * never a view. An ambiguous listing throws.
+   */
+  isView(
+    input: Readonly<{
+      coordinator: Endpoint;
+      cwd: string;
+      home: string;
+      origin: ViewOrigin & Readonly<{ paneId: string }>;
+      view: ProvableView;
+    }>,
+  ): Promise<boolean>;
   /** Settles every retained native view open under `home` whose outcome is now proved. */
   recover(home: string): Promise<void>;
   /**
