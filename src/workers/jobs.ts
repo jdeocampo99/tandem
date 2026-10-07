@@ -64,8 +64,8 @@ export type WorkerJob = Readonly<{
   readonly timeoutMs?: number;
   /** The pinned worktree setup commands an implementer runs before OMP starts. */
   readonly setup?: readonly SetupCommand[];
-  /** The implementer's playbook steps; its report is rejected while any is open in its to-do list. */
-  readonly playbookSteps?: readonly string[];
+  /** The implementer's specialist steps; its report is rejected while any is open in its to-do list. */
+  readonly specialistSteps?: readonly string[];
   /** The pinned validation command lines an implementer may not run; Tandem runs them after its report. */
   readonly validationCommands?: readonly string[];
   /**
@@ -447,10 +447,9 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   if (setup !== undefined && role !== "implementer") {
     throw new TypeError("setup is only permitted for implementer jobs");
   }
-  const playbookSteps =
-    value.playbookSteps === undefined ? undefined : readPlaybookSteps(value.playbookSteps);
-  if (playbookSteps !== undefined && role !== "implementer") {
-    throw new TypeError("playbookSteps is only permitted for implementer jobs");
+  const specialistSteps = readSpecialistSteps(value);
+  if (specialistSteps !== undefined && role !== "implementer") {
+    throw new TypeError("specialistSteps is only permitted for implementer jobs");
   }
   const validationCommands =
     value.validationCommands === undefined
@@ -481,17 +480,29 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(communication === undefined ? {} : { communication }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(setup === undefined ? {} : { setup }),
-    ...(playbookSteps === undefined ? {} : { playbookSteps }),
+    ...(specialistSteps === undefined ? {} : { specialistSteps }),
     ...(validationCommands === undefined ? {} : { validationCommands }),
     ...(prReview === undefined ? {} : { prReview }),
   };
 }
 
-function readPlaybookSteps(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError("playbookSteps must be a non-empty array");
+/**
+ * A job written before specialists carries its steps as `playbookSteps`; reading that key keeps the
+ * submit gate on a job already in flight across the upgrade. New jobs never write it.
+ */
+function readSpecialistSteps(
+  value: Readonly<Record<string, unknown>>,
+): readonly string[] | undefined {
+  if (value.specialistSteps !== undefined && value.playbookSteps !== undefined) {
+    throw new TypeError("a job records either specialistSteps or playbookSteps, not both");
   }
-  return value.map((step, index) => readSingleLineText(step, `playbookSteps[${index}]`));
+  const key = value.playbookSteps === undefined ? "specialistSteps" : "playbookSteps";
+  const steps = value[key];
+  if (steps === undefined) return undefined;
+  if (!Array.isArray(steps) || steps.length === 0) {
+    throw new TypeError(`${key} must be a non-empty array`);
+  }
+  return steps.map((step, index) => readSingleLineText(step, `${key}[${index}]`));
 }
 
 function readValidationCommandLines(value: unknown): readonly string[] {

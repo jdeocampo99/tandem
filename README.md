@@ -8,7 +8,7 @@ CI and review. Every task is saved, so you can close the terminal and pick up wh
 The parts it takes off your plate:
 
 - **Slop.** Agents pad their writing and cut corners in code. Tandem holds every agent to shared
-  writing and code standards and a playbook for its kind of task, then has a fresh reviewer grade
+  writing and code standards and a specialist for its kind of task, then has a fresh reviewer grade
   the work against the same rules.
 - **Context windows and worktrees.** Each job gets a fresh agent with only the context it needs, in
   its own worktree that Tandem creates, reuses, and cleans up. Your own checkout is never touched.
@@ -47,19 +47,49 @@ of abstraction per function, reuse before adding, plain names, comments that exp
 **reviewers grade against the identical text**. A project that has its own conventions can turn these
 off with `standards = "none"`.
 
-### Playbooks
+### Specialists
 
-Every coding task follows a playbook for its kind of work, so **good practice happens by default on
-every task**. Tandem picks the playbook, and the agent can't finish until each step is done or it
-explains why one doesn't apply.
+Every coding task follows a specialist: instructions and a checklist for its kind of work, so **good
+practice happens by default on every task**. Tandem guesses the specialist from what you asked for,
+or you name one ("use the blog writer"). The summary shows the pick before you approve, and the
+agent can't finish until each step is done or it explains why one doesn't apply.
 
-| Playbook | Main steps |
+Five come built in:
+
+| Specialist | Main steps |
 | --- | --- |
 | Bug fix | Reproduce it in a failing test, fix the cause, commit the test before the fix |
 | Feature | Reuse existing code, test through the public entry point, check reruns and partial failures |
 | Refactor | Confirm coverage first, move every caller, delete the old version |
-| Perf | Measure before and after, fix the cause |
-| Fix round | Fix every finding, confirm each is gone |
+| Performance | Measure before and after, fix the cause |
+| General | The feature steps, for anything else |
+
+Fix rounds keep the task's instructions and follow Tandem's own fix-round checklist: fix every
+finding, confirm each is gone.
+
+Write your own as a Markdown file in your repository's `.tandem/specialists/` (shared with your
+team) or in `~/.tandem/specialists/` (just for you). The repository's file wins over yours, and
+either replaces a built-in with the same name.
+
+```md
+---
+name: blog-writer
+label: Blog writer
+description: Writes posts for the docs blog.
+---
+You write posts for our docs site. Friendly, short paragraphs.
+
+## Steps
+- Read the brief and the three latest posts
+- Write an outline
+- Write the post in docs/blog/
+- Check every link works
+```
+
+`name` must match the file name. Without a `description`, Tandem never guesses it; you have to name
+it. A task keeps a copy of its specialist, so editing the file later never changes work already
+under way. `tandem specialists` lists them all and any file problems. See
+[task-lifecycle.md](docs/reference/task-lifecycle.md#specialists) for the full format.
 
 ### Validation and independent review
 
@@ -114,11 +144,11 @@ costs $0.042 per million tokens with output free.
   way still asks you to type `y`.
 - "Pull up the dark mode brief" and "why did that task take so long?" go straight to the right
   action.
-- Each coding task's playbook is picked by Jev.
+- Jev guesses each coding task's specialist when you don't name one.
 
 Jev only chooses among options Tandem's code lists for it. It never authorizes anything, and any
 low-confidence or unclear prompt falls through to the coordinator. Without a `TYPESAFE_API_KEY`,
-everything goes to the coordinator and tasks use the General playbook.
+everything goes to the coordinator and tasks use the General specialist unless you name one.
 
 ### Visual mockups
 
@@ -308,6 +338,7 @@ folder reopens Tandem's chat and every saved project with its previous chat.
 | `tandem report` | A page in Lavish showing where each task's time and money went and what held it up (`--since DATE` to narrow it) |
 | `tandem watch [PR]` | Your watched pull requests; with a link or number, start watching it (`--stop` to stop) |
 | `tandem memory [NAME]` | This project's workstreams; with a name, its catch-up and where its notes file is |
+| `tandem specialists` | This project's specialists, where each comes from, and any file problems (exits 1 on a problem) |
 | `tandem update` | Load your latest local Tandem code into every coordinator, keeping chats and tasks |
 | `tandem fix` | Clean up leftovers from a crash or failed launch, including paused Tern views and panes Tandem stopped touching (asks first) |
 | `tandem configure [PATH]` | Change models and project settings |
@@ -329,7 +360,7 @@ Tandem keeps its data in `~/.tandem`, never in your repository.
 
 ## Credits
 
-Tandem's playbooks and the principles its coding and review agents follow are adapted from
+Tandem's built-in specialists and the principles its coding and review agents follow are adapted from
 [pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT). Worktrees come from
 [Treehouse](https://github.com/kunchenguid/treehouse) and visual mockups from
 [Lavish](https://github.com/kunchenguid/lavish-axi), both by Kun Chen.

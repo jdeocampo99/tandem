@@ -233,7 +233,7 @@ test("a background task's notification after the report is dropped; before it, a
   ).toEqual({ type: "promptRoute", handled: false });
 });
 
-test("submit_report runs through the guard, and a TodoWrite list reaches the playbook gate", async () => {
+test("submit_report runs through the guard, and a TodoWrite list reaches the specialist steps gate", async () => {
   const { binding, files } = await worker("scout");
   await binding.handle({ type: "agentStart", prompt: BRIEF });
   const report = await binding.handle({
@@ -330,8 +330,8 @@ test("an implementer's edits stop once its report is in, as on OMP", async () =>
   });
 });
 
-test("an implementer's playbook steps count as done once Claude Code's task tools mark them", async () => {
-  const { binding, files } = await worker("implementer", { playbookSteps: ["Write the test"] });
+test("an implementer's specialist steps count as done once Claude Code's task tools mark them", async () => {
+  const { binding, files } = await worker("implementer", { specialistSteps: ["Write the test"] });
   await binding.handle({ type: "agentStart", prompt: BRIEF });
   const report = {
     type: "pluginTool",

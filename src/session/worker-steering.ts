@@ -1,5 +1,4 @@
 import type { TaskInbox, WorkerReceipt } from "../contracts.ts";
-import type { TodoItem } from "../playbooks/progress.ts";
 import {
   formatTaskMessages,
   markersFromText,
@@ -13,6 +12,7 @@ import {
   touchedReceipt,
   type WorkerControlConfig,
 } from "../workers/control-protocol.ts";
+import type { TodoItem } from "../workers/todos.ts";
 import {
   type ActivityObservation,
   type ActivityTool,

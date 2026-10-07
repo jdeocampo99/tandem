@@ -4,7 +4,6 @@ import type {
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { matchesKey } from "@oh-my-pi/pi-tui";
-import { todoItems } from "../../playbooks/progress.ts";
 import type {
   SessionDeps,
   SessionEffect,
@@ -34,6 +33,7 @@ import {
   SUBMIT_REPORT_TOOL,
   taskUsage,
 } from "../../workers/terminal.ts";
+import { todoItems } from "../../workers/todos.ts";
 import { jobTrace, readWorkerJob, workerJobPath, workerSession } from "../worker-session.ts";
 import { ompToolParameters } from "./tool-schema.ts";
 

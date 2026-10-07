@@ -73,6 +73,7 @@ const validRequests: readonly Record<string, unknown>[] = [
   { action: "onboard", repoPath: "/r" },
   { action: "setup", repoPath: "/r" },
   { action: "models", repoPath: "." },
+  { action: "specialists", repoPath: "/r" },
   { action: "configure-models", repoPath: "/r", models },
   { action: "configure-models", repoPath: "/r", models, enabledProviders: ["openai-codex"] },
   {
@@ -96,7 +97,7 @@ const validRequests: readonly Record<string, unknown>[] = [
     surfaces: ["src"],
     researchTaskIds: ["t0"],
     skills: ["tdd"],
-    playbook: "bug-fix",
+    specialist: "blog-writer",
     targetRepo: "owner/repo",
     targetCheckout: "/elsewhere",
     targetClone: true,
@@ -279,7 +280,7 @@ const invalidRequests: readonly [string, unknown][] = [
     { request: { action: "review-edit", taskId: "t", comments: [{ id: "c", line: 3 }] } },
   ],
   [
-    "fix-round is not a playbook the user can pin",
+    "an empty specialist name",
     {
       request: {
         action: "create",
@@ -289,7 +290,7 @@ const invalidRequests: readonly [string, unknown][] = [
         title: "o",
         acceptanceCriteria: [],
         surfaces: [],
-        playbook: "fix-round",
+        specialist: "",
       },
     },
   ],

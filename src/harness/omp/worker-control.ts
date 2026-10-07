@@ -3,8 +3,8 @@ import type {
   ExtensionContext,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import type { WorkerReceipt } from "../../contracts.ts";
-import { type TodoItem, todoItems } from "../../playbooks/progress.ts";
 import type { ToolCall } from "../../session/events.ts";
+import { type TodoItem, todoItems } from "../../workers/todos.ts";
 import { jobTrace, openWorkerSteering, workerJobPath } from "../worker-session.ts";
 import { contextWithTaskMessages, newestTaskMarker } from "./task-messages.ts";
 import {

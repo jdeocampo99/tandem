@@ -13,6 +13,8 @@ import {
 } from "../../src/contracts.ts";
 import { readRuntimeState, runtimeFile, writeRuntimeState } from "../../src/runtime/persistence.ts";
 import { emptyRuntimeState } from "../../src/runtime/schema.ts";
+import { builtInSpecialist } from "../../src/specialists/built-in.ts";
+import { readSpecialistMarkdown } from "../../src/specialists/specialist.ts";
 import { finalAcceptanceStatus, policyIdentity } from "../../src/tasks/acceptance.ts";
 import { ledgerBlockers } from "../../src/tasks/findings.ts";
 import { type TaskTransitionContext, transitionTask } from "../../src/tasks/lifecycle.ts";
@@ -418,18 +420,66 @@ test("round-trips pinned skills and refuses a malformed one at creation", async 
   });
 });
 
-test("round-trips a pinned playbook, loads older tasks without one, and rejects an unknown one", async () => {
+const writer = (() => {
+  const check = readSpecialistMarkdown(
+    "---\nname: blog-writer\n---\nShort paragraphs.\n## Steps\n- Write an outline",
+    { origin: "repository", path: "/repo/.tandem/specialists/blog-writer.md" },
+  );
+  if (!check.valid) throw new Error(check.defect);
+  return check.specialist;
+})();
+
+test("round-trips a pinned specialist and refuses one whose content no longer matches its digest", async () => {
   await withTemporaryDirectory(async (directory) => {
     const store = makeStore(directory);
     const older = await store.create({ ...input, id: "older" });
-    const pinned = await store.create({ ...input, id: "pinned", playbook: "bug-fix" });
-    expect((await store.read(older.id))?.playbook).toBeUndefined();
-    expect((await makeStore(directory, "reloaded").read(pinned.id))?.playbook).toBe("bug-fix");
+    const pinned = await store.create({ ...input, id: "pinned", specialist: writer });
+    expect((await store.read(older.id))?.specialist).toBeUndefined();
+    expect((await makeStore(directory, "reloaded").read(pinned.id))?.specialist).toEqual(writer);
 
     rewritePayload(directory, pinned.id, (payload) => {
-      payload.playbook = "yolo";
+      payload.specialist = { ...writer, steps: ["Skip the outline"] };
     });
     await expect(store.read(pinned.id)).rejects.toBeInstanceOf(StateCorruptionError);
+  });
+});
+
+test("an older task's playbook id decodes to that built-in specialist", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const legacy = await store.create({ ...input, id: "legacy" });
+    rewritePayload(directory, legacy.id, (payload) => {
+      payload.playbook = "perf";
+    });
+    expect((await store.read(legacy.id))?.specialist).toEqual(builtInSpecialist("perf"));
+
+    for (const [index, corrupt] of [
+      (payload: Record<string, unknown>) => {
+        payload.playbook = "fix-round";
+      },
+      (payload: Record<string, unknown>) => {
+        payload.playbook = "yolo";
+      },
+      (payload: Record<string, unknown>) => {
+        payload.playbook = "perf";
+        payload.specialist = builtInSpecialist("perf");
+      },
+    ].entries()) {
+      const task = await store.create({ ...input, id: `corrupt-${index}` });
+      rewritePayload(directory, task.id, corrupt);
+      await expect(store.read(task.id)).rejects.toBeInstanceOf(StateCorruptionError);
+    }
+  });
+});
+
+test("a specialist on a scout task is corrupt", async () => {
+  await withTemporaryDirectory(async (directory) => {
+    const store = makeStore(directory);
+    const scout = await store.create({ ...input, kind: "scout", id: "scout" });
+    rewritePayload(directory, scout.id, (payload) => {
+      payload.specialist = writer;
+    });
+    await expect(store.read(scout.id)).rejects.toBeInstanceOf(StateCorruptionError);
   });
 });
 

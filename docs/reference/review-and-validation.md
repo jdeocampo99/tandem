@@ -75,7 +75,7 @@ src/tasks/acceptance.ts owns both decisions; the runner and lifecycle only execu
   commits before the job settles instead of blocking the task with `no-clean-checkpoint`. When git
   cannot report a status, the submission goes through and the settle-time checkpoint check decides.
 - An implementer's `implemented` is also refused while any of its
-  [playbook](task-lifecycle.md#playbooks) steps is not completed or abandoned in its `todo` list.
+  [specialist](task-lifecycle.md#specialists) steps is not completed or abandoned in its `todo` list.
 - An implementer does not run the task's pinned validation commands; the validation worker runs
   them after the report. Its job spec lists each command line (a shell string as typed, otherwise
   its argv joined by spaces), and the worker extension's tool guard refuses a `bash` call that runs

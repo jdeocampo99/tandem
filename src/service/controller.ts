@@ -82,12 +82,6 @@ import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
 import type { SetupMode, SetupView } from "../onboarding/setup-view.ts";
 import { type SetupApplyResult, SetupWorkflow } from "../onboarding/setup-workflow.ts";
 import { checkTools, type ToolCheck } from "../onboarding/tools.ts";
-import {
-  PINNABLE_PLAYBOOK_IDS,
-  type PinnablePlaybookId,
-  type PlaybookId,
-} from "../playbooks/catalog.ts";
-import type { PlaybookClassifier } from "../playbooks/classify.ts";
 import { maintainPool } from "../pool/maintenance.ts";
 import type { PoolMaintenanceResult } from "../pool/policy.ts";
 import type { PrReviewEdits } from "../pr-review/edits.ts";
@@ -180,6 +174,13 @@ import {
   type IssueReview,
   SelfImprovement,
 } from "../self-improvement/service.ts";
+import type { SpecialistClassifier } from "../specialists/classify.ts";
+import {
+  loadSpecialists,
+  pinSpecialist,
+  type SpecialistRegistry,
+} from "../specialists/registry.ts";
+import type { Specialist } from "../specialists/specialist.ts";
 import { TaskControlWorkflow } from "../tasks/control.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX, keepFixingGrant } from "../tasks/findings.ts";
 import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
@@ -269,8 +270,8 @@ export type CreateTaskRequest = Readonly<{
   readonly researchContinuation?: ResearchContinuation;
   /** Names of skills the user asked this work to use; Tandem looks each one up and pins it. */
   readonly skills?: readonly string[];
-  /** The job playbook the user chose for implementation work; Jev picks one when absent. */
-  readonly playbook?: PinnablePlaybookId;
+  /** The specialist the user named for implementation work; Jev guesses one when absent. */
+  readonly specialist?: string;
   /** Another repository to work in, as GitHub `owner/repo`; absent works in this project. */
   readonly targetRepo?: string;
   /** Where the user said the target repository is checked out. */
@@ -319,8 +320,8 @@ export type TandemServiceOptions = Readonly<{
   readonly idFactory?: IdFactory;
   /** Chooses a new scout's post-research disposition; defaults to deterministic cues alone. */
   readonly classifyResearchContinuation?: ResearchContinuationClassifier;
-  /** Picks a new implementation task's playbook; defaults to the general playbook. */
-  readonly classifyPlaybook?: PlaybookClassifier;
+  /** Guesses a new implementation task's specialist; defaults to no guess, so general. */
+  readonly classifySpecialist?: SpecialistClassifier;
   /** Folders crawled for another repository's checkout; unset reads `projectRoots` on each use. */
   readonly projectRoots?: readonly string[];
   /** The home folder whose skill folders hold the user's personal skills; defaults to the OS home. */
@@ -367,6 +368,8 @@ export type TandemService = Readonly<{
   /** Parses, revalidates, and saves a setup answer; reports its complete or partial result. */
   readonly saveSetup: (repoPath: string, answerText: string) => Promise<SetupApplyResult>;
   readonly models: (repoPath: string) => Promise<ModelOptionsResult>;
+  /** Every specialist a new implementation task in this project could use, and any file problems. */
+  readonly specialists: (repoPath: string) => Promise<SpecialistRegistry>;
   /** Opens a saved project's coordinator in this Herdr session; refuses one not yet set up. */
   readonly openProject: (
     repoPath: string,
@@ -573,7 +576,7 @@ type ServiceDependencies = Readonly<{
   clock: Clock;
   idFactory: IdFactory;
   classifyResearchContinuation: ResearchContinuationClassifier;
-  classifyPlaybook: PlaybookClassifier;
+  classifySpecialist: SpecialistClassifier;
   store: TaskStore;
   requestStore: RequestBriefStore;
   usageLedger: RequestUsageLedger;
@@ -982,6 +985,7 @@ class TandemController {
       report: (options) => this.report(options),
       deliveryPreflight: (id, input) => this.deliveryPreflight(id, input.base),
       models: (repoPath) => this.models(repoPath),
+      specialists: (repoPath) => this.specialists(repoPath),
       openProject: (repoPath) => this.openProject(repoPath),
       configureModels: (input) => this.configureModels(input),
       create: (input) => this.create(input),
@@ -1347,21 +1351,41 @@ class TandemController {
     return classified.continuation;
   }
 
-  /** Pinned once at creation, outside the store lock, so restarts and fix rounds reuse it. */
-  private async playbookFor(
+  /**
+   * Copied onto the task once at creation, outside the store lock (the guess is a network call), so
+   * restarts and fix rounds reuse it and later edits to the file never reach this task.
+   */
+  private async specialistFor(
     input: CreateTaskRequest | PrReviewTaskRequest,
+    requested: unknown,
     brief: RequestBriefRecord | undefined,
-  ): Promise<PlaybookId | undefined> {
-    if (input.kind !== "implementation") return undefined;
-    if (input.playbook !== undefined) {
-      if (!(PINNABLE_PLAYBOOK_IDS as readonly string[]).includes(input.playbook)) {
-        throw new TypeError(`playbook must be one of ${PINNABLE_PLAYBOOK_IDS.join(", ")}`);
+    checkout: string,
+  ): Promise<Specialist | undefined> {
+    if (input.kind !== "implementation") {
+      if (requested !== undefined) {
+        throw new TypeError("a specialist is only valid for implementation tasks");
       }
-      return input.playbook;
+      return undefined;
     }
-    return this.#deps.classifyPlaybook(
-      brief === undefined ? input.objective : brief.draft.content.goal,
+    const registry = await loadSpecialists({
+      repositoryCheckout: checkout,
+      tandemHome: this.#deps.home,
+    });
+    const goal = brief === undefined ? input.objective : brief.draft.content.goal;
+    return pinSpecialist(
+      registry,
+      requested === undefined ? undefined : singleLine(requested, "specialist"),
+      (candidates) => this.#deps.classifySpecialist(goal, candidates),
     );
+  }
+
+  /** The specialists a new task in this project could use, read from the project's clean checkout. */
+  async specialists(repoPath: string): Promise<SpecialistRegistry> {
+    const source = await mapTaskSource(this.#deps.run, repoPath, this.#deps.sourceWorkspace);
+    return loadSpecialists({
+      repositoryCheckout: source.checkoutPath,
+      tandemHome: this.#deps.home,
+    });
   }
 
   async create(input: CreateTaskRequest | PrReviewTaskRequest): Promise<TaskRecord> {
@@ -1377,14 +1401,17 @@ class TandemController {
     const brief =
       requestId === undefined ? undefined : await this.#requests.requireRequest(requestId);
     const classifiedContinuation = await this.continuationFor(input, brief);
-    const playbook = await this.playbookFor(input, brief);
     const pinned = input.kind === "pr-review" ? undefined : await this.pinTarget(input);
+    // Only maps paths and asks git; it reads nothing the store lock guards.
+    const source = await mapTaskSource(this.#deps.run, input.repoPath, this.#deps.sourceWorkspace);
+    const { specialist: requestedSpecialist, ...request } = input;
+    const specialist = await this.specialistFor(
+      input,
+      requestedSpecialist,
+      brief,
+      pinned?.target.checkout ?? source.checkoutPath,
+    );
     return this.#deps.store.exclusive(async (store) => {
-      const source = await mapTaskSource(
-        this.#deps.run,
-        input.repoPath,
-        this.#deps.sourceWorkspace,
-      );
       const policy =
         pinned === undefined
           ? await resolveRepoPolicy({
@@ -1428,14 +1455,14 @@ class TandemController {
             });
       const taskInput = taskInputFor(
         {
-          ...input,
+          ...request,
           ...(requestId === undefined ? {} : { requestId }),
           ...(researchHandoffs === undefined ? {} : { researchHandoffs }),
           ...(classifiedContinuation === undefined
             ? {}
             : { researchContinuation: classifiedContinuation }),
           ...(pinned === undefined ? {} : { target: pinned.target }),
-          ...(playbook === undefined ? {} : { playbook }),
+          ...(specialist === undefined ? {} : { specialist }),
           ...(input.kind === "implementation"
             ? {
                 requiredStages: decideRequiredStages({
@@ -2916,9 +2943,9 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
   if (typeof classifyResearchContinuation !== "function") {
     throw new TypeError("classifyResearchContinuation must be a function");
   }
-  const classifyPlaybook = options.classifyPlaybook ?? (async () => "general" as const);
-  if (typeof classifyPlaybook !== "function") {
-    throw new TypeError("classifyPlaybook must be a function");
+  const classifySpecialist = options.classifySpecialist ?? (async () => undefined);
+  if (typeof classifySpecialist !== "function") {
+    throw new TypeError("classifySpecialist must be a function");
   }
   return {
     home,
@@ -2940,7 +2967,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     clock,
     idFactory,
     classifyResearchContinuation,
-    classifyPlaybook,
+    classifySpecialist,
     store: createTaskStore({ directory: join(home, "tasks"), clock, idFactory }),
     requestStore: createRequestBriefStore({ home, clock, idFactory }),
     usageLedger: createRequestUsageLedger({ home, clock }),

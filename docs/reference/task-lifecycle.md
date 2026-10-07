@@ -178,24 +178,78 @@ from the prompt router.
    `implementation-interview` with `selectedBy: "fallback"` and the real `fallbackReason`. Research
    never waits past `TANDEM_JEV_TIMEOUT_MS`. Jev never creates tasks, approves scope, or relaxes policy.
 
-## Playbooks
+## Specialists
 
-Code: src/playbooks/ (`catalog.ts` steps, `selection.ts` choice, `classify.ts` the Jev call,
-`progress.ts` the submit gate, `brief.ts` the brief section).
+Code: src/specialists/ (`specialist.ts` the file format and every check, `built-in.ts` the five
+built-ins, `registry.ts` folders, precedence and the pick, `classify.ts` the Jev guess, `run.ts`
+fix-round steps and the brief section, `view.ts` the listing). The submit gate is
+`src/workers/todos.ts`.
 
-- An implementation task pins a playbook at creation: `bug-fix`, `feature`, `refactor`, `perf`, or
-  `general`. The coordinator passes `playbook` when the user chose one; otherwise Jev classifies the
-  brief's goal (or the objective). A pick below 0.80 confidence, `other`, any Jev failure, or no
-  `TYPESAFE_API_KEY` pins `general`. Jev picks the playbook and nothing else. The task summary shows
-  it as `Type:`.
-- The implementer brief lists the steps and asks the worker to load them verbatim into OMP's `todo`
-  tool. Every fix round uses the `fix-round` playbook, whose first step carries the fix-round rule
-  to fix each P0 and P1 finding, or decline it in the report if it has no realistic failure or is
-  out of scope, and leave P2 and P3 as known issues. Older tasks without a playbook get one only in fix rounds.
+- A specialist is a Markdown file: frontmatter, free-form instructions, and an optional `## Steps`
+  list the implementer must finish. A file with only steps, or only instructions, is valid.
+
+  ```md
+  ---
+  name: blog-writer
+  label: Blog writer
+  description: Writes posts for the docs blog.
+  ---
+  You write posts for our docs site. Friendly, short paragraphs.
+
+  ## Steps
+  - Read the brief and the three latest posts
+  - Write an outline
+  - Write the post in docs/blog/
+  - Check every link works
+  ```
+
+- Frontmatter keys are `name` (required, equal to the file name, lowercase letters, digits and
+  hyphens, at most 40), `label` (defaults to the name, at most 60 characters) and `description`
+  (at most 300 characters; without one Tandem never guesses the specialist, it is used only when
+  named). Lines are `key: value`, blank, or `#` comments; a value may be quoted, and an unquoted one
+  ends at ` #`. Any other key, or a key twice, is an error.
+- The body's `## Steps` heading (one at most, case-insensitive, not inside a code fence) starts the
+  list; it ends at the next `#` or `##` heading. Each line in it is one `-`, `*`, `+` or `1.` item;
+  steps must be unique. Text after the list under a later heading goes back into the instructions.
+  Instructions and steps together are at most 8 KiB.
+- Folders: the repository's `.tandem/specialists/<name>.md` (shared through git) and the Tandem
+  home's `specialists/<name>.md` (private; `~/.tandem/specialists/` by default). Per name, the
+  repository wins over the home, and both win over a built-in of the same name. A broken file that
+  wins its name blocks that name: Tandem refuses it rather than falling back to the next one.
+  `fix-round` is reserved.
+- Built-ins: `bug-fix`, `feature`, `refactor`, `perf` and `general`, steps only, written in the same
+  format in `built-in.ts`. A file with the same name replaces one; none can be removed.
+- Picking: only implementation tasks get a specialist (create refuses `specialist` on a scout or a
+  pull request review). The coordinator passes `specialist: "<name>"` when the user names one; an
+  unknown or broken name fails create with a message the coordinator puts to the user. Otherwise Jev
+  guesses from the brief's goal (or the objective) among the ready specialists that have a
+  description, plus a `no_fit` option. `no_fit`, confidence below 0.80, any Jev failure, no
+  `TYPESAFE_API_KEY`, or more than 63 described specialists pins `general` (whichever file or
+  built-in wins that name). The task summary shows `Specialist: <label> (<name>, <origin>)` before
+  approval, and `tandem status TASK_ID --json` has `specialist`.
+- Repository specialists are read from the checkout skills come from: the coordinator's clean
+  checkout for this project, or the target checkout for work in another repository. A file must be
+  committed and the checkout refreshed before new tasks see it.
+- Pinning: create copies the whole specialist (name, label, origin, path, instructions, steps) onto
+  the task with a sha256 digest of that content. Editing or deleting the file later never changes the
+  task, and a stored copy whose digest no longer matches is refused as corrupt.
+- The implementer brief carries the instructions and asks the worker to load the steps verbatim into
+  its to-do list as one phase named Steps. Every fix round keeps the specialist's instructions but
+  swaps in Tandem's own fix-round steps: fix each P0 and P1 finding, or decline it in the report if it
+  has no realistic failure or is out of scope, and leave P2 and P3 as known issues. Reviewers and
+  scouts never get a specialist.
 - The worker extension remembers the list from the latest `todo` result. An `implemented` report is
   rejected while any step is not completed or abandoned (missing counts as open); the rejection
   names the steps. A dropped step's reason goes in the report.
 - The to-do list is the worker's scratch state and a submit-time gate only. It is never task state.
+- Legacy: a task saved with `playbook: "<id>"` decodes to the built-in specialist with that name
+  (never a user's file) and is saved back as `specialist`. A job file with `playbookSteps` keeps its
+  submit gate.
+- `tandem specialists` lists every specialist in the current project's working tree and the Tandem
+  home: where it comes from, whether it replaces a built-in, a short digest, and every file problem.
+  `--json` prints the registry. It exits 1 when there is any problem, so it works as a check. The
+  coordinator's read-only `specialists` action returns the same list from its clean checkout, so the
+  two can differ until a change is committed and refreshed.
 
 ## Interactive child terminals
 

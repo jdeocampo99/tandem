@@ -11,7 +11,6 @@ import { canonicalPath } from "../coordinator/record.ts";
 import { refreshCoordinatorSourceUnlocked } from "../coordinator/source.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import { publishViews } from "../native/store.ts";
-import { playbookClassifier } from "../playbooks/classify.ts";
 import { briefLanguageChecker } from "../requests/plain-language.ts";
 import { appendCoordinatorUsage } from "../runtime/usage-ledger.ts";
 import { issueDraftChecker } from "../self-improvement/issue-draft.ts";
@@ -24,6 +23,7 @@ import { coordinatorCompactTokens } from "../session/compaction.ts";
 import { CoordinatorSession } from "../session/coordinator.ts";
 import type { SessionDeps } from "../session/events.ts";
 import { readResearchReport } from "../session/notifications.ts";
+import { specialistClassifier } from "../specialists/classify.ts";
 import {
   researchContinuationClassifier,
   researchContinuationClassifierConfig,
@@ -72,7 +72,7 @@ function createCoordinatorService(
       : { coordinatorPaneId: environment.coordinatorPaneId }),
     poolRoot: environment.poolRoot,
     classifyResearchContinuation: researchContinuationClassifier(jevConfig),
-    classifyPlaybook: playbookClassifier(jevConfig),
+    classifySpecialist: specialistClassifier(jevConfig),
     checkIssueDraft: issueDraftChecker(jevConfig),
     checkBriefLanguage: briefLanguageChecker(jevConfig),
     ...(sourceRepo === undefined

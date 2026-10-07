@@ -1,9 +1,9 @@
 import { displayActivity } from "../board/panel.ts";
 import type { FindingLedgerEntry, IsoTimestamp, TaskRecord, TaskStage } from "../contracts.ts";
 import { harnessOfSelector } from "../harness/contract.ts";
-import type { TodoItem } from "../playbooks/progress.ts";
 import { elapsed } from "../pr-watch/view.ts";
 import type { TaskCostView } from "../runtime/usage-view.ts";
+import type { TodoItem } from "../workers/todos.ts";
 import type { WorkerActivity } from "../workers/worker-activity.ts";
 import type { TaskInspection } from "./inspection.ts";
 import type { StoredTimelineEvent } from "./timeline.ts";

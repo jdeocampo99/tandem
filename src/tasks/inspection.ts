@@ -13,6 +13,7 @@ import type {
 } from "../runtime/schema.ts";
 import { describeError, reportPathFor } from "../service/records.ts";
 import { taskCheckoutPath } from "../service/source.ts";
+import type { Specialist } from "../specialists/specialist.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { fixRoundBudget } from "./findings.ts";
 
@@ -44,6 +45,8 @@ export type TaskInspection = Readonly<{
   readonly taskId: string;
   /** The request this task belongs to. */
   readonly requestId?: string;
+  /** The specialist the task pinned at creation; absent on scouts and older tasks. */
+  readonly specialist?: Readonly<Pick<Specialist, "name" | "label" | "origin">>;
   readonly stage: TaskRecord["stage"];
   readonly generation: number;
   readonly reviewRound: number;
@@ -404,6 +407,15 @@ export async function inspectTask(
   return {
     taskId: task.id,
     ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
+    ...(task.specialist === undefined
+      ? {}
+      : {
+          specialist: {
+            name: task.specialist.name,
+            label: task.specialist.label,
+            origin: task.specialist.origin,
+          },
+        }),
     stage: task.stage,
     generation: task.generation,
     reviewRound: task.reviewRound,

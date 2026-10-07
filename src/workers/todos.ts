@@ -26,7 +26,7 @@ export function todoItems(result: unknown): readonly TodoItem[] | undefined {
 }
 
 /**
- * Playbook steps not yet completed or abandoned. A step missing from the list is open too, so
+ * Required steps not yet completed or abandoned. A step missing from the list is open too, so
  * removing it is not a way to skip it.
  */
 export function openSteps(

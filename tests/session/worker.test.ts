@@ -672,8 +672,8 @@ test("copy_asset works only while a scout draws a mockup", async () => {
   });
 });
 
-test("an implementer cannot report done while a playbook step is open in its to-do list", async () => {
-  const worker = workerSession({ playbookSteps: ["Reproduce the bug", "Add a regression test"] });
+test("an implementer cannot report done while a specialist step is open in its to-do list", async () => {
+  const worker = workerSession({ specialistSteps: ["Reproduce the bug", "Add a regression test"] });
   worker.session.onToolEnd({
     call: call("todo"),
     todos: [
