@@ -33,11 +33,13 @@ export async function projectForView(
   coordinator: Endpoint,
   cwd: string,
 ): Promise<string> {
+  const { canonicalPath } = await import("../../coordinator/record.ts");
   const { findRecordedOwner } = await import("../../coordinator/recorded-owner.ts");
   const owner = await findRecordedOwner(home, {
     by: "pane",
     pane: { ...coordinator, terminal: "tern" },
-    cwd,
+    // Records keep the worktree's real path; a harness may report it through a symlink like /tmp.
+    cwd: await canonicalPath(cwd, "cwd"),
   });
   if (owner.status !== "owned")
     throw new Error("Native view requires exactly one recorded coordinator");
