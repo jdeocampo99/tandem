@@ -3,7 +3,7 @@ import type { CommandRunner } from "../contracts.ts";
 import type { CoordinatorResourceOutcome } from "../coordinator/resources.ts";
 import type { CoordinatorWorkspaceRetirement } from "../coordinator/workspace.ts";
 import type { TandemService } from "../service/controller.ts";
-import { terminalContext } from "../terminal-backend/compose.ts";
+import { terminalContextFor } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { TerminalInvocation } from "./arguments.ts";
 import {
@@ -226,7 +226,8 @@ export async function launchProjects(
         `Herdr workspace focus failed with code ${focus.code}${focus.detail.length === 0 ? "" : `: ${focus.detail}`}`,
       );
     }
-    if (terminalContext.inheritedPane(environment.source).status !== "inside") {
+    // Focus already showed the coordinator in this window; a client would open a second one.
+    if (!terminalContextFor(terminal.name).inWindow(environment.source)) {
       const attach = await (dependencies.runInteractive ?? defaultRunInteractive)({
         argv: terminal.clientCommand(environment.sessionId),
         cwd: first,

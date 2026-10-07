@@ -165,6 +165,7 @@ export const terminalContext: TerminalContext = {
       status: "invalid",
       reason: "Both Herdr and Tern pane contexts are present; ownership is ambiguous",
     },
+  inWindow: (source) => TERN_CONTEXT.inWindow(source) || HERDR_CONTEXT.inWindow(source),
   sessionName: (source) => inheritedContext(source)?.sessionName(source),
   workspaceId: (source) => inheritedContext(source)?.workspaceId(source),
   paneInSession: (source, sessionId) => inheritedContext(source)?.paneInSession(source, sessionId),

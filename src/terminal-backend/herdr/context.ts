@@ -69,6 +69,7 @@ export const HERDR_CONTEXT: TerminalContext = {
     "HERDR_PANE_ID",
   ],
   inheritedPane,
+  inWindow: (source) => inheritedPane(source).status === "inside",
   sessionName: (source) => source.HERDR_SESSION ?? source.HERDR_SESSION_NAME,
   workspaceId: (source) => source.HERDR_WORKSPACE_ID,
   paneInSession,
