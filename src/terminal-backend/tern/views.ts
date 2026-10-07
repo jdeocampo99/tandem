@@ -27,17 +27,23 @@ class BrowserOpenUnconfirmedError extends AdapterError {
 }
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 export type ViewHostingInput = Parameters<ViewsCapability["open"]>[0];
-export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
-  const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
-  const records = (await listCoordinatorRecords(home, coordinator.sessionId)).filter(
-    (record) =>
-      record.endpoint.terminal === "tern" &&
-      record.endpoint.paneId === coordinator.paneId &&
-      record.endpoint.terminalSessionId === coordinator.terminalSessionId,
-  );
-  if (records.length !== 1 || records[0] === undefined)
+/** The project of the one recorded coordinator in this exact pane, tab and worktree. */
+export async function projectForView(
+  home: string,
+  coordinator: Endpoint,
+  cwd: string,
+): Promise<string> {
+  const { canonicalPath } = await import("../../coordinator/record.ts");
+  const { findRecordedOwner } = await import("../../coordinator/recorded-owner.ts");
+  const owner = await findRecordedOwner(home, {
+    by: "pane",
+    pane: { ...coordinator, terminal: "tern" },
+    // Records keep the worktree's real path; a harness may report it through a symlink like /tmp.
+    cwd: await canonicalPath(cwd, "cwd"),
+  });
+  if (owner.status !== "owned")
     throw new Error("Native view requires exactly one recorded coordinator");
-  return records[0].repoPath;
+  return owner.record.repoPath;
 }
 
 export function detailForView(
@@ -170,9 +176,9 @@ export function ternViewHost(commands: TernCli) {
     close,
     toggleBoard,
     closeView: async (input: Parameters<ViewsCapability["close"]>[0]) =>
-      close(input, await projectForView(input.home, input.coordinator)),
+      close(input, await projectForView(input.home, input.coordinator, input.cwd)),
     openView: async (input: ViewHostingInput) => {
-      const project = await projectForView(input.home, input.coordinator);
+      const project = await projectForView(input.home, input.coordinator, input.cwd);
       if (input.view.kind === "browser") {
         const url = new URL(input.view.url);
         if (url.protocol !== "https:") throw new Error("PR links require an HTTPS URL");

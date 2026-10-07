@@ -2,7 +2,7 @@ import { EndpointBusyError } from "../adapters/primitives.ts";
 import { nativeBriefFile } from "../board/native-views.ts";
 import type { RequestBriefRecord, RequestReviewPane } from "../contracts.ts";
 import { type CoordinatorRecord, canonicalPath } from "../coordinator/record.ts";
-import { listCoordinatorRecords } from "../coordinator/registry.ts";
+import { findRecordedOwner } from "../coordinator/recorded-owner.ts";
 import { publishViews, viewDetailPath } from "../native/store.ts";
 import type { ViewsCapability } from "../terminal-backend/contract.ts";
 import { briefView } from "./native-view.ts";
@@ -13,17 +13,16 @@ async function coordinatorForBrief(
   deps: RequestReviewPaneDependencies,
   record: RequestBriefRecord,
 ): Promise<CoordinatorRecord> {
-  const repo = await canonicalPath(record.repoPath, "brief repository");
-  const matches = (await listCoordinatorRecords(deps.home, deps.sessionId)).filter(
-    (owner) =>
-      owner.endpoint.terminal === deps.terminal.name &&
-      (owner.repoPath === repo || owner.worktree.path === repo) &&
-      (deps.coordinatorPaneId === undefined || owner.endpoint.paneId === deps.coordinatorPaneId),
-  );
-  const owner = matches[0];
-  if (matches.length !== 1 || owner === undefined)
+  const owner = await findRecordedOwner(deps.home, {
+    by: "project",
+    sessionId: deps.sessionId,
+    path: await canonicalPath(record.repoPath, "brief repository"),
+    terminal: deps.terminal.name,
+    ...(deps.coordinatorPaneId === undefined ? {} : { paneId: deps.coordinatorPaneId }),
+  });
+  if (owner.status !== "owned")
     throw new Error("Native brief requires exactly one recorded Tern coordinator");
-  return owner;
+  return owner.record;
 }
 
 /** Native hosting owns exact-id proof, idempotent reuse and its durable unknown-outcome fence. */
