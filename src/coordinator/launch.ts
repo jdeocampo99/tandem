@@ -1037,7 +1037,8 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       label: coordinatorWorkspaceLabel(paths.repo),
       role: "coordinator",
       generation: 0,
-      env: serverEnvironment,
+      // Tern types env into the pane's own login shell, which already has the user's environment.
+      env: dependencies.terminal.name === "tern" ? sourceEnvironment : serverEnvironment,
       ...(previous === undefined ? {} : { previousEndpoint: previous.endpoint }),
     }),
   );
@@ -1068,10 +1069,13 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
       endpoint,
       cwd: coordinatorCwd,
       command: ["/bin/sh", bootstrapPath],
-      env: terminalLaunchEnvironment(
-        dependencies.terminal.name,
-        mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
-      ),
+      env:
+        dependencies.terminal.name === "tern"
+          ? coordinatorEnvironment
+          : terminalLaunchEnvironment(
+              dependencies.terminal.name,
+              mergeInheritedEnvironment(dependencies.processEnvironment, coordinatorEnvironment),
+            ),
     }),
   );
   await saveCoordinatorRecord(paths.home, {

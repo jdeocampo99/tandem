@@ -749,9 +749,9 @@ async function runProjectFlow({
         }
       : {}),
   };
-  if (invocation.command !== "update") {
-    await installTerminalPlugin(environment.home, pluginDependencies);
-  }
+  // Update reloads a linked package after its launches; a home that never linked one (or a fresh
+  // Tern) still needs it before any coordinator opens a view.
+  await installTerminalPlugin(environment.home, pluginDependencies);
   closeInteraction();
   if (invocation.command === "reset") {
     const stopped = await (dependencies.resetCoordinators ?? resetCoordinators)(run, terminal, {
