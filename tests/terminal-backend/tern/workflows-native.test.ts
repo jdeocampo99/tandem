@@ -10,7 +10,6 @@ import { centralConfigPath, onboardRepo } from "../../../src/config/repositories
 import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { nativeAct } from "../../../src/native/actions.ts";
 import { publishViews } from "../../../src/native/store.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import {
@@ -33,7 +32,6 @@ import {
   isolatedRunner,
   type SeededCoordinator,
   seedCoordinator,
-  setupRunner,
   type TernWindow,
   ternNativeEnabled,
   withTernWindow,

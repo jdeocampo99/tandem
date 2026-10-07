@@ -244,7 +244,8 @@ existing services and prints the outcome. The verbs are `open`, `open-project`, 
 `visit`, `restart`, `steer`, `brief-approve`, `brief-request-changes`, `pr-comment`,
 `review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link` and
 `setup-save`. `open` takes a `ref` naming a task, brief, PR, `board`, `usage`, `prs`,
-`orchestrator`, `inbox`, `task-picker`, `new-request` or `{kind:"setup", mode:"setup"|"settings"}`.
+`orchestrator`, `inbox`, `task-picker`, `new-request` or `{kind:"setup", mode:"setup"|"settings"}`
+with an optional `section` (`models`, `repositories` or `bug-reports`).
 
 `done` means the click did what it asked. `kept` means part of it did not happen, typically a
 view that could not be closed or proved, and the originating view stays. `refused` means Tandem
@@ -987,6 +988,10 @@ in the `split` placement beside the conversation. Settings opens as a `window` t
 in `src/native/contract.ts` tells the two apart from the detail file: `retire-views.ts` and the
 return-origin proof in `host.ts` use it instead of a per-kind table. Settings refuses to open on
 the Tandem checkout's coordinator while onboarding is unfinished.
+The optional `section` on the ref travels in the published model, not the block args, so the
+block's identity and tab reuse do not change: an open Settings tab jumps to the section once per
+newer file and keeps its draft. "Tandem: Change models" and "Tandem: Add or edit repositories" send
+`models` and `repositories`.
 
 The Tandem coordinator opens the setup block at session start, in the slot where the welcome view
 opened, while `remainingOnboardingSteps` is not empty and the terminal has native views
