@@ -217,6 +217,24 @@ export function quickScopeQuestionAllowed(task: Pick<TaskRecord, "quick">): bool
 }
 
 /**
+ * Whether a quick task is waiting on the user's answer to its scope question: the worker asked,
+ * the user has not chosen Proceed, and the task is not cancelled. Until they answer, nothing may
+ * resume or re-dispatch its implementer, because the request it would build was never approved.
+ */
+export function quickScopeAwaitingAnswer(task: Pick<TaskRecord, "quick" | "stage">): boolean {
+  return (
+    task.quick?.scopeQuestionId !== undefined &&
+    task.quick.scopeExtendedAt === undefined &&
+    task.stage !== "cancelled"
+  );
+}
+
+/** Why a quick task waiting on its scope question cannot resume, and how to move it on. */
+export function quickScopeResumeRefusal(taskId: string): string {
+  return `Task ${taskId} is waiting on its scope question. Answer it with ${QUICK_SCOPE_CHOICES.map((choice) => `"${QUICK_SCOPE_LABELS[choice]}"`).join(", ")}; it can't resume until then.`;
+}
+
+/**
  * What a quick task's implementer is told: the objective is the user's own approved words, and it
  * may stop once, before changing anything, when the request clearly exceeds a small change.
  */
@@ -230,10 +248,12 @@ export function quickTaskInstructions(task: Pick<TaskRecord, "quick">): readonly
       approved,
       "Before you change any file, check whether the request clearly exceeds a small change: for example many files across different areas of the code, or a design decision the request leaves open. If it does, make no changes and call submit_report with outcome needs-decision, your reasons in report, and scopeExceeded with files, areas, decision (only if one is open) and a one-sentence plan. Tandem asks the user whether to proceed, turn it into a request, or cancel. You can ask this once.",
     ];
+  // An unanswered question is never permission to proceed: Tandem refuses to resume such a task,
+  // and a brief written anyway tells the worker to change nothing.
   return [
     approved,
     quick.scopeExtendedAt === undefined
-      ? "You already asked the scope question for this task; do not submit scopeExceeded again."
+      ? "You already asked the scope question for this task and the user has not chosen Proceed. Do not change any file and do not submit scopeExceeded again; the scope is still only their original words."
       : "The user chose to proceed beyond a quick task with your proposed plan. Make the change; do not ask about scope again.",
   ];
 }

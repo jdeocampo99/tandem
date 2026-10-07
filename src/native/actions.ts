@@ -52,7 +52,7 @@ import {
   parseBlockContext,
   type ViewRef,
 } from "./contract.ts";
-import { type Published, publishViews, readProjectState } from "./store.ts";
+import { type Published, publishViews, readProjectState, viewIndexPath } from "./store.ts";
 
 /** Review submissions are the largest envelopes; brief feedback alone is capped at 64,000 bytes. */
 const MAX_ENVELOPE_BYTES = 1024 * 1024;
@@ -72,6 +72,8 @@ type Origin = Readonly<{ paneId: string; cwd: string; windowId?: string }>;
 type Act = Readonly<{
   environment: TandemBoundaryEnvironment;
   origin: Origin;
+  /** The context a block origin echoed; a window command has none. It proves nothing alone. */
+  block?: BlockContext;
   run: CommandRunner;
   terminal: TerminalBackend;
   service: () => TandemService;
@@ -165,6 +167,7 @@ async function locate(
 ): Promise<Omit<Act, "run" | "service">> {
   let home: string | undefined;
   let origin: Origin;
+  let block: BlockContext | undefined;
   if ("ctx" in envelope.origin) {
     let ctx: BlockContext;
     try {
@@ -172,6 +175,7 @@ async function locate(
     } catch {
       throw new Error("The view's context is not one Tandem launched it with");
     }
+    block = ctx;
     home = ctx.home;
     origin = {
       paneId: envelope.origin.pane,
@@ -247,6 +251,7 @@ async function locate(
       coordinatorPaneId: record.endpoint.paneId,
     },
     origin,
+    ...(block === undefined ? {} : { block }),
     terminal,
   };
 }
@@ -949,9 +954,10 @@ async function startQuick(
   act: Act,
   action: Extract<Action, { verb: "quick-start" }>,
 ): Promise<Outcome> {
+  const owner = await ternOwner(act, "starting a quick task");
+  await requireQuickTaskBlock(act, owner);
   const checked = checkQuickText(action.text);
   if (!checked.ok) return notice("refused", "failed", checked.problem);
-  const owner = await coordinator(act, act.environment.repo, "starting a quick task");
   const started = await startQuickTask(
     act.service(),
     { repoPath: owner.repoPath, text: checked.text },
@@ -964,6 +970,53 @@ async function startQuick(
         "quick-warning",
         `Task ${started.task.id} started, but the coordinator could not be told: ${started.problem}. Do not start it again.`,
       );
+}
+
+/**
+ * Why a click's echoed context is not the quick task composer this coordinator's views launch, or
+ * undefined when it names exactly that block's owner. Pure; the terminal still has to prove the pane.
+ */
+export function quickTaskContextProblem(
+  block: BlockContext | undefined,
+  expected: Readonly<{ coordinator: string; cwd: string; home: string; index: string }>,
+): string | undefined {
+  if (block === undefined) return "Start a quick task from the quick task composer";
+  return block.coordinator === expected.coordinator &&
+    block.cwd === expected.cwd &&
+    block.home === expected.home &&
+    block.index === expected.index
+    ? undefined
+    : "The quick task composer belongs to another coordinator; open it again from the palette";
+}
+
+/**
+ * Start approves scope, so it must come from the composer itself. A pane listed in the project's
+ * session is not enough: a worker runs in one, knows its own id and can pipe an envelope into
+ * `tandem native act`. Only Tern's record that the exact pane runs this coordinator's
+ * `tandem.quick-task` block with the arguments Tandem launched it with proves the click.
+ */
+async function requireQuickTaskBlock(act: Act, owner: CoordinatorRecord): Promise<void> {
+  const problem = quickTaskContextProblem(act.block, {
+    coordinator: owner.endpoint.paneId,
+    cwd: owner.worktree.path,
+    home: act.environment.home,
+    index: viewIndexPath(act.environment.home, owner.repoPath),
+  });
+  if (problem !== undefined) throw new Error(`${problem}; no task was started`);
+  const proved = await act.terminal.views?.isView({
+    coordinator: owner.endpoint,
+    cwd: owner.worktree.path,
+    home: act.environment.home,
+    origin: {
+      paneId: act.origin.paneId,
+      ...(act.origin.windowId === undefined ? {} : { windowId: act.origin.windowId }),
+    },
+    view: { kind: "quick-task" },
+  });
+  if (proved !== true)
+    throw new Error(
+      "This click did not come from this project's quick task composer; no task was started",
+    );
 }
 
 /** A scope-question link: the user's own choice, sent through the ordinary answer path. */

@@ -172,6 +172,28 @@ test("the scope question is a question in Needs you, asked once, never a silent 
   });
 });
 
+test("an open scope question refuses resume and restart, so nothing implements without Proceed", async () => {
+  await withScenario({}, async (world) => {
+    const service = serviceFor(world);
+    await askScope(world, service);
+
+    await expect(service.resume(SCENARIO_TASK_ID)).rejects.toThrow(
+      '"Proceed", "Convert to request", "Cancel"',
+    );
+    await expect(service.restart(SCENARIO_TASK_ID)).rejects.toThrow("unanswered question");
+
+    const task = await service.get(SCENARIO_TASK_ID);
+    expect(task.stage).toBe("blocked");
+    expect(task.communication?.question?.id).toBe("job-1");
+    expect(task.quick?.scopeExtendedAt).toBeUndefined();
+
+    // Proceed is the one way on: it records the stretched scope, then resumes.
+    await service.answer({ taskId: SCENARIO_TASK_ID, questionId: "job-1", text: "Proceed" });
+    expect((await service.get(SCENARIO_TASK_ID)).stage).not.toBe("blocked");
+    await service.shutdown();
+  });
+});
+
 test("Convert to request cancels the quick task and hands its words and findings to the coordinator", async () => {
   await withScenario({}, async (world) => {
     const service = serviceFor(world);

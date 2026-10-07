@@ -18,7 +18,7 @@ import {
 import type { ViewsCapability } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
-import { type OpenResult, openView, withSettledOpens } from "./host.ts";
+import { exactView, type OpenResult, openView, withSettledOpens } from "./host.ts";
 import { blocks, TernOutcomeUnknownError, TernQuarantinedError } from "./protocol.ts";
 
 class BrowserOpenUnconfirmedError extends AdapterError {
@@ -170,10 +170,34 @@ export function ternViewHost(commands: TernCli) {
     await open(input, project, "panel", "return", viewIndexPath(input.home, project));
     return true;
   };
+  /** The origin pane is this coordinator's exact quick task block, as Tern lists it. */
+  const isView = async (input: Parameters<ViewsCapability["isView"]>[0]): Promise<boolean> => {
+    if (input.origin.paneId === input.coordinator.paneId) return false;
+    const project = await projectForView(input.home, input.coordinator);
+    const cmd = await scoped(input);
+    const index = viewIndexPath(input.home, project);
+    const args = blockArgs(viewDetailPath(input.home, project, QUICK_TASK_FILE), {
+      coordinator: input.coordinator.paneId,
+      cwd: input.cwd,
+      home: input.home,
+      index,
+      ...(input.origin.windowId === undefined ? {} : { window: input.origin.windowId }),
+    });
+    const exact = await exactView(
+      cmd,
+      input.cwd,
+      input.coordinator,
+      input.view.kind,
+      "split",
+      args,
+    );
+    return exact?.block.id === input.origin.paneId;
+  };
   return {
     open,
     scoped,
     close,
+    isView,
     toggleBoard,
     closeView: async (input: Parameters<ViewsCapability["close"]>[0]) =>
       close(input, await projectForView(input.home, input.coordinator)),

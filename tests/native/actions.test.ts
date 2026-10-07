@@ -20,7 +20,12 @@ import {
   setupFile,
   ViewFile,
 } from "../../src/native/contract.ts";
-import { projectStoreDirectory, readProjectState, viewDetailPath } from "../../src/native/store.ts";
+import {
+  projectStoreDirectory,
+  readProjectState,
+  viewDetailPath,
+  viewIndexPath,
+} from "../../src/native/store.ts";
 import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
 import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
@@ -149,6 +154,11 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
         closed.push(target);
         return { closed: true, warnings: [] };
       },
+      // Tern lists pane 102 as this coordinator's quick task composer.
+      isView: async (input) =>
+        input.coordinator.paneId === endpoint.paneId &&
+        input.origin.paneId === "102" &&
+        input.view.kind === "quick-task",
     }),
   };
   let nextId = 0;
@@ -2088,6 +2098,17 @@ test("setup-save refuses an answer the CLI cannot parse before saving or prompti
 
 const QUICK_TEXT = "Rename the Save button to Save draft on the settings page";
 
+/** The origin the quick task composer's Start sends: its own pane and the context it was launched with. */
+function composerOrigin(f: Fixture, pane = "102", coordinator: string = f.endpoint.paneId) {
+  const [, ctx] = blockArgs(viewDetailPath(f.home, f.repo, QUICK_TASK_FILE), {
+    coordinator,
+    cwd: f.clean,
+    home: f.home,
+    index: viewIndexPath(f.home, f.repo),
+  });
+  return { pane, ctx };
+}
+
 /** The quick task the service would create, recorded with every call it got. */
 function quickService(f: Fixture, calls: StartQuickTaskInput[]): TandemService {
   return {
@@ -2125,7 +2146,10 @@ test("Start is the user's approval: it records exactly the typed text and tells 
     const calls: StartQuickTaskInput[] = [];
     const service = quickService(f, calls);
     expect(
-      await f.act({ verb: "quick-start", text: `${QUICK_TEXT}\n` }, { deps: { service } }),
+      await f.act(
+        { verb: "quick-start", text: `${QUICK_TEXT}\n` },
+        { deps: { service }, origin: composerOrigin(f) },
+      ),
     ).toEqual({ status: "done" });
     expect(calls).toEqual([{ repoPath: f.repo, text: QUICK_TEXT }]);
     expect(f.prompts).toEqual([
@@ -2141,7 +2165,12 @@ test("Start refuses text that does not describe a change, an unproven origin and
   try {
     const calls: StartQuickTaskInput[] = [];
     const service = quickService(f, calls);
-    expect(await f.act({ verb: "quick-start", text: "fix it" }, { deps: { service } })).toEqual({
+    expect(
+      await f.act(
+        { verb: "quick-start", text: "fix it" },
+        { deps: { service }, origin: composerOrigin(f) },
+      ),
+    ).toEqual({
       status: "refused",
       notice: { code: "failed", text: "Describe the change in a sentence or two." },
     });
@@ -2151,13 +2180,73 @@ test("Start refuses text that does not describe a change, an unproven origin and
     );
     expect(unlisted.status).toBe("refused");
     f.setOwner(false);
-    const occupied = await f.act({ verb: "quick-start", text: QUICK_TEXT }, { deps: { service } });
+    const occupied = await f.act(
+      { verb: "quick-start", text: QUICK_TEXT },
+      { deps: { service }, origin: composerOrigin(f) },
+    );
     expect(occupied.status).toBe("refused");
     expect(calls).toEqual([]);
     expect(f.prompts).toEqual([]);
     expect(
       Action.safeParse({ verb: "quick-start", text: QUICK_TEXT, repoPath: "/x" }).success,
     ).toBe(false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Start is refused unless Tern proves the click came from this coordinator's quick task composer", async () => {
+  const f = await fixture("tern");
+  try {
+    const calls: StartQuickTaskInput[] = [];
+    const service = quickService(f, calls);
+    const start = { verb: "quick-start", text: QUICK_TEXT };
+    // A worker pane in the project's session, piping a window-style envelope with its own pane.
+    const fromWorkerWindow = await f.act(start, {
+      deps: { service },
+      origin: { pane: "102", cwd: f.clean },
+    });
+    expect(fromWorkerWindow).toEqual({
+      status: "refused",
+      notice: {
+        code: "failed",
+        text: "Start a quick task from the quick task composer; no task was started",
+      },
+    });
+    // The coordinator's own pane, as any window command would send it.
+    expect((await f.act(start, { deps: { service } })).status).toBe("refused");
+    // A copied composer context from a pane Tern does not list as the composer: the worker's.
+    const forged = await f.act(start, {
+      deps: { service },
+      origin: composerOrigin(f, "101"),
+    });
+    expect(forged).toEqual({
+      status: "refused",
+      notice: {
+        code: "failed",
+        text: "This click did not come from this project's quick task composer; no task was started",
+      },
+    });
+    // A context naming another coordinator is not this project's composer.
+    expect(
+      (await f.act(start, { deps: { service }, origin: composerOrigin(f, "102", "777") })).status,
+    ).toBe("refused");
+    // Herdr hosts no composer, so nothing there can prove a Start.
+    expect(
+      (
+        await f.act(start, {
+          deps: { service, terminal: { ...f.deps.terminal, views: undefined } },
+          origin: composerOrigin(f),
+        })
+      ).status,
+    ).toBe("refused");
+    expect(calls).toEqual([]);
+    expect(f.prompts).toEqual([]);
+
+    expect(await f.act(start, { deps: { service }, origin: composerOrigin(f) })).toEqual({
+      status: "done",
+    });
+    expect(calls).toEqual([{ repoPath: f.repo, text: QUICK_TEXT }]);
   } finally {
     await f.close();
   }
@@ -2170,6 +2259,7 @@ test("a started quick task whose coordinator cannot be told says so instead of i
     const outcome = await f.act(
       { verb: "quick-start", text: QUICK_TEXT },
       {
+        origin: composerOrigin(f),
         deps: {
           service: quickService(f, calls),
           terminal: {

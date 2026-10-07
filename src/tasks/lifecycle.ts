@@ -44,6 +44,7 @@ import {
   ledgerSuggestions,
   recordReviewFindings,
 } from "./findings.ts";
+import { quickScopeAwaitingAnswer, quickScopeResumeRefusal } from "./quick.ts";
 import { decideRequiredStages, policyStageFacts, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel } from "./review-levels.ts";
@@ -1371,6 +1372,10 @@ function pauseTask(
 
 function resumeTask(task: TaskRecord, context: TaskTransitionContext): TaskRecord {
   assertStageIn(task, "resume", ["paused", "blocked"]);
+  // A quick task's scope question gates its implementer: only the user's Proceed reopens work.
+  if (quickScopeAwaitingAnswer(task)) {
+    throw new TaskTransitionError("approval-required", task, quickScopeResumeRefusal(task.id));
+  }
   const { previousStage } = task;
   if (previousStage === undefined || !OPEN_STAGES.includes(previousStage)) {
     throw new TaskTransitionError(

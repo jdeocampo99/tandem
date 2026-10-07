@@ -241,6 +241,7 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
     views: {
       open: async (input) => (await native()).views.openView(input),
       close: async (input) => (await native()).views.closeView(input),
+      isView: async (input) => (await native()).views.isView(input),
       recover: async (home) => (await import("./host.ts")).recoverViewOpens(cli, home, cli.clock()),
       retained: async (home) => (await import("./host.ts")).listRetainedNativeOpens(home),
       abandon: async (open, conclusive) =>

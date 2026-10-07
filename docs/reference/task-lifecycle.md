@@ -92,6 +92,12 @@ src/service/quick-start.ts (the one start path).
   - Either one is refused when the cancel cannot prove the worker stopped (the task stays
     blocked): the question stays open, nothing reaches the coordinator, and the answer may be
     given again once the pane is stopped.
+- **Nothing else reopens the work.** While the scope question is unanswered (`quick.scopeQuestionId`
+  set, no `scopeExtendedAt`, task not cancelled; `quickScopeAwaitingAnswer`), the `resume`
+  transition refuses with `approval-required` and a message naming the three answers, so
+  `tandem resume`, `restart` and every other path through it cannot dispatch the implementer.
+  Proceed records `scopeExtendedAt` before it resumes. An implementer brief written for an asked
+  but unanswered question tells the worker to change nothing; only Proceed tells it to go ahead.
 
 ## Stages
 

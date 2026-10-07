@@ -4,7 +4,7 @@ import type { QuickScopeReport, TaskRecord } from "../../src/contracts.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { renderDraftPrDescription, renderPrDescription } from "../../src/instructions.ts";
 import { taskWithQuestion } from "../../src/service/records.ts";
-import { createTask } from "../../src/tasks/lifecycle.ts";
+import { createTask, TaskTransitionError, transitionTask } from "../../src/tasks/lifecycle.ts";
 import {
   approvedScopeLabel,
   approvedScopeMarkdown,
@@ -14,6 +14,7 @@ import {
   QUICK_TASK_TOO_SHORT,
   quickApproval,
   quickConvertedText,
+  quickScopeAwaitingAnswer,
   quickScopeLines,
   quickScopeQuestionAllowed,
   quickScopeQuestionText,
@@ -187,6 +188,42 @@ test("only a quick task that has not asked may ask its one scope question", () =
   expect(quickTaskInstructions(quickTask()).join("\n")).toContain("Before you change any file");
   expect(quickTaskInstructions(asked).join("\n")).toContain("do not submit scopeExceeded again");
   expect(quickTaskInstructions(plainTask())).toEqual([]);
+});
+
+test("an asked but unanswered scope question never reads as permission to proceed or resume", () => {
+  const asked = quickTask({
+    stage: "blocked",
+    previousStage: "implementing",
+    quick: { ...quickApproval({ text: TEXT, at: SCENARIO_NOW }), scopeQuestionId: "j" },
+  });
+  expect(quickScopeAwaitingAnswer(asked)).toBe(true);
+  expect(quickScopeAwaitingAnswer(quickTask())).toBe(false);
+  expect(quickScopeAwaitingAnswer({ ...asked, stage: "cancelled" })).toBe(false);
+  const proceeded = {
+    ...asked,
+    quick: { ...asked.quick, scopeExtendedAt: SCENARIO_NOW },
+  } as TaskRecord;
+  expect(quickScopeAwaitingAnswer(proceeded)).toBe(false);
+
+  const brief = quickTaskInstructions(asked).join("\n");
+  expect(brief).toContain("has not chosen Proceed");
+  expect(brief).toContain("Do not change any file");
+  expect(brief).not.toContain("Make the change");
+  expect(quickTaskInstructions(proceeded).join("\n")).toContain("Make the change");
+
+  const context = { now: SCENARIO_NOW, notificationId: "n" };
+  for (const paused of [asked, { ...asked, stage: "paused" as const }]) {
+    let refusal: unknown;
+    try {
+      transitionTask(paused, { type: "resume" }, context);
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(TaskTransitionError);
+    expect((refusal as TaskTransitionError).code).toBe("approval-required");
+    expect((refusal as Error).message).toContain('"Proceed", "Convert to request", "Cancel"');
+  }
+  expect(transitionTask(proceeded, { type: "resume" }, context).stage).toBe("implementing");
 });
 
 function plainTask(): TaskRecord {

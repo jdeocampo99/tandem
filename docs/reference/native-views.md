@@ -316,7 +316,13 @@ directly.
 
 `restart` names the task and goes through central recovery. `steer` names the task and carries
 the user's direction as `text`. `quick-start` carries the composer's `text` exactly as typed (at
-most 16,000 characters on the wire; the CLI applies the quick task limits). `quick-answer`
+most 16,000 characters on the wire; the CLI applies the quick task limits). Start approves scope,
+so a pane listed in the project's session is not enough: a worker runs in one and can pipe an
+envelope with its own pane into `tandem native act`. `quick-start` is refused unless its origin is
+a block origin whose echoed context names this coordinator, its worktree, the Tandem home and the
+project index, and Tern lists that exact pane as the coordinator's `tandem.quick-task` split with
+exactly the arguments Tandem launched it with (`ViewsCapability.isView`). A window command, the
+coordinator's own pane, a worker's pane and any terminal without native views are refused. `quick-answer`
 carries `taskId`, `questionId` and `choice` (`proceed`, `convert` or `cancel`) from an answer
 link. Renderers only collect input and call `rt.act`.
 

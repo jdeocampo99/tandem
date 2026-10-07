@@ -19,6 +19,7 @@ export function viewsWith(
     ...(terminal.views ?? {
       open: unexpected,
       close: unexpected,
+      isView: unexpected,
       recover: async () => {},
       retained: async () => [],
       abandon: unexpected,
