@@ -28,18 +28,20 @@ export type TerminalComposition = Readonly<{
 /** Resolve the dedicated helper from the one durable project owner, never a substitute pane. */
 async function notificationEndpointFor(home: string, target: SessionTarget) {
   // Keep coordinator harness imports out of validation and worker startup.
-  const [{ canonicalPath }, { listCoordinatorRecords }] = await Promise.all([
+  const [{ canonicalPath }, { findRecordedOwner }] = await Promise.all([
     import("../coordinator/record.ts"),
-    import("../coordinator/registry.ts"),
+    import("../coordinator/recorded-owner.ts"),
   ]);
-  const cwd = await canonicalPath(target.cwd, "notification cwd");
-  const records = (await listCoordinatorRecords(home, target.sessionId)).filter(
-    (record) => record.repoPath === cwd || record.worktree.path === cwd,
-  );
-  if (records.length > 1)
+  const found = await findRecordedOwner(home, {
+    by: "project",
+    sessionId: target.sessionId,
+    path: await canonicalPath(target.cwd, "notification cwd"),
+    terminal: "any",
+  });
+  if (found.status === "ambiguous")
     throw new AdapterError("Tern alert project owner is ambiguous", "tern notify");
-  const owner = records[0]?.endpoint;
-  if (owner === undefined) return undefined;
+  if (found.status === "none") return undefined;
+  const owner = found.record.endpoint;
   assertTerminalEndpoint("tern", owner);
   return ternNotificationEndpoint(owner);
 }
