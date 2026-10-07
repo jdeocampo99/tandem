@@ -335,5 +335,5 @@ The home setting `terminal = "herdr"` or `terminal = "tern"` applies across proj
 means Tern, and only `terminal = "herdr"` selects Herdr. No setup surface asks about it. Linking
 the view package needs no consent; a separate consent controls global sidebar and shortcut
 changes. See [terminal.md](terminal.md#choosing-a-terminal) for the authoritative selection rules,
-and [plugin consent and restoration](terminal.md#plugin-consent-and-restoration) for guarded
+and [plugin link and restoration](terminal.md#plugin-link-and-restoration) for guarded
 settings changes. Task policy and model/harness choices are independent of the terminal.

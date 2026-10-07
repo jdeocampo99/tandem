@@ -469,22 +469,17 @@ export class TernParityHost {
   }
 
   /**
-   * A coordinator start offers Tern's sidebar and keys under `configDirectory`, answering the
-   * consent question with `answer`. Returns what the user saw and the settings Tern now has.
+   * A coordinator start sets Tern's sidebar and keys under `configDirectory`. Returns what the
+   * user saw and the settings Tern now has.
    */
-  async offerTernPreferences(configDirectory: string, answer: boolean) {
+  async applyTernPreferences(configDirectory: string) {
     const { home } = this.world;
-    const questions: string[] = [];
     const printed: string[] = [];
     await installTerminalPlugin(home, {
       run: this.#run,
       cwd: home,
       binary: "tern",
       env: { TERN_CONFIG_DIR: join(home, configDirectory) },
-      confirm: async (question) => {
-        questions.push(question);
-        return answer;
-      },
       print: (text) => printed.push(text),
     });
     const settings: unknown = await readFile(
@@ -494,7 +489,7 @@ export class TernParityHost {
       (text) => JSON.parse(text),
       () => undefined,
     );
-    return { questions, printed, settings };
+    return { printed, settings };
   }
 
   /** Lets every open block poll its file again, as Tern's one-second watch timers do. */

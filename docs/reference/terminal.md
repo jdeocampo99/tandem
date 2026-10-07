@@ -26,8 +26,8 @@ does not check for unfinished work when the file changes, so edit it only while 
 unfinished: endpoints belong to the terminal that created them.
 
 Tandem does not probe Tern. A missing or unusable Tern shows at link time:
-`installTerminalPlugin` (every `tandem` command except `update`, and `setup.sh`) resolves `tern`
-as described under [Plugin consent and restoration](#plugin-consent-and-restoration) and throws
+`installTerminalPlugin` (every `tandem` command, including `update`, and `setup.sh`) resolves `tern`
+as described under [Plugin link and restoration](#plugin-link-and-restoration) and throws
 `TernRequiredError` when Tern is missing or the package cannot be linked or become ready. Its one
 plain message says Tandem needs Tern and where to install it. With Herdr selected it restores
 Tern's preferences instead and never touches the plugin.
@@ -231,23 +231,23 @@ Native checks use a temporary `TERN_CONFIG_DIR`, `TERN_DAEMON_SOCKET`, Tandem ho
 the user's Tern sessions, settings or live Tandem home, and fixtures never contain environment
 dumps or secrets.
 
-## Plugin consent and restoration
+## Plugin link and restoration
 
 Plugin list, link and reload resolve an explicit executable override first, then `tern` from
 injected `PATH` (or the process `PATH`), then the macOS app bundle executable. PATH-only
 installs work without a bundle.
 
-Linking Tandem's native view package needs no question: Tern is the terminal. One separate question
-asks before setting global `tabs_autohide=true` and adding global shortcuts. Declining leaves
-the settings byte-identical and remembers the decision. Palette commands and panel header
-buttons remain available. To reconsider, set `terminal = "herdr"` and start Tandem, which
-restores the settings, then remove that line to be asked again.
+Linking Tandem's native view package needs no question: Tern is the terminal. The first link
+also sets global `tabs_autohide=true` and adds global shortcuts, without asking, and prints one
+line for each change. Tandem sets them once: the record below stops it from reapplying settings
+the user later changes or removes. To undo them, set `terminal = "herdr"` and start Tandem, which
+restores them.
 
-Link, consent, reload and restoration run under one machine-wide lock, `tandem-setup.lock`, in
+Link, preferences, reload and restoration run under one machine-wide lock, `tandem-setup.lock`, in
 Tern's config directory next to `settings.json`. That directory holds the plugin links and the
 global settings every Tandem home shares, so separate homes serialize too. Inside the lock, setup
 re-reads the catalog and links only when the package is absent; a caller that waited sees the
-first caller's recorded decision and asks nothing. A waiting caller gives up after five minutes.
+first caller's record and changes nothing. A waiting caller gives up after five minutes.
 Restoration with no record returns without taking the lock.
 
 The shortcuts cover Board (⌘⇧B), PRs (⌘⇧P), Usage (⌘⇧U), Settings (⌘⇧,), projects (⌘1–9) and
@@ -256,14 +256,14 @@ sequences are preserved. Alternate keymap presets are preserved as a whole; setu
 skipped keys or the preset. Window commands register no default chords. New windows read the
 saved mappings.
 
-Before applying approved changes, the private `settings.json.tandem.json` record saves the
-decision, exact added key/action pairs, original keybind-table presence and sidebar's original
-presence/value. Both settings and record writes are atomic, regular non-symlink files with
-0600 permissions and stale-write checks. Unknown commit failures retain the record for
-restoration. Existing records neither reapply user-removed settings nor repeatedly prompt.
+Before applying the changes, the private `settings.json.tandem.json` record saves the exact added
+key/action pairs, original keybind-table presence and sidebar's original presence/value. Both
+settings and record writes are atomic, regular non-symlink files with 0600 permissions and
+stale-write checks. Unknown commit failures retain the record for restoration. Existing records
+never reapply user-removed settings.
 
 Choosing Herdr restores only recorded bindings still equal to Tandem's installed actions and
 the sidebar only while it still has Tandem's installed value. Later user edits and unrelated
 settings survive; successful restoration removes the record. Failed restoration warns and keeps
-the record without blocking Herdr. The plugin remains linked. `tandem update` reloads an
-existing selected Tern package without prompting or installing a missing package.
+the record without blocking Herdr. The plugin remains linked. `tandem update` links a missing
+package before its launches and reloads the linked package after them.

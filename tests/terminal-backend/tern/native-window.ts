@@ -179,8 +179,8 @@ export async function withTernWindow(
     join(env.TERN_CONFIG_DIR, "settings.json"),
     JSON.stringify({ tabs_autohide: true, layout: "rail", link_target: "Tern" }),
   );
-  // The shortcuts a user gets by accepting Tandem's Tern preferences during setup.
-  await configureTernPluginSettings({ configDirectory: env.TERN_CONFIG_DIR, approved: true });
+  // The shortcuts Tandem sets when it first links into Tern.
+  await configureTernPluginSettings({ configDirectory: env.TERN_CONFIG_DIR });
   await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
     recursive: true,
   });
