@@ -683,7 +683,7 @@ test("an implementer cannot report done while a playbook step is open in its to-
   });
   const rejected = await worker.session.submitReport({ outcome: "implemented", report: "Done." });
   expect(rejected.isError).toBe(true);
-  expect(rejected.text).toContain("still open in your to-do list: Add a regression test.");
+  expect(rejected.text).toContain('still open in your to-do list: "2. Add a regression test".');
   expect(worker.results).toHaveLength(0);
 
   worker.session.onToolEnd({

@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
-import { openSteps, type TodoItem } from "../playbooks/progress.ts";
+import { openSteps, openStepsRejection, type TodoItem } from "../playbooks/progress.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { findingHeadline } from "../tasks/findings.ts";
@@ -751,9 +751,7 @@ export class WorkerSession {
         if (uncommitted !== undefined) return uncommitted;
         const open = openSteps(job.playbookSteps ?? [], this.todos);
         if (open.length > 0) {
-          return new ReportRejection(
-            `these playbook steps are still open in your to-do list: ${open.join("; ")}. Finish them, or drop any that do not apply with the todo tool and give the reason in your report`,
-          );
+          return new ReportRejection(openStepsRejection(open));
         }
       }
       const report = resolveSubmittedReport(job, submission, await this.reviewAnchors());

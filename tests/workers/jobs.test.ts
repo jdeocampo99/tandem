@@ -562,12 +562,12 @@ test("an implementer cannot report implemented while a playbook step is open in 
     });
 
     const beforeTodo = await submitReport(f, IMPLEMENTED);
-    expect(beforeTodo.content[0]?.text).toContain("Measure a baseline; Measure again");
+    expect(beforeTodo.content[0]?.text).toContain('"1. Measure a baseline"; "2. Measure again"');
 
     await f.handlers.get("tool_execution_end")?.(todo("in_progress"), f.context);
     const open = await submitReport(f, IMPLEMENTED);
     expect(open.isError).toBe(true);
-    expect(open.content[0]?.text).toContain("still open in your to-do list: Measure again.");
+    expect(open.content[0]?.text).toContain('still open in your to-do list: "2. Measure again".');
     expect(await Bun.file(job.resultPath).exists()).toBe(false);
 
     await f.handlers.get("tool_execution_end")?.(todo("abandoned"), f.context);
