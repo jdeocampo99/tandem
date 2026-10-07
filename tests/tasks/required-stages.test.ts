@@ -41,6 +41,16 @@ test.each([
     },
   ],
   [
+    "steering a published task in a project with no checks",
+    false,
+    true,
+    true,
+    {
+      validation: false,
+      review: true,
+    },
+  ],
+  [
     "steering a published task under a skip-review brief",
     true,
     true,

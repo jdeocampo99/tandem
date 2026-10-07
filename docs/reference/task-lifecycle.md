@@ -52,13 +52,14 @@ decides them; the lifecycle and the review stage read the record and never re-de
 | --- | --- | --- |
 | Normal new task | ✓ | ✓ |
 | Brief approved with `skipReview` | ✓ | ✗ |
-| Project chose [no checks](policy.md#no-checks) (with or without `skipReview`) | ✗ | ✓ |
+| Project chose [no checks](policy.md#no-checks) (with or without `skipReview`, PR open or not) | ✗ | ✓ |
 | Steering a task whose PR is open (not a draft) | ✗ | ✗ |
 
 - Recorded at creation (from the brief the task runs under and its pinned policy), again on every
   `steer` with a new direction (from the brief and the PR's state at that moment), and again on
   the governed tasks when a brief is approved.
-- No checks always keeps review, so a task with no checks never reaches `ready` ungated. Its task
+- No checks always keeps review, so a task with no checks never reaches `ready` ungated, including
+  a follow-up on its published PR, which may have no CI of its own. Its task
   page shows the skipped validation step as "Unvalidated", not as passed.
 - `implementation-complete` goes to `validating` when validation is required (or straight to
   `reviewing` when every check already passed at that HEAD). With nothing required it goes

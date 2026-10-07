@@ -25,12 +25,12 @@ export type RequiredStageFacts = Readonly<{
  * | ---------------------------------- | ---------- | ------ |
  * | Normal new task                    | yes        | yes    |
  * | Brief approved with "skip review"  | yes        | no     |
- * | Project chose no checks            | no         | yes    |
+ * | Project chose no checks (any PR)   | no         | yes    |
  * | Steering a task whose PR is open   | no         | no     |
  */
 export function decideRequiredStages(facts: RequiredStageFacts): RequiredStages {
-  if (facts.pullRequestPublished) return { validation: false, review: false };
   if (facts.unvalidated) return { validation: false, review: true };
+  if (facts.pullRequestPublished) return { validation: false, review: false };
   return { validation: true, review: !facts.briefSkipsReview };
 }
 
