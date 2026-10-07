@@ -121,6 +121,9 @@ export function terminalBackend(
     sessionDetail: (input) => select().sessionDetail(input),
     serverCommand: (input) => select().serverCommand(input),
     clientCommand: (input) => select().clientCommand(input),
+    launchEnvironment: (input) => select().launchEnvironment(input),
+    paneEnvironment: (input) => select().paneEnvironment(input),
+    paneIdentity: (pane) => select().paneIdentity(pane),
     checkInstall: (input) => select().checkInstall(input),
     notify: (input) => select().notify(input),
     openWelcome: (input) => select().openWelcome(input),
@@ -137,17 +140,6 @@ export function terminalBackend(
 /** A launch uses its selected backend's context, so foreign inherited ids are ignored. */
 export function terminalContextFor(terminal: TerminalName): TerminalContext {
   return terminal === "tern" ? TERN_CONTEXT : HERDR_CONTEXT;
-}
-
-/** A newly launched terminal must not inherit the other terminal's pane identity. */
-export function terminalLaunchEnvironment(
-  terminal: TerminalName,
-  environment: Readonly<Record<string, string>>,
-): Readonly<Record<string, string>> {
-  const foreign = terminalContextFor(terminal === "tern" ? "herdr" : "tern").variables;
-  return Object.fromEntries(
-    Object.entries(environment).filter(([name]) => !foreign.includes(name)),
-  );
 }
 
 function inheritedContext(source: TandemEnvironmentSource): TerminalContext | undefined {

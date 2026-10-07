@@ -10,7 +10,7 @@ import {
 import type { Endpoint, TerminalPaneLocation } from "../../contracts.ts";
 import { blockArgs, parseBlockArgs, setupFile } from "../../native/contract.ts";
 import type { EndpointTarget, SessionTarget, TerminalBackend } from "../contract.ts";
-import { type TernEndpoint, ternEndpoint } from "../identity.ts";
+import { type TernEndpoint, ternEndpoint, withoutForeignPaneIdentity } from "../identity.ts";
 import {
   clearTernQuarantine,
   listTernQuarantine,
@@ -491,6 +491,15 @@ export function ternBackend(run: TernRunner, options: TernBackendOptions = {}): 
     },
     serverCommand: cli.serverCommand,
     clientCommand: cli.clientCommand,
+    launchEnvironment: ({ overrides, inherited }) =>
+      withoutForeignPaneIdentity("tern", { ...inherited, ...overrides }),
+    // Tern types env into the pane's own login shell, which already has the user's environment.
+    paneEnvironment: ({ overrides }) => overrides,
+    // Tern exports only a pane id; the session and tab mark the pane as Tandem's.
+    paneIdentity: (pane) => ({
+      TANDEM_SESSION: pane.sessionId,
+      TANDEM_TERN_WORKSPACE_ID: pane.workspaceId,
+    }),
     // The coordinator already runs inside Tern; a missing app fails at link or launch instead.
     checkInstall: async () => [],
     notify: async (target) => {

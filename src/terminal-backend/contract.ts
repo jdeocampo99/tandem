@@ -194,6 +194,12 @@ export type SplitAnchor =
   | Readonly<{ anchor: Endpoint }>
   | Readonly<{ sessionId: string; anchorPaneId: string }>;
 
+/** Tandem's own variables, and the environment its process inherited. */
+export type LaunchEnvironmentInput = Readonly<{
+  overrides: Readonly<Record<string, string>>;
+  inherited: Readonly<Record<string, string>>;
+}>;
+
 /**
  * The terminal port: every pane, workspace, and session effect Tandem has. Implementations are
  * bound to one command runner. Failures that a caller decides on are typed: a missing pane is an
@@ -341,6 +347,25 @@ export type TerminalBackend = Readonly<{
   serverCommand(sessionId: string): readonly string[];
   /** The command that opens the session in this terminal window, starting it if needed. */
   clientCommand(sessionId: string): readonly string[];
+  /**
+   * The environment of a process Tandem starts itself for this terminal, such as its server or a
+   * coordinator run in the current pane: `inherited` with `overrides` on top, never carrying
+   * another terminal's pane identity.
+   */
+  launchEnvironment(input: LaunchEnvironmentInput): Readonly<Record<string, string>>;
+  /**
+   * The `env` for `createWorkspace` and `runCommand` on a pane this terminal starts. Every
+   * override reaches the pane, and no other terminal's pane identity does; whether `inherited`
+   * is passed along depends on where the terminal's panes get the rest of their environment.
+   */
+  paneEnvironment(input: LaunchEnvironmentInput): Readonly<Record<string, string>>;
+  /**
+   * The variables a process needs to recognise `pane` as a Tandem pane of this terminal; empty
+   * when the terminal sets them itself.
+   */
+  paneIdentity(
+    pane: Readonly<{ sessionId: string; workspaceId: string }>,
+  ): Readonly<Record<string, string>>;
   /** Whether the terminal, and Tandem's integration with it, are installed for onboarding. */
   checkInstall(target: SessionTarget): Promise<readonly ToolCheck[]>;
 

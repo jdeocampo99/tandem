@@ -1,5 +1,6 @@
 import type { TandemEnvironmentSource } from "../../config/environment.ts";
 import type { InheritedPane, TerminalContext } from "../contract.ts";
+import { PANE_IDENTITY_VARIABLES } from "../identity.ts";
 import { PANEL_ENTRYPOINT, WELCOME_PANE_VARIABLE } from "./ui.ts";
 
 function inheritedPane(source: TandemEnvironmentSource): InheritedPane {
@@ -61,13 +62,7 @@ function focus(source: TandemEnvironmentSource): Readonly<{ workspaceId?: string
 }
 
 export const HERDR_CONTEXT: TerminalContext = {
-  variables: [
-    "HERDR_ENV",
-    "HERDR_SESSION",
-    "HERDR_SESSION_NAME",
-    "HERDR_WORKSPACE_ID",
-    "HERDR_PANE_ID",
-  ],
+  variables: PANE_IDENTITY_VARIABLES.herdr,
   inheritedPane,
   inWindow: (source) => inheritedPane(source).status === "inside",
   sessionName: (source) => source.HERDR_SESSION ?? source.HERDR_SESSION_NAME,

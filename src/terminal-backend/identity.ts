@@ -2,6 +2,37 @@ import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type { Endpoint, TerminalName } from "../contracts.ts";
 import type { TerminalBackend } from "./contract.ts";
 
+/** The variables that tell a process which pane of each terminal it runs in. */
+export const PANE_IDENTITY_VARIABLES: Readonly<Record<TerminalName, readonly string[]>> = {
+  herdr: [
+    "HERDR_ENV",
+    "HERDR_SESSION",
+    "HERDR_SESSION_NAME",
+    "HERDR_WORKSPACE_ID",
+    "HERDR_PANE_ID",
+  ],
+  tern: [
+    "TERN_PANE",
+    "TERN_PANE_SOCKET",
+    "TERN_WINDOW_KEY",
+    "TERN_WINDOW_SOCKET",
+    "TANDEM_TERN_WORKSPACE_ID",
+  ],
+};
+
+/** A process started for `terminal` must not inherit another terminal's pane identity. */
+export function withoutForeignPaneIdentity(
+  terminal: TerminalName,
+  environment: Readonly<Record<string, string>>,
+): Readonly<Record<string, string>> {
+  const foreign = Object.entries(PANE_IDENTITY_VARIABLES).flatMap(([name, variables]) =>
+    name === terminal ? [] : variables,
+  );
+  return Object.fromEntries(
+    Object.entries(environment).filter(([name]) => !foreign.includes(name)),
+  );
+}
+
 /** Untagged records predate Tern support and were created exclusively by Herdr. */
 export function storedEndpointTerminal(value: unknown, field: string): TerminalName {
   if (value === undefined) return "herdr";
