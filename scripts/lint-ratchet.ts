@@ -1,6 +1,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { findPassThroughs, type PassThrough } from "./lint-ratchet/pass-through.ts";
+import { type RatchetRule, RULES } from "./lint-ratchet/rules.ts";
 
 /** Diagnostic counts per file, then per rule. A missing entry means zero. */
 export type Counts = Readonly<Record<string, Readonly<Record<string, number>>>>;
@@ -9,13 +11,6 @@ export type Counts = Readonly<Record<string, Readonly<Record<string, number>>>>;
 export type Baseline = Readonly<{ rules: readonly string[]; counts: Counts }>;
 
 export type CountChange = Readonly<{ file: string; rule: string; before: number; after: number }>;
-
-export type RatchetRule = Readonly<{
-  id: string;
-  hint: string;
-  /** Files the rule is ratcheted in; others are left out of the counts. */
-  appliesTo: (file: string) => boolean;
-}>;
 
 export type RatchetOutcome = Readonly<{
   exitCode: 0 | 1;
@@ -29,51 +24,8 @@ const BASELINE_PATH = join(ROOT, "scripts/lint-ratchet/baseline.json");
 /** Enables exactly the ratcheted Biome rules, at their default limits, over the same files as biome.json. */
 const BIOME_CONFIG_PATH = join(ROOT, "scripts/lint-ratchet/ratchet.json");
 
-const isTest = (file: string): boolean => file.startsWith("tests/") || file.endsWith(".test.ts");
-const everywhere = (): boolean => true;
-
-export const RULES: readonly RatchetRule[] = [
-  {
-    id: "complexity/noExcessiveCognitiveComplexity",
-    hint: "Split the function into named steps, or replace branching with a lookup table.",
-    appliesTo: everywhere,
-  },
-  {
-    id: "complexity/noExcessiveLinesPerFunction",
-    hint: "Extract cohesive steps into named functions (limit 50 lines).",
-    appliesTo: (file) => !isTest(file),
-  },
-  {
-    id: "style/noNestedTernary",
-    hint: "Use if/else, a switch, or a lookup table instead of nesting ternaries.",
-    appliesTo: everywhere,
-  },
-  {
-    id: "style/noExcessiveLinesPerFile",
-    hint: "Split the file by responsibility (limit 300 lines).",
-    appliesTo: everywhere,
-  },
-  {
-    id: "complexity/useMaxParams",
-    hint: "Group related parameters into one named object (limit 4).",
-    appliesTo: everywhere,
-  },
-  {
-    id: "suspicious/noUnnecessaryConditions",
-    hint: "Delete the check; the types already decide it.",
-    appliesTo: everywhere,
-  },
-  {
-    id: "suspicious/noShadow",
-    hint: "Rename the inner binding so it does not hide the outer one.",
-    appliesTo: everywhere,
-  },
-  {
-    id: "suspicious/noSkippedTests",
-    hint: "Fix or delete the skipped test; gate machine-specific tests on an explicit flag.",
-    appliesTo: everywhere,
-  },
-];
+/** Where the pass-through report looks; it is report-only and never fails the ratchet. */
+const PASS_THROUGH_GLOB = new Bun.Glob("{src,tests,evals,scripts}/**/*.ts");
 
 const baselineSchema = z.object({
   rules: z.array(z.string()),
@@ -81,7 +33,11 @@ const baselineSchema = z.object({
 });
 const biomeReportSchema = z.object({
   diagnostics: z.array(
-    z.object({ category: z.string(), location: z.object({ path: z.string() }) }),
+    z.object({
+      category: z.string(),
+      message: z.string(),
+      location: z.object({ path: z.string() }),
+    }),
   ),
 });
 
@@ -214,6 +170,12 @@ function sortedCounts(counts: Counts): Counts {
   );
 }
 
+/** Biome files every GritQL plugin diagnostic under "plugin"; the rule id leads its message. */
+function ruleOf(diagnostic: Readonly<{ category: string; message: string }>): string {
+  if (diagnostic.category !== "plugin") return diagnostic.category.replace(/^lint\//u, "");
+  return /^\[(?<id>[^\]]+)\]/u.exec(diagnostic.message)?.groups?.id ?? "plugin";
+}
+
 async function biomeHits(): Promise<ReadonlyArray<Readonly<{ file: string; rule: string }>>> {
   const child = Bun.spawn(
     [
@@ -236,7 +198,7 @@ async function biomeHits(): Promise<ReadonlyArray<Readonly<{ file: string; rule:
   if (!parsed.success) throw new Error(`biome produced no JSON report:\n${stderr}`);
   return parsed.data.diagnostics.map((diagnostic) => ({
     file: diagnostic.location.path,
-    rule: diagnostic.category.replace(/^lint\//u, ""),
+    rule: ruleOf(diagnostic),
   }));
 }
 
@@ -245,8 +207,28 @@ async function readBaseline(): Promise<Baseline> {
   return baselineSchema.parse(JSON.parse(await readFile(BASELINE_PATH, "utf8")));
 }
 
+async function passThroughs(): Promise<readonly PassThrough[]> {
+  const found: PassThrough[] = [];
+  for await (const file of PASS_THROUGH_GLOB.scan({ cwd: ROOT })) {
+    if (file.includes("/.claude-plugin/types/")) continue;
+    found.push(...findPassThroughs(file, await Bun.file(join(ROOT, file)).text()));
+  }
+  return found.toSorted(
+    (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
+  );
+}
+
+function passThroughReport(found: readonly PassThrough[], listAll: boolean): string {
+  const summary = `lint:ratchet warning: ${found.length} pass-through wrapper(s), report-only. Inline the call or give the wrapper a reason to exist.`;
+  if (!listAll) return `${summary} List them with \`bun run lint:ratchet --warnings\`.`;
+  return [summary, ...found.map((entry) => `  ${entry.file}:${entry.line}  ${entry.name}`)].join(
+    "\n",
+  );
+}
+
 async function main(argv: readonly string[]): Promise<number> {
   const update = argv.includes("--update");
+  process.stdout.write(`${passThroughReport(await passThroughs(), argv.includes("--warnings"))}\n`);
   const current = tally(await biomeHits(), RULES);
   const outcome = decide({ baseline: await readBaseline(), current, update }, RULES);
   if (outcome.nextBaseline !== undefined) {

@@ -7,18 +7,29 @@
     "style/noNestedTernary",
     "suspicious/noShadow",
     "suspicious/noSkippedTests",
-    "suspicious/noUnnecessaryConditions"
+    "suspicious/noUnnecessaryConditions",
+    "tandem/hidden-clock",
+    "tandem/json-parse-cast",
+    "tandem/type-assertion"
   ],
   "counts": {
+    "evals/baseline-fixtures.ts": {
+      "tandem/type-assertion": 2
+    },
     "evals/benchmark.ts": {
       "style/noExcessiveLinesPerFile": 1
     },
+    "evals/fixtures.ts": {
+      "tandem/type-assertion": 4
+    },
     "evals/research-continuation-fixtures.ts": {
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/type-assertion": 2
     },
     "evals/run-jev.ts": {
       "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/json-parse-cast": 1
     },
     "evals/run-research-continuation.ts": {
       "complexity/noExcessiveLinesPerFunction": 1,
@@ -26,7 +37,8 @@
       "style/noExcessiveLinesPerFile": 1
     },
     "evals/summarize.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 1
     },
     "src/adapters/commands.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -50,13 +62,15 @@
       "complexity/noExcessiveLinesPerFunction": 2,
       "complexity/useMaxParams": 3,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/type-assertion": 2
     },
     "src/adapters/typesafe.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/json-parse-cast": 1
     },
     "src/board/native-read.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -80,6 +94,10 @@
       "style/noNestedTernary": 10,
       "suspicious/noShadow": 4
     },
+    "src/board/snapshot.ts": {
+      "tandem/hidden-clock": 1,
+      "tandem/type-assertion": 4
+    },
     "src/board/terminal.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
@@ -88,18 +106,24 @@
     },
     "src/board/view.ts": {
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 3
+      "style/noNestedTernary": 3,
+      "tandem/type-assertion": 3
     },
     "src/config/model-tier.ts": {
       "suspicious/noShadow": 1
     },
+    "src/config/models.ts": {
+      "tandem/type-assertion": 1
+    },
     "src/config/operating-profile.ts": {
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/type-assertion": 2
     },
     "src/config/policy.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 2,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 3
     },
     "src/config/repositories.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
@@ -112,15 +136,21 @@
       "complexity/noExcessiveCognitiveComplexity": 1,
       "suspicious/noUnnecessaryConditions": 2
     },
+    "src/config/values.ts": {
+      "tandem/json-parse-cast": 1,
+      "tandem/type-assertion": 5
+    },
     "src/contracts.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 2
     },
     "src/coordinator/launch.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 2,
       "complexity/useMaxParams": 4,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 2
     },
     "src/coordinator/lock.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -133,19 +163,27 @@
       "style/noExcessiveLinesPerFile": 1,
       "suspicious/noShadow": 1
     },
+    "src/coordinator/quarantine.ts": {
+      "tandem/json-parse-cast": 1
+    },
     "src/coordinator/reconcile.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 1
     },
     "src/coordinator/record.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 4
     },
     "src/coordinator/registry.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "tandem/hidden-clock": 1,
+      "tandem/json-parse-cast": 1
     },
     "src/coordinator/renest.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/hidden-clock": 1
     },
     "src/coordinator/reset.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
@@ -153,7 +191,8 @@
       "complexity/useMaxParams": 5,
       "style/noExcessiveLinesPerFile": 1,
       "suspicious/noShadow": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 5
     },
     "src/coordinator/resources.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -169,29 +208,38 @@
     "src/delivery/evidence.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 5
+      "suspicious/noUnnecessaryConditions": 5,
+      "tandem/type-assertion": 2
     },
     "src/delivery/preflight.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/type-assertion": 1
     },
     "src/delivery/pull-requests.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 1,
       "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/json-parse-cast": 1,
+      "tandem/type-assertion": 3
     },
     "src/harness/claude-code/coordinator.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 2
     },
+    "src/harness/claude-code/host.ts": {
+      "tandem/type-assertion": 1
+    },
     "src/harness/claude-code/launch.ts": {
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 3
+      "suspicious/noShadow": 3,
+      "tandem/type-assertion": 1
     },
     "src/harness/claude-code/plugins/tandem/hooks/protocol.ts": {
       "complexity/noExcessiveLinesPerFunction": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 2
     },
     "src/harness/claude-code/plugins/tandem/hooks/register.ts": {
       "complexity/noExcessiveLinesPerFunction": 1,
@@ -209,32 +257,51 @@
     },
     "src/harness/claude-code/worker.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 2
+      "complexity/noExcessiveLinesPerFunction": 2,
+      "tandem/type-assertion": 1
+    },
+    "src/harness/contract.ts": {
+      "tandem/type-assertion": 2
+    },
+    "src/harness/coordinator-session.ts": {
+      "tandem/hidden-clock": 1
     },
     "src/harness/omp/adapter.ts": {
       "style/noNestedTernary": 1
     },
     "src/harness/omp/extension.ts": {
       "complexity/noExcessiveLinesPerFunction": 2,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/type-assertion": 1
     },
     "src/harness/omp/host.ts": {
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/type-assertion": 2
     },
     "src/harness/omp/registration.ts": {
-      "complexity/useMaxParams": 1
+      "complexity/useMaxParams": 1,
+      "tandem/type-assertion": 1
+    },
+    "src/harness/omp/task-messages.ts": {
+      "tandem/type-assertion": 3
     },
     "src/harness/omp/terminal-extension.ts": {
       "complexity/noExcessiveLinesPerFunction": 1,
       "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 1
     },
     "src/harness/omp/usage-limits.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/type-assertion": 1
     },
     "src/harness/omp/worker-control.ts": {
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/hidden-clock": 1
+    },
+    "src/harness/worker-session.ts": {
+      "tandem/hidden-clock": 1
     },
     "src/instructions.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -246,30 +313,40 @@
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 2
+      "style/noNestedTernary": 2,
+      "tandem/type-assertion": 2
+    },
+    "src/memory/native-visits.ts": {
+      "tandem/hidden-clock": 1
     },
     "src/memory/view.ts": {
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/type-assertion": 1
     },
     "src/native/actions.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
-      "suspicious/noShadow": 8
+      "suspicious/noShadow": 8,
+      "tandem/hidden-clock": 4,
+      "tandem/type-assertion": 3
     },
     "src/native/store.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/type-assertion": 4
     },
     "src/native/view-file.ts": {
       "style/noExcessiveLinesPerFile": 1
     },
     "src/onboarding/setup-answer.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "suspicious/noShadow": 2
+      "suspicious/noShadow": 2,
+      "tandem/type-assertion": 1
     },
     "src/onboarding/setup-view.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -278,11 +355,15 @@
     "src/onboarding/tools.ts": {
       "style/noNestedTernary": 1
     },
+    "src/playbooks/classify.ts": {
+      "tandem/type-assertion": 1
+    },
     "src/pool/maintenance.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 2
+      "suspicious/noUnnecessaryConditions": 2,
+      "tandem/type-assertion": 2
     },
     "src/pool/policy.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -338,7 +419,8 @@
     "src/pr-review/review.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 2
     },
     "src/pr-review/route.ts": {
       "suspicious/noShadow": 1
@@ -347,7 +429,8 @@
       "complexity/noExcessiveLinesPerFunction": 1,
       "complexity/useMaxParams": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/type-assertion": 1
     },
     "src/pr-review/service.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
@@ -357,7 +440,8 @@
       "suspicious/noShadow": 3
     },
     "src/pr-review/state.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "tandem/type-assertion": 4
     },
     "src/pr-watch/decide.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -368,7 +452,8 @@
     "src/pr-watch/github.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 3
+      "style/noNestedTernary": 3,
+      "tandem/json-parse-cast": 1
     },
     "src/pr-watch/merging-check.ts": {
       "style/noNestedTernary": 3
@@ -378,6 +463,9 @@
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noNestedTernary": 2
     },
+    "src/pr-watch/store.ts": {
+      "tandem/type-assertion": 1
+    },
     "src/pr-watch/view.ts": {
       "style/noNestedTernary": 1
     },
@@ -386,6 +474,9 @@
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1
+    },
+    "src/presentations/evidence.ts": {
+      "tandem/hidden-clock": 1
     },
     "src/presentations/feedback.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -399,16 +490,21 @@
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
       "suspicious/noShadow": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/json-parse-cast": 1,
+      "tandem/type-assertion": 11
     },
     "src/presentations/session.ts": {
       "complexity/useMaxParams": 3,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/type-assertion": 2
     },
     "src/recovery/central.ts": {
       "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/type-assertion": 1
     },
     "src/report/build.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
@@ -423,7 +519,8 @@
       "style/noExcessiveLinesPerFile": 1
     },
     "src/requests/brief.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 2
     },
     "src/requests/markdown.ts": {
       "complexity/noExcessiveLinesPerFunction": 1
@@ -431,19 +528,37 @@
     "src/requests/native-view.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
     },
+    "src/requests/review-pane.ts": {
+      "tandem/hidden-clock": 1
+    },
+    "src/requests/store-codec.ts": {
+      "tandem/type-assertion": 2
+    },
     "src/requests/store.ts": {
       "complexity/noExcessiveLinesPerFunction": 1,
       "suspicious/noUnnecessaryConditions": 1
     },
     "src/runtime/database.ts": {
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/json-parse-cast": 9,
+      "tandem/type-assertion": 16
+    },
+    "src/runtime/diagnostics.ts": {
+      "tandem/hidden-clock": 1
+    },
+    "src/runtime/persistence.ts": {
+      "tandem/hidden-clock": 3
     },
     "src/runtime/schema.ts": {
       "complexity/noExcessiveCognitiveComplexity": 4,
       "complexity/noExcessiveLinesPerFunction": 3,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/type-assertion": 7
+    },
+    "src/runtime/usage-codec.ts": {
+      "tandem/type-assertion": 2
     },
     "src/runtime/usage-display.ts": {
       "complexity/noExcessiveLinesPerFunction": 1
@@ -452,11 +567,13 @@
       "style/noExcessiveLinesPerFile": 1
     },
     "src/runtime/usage-ledger.ts": {
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/json-parse-cast": 1
     },
     "src/runtime/usage-receipt.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 1
     },
     "src/runtime/usage.ts": {
       "style/noExcessiveLinesPerFile": 1
@@ -470,11 +587,15 @@
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
       "suspicious/noShadow": 3,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 1,
+      "tandem/type-assertion": 1
     },
     "src/service/records.ts": {
       "complexity/useMaxParams": 5,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 1,
+      "tandem/type-assertion": 4
     },
     "src/service/research-follow-up.ts": {
       "suspicious/noShadow": 1,
@@ -484,7 +605,8 @@
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 3,
       "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 2
     },
     "src/service/source.ts": {
       "style/noNestedTernary": 3
@@ -499,7 +621,9 @@
       "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 2,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/json-parse-cast": 1,
+      "tandem/type-assertion": 3
     },
     "src/session/choice-reply-route.ts": {
       "complexity/useMaxParams": 1,
@@ -529,7 +653,8 @@
       "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 2,
       "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 1
     },
     "src/session/pull-up-route.ts": {
       "complexity/useMaxParams": 1,
@@ -542,10 +667,12 @@
       "complexity/noExcessiveCognitiveComplexity": 10,
       "complexity/noExcessiveLinesPerFunction": 4,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 3
+      "style/noNestedTernary": 3,
+      "tandem/type-assertion": 3
     },
     "src/session/tools.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 1
     },
     "src/session/worker-steering.ts": {
       "style/noExcessiveLinesPerFile": 1,
@@ -560,10 +687,15 @@
     "src/tasks/acceptance.ts": {
       "style/noNestedTernary": 1
     },
+    "src/tasks/communication-persistence.ts": {
+      "tandem/hidden-clock": 1,
+      "tandem/json-parse-cast": 1
+    },
     "src/tasks/communication-protocol.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/json-parse-cast": 1
     },
     "src/tasks/control.ts": {
       "complexity/noExcessiveCognitiveComplexity": 4,
@@ -597,7 +729,8 @@
     },
     "src/tasks/research-continuation.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/type-assertion": 3
     },
     "src/tasks/review-brief.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -611,11 +744,13 @@
     "src/tasks/store-codec.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 2,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 1
     },
     "src/tasks/store-lock.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 2
     },
     "src/tasks/store.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -624,25 +759,39 @@
       "style/noExcessiveLinesPerFile": 1,
       "suspicious/noUnnecessaryConditions": 1
     },
+    "src/tasks/timeline-store.ts": {
+      "tandem/type-assertion": 4
+    },
     "src/terminal-backend/contract.ts": {
       "style/noExcessiveLinesPerFile": 1
+    },
+    "src/terminal-backend/herdr/context.ts": {
+      "tandem/type-assertion": 1
     },
     "src/terminal-backend/herdr/endpoints.ts": {
       "complexity/useMaxParams": 3,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/type-assertion": 2
     },
     "src/terminal-backend/herdr/install.ts": {
       "style/noNestedTernary": 1
+    },
+    "src/terminal-backend/herdr/protocol.ts": {
+      "tandem/json-parse-cast": 1
     },
     "src/terminal-backend/herdr/setup.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/hidden-clock": 1,
+      "tandem/type-assertion": 2
     },
     "src/terminal-backend/herdr/status.ts": {
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/hidden-clock": 1
     },
     "src/terminal-backend/herdr/workspaces.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -650,6 +799,9 @@
       "complexity/useMaxParams": 1,
       "style/noExcessiveLinesPerFile": 1,
       "suspicious/noShadow": 2
+    },
+    "src/terminal-backend/identity.ts": {
+      "tandem/type-assertion": 1
     },
     "src/terminal-backend/tern/backend.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
@@ -663,24 +815,30 @@
       "complexity/useMaxParams": 2,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/type-assertion": 1
     },
     "src/terminal-backend/tern/host.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 2,
       "complexity/useMaxParams": 5,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/hidden-clock": 2
     },
     "src/terminal-backend/tern/plugin.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/hidden-clock": 1,
+      "tandem/type-assertion": 1
     },
     "src/terminal-backend/tern/retire-views.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/hidden-clock": 2
     },
     "src/terminal-backend/tern/views.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
@@ -690,39 +848,50 @@
     },
     "src/terminal/arguments.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/type-assertion": 1
     },
     "src/terminal/cli-arguments.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/json-parse-cast": 1,
+      "tandem/type-assertion": 7
     },
     "src/terminal/cli-commands.ts": {
       "style/noExcessiveLinesPerFile": 1
     },
+    "src/terminal/cli-input.ts": {
+      "tandem/type-assertion": 1
+    },
     "src/terminal/fix-report.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 1
     },
     "src/terminal/hard-reset.ts": {
-      "complexity/useMaxParams": 1
+      "complexity/useMaxParams": 1,
+      "tandem/json-parse-cast": 1
     },
     "src/terminal/launch.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 1,
-      "complexity/useMaxParams": 1
+      "complexity/useMaxParams": 1,
+      "tandem/type-assertion": 2
     },
     "src/terminal/onboarding.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/type-assertion": 2
     },
     "src/terminal/panel.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 3,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 2,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/type-assertion": 1
     },
     "src/terminal/preparation.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -730,21 +899,29 @@
     },
     "src/terminal/process.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/type-assertion": 2
     },
     "src/terminal/projects.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
-      "complexity/useMaxParams": 1
+      "complexity/useMaxParams": 1,
+      "tandem/json-parse-cast": 1
+    },
+    "src/terminal/status.ts": {
+      "tandem/hidden-clock": 1
     },
     "src/terminal/welcome.ts": {
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/type-assertion": 1
     },
     "src/validation-worker.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 1,
       "complexity/useMaxParams": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/json-parse-cast": 2,
+      "tandem/type-assertion": 7
     },
     "src/worker.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -752,7 +929,8 @@
       "complexity/useMaxParams": 2,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/json-parse-cast": 1
     },
     "src/workers/admission.ts": {
       "style/noNestedTernary": 2
@@ -760,20 +938,27 @@
     "src/workers/checkout.ts": {
       "style/noNestedTernary": 2
     },
+    "src/workers/control-protocol.ts": {
+      "tandem/json-parse-cast": 1
+    },
     "src/workers/execution-gate.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1
+      "complexity/noExcessiveLinesPerFunction": 1,
+      "tandem/hidden-clock": 2
     },
     "src/workers/execution-routing.ts": {
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/type-assertion": 1
     },
     "src/workers/job-launch.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 3,
       "complexity/useMaxParams": 4,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/json-parse-cast": 1
     },
     "src/workers/job-settlement.ts": {
       "complexity/noExcessiveLinesPerFunction": 1,
@@ -783,12 +968,16 @@
       "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 2
+      "style/noNestedTernary": 2,
+      "tandem/hidden-clock": 1,
+      "tandem/json-parse-cast": 1,
+      "tandem/type-assertion": 4
     },
     "src/workers/operation-records.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/useMaxParams": 3,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/type-assertion": 4
     },
     "src/workers/protocol.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
@@ -804,16 +993,22 @@
       "style/noExcessiveLinesPerFile": 1
     },
     "src/workers/terminal-control.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/type-assertion": 1
     },
     "src/workers/terminal.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 7,
+      "tandem/json-parse-cast": 1,
+      "tandem/type-assertion": 10
     },
     "src/workers/validation-stage.ts": {
       "complexity/noExcessiveLinesPerFunction": 3,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/json-parse-cast": 2
     },
     "src/workers/validation.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -821,23 +1016,32 @@
       "complexity/useMaxParams": 1,
       "style/noExcessiveLinesPerFile": 1
     },
+    "src/workers/worker-activity.ts": {
+      "tandem/type-assertion": 3
+    },
     "src/workers/workflow.ts": {
       "complexity/noExcessiveCognitiveComplexity": 4,
       "complexity/noExcessiveLinesPerFunction": 8,
       "complexity/useMaxParams": 7,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 2
+      "style/noNestedTernary": 2,
+      "tandem/hidden-clock": 1
     },
     "src/workers/worktree-lease.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 2,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/json-parse-cast": 1
     },
     "tern-plugin/setup.css": {
       "style/noExcessiveLinesPerFile": 1
     },
     "tests/adapters/adapters.test.ts": {
       "style/noExcessiveLinesPerFile": 1
+    },
+    "tests/adapters/typesafe.test.ts": {
+      "tandem/hidden-clock": 2,
+      "tandem/json-parse-cast": 1
     },
     "tests/board/native-alerts.test.ts": {
       "suspicious/noUnnecessaryConditions": 1
@@ -866,12 +1070,15 @@
     "tests/coordinator/coordinator-reconcile.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 27
+      "suspicious/noShadow": 27,
+      "tandem/json-parse-cast": 1
     },
     "tests/coordinator/coordinator-registry.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 2
+      "suspicious/noShadow": 2,
+      "tandem/hidden-clock": 12,
+      "tandem/json-parse-cast": 1
     },
     "tests/coordinator/coordinator-resources.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
@@ -887,7 +1094,8 @@
       "suspicious/noShadow": 5
     },
     "tests/coordinator/open-project.test.ts": {
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/hidden-clock": 1
     },
     "tests/delivery/delivery.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 5,
@@ -901,7 +1109,8 @@
       "style/noExcessiveLinesPerFile": 1
     },
     "tests/evals/central-recovery-scenarios.test.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/json-parse-cast": 3
     },
     "tests/evals/central-recovery-validating-scenarios.test.ts": {
       "style/noExcessiveLinesPerFile": 1
@@ -912,27 +1121,45 @@
     "tests/evals/crash-restart-scenarios.test.ts": {
       "complexity/useMaxParams": 1
     },
+    "tests/evals/cross-repo-scenarios.test.ts": {
+      "tandem/json-parse-cast": 1
+    },
+    "tests/evals/manual-verification-scenarios.test.ts": {
+      "tandem/json-parse-cast": 1
+    },
     "tests/evals/native-catchup.test.ts": {
       "suspicious/noShadow": 1
     },
     "tests/evals/native-entry.test.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "tandem/hidden-clock": 2
     },
     "tests/evals/native-review-submit.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 7,
       "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1
+      "style/noNestedTernary": 1,
+      "tandem/json-parse-cast": 1
     },
     "tests/evals/native-screens.test.ts": {
       "suspicious/noShadow": 1
     },
     "tests/evals/pr-review-scenarios.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/json-parse-cast": 2
     },
     "tests/evals/pr-watch-scenarios.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
       "suspicious/noUnnecessaryConditions": 5
+    },
+    "tests/evals/provider-scenarios.test.ts": {
+      "tandem/json-parse-cast": 1
+    },
+    "tests/evals/run-jev.test.ts": {
+      "tandem/json-parse-cast": 2
+    },
+    "tests/evals/run-research-continuation.test.ts": {
+      "tandem/json-parse-cast": 2
     },
     "tests/evals/scenario.ts": {
       "complexity/noExcessiveCognitiveComplexity": 9,
@@ -950,7 +1177,8 @@
       "suspicious/noUnnecessaryConditions": 2
     },
     "tests/evals/tern-parity/inventory.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 1
     },
     "tests/evals/tern-parity/paint.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
@@ -979,7 +1207,9 @@
     "tests/harness/omp/prompt-routing.test.ts": {
       "complexity/useMaxParams": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 1,
+      "tandem/json-parse-cast": 2
     },
     "tests/harness/omp/tools.test.ts": {
       "style/noExcessiveLinesPerFile": 1
@@ -990,17 +1220,22 @@
     "tests/native/actions.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 3
     },
     "tests/native/layout.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
     },
     "tests/native/render.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/json-parse-cast": 1
     },
     "tests/native/routes.test.ts": {
       "style/noNestedTernary": 1
+    },
+    "tests/native/view-files.ts": {
+      "tandem/hidden-clock": 1
     },
     "tests/onboarding/setup-workflow.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
@@ -1017,6 +1252,9 @@
     },
     "tests/pr-review/submit.test.ts": {
       "style/noExcessiveLinesPerFile": 1
+    },
+    "tests/pr-review/tern-native.test.ts": {
+      "tandem/hidden-clock": 2
     },
     "tests/pr-watch/decide.test.ts": {
       "style/noExcessiveLinesPerFile": 1
@@ -1076,14 +1314,18 @@
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 2,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 1,
+      "tandem/json-parse-cast": 1
     },
     "tests/service/service.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/useMaxParams": 1,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 3,
-      "suspicious/noShadow": 5
+      "suspicious/noShadow": 5,
+      "tandem/hidden-clock": 3,
+      "tandem/json-parse-cast": 11
     },
     "tests/session/actions.test.ts": {
       "style/noExcessiveLinesPerFile": 1
@@ -1094,6 +1336,9 @@
     "tests/session/notifications.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
       "suspicious/noUnnecessaryConditions": 2
+    },
+    "tests/session/pull-up-route.test.ts": {
+      "tandem/json-parse-cast": 1
     },
     "tests/session/research-follow-up.test.ts": {
       "style/noExcessiveLinesPerFile": 1
@@ -1128,10 +1373,12 @@
     },
     "tests/tasks/store.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 2
+      "suspicious/noUnnecessaryConditions": 2,
+      "tandem/json-parse-cast": 3
     },
     "tests/tasks/task-screen-fixture.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 1
     },
     "tests/tasks/timeline.test.ts": {
       "style/noExcessiveLinesPerFile": 1
@@ -1151,11 +1398,13 @@
     "tests/terminal-backend/tern/board-usage-native.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 3
     },
     "tests/terminal-backend/tern/brief-native.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 2
     },
     "tests/terminal-backend/tern/brief-persistence.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -1167,14 +1416,18 @@
     "tests/terminal-backend/tern/launch-plugin-native.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 3
+      "suspicious/noShadow": 3,
+      "tandem/hidden-clock": 4
     },
     "tests/terminal-backend/tern/native-window.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 9
     },
     "tests/terminal-backend/tern/native.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 8,
+      "tandem/json-parse-cast": 1
     },
     "tests/terminal-backend/tern/open-outcomes.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
@@ -1187,35 +1440,51 @@
     },
     "tests/terminal-backend/tern/panel-native.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 3,
+      "tandem/json-parse-cast": 1
     },
     "tests/terminal-backend/tern/panel-spec-driver.ts": {
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 1
     },
     "tests/terminal-backend/tern/panel-spec-native.test.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 6,
+      "tandem/json-parse-cast": 1
     },
     "tests/terminal-backend/tern/plugin-load-native.test.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "tandem/hidden-clock": 2
     },
     "tests/terminal-backend/tern/plugin.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 2
     },
     "tests/terminal-backend/tern/pr-followups-native.test.ts": {
-      "suspicious/noShadow": 1
+      "suspicious/noShadow": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/json-parse-cast": 1
     },
     "tests/terminal-backend/tern/probes-native.test.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 4,
+      "tandem/json-parse-cast": 3
     },
     "tests/terminal-backend/tern/process-transition.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
     },
+    "tests/terminal-backend/tern/reset-native.test.ts": {
+      "tandem/hidden-clock": 2
+    },
     "tests/terminal-backend/tern/shell-native.test.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "tandem/hidden-clock": 4
     },
     "tests/terminal-backend/tern/task-native.test.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 2,
+      "tandem/json-parse-cast": 1
     },
     "tests/terminal-backend/tern/view-close.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2
@@ -1225,14 +1494,19 @@
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 7
     },
+    "tests/terminal-backend/tern/window-native.test.ts": {
+      "tandem/hidden-clock": 2
+    },
     "tests/terminal-backend/tern/workflows-native.test.ts": {
       "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 3
     },
     "tests/terminal/cli.test.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1
+      "suspicious/noUnnecessaryConditions": 1,
+      "tandem/hidden-clock": 2
     },
     "tests/terminal/main.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
@@ -1241,6 +1515,9 @@
     },
     "tests/terminal/panel.test.ts": {
       "style/noExcessiveLinesPerFile": 1
+    },
+    "tests/tern-view/native.test.ts": {
+      "tandem/hidden-clock": 2
     },
     "tests/tern-view/screens-fixture.ts": {
       "complexity/useMaxParams": 1
@@ -1256,10 +1533,16 @@
     },
     "tests/workers/jobs.test.ts": {
       "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 5
+    },
+    "tests/workers/terminal-control.test.ts": {
+      "tandem/hidden-clock": 1,
+      "tandem/json-parse-cast": 1
     },
     "tests/workers/terminal.test.ts": {
-      "style/noExcessiveLinesPerFile": 1
+      "style/noExcessiveLinesPerFile": 1,
+      "tandem/hidden-clock": 6
     },
     "tests/workers/validation.test.ts": {
       "suspicious/noShadow": 1

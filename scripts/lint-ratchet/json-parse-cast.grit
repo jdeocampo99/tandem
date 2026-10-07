@@ -1,0 +1,5 @@
+language js
+
+`JSON.parse($text) as $type` as $cast where {
+  register_diagnostic(span=$cast, message="[tandem/json-parse-cast] JSON.parse(...) as T trusts unchecked data: parse it with a zod schema at the boundary.", severity="error")
+}
