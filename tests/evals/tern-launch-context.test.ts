@@ -39,6 +39,7 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
           HERDR_SESSION: "foreign",
           HERDR_WORKSPACE_ID: "foreign-tab",
           HERDR_PANE_ID: "foreign-pane",
+          TANDEM_EVAL_INHERITED: "login-shell-owns-this",
         },
       },
     );
@@ -50,6 +51,8 @@ test("a coordinator launched into Tern carries its new workspace and namespace t
     const writes = world.trace().filter((event) => event.action === "tern run");
     expect(writes.length).toBeGreaterThan(0);
     expect(JSON.stringify(writes)).not.toContain("foreign-pane");
+    // Tern panes start from the user's login shell; Tandem must not type its inherited env in.
+    expect(world.ranLines(launched.paneId ?? "").join("\n")).not.toContain("login-shell-owns-this");
 
     // A background open must leave the visit intact until its caller brings the project forward.
     await publishFixture(world.home, world.repoPath, {
