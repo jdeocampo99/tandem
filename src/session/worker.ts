@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { Finding, ReviewResult, WorkerReceipt } from "../contracts.ts";
-import { openSteps, type TodoItem } from "../playbooks/progress.ts";
+import { openSteps, openStepsRejection, type TodoItem } from "../playbooks/progress.ts";
 import { commentableLines } from "../pr-review/diff.ts";
 import { readOnlyCommandRefusal } from "../pr-review/shell.ts";
 import { findingHeadline } from "../tasks/findings.ts";
@@ -29,7 +29,6 @@ import {
   type WorkerTerminalState,
   type WorkerTokenTally,
 } from "../workers/terminal.ts";
-import { validationCommandRefusal } from "../workers/validation-commands.ts";
 import type {
   Cancel,
   SessionDeps,
@@ -244,17 +243,6 @@ export function reviewerToolRefusal(
   return REVIEWER_REFUSED_KINDS.has(call.kind) ? REVIEWER_REFUSAL : undefined;
 }
 
-/** Why an implementer's shell call is refused: it runs a pinned validation command itself. */
-export function implementerShellRefusal(
-  validationCommands: readonly string[] | undefined,
-  call: ToolCall,
-): string | undefined {
-  if (validationCommands === undefined || call.kind !== "shell" || call.command === undefined) {
-    return undefined;
-  }
-  return validationCommandRefusal(validationCommands, call.command);
-}
-
 /** What a worker session needs from the pane it runs in. */
 export type WorkerHost = Pick<SessionHost, "perform" | "paneState" | "assertSelectedModel">;
 
@@ -370,9 +358,7 @@ export class WorkerSession {
           completed: this.currentState.completed,
         },
         call.kind,
-      ) ??
-      reviewerToolRefusal(this.job, call) ??
-      implementerShellRefusal(this.job.validationCommands, call);
+      ) ?? reviewerToolRefusal(this.job, call);
     return refusal === undefined ? { block: false } : { block: true, reason: refusal };
   }
 
@@ -751,9 +737,7 @@ export class WorkerSession {
         if (uncommitted !== undefined) return uncommitted;
         const open = openSteps(job.playbookSteps ?? [], this.todos);
         if (open.length > 0) {
-          return new ReportRejection(
-            `these playbook steps are still open in your to-do list: ${open.join("; ")}. Finish them, or drop any that do not apply with the todo tool and give the reason in your report`,
-          );
+          return new ReportRejection(openStepsRejection(open));
         }
       }
       const report = resolveSubmittedReport(job, submission, await this.reviewAnchors());

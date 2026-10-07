@@ -55,7 +55,6 @@ import {
 import type { OperationRecords } from "./operation-records.ts";
 import { workerBriefContext } from "./prompts.ts";
 import { prepareWorkerTerminal, workerJobForEndpoint } from "./terminal-control.ts";
-import { validationCommandLine } from "./validation-commands.ts";
 
 /** Re-stamps a prepared job spec with the claim now launching it, after checking its identity. */
 async function refreshJobSpecClaim(job: DurableJob, claim: OperationClaim): Promise<void> {
@@ -121,9 +120,6 @@ function workerJobSpec(
       ? { setup: task.policy.config.setupCommands }
       : {}),
     ...(input.playbook === undefined ? {} : { playbookSteps: PLAYBOOKS[input.playbook].steps }),
-    ...(role === "implementer" && task.policy.config.validationCommands.length > 0
-      ? { validationCommands: task.policy.config.validationCommands.map(validationCommandLine) }
-      : {}),
     ...(prReview === undefined
       ? {}
       : {
@@ -186,7 +182,9 @@ export class JobLauncher {
     const sessionDirectory =
       role === "implementer" || role === "scout" ? runtime.sessionDirectory : undefined;
     const claim = claimOf(runtime.operation);
-    if (claim === undefined) return;
+    // Another coordinator took the operation over since this one admitted it: the new owner
+    // launches. Adopting its claim here would append a job that only the owner may launch.
+    if (claim === undefined || claim.claimOwner !== this.#deps.claimOwner) return;
     if (sessionDirectory !== undefined) {
       const prepared = await this.#deps.records.withOperationEffect(
         task.id,

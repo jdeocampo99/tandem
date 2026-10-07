@@ -20,7 +20,6 @@ import {
   requestWorkerTerminalCommand,
   type WorkerTerminalJob,
 } from "../../src/workers/terminal.ts";
-import { validationCommandLine } from "../../src/workers/validation-commands.ts";
 
 const MODEL = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
@@ -562,12 +561,12 @@ test("an implementer cannot report implemented while a playbook step is open in 
     });
 
     const beforeTodo = await submitReport(f, IMPLEMENTED);
-    expect(beforeTodo.content[0]?.text).toContain("Measure a baseline; Measure again");
+    expect(beforeTodo.content[0]?.text).toContain('"1. Measure a baseline"; "2. Measure again"');
 
     await f.handlers.get("tool_execution_end")?.(todo("in_progress"), f.context);
     const open = await submitReport(f, IMPLEMENTED);
     expect(open.isError).toBe(true);
-    expect(open.content[0]?.text).toContain("still open in your to-do list: Measure again.");
+    expect(open.content[0]?.text).toContain('still open in your to-do list: "2. Measure again".');
     expect(await Bun.file(job.resultPath).exists()).toBe(false);
 
     await f.handlers.get("tool_execution_end")?.(todo("abandoned"), f.context);
@@ -808,29 +807,6 @@ test("a Claude Code job whose plugin never loads is stopped and fails in plain E
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test("only an implementer job carries validation command lines", () => {
-  const validationCommands = ["bun run check", "bun test"];
-  const job = parseWorkerJob({ ...makeJob("/tmp/worktree"), validationCommands });
-  expect(job.validationCommands).toEqual(validationCommands);
-  expect(() =>
-    parseWorkerJob({ ...makeJob("/tmp/worktree", "scout"), validationCommands }),
-  ).toThrow(TypeError);
-  expect(() => parseWorkerJob({ ...makeJob("/tmp/worktree"), validationCommands: [""] })).toThrow(
-    TypeError,
-  );
-});
-
-test("a shell-string validation command is matched as typed", () => {
-  const command = {
-    name: "tests",
-    argv: ["/bin/sh", "-c", "bun test"],
-    surfaces: [],
-    timeoutMs: 1,
-  };
-  expect(validationCommandLine(command)).toBe("bun test");
-  expect(validationCommandLine({ ...command, argv: ["bun", "run", "lint"] })).toBe("bun run lint");
 });
 
 test("requires absolute paths and strict result fields at the wire boundary", () => {
