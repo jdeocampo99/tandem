@@ -97,17 +97,22 @@ export type SetupRepo = Readonly<{
   repo?: string;
   setUp: boolean;
   validationCommands: readonly string[];
+  /** The saved choice of no checks: tasks skip validation and are labeled unvalidated. */
+  noChecks: boolean;
   setupCommands: readonly string[];
-  /** Checks package.json offers that `validationCommands` does not run yet. */
+  /** Checks the repository's files suggest that `validationCommands` does not run yet. */
   suggestions: readonly string[];
-  /** What the commands were found in, such as "package.json scripts and bun.lock". */
+  /** What the commands were found in, such as "package.json scripts, go.mod and bun.lock". */
   detectedFrom?: string;
   inspectionError?: string;
 }>;
 export type SetupRepoDetails = Readonly<{
   validationCommands: readonly string[];
-  /** The commands that run the package.json check scripts, whether or not they are validated. */
-  scriptCommands: readonly string[];
+  noChecks: boolean;
+  /** Every check the repository's files suggest, whether or not it is validated yet. */
+  discoveredCommands: readonly string[];
+  /** The files `discoveredCommands` came from, such as "package.json scripts" and "go.mod". */
+  sources: readonly string[];
   setupCommands: readonly string[];
   /** The lockfile behind `setupCommands`. */
   lockfile?: string;
@@ -381,21 +386,30 @@ function setupRepo(repo: SetupRepoFacts, homeFolder: string): SetupRepo {
     ...(repo.inspectionError === undefined ? {} : { inspectionError: repo.inspectionError }),
   };
   if (details === undefined) {
-    return { ...base, validationCommands: [], setupCommands: [], suggestions: [] };
+    return { ...base, validationCommands: [], noChecks: false, setupCommands: [], suggestions: [] };
   }
   const sources = [
-    ...(details.scriptCommands.length > 0 ? ["package.json scripts"] : []),
-    ...(details.lockfile === undefined ? [] : [details.lockfile]),
+    ...details.sources,
+    ...(details.lockfile === undefined || details.sources.includes(details.lockfile)
+      ? []
+      : [details.lockfile]),
   ];
   return {
     ...base,
     validationCommands: details.validationCommands,
+    noChecks: details.noChecks,
     setupCommands: details.setupCommands,
-    suggestions: details.scriptCommands.filter(
+    suggestions: details.discoveredCommands.filter(
       (command) => !details.validationCommands.includes(command),
     ),
-    ...(sources.length === 0 ? {} : { detectedFrom: sources.join(" and ") }),
+    ...(sources.length === 0 ? {} : { detectedFrom: spokenList(sources) }),
   };
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function spokenList(items: readonly string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 /** `~/code/api` for a path under the home folder; any other path unchanged. */

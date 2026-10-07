@@ -90,13 +90,14 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   - Models: every role has a picker over every runnable model and a thinking level, with a hint
     and one Recommended model ([harness.md](harness.md#model-recommendations)). **Use recommended
     models** resets every role.
-  - Repositories: a list of the chosen checkouts, each marked with its validation commands or
-    "Needs a validation command", and **+ Add repository**, a name search over the checkouts found
-    under the code folders (`findCheckoutsByName`, `projectRoots` in src/repos/locate.ts). A
-    repository has editable validation commands and setup commands. Package scripts not yet used
-    are offered as suggestions, and the commands show what they were detected from. Every chosen
-    repository needs a validation command: Start and Save changes stay disabled until it has one,
-    and the bottom bar names the repository.
+  - Repositories: a list of the chosen checkouts, each marked with its validation commands,
+    "No checks · unvalidated", or "Needs a validation command", and **+ Add repository**, a name
+    search over the checkouts found under the code folders (`findCheckoutsByName`, `projectRoots`
+    in src/repos/locate.ts). A repository has editable validation commands and setup commands.
+    Checks its files suggest and it does not run yet are offered as suggestions, headed by the
+    files they were detected from. Every chosen repository needs a validation command or **No
+    checks (tasks will be marked unvalidated)** ([policy.md](policy.md#no-checks)): Start and Save
+    changes stay disabled until it has one, and the bottom bar names the repository.
   - Bug reports: **Draft an issue** (`report`), **Fix it** (`fix`) or **Do nothing** (`off`);
     `fix` when the user never chose.
   - The block never asks for a terminal, MCP servers or worker skills; each coordinator and child

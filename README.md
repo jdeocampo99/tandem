@@ -63,7 +63,8 @@ explains why one doesn't apply.
 
 ### Validation and independent review
 
-Every change runs your project's tests, types, and lint first. Then **a fresh reviewer agent that
+Every change runs your project's tests, types, and lint first (a repository you set up with no
+checks skips this, and its work is labeled unvalidated). Then **a fresh reviewer agent that
 didn't write the code** reads it through three lenses:
 
 - **Behavior:** does it do what the approved brief says, including errors, edge cases, ordering,
@@ -275,8 +276,11 @@ it, or **Customize** to go through four steps:
    **Use recommended models** to start over.
 2. **Repositories:** add checkouts by name. For each one, set the validation commands Tandem runs
    to test every change and the setup commands that prepare a task's worktree, usually installing
-   dependencies. Tandem suggests commands from the repository's `package.json` scripts. Every
-   repository needs at least one validation command, and Start stays disabled until it has one.
+   dependencies. Tandem suggests commands from the repository's `package.json` scripts and from
+   `go.mod`, `Cargo.toml`, a uv Python project, or `Makefile`/`justfile` targets; click one to add
+   it. Every repository needs at least one validation command, or **No checks** if it really has
+   none: its tasks then skip validation, are still reviewed, and say "Unvalidated" everywhere.
+   Start stays disabled until each repository has one or the other.
 3. **Bug reports:** choose whether Tandem drafts an issue, opens a task to fix it, or does
    nothing when it finds a bug in itself.
 4. **Review:** check the models, repositories and bug-report choice together, then press Start.

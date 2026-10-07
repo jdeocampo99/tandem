@@ -90,7 +90,9 @@ async function machine(
     registeredProjects: async () => [join(code, "old")],
     inspectRepo: async () => ({
       validationCommands: ["bun run test"],
-      scriptCommands: ["bun run test"],
+      noChecks: false,
+      discoveredCommands: ["bun run test"],
+      sources: ["package.json scripts"],
       setupCommands: ["bun install --frozen-lockfile"],
       lockfile: "bun.lock",
     }),
@@ -103,10 +105,12 @@ async function machine(
       settings = { ...settings, projectRoots: folders };
     },
     setupRepo: async (path, repo) =>
-      record(`setup ${path} ${JSON.stringify([repo.validationCommands, repo.setupCommands])}`)(),
+      record(
+        `setup ${path} ${JSON.stringify([repo.validationCommands, repo.setupCommands])}${repo.noChecks ? " no-checks" : ""}`,
+      )(),
     updateRepoCommands: async (path, commands) =>
       record(
-        `update ${path} ${JSON.stringify([commands.validationCommands, commands.setupCommands])}`,
+        `update ${path} ${JSON.stringify([commands.validationCommands, commands.setupCommands])}${commands.noChecks ? " no-checks" : ""}`,
       )(),
     openProject: async (path) => record(`open ${path}`)(),
   };
@@ -239,7 +243,7 @@ test("an answer that can't be saved is refused with every problem and saves noth
       ),
     ),
   ).rejects.toThrow(
-    `The setup answer can't be saved: api needs a validation command. ${join(code, "api", "src")} is inside the repository at ${join(code, "api")}; add that folder.`,
+    `The setup answer can't be saved: api needs a validation command, or choose No checks. ${join(code, "api", "src")} is inside the repository at ${join(code, "api")}; add that folder.`,
   );
   expect(saved).toEqual([]);
 });
@@ -248,7 +252,9 @@ test("a repository without a validation command names itself, even when it is al
   const { workflow, code, saved } = await machine();
   await expect(
     workflow.apply("/tandem", answerOf([{ path: join(code, "old"), validationCommands: [] }])),
-  ).rejects.toThrow("The setup answer can't be saved: old needs a validation command.");
+  ).rejects.toThrow(
+    "The setup answer can't be saved: old needs a validation command, or choose No checks.",
+  );
   expect(saved).toEqual([]);
 });
 
@@ -268,6 +274,23 @@ test("settings saves an edited repository's commands in place and opens no chat 
     `open ${join(code, "api")}`,
   ]);
   expect(report.opened).toEqual(["api"]);
+});
+
+test("a repository saved with no checks keeps that choice, new or already set up", async () => {
+  const { workflow, saved, code } = await machine();
+  await workflow.apply(
+    "/tandem",
+    answerOf([
+      { path: join(code, "old"), validationCommands: [], noChecks: true },
+      { path: join(code, "api"), validationCommands: [], noChecks: true },
+    ]),
+  );
+  expect(saved.slice(2)).toEqual([
+    `folders ${code}`,
+    `update ${join(code, "old")} [[],null] no-checks`,
+    `setup ${join(code, "api")} [[],null] no-checks`,
+    `open ${join(code, "api")}`,
+  ]);
 });
 
 test("setup opens the chat of a repository that was already set up", async () => {

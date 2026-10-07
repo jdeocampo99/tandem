@@ -550,6 +550,32 @@ test("find-repo with one new checkout also says what Tandem found there", async 
   expect(summary).toContain("MCP tools OMP loaded for this project: linear");
 });
 
+test("onboarding a repository without checks offers its suggestions and the no-checks choice", () => {
+  const found = {
+    repoPath: "/code/svc",
+    existingConfig: false,
+    written: false,
+    validationCommands: [],
+    noChecks: false,
+    setupCommands: [],
+    unresolved: [],
+    discovery: { commands: ["go vet ./...", "go test ./..."], sources: ["go.mod"] },
+  };
+  const summary = summarizeTandemActionValue("onboard", found);
+  expect(summary).toContain("Checks: none configured.");
+  expect(summary).toContain("noChecks: true");
+  expect(summary).toContain(
+    "Suggested from go.mod (not saved unless the user picks them): go vet ./...; go test ./...",
+  );
+  const chosen = summarizeTandemActionValue("setup", {
+    ...found,
+    written: true,
+    noChecks: true,
+  });
+  expect(chosen).toContain("Checks: none, by the user's choice.");
+  expect(chosen).toContain("marked unvalidated");
+});
+
 test("model listing is read-only and model changes require approval", async () => {
   const modelOptions = {
     modelSettings: {

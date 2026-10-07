@@ -19,12 +19,14 @@ export type SetupAnswer = Readonly<{
 
 /**
  * One repository to save: a new one is set up, one already set up has its commands updated. Every
- * repository needs a validation command; omitted setup commands are discovered for a new one and
- * left alone for one already set up.
+ * repository needs a validation command or the deliberate "no checks"; omitted setup commands are
+ * discovered for a new one and left alone for one already set up.
  */
 export type SetupAnswerRepo = Readonly<{
   path: string;
   validationCommands: readonly string[];
+  /** The user chose no checks: tasks here skip validation and are labeled unvalidated. */
+  noChecks?: boolean;
   setupCommands?: readonly string[];
 }>;
 
@@ -52,7 +54,7 @@ export type ParsedSetupAnswer =
 
 const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "report"];
 const ANSWER_KEYS = ["tandemSetup", "mode", "models", "repositories", "selfImprovement"] as const;
-const REPO_KEYS = ["path", "validationCommands", "setupCommands"];
+const REPO_KEYS = ["path", "validationCommands", "noChecks", "setupCommands"];
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -158,6 +160,9 @@ function parseRepositories(value: unknown, problems: string[]): readonly SetupAn
       entry.setupCommands === undefined
         ? {}
         : { setupCommands: stringList(entry.setupCommands, `${where}.setupCommands`, problems) };
+    if (entry.noChecks !== undefined && typeof entry.noChecks !== "boolean") {
+      problems.push(`${where}.noChecks must be true or false.`);
+    }
     return [
       {
         path: entry.path.trim(),
@@ -166,6 +171,7 @@ function parseRepositories(value: unknown, problems: string[]): readonly SetupAn
           entry.validationCommands === undefined
             ? []
             : stringList(entry.validationCommands, `${where}.validationCommands`, problems),
+        ...(entry.noChecks === true ? { noChecks: true } : {}),
         ...setupCommands,
       },
     ];
@@ -202,8 +208,12 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
     }
     if (roots.has(check.root)) problems.push(`${repo.path} is listed twice.`);
     roots.add(check.root);
-    if (!repo.validationCommands.some((command) => command.trim().length > 0)) {
-      problems.push(`${basename(check.root)} needs a validation command.`);
+    const hasCommand = repo.validationCommands.some((command) => command.trim().length > 0);
+    const noChecks = repo.noChecks === true;
+    if (noChecks && hasCommand) {
+      problems.push(`${basename(check.root)} has validation commands and No checks; choose one.`);
+    } else if (!noChecks && !hasCommand) {
+      problems.push(`${basename(check.root)} needs a validation command, or choose No checks.`);
     }
   }
   if (answer.mode === "setup" && answer.repositories.length === 0) {

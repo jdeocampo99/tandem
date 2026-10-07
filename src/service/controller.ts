@@ -341,6 +341,8 @@ export type FoundRepo = NamedCheckout & Readonly<{ readonly setUp: boolean }>;
 export type SetupCommandEdits = Readonly<{
   readonly validationCommands?: readonly string[] | undefined;
   readonly setupCommands?: readonly string[] | undefined;
+  /** The user chose no checks: tasks skip validation and are labeled unvalidated. */
+  readonly noChecks?: boolean | undefined;
 }>;
 
 export type TandemService = Readonly<{
@@ -701,7 +703,9 @@ class TandemController {
         const onboarded = await this.setupOnboard(path, false);
         return {
           validationCommands: onboarded.validationCommands.map((command) => command.name),
-          scriptCommands: onboarded.discovery.commands,
+          noChecks: onboarded.noChecks,
+          discoveredCommands: onboarded.discovery.commands,
+          sources: onboarded.discovery.sources,
           setupCommands: onboarded.setupCommands.map((command) => command.name),
           ...(onboarded.discovery.lockfile === undefined
             ? {}
@@ -715,12 +719,14 @@ class TandemController {
         this.setupOnboard(path, true, {
           validationCommands: repo.validationCommands,
           setupCommands: repo.setupCommands,
+          noChecks: repo.noChecks,
         }),
       updateRepoCommands: async (path, commands) =>
         saveRepositoryCommands({
           repoPath: (await this.setupTarget(path)).repoPath,
           home: deps.home,
           validationCommands: readTextList(commands.validationCommands, "validationCommands"),
+          noChecks: commands.noChecks,
           ...(commands.setupCommands === undefined
             ? {}
             : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
@@ -1142,6 +1148,7 @@ class TandemController {
       ...(commands.setupCommands === undefined
         ? {}
         : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
+      ...(commands.noChecks === true ? { noChecks: true } : {}),
       ...(checkoutPath === undefined ? {} : { checkoutPath }),
     });
   }
@@ -1162,6 +1169,7 @@ class TandemController {
       ...(commands.setupCommands === undefined
         ? {}
         : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
+      ...(commands.noChecks === true ? { noChecks: true } : {}),
       ...(source.sourceRepoPath === undefined ? {} : { checkoutPath: source.sourceRepoPath }),
     });
   }

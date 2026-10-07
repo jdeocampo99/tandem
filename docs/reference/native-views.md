@@ -672,7 +672,8 @@ Brief and PR detail references are project-relative filenames that resolve besid
 detail file.
 
 - The header shows the task's model, elapsed time, branch, current activity and stage track,
-  including skipped validation and review stages and the fix-round budget.
+  including skipped validation and review stages and the fix-round budget. A project with no checks
+  labels its skipped validation step "Unvalidated".
 - All six tabs stay visible. Overview has the objective, worker to-dos and five recent events.
   Brief shows saved lines and opens the separate pane for approval and comments. Progress shows
   the timeline, validation evidence and findings. Diff and PR embed the shared PR controls,
@@ -1005,9 +1006,14 @@ setup is beside it, and the coordinator's context says to answer questions, not 
 setup is finished the welcome view behaves as before.
 
 The block keeps only a transient draft: model and thinking per role, the chosen repositories with
-editable validation and setup command lists, and the bug-report choice. Start (setup) and Save
-changes (settings) are disabled while any role has no model, setup has no repository, or a chosen
-repository has no non-blank validation command; the bottom bar names the repository. They send
+editable validation and setup command lists and their **No checks (tasks will be marked
+unvalidated)** choice, and the bug-report choice. Each repository's `suggestions` (the commands its
+`package.json`, `go.mod`, `Cargo.toml`, `pyproject.toml` with `uv.lock`, `Makefile` or `justfile`
+suggest that it does not run yet) are one-click chips headed "Suggested from" its `detectedFrom`;
+a chip or a new command clears No checks. `noChecks` in the model is the saved choice. Start
+(setup) and Save changes (settings) are disabled while any role has no model, setup has no
+repository, or a chosen repository has neither a non-blank validation command nor No checks; the
+bottom bar names the repository. They send
 `setup-save` with `answer`, the `SetupAnswer` that `parseSetupAnswer` checks at the CLI boundary
 (`mode` is part of it). `SetupWorkflow.apply` revalidates it, saves models, the bug-report choice,
 code folders and repositories in order, updates the commands of repositories already set up in

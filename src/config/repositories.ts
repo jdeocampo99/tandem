@@ -70,6 +70,11 @@ export type OnboardRepoOptions = Readonly<{
   write?: boolean;
   /** The user's own check commands, replacing the discovered ones in the proposal and the write. */
   validationCommands?: readonly string[];
+  /**
+   * The user's deliberate "no checks": saves `validation = "none"` and no validation commands, so
+   * tasks skip validation and are labeled unvalidated. Refused together with validationCommands.
+   */
+  noChecks?: boolean;
   /** The user's own install commands, replacing the discovered one likewise. */
   setupCommands?: readonly string[];
 }>;
@@ -85,15 +90,22 @@ export type OnboardRepoResult = Readonly<{
   policy: RepoPolicy;
   proposedPolicy: RepoPolicy;
   validationCommands: readonly ValidationCommand[];
+  /** The policy is the user's "no checks": tasks skip validation and are labeled unvalidated. */
+  noChecks: boolean;
   setupCommands: readonly SetupCommand[];
   unresolved: readonly string[];
   /** Where the discovered commands came from, whether or not the user replaced them. */
   discovery: OnboardingDiscovery;
 }>;
 
-/** Every package.json script as the command that runs it, and the lockfile behind the install. */
+/**
+ * Every check the repository's files suggest, never run: each package.json script as the command
+ * that runs it, then the checks its other build files name. Suggestions only; none is prefilled
+ * except the package.json proposal. `sources` names the files they came from, in order.
+ */
 export type OnboardingDiscovery = Readonly<{
   commands: readonly string[];
+  sources: readonly string[];
   lockfile?: string;
 }>;
 
@@ -562,6 +574,30 @@ function withCommandList(text: string, key: string, values: readonly string[]): 
 }
 
 /**
+ * Sets or clears the top-level `validation = "none"` line, the user's "no checks"; it goes just
+ * above `validationCommands` when the file has that line, else above the first table.
+ */
+function withNoChecks(text: string, noChecks: boolean): string {
+  const tableStart = text.search(/^[ \t]*\[/mu);
+  const head = tableStart === -1 ? text : text.slice(0, tableStart);
+  const tail = text.slice(head.length);
+  const set = /^validation[ \t]*=.*\n?/mu.exec(head);
+  if (!noChecks) {
+    return set === null
+      ? text
+      : head.slice(0, set.index) + head.slice(set.index + set[0].length) + tail;
+  }
+  if (set !== null) {
+    return `${head.slice(0, set.index)}${NO_CHECKS_LINE}\n${head.slice(set.index + set[0].length)}${tail}`;
+  }
+  const anchor = /^#?[ \t]*validationCommands[ \t]*=/mu.exec(head);
+  if (anchor !== null) {
+    return `${head.slice(0, anchor.index)}${NO_CHECKS_LINE}\n${head.slice(anchor.index)}${tail}`;
+  }
+  return `${head.replace(/\n*$/u, "\n")}\n${NO_CHECKS_LINE}\n${tail === "" ? "" : `\n${tail}`}`;
+}
+
+/**
  * Saves new validation and setup commands into a set-up project's settings.toml, replacing only
  * those two keys; a list left undefined stays as it is. Nothing is written when the file changed
  * since it was read or already says the same. The file stays where it is; a symlink in the
@@ -573,6 +609,11 @@ export async function saveRepositoryCommands(
     home: string;
     validationCommands?: readonly string[];
     setupCommands?: readonly string[];
+    /**
+     * true saves "no checks" (`validation = "none"`, no validation commands); false with
+     * validation commands removes it. Undefined leaves the choice as it is.
+     */
+    noChecks?: boolean;
   }>,
 ): Promise<void> {
   const root = await repositoryRoot(options.repoPath);
@@ -592,18 +633,29 @@ export async function saveRepositoryCommands(
       throw new TypeError(`${key} must not have an empty command`);
     }
   }
+  if (options.noChecks === true && (options.validationCommands?.length ?? 0) > 0) {
+    throw new TypeError("No checks can't be saved together with validation commands");
+  }
   const before = await readFile(file, "utf8");
   readSettingsToml(before, file, root);
   let after = before;
   for (const [key, values] of edits) {
     if (values !== undefined) after = withCommandList(after, key, values);
   }
+  if (options.noChecks !== undefined) after = withNoChecks(after, options.noChecks);
   const saved = readSettingsToml(after, file, root);
   for (const [key, values] of edits) {
     if (values !== undefined && JSON.stringify(saved[key]) !== JSON.stringify(values)) {
       throw new TypeError(`${file} did not keep ${key} as saved; nothing was written.`);
     }
   }
+  if (options.noChecks !== undefined && (saved.validation === "none") !== options.noChecks) {
+    throw new TypeError(
+      `${file} did not keep the validation choice as saved; nothing was written.`,
+    );
+  }
+  // The edited file must still be a valid policy, such as no checks beside no commands.
+  parsePolicy(parseSettingsToml(after, file, root));
   if (after === before) return;
   if ((await readFile(file, "utf8")) !== before) {
     throw new Error(`${file} changed while saving; nothing was written. Try again.`);
@@ -730,7 +782,89 @@ function packageScriptCommands(packageText: string | undefined, runner: string):
     .map(([name]) => `${runner} run ${name}`);
 }
 
-type PackageManager = Readonly<{ install: string; runner: string; lockfile: string }>;
+/** The build files ecosystem detection reads, as text; a missing file is simply absent. */
+export const ECOSYSTEM_FILES = [
+  "go.mod",
+  "Cargo.toml",
+  "pyproject.toml",
+  "uv.lock",
+  "Makefile",
+  "makefile",
+  "justfile",
+  "Justfile",
+] as const;
+
+export type EcosystemFile = (typeof ECOSYSTEM_FILES)[number];
+
+/** One suggested check and the file it was found in. */
+export type EcosystemCheck = Readonly<{ command: string; from: string }>;
+
+/** The task-runner targets worth suggesting, in the order they are offered. */
+const RUNNER_TARGETS = ["check", "lint", "test"] as const;
+
+/** Makefile rule names on a line like `test lint: deps`; `:=` and `::=` assignments are not rules. */
+function makeTargets(text: string): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const match of text.matchAll(/^([A-Za-z0-9_.\- ]+?)[ \t]*::?(?!=)/gmu)) {
+    for (const name of (match[1] ?? "").split(/\s+/u)) names.add(name);
+  }
+  return names;
+}
+
+/** just recipe names on a line like `test *args:` or `@lint:`; `:=` assignments are not recipes. */
+function justRecipes(text: string): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const match of text.matchAll(/^@?([A-Za-z_][A-Za-z0-9_-]*)[^:=\n]*:(?!=)/gmu)) {
+    names.add(match[1] ?? "");
+  }
+  return names;
+}
+
+/**
+ * The checks a repository's build files suggest, read as text and never executed: Go, Rust, a uv
+ * Python project, and `check`/`lint`/`test` targets of a Makefile or justfile. Pure.
+ */
+export function detectEcosystemChecks(
+  files: Readonly<Partial<Record<EcosystemFile, string>>>,
+): readonly EcosystemCheck[] {
+  const checks: EcosystemCheck[] = [];
+  const add = (from: string, commands: readonly string[]) => {
+    for (const command of commands) checks.push({ command, from });
+  };
+  if (files["go.mod"] !== undefined) add("go.mod", ["go vet ./...", "go test ./..."]);
+  if (files["Cargo.toml"] !== undefined) add("Cargo.toml", ["cargo clippy", "cargo test"]);
+  if (files["pyproject.toml"] !== undefined && files["uv.lock"] !== undefined) {
+    add("pyproject.toml and uv.lock", ["uv run pytest"]);
+  }
+  for (const name of ["Makefile", "makefile"] as const) {
+    const text = files[name];
+    if (text === undefined) continue;
+    const targets = makeTargets(text);
+    add(
+      name,
+      RUNNER_TARGETS.filter((target) => targets.has(target)).map((target) => `make ${target}`),
+    );
+    break;
+  }
+  for (const name of ["justfile", "Justfile"] as const) {
+    const text = files[name];
+    if (text === undefined) continue;
+    const recipes = justRecipes(text);
+    add(
+      name,
+      RUNNER_TARGETS.filter((target) => recipes.has(target)).map((target) => `just ${target}`),
+    );
+    break;
+  }
+  return checks;
+}
+
+type PackageManager = Readonly<{
+  install: string;
+  /** The tool that runs package.json scripts; absent for a lockfile that is not JavaScript's. */
+  runner?: string;
+  lockfile: string;
+}>;
 
 /** Lockfile → the install that reproduces it exactly and the tool that runs package scripts. */
 const LOCKFILE_PACKAGE_MANAGERS: readonly (readonly [string, Omit<PackageManager, "lockfile">])[] =
@@ -740,8 +874,17 @@ const LOCKFILE_PACKAGE_MANAGERS: readonly (readonly [string, Omit<PackageManager
     ["pnpm-lock.yaml", { install: "pnpm install --frozen-lockfile", runner: "pnpm" }],
     ["yarn.lock", { install: "yarn install --immutable", runner: "yarn" }],
     ["package-lock.json", { install: "npm ci", runner: "npm" }],
-    ["uv.lock", { install: "uv sync --frozen", runner: "bun" }],
+    ["uv.lock", { install: "uv sync --frozen" }],
   ];
+
+/**
+ * The tool that runs package.json scripts: the JavaScript lockfile's own, `bun` with no lockfile,
+ * and `npm` beside a uv.lock, since a Python project is never assumed to have bun.
+ */
+function scriptRunner(manager: PackageManager | undefined): string {
+  if (manager === undefined) return "bun";
+  return manager.runner ?? "npm";
+}
 
 /** The first lockfile found decides the package manager; none means no install and bun scripts. */
 async function detectPackageManager(
@@ -761,7 +904,7 @@ function onboardingUnresolved(
   policy: RepoPolicy,
 ): readonly string[] {
   const unresolved = [...proposal.unresolved];
-  if (policy.validationCommands.length === 0) {
+  if (policy.validationCommands.length === 0 && policy.validation !== "none") {
     unresolved.push("no validation commands are configured; validation remains unresolved");
   }
   return deduplicateStrings(unresolved);
@@ -779,10 +922,14 @@ function serializeCentralConfig(
   root: string,
   validationCommands: readonly string[],
   setupCommands: readonly string[],
+  noChecks: boolean,
 ): string {
   const defaults = defaultPolicy();
   const setting = (values: readonly string[], key: string, example: string): string =>
     values.length > 0 ? `${key} = ${tomlList(values)}` : `# ${key} = ${example}`;
+  const validation = noChecks
+    ? `${NO_CHECKS_LINE}\nvalidationCommands = []`
+    : setting(validationCommands, "validationCommands", '["npm run lint", "npm test"]');
   return `# Tandem settings for this project. Edit with \`tandem config\`.
 # Uncomment a line (remove the leading "#") to turn a setting on.
 # Changes apply to tasks started afterwards; running tasks keep the settings they began with.
@@ -795,7 +942,9 @@ repoPath = ${JSON.stringify(root)}
 ${setting(setupCommands, "setupCommands", '["npm ci", "npx prisma generate"]')}
 
 # Checks every change must pass before Tandem accepts it. Each one runs in the project folder.
-${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"]')}
+# For no checks at all, set validation = "none" with no validationCommands: tasks then skip
+# validation and are labeled unvalidated.
+${validation}
 
 # Commands that stop what agents started in a working copy, like a Docker or database stack.
 # They run in the task's working copy once the task is finished and its agents are closed.
@@ -840,6 +989,9 @@ ${setting(validationCommands, "validationCommands", '["npm run lint", "npm test"
 `;
 }
 
+/** The line that saves "no checks". */
+const NO_CHECKS_LINE = 'validation = "none"';
+
 /** The absolute path of a repository's central settings file, whether or not it exists yet. */
 export async function centralConfigPath(repoPath: string, home: string): Promise<string> {
   const paths = centralPaths(await repositoryRoot(repoPath), await configuredHome(home));
@@ -874,14 +1026,19 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     false,
   );
   const manager = await detectPackageManager(checkoutRoot, options.readText);
-  const runner = manager?.runner ?? "bun";
+  const runner = scriptRunner(manager);
+  const ecosystem = detectEcosystemChecks(await readEcosystemFiles(checkoutRoot, options.readText));
+  const noChecks = options.noChecks === true;
+  if (noChecks && (options.validationCommands?.length ?? 0) > 0) {
+    throw new TypeError("No checks can't be saved together with validation commands");
+  }
   const discovered = proposeValidationCommands(packageText, runner);
-  // Commands the user chose are theirs to vouch for, so they leave nothing unresolved.
+  // Commands the user chose, or their choice of none, are theirs to vouch for: nothing unresolved.
   const proposal: ValidationProposal =
-    options.validationCommands === undefined
+    options.validationCommands === undefined && !noChecks
       ? discovered
       : {
-          commands: options.validationCommands,
+          commands: options.validationCommands ?? [],
           scripts: [],
           unresolved: [],
           approvalRequired: true,
@@ -889,14 +1046,21 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
   const setupCommands = options.setupCommands ?? (manager === undefined ? [] : [manager.install]);
   const proposedPolicy = existingConfig
     ? copyPolicy(currentPolicy)
-    : parsePolicyOverride({ setupCommands, validationCommands: proposal.commands }, global);
+    : parsePolicyOverride(
+        {
+          setupCommands,
+          validationCommands: proposal.commands,
+          ...(noChecks ? { validation: "none" } : {}),
+        },
+        global,
+      );
   const unresolved = onboardingUnresolved(proposal, proposedPolicy);
 
   let written = false;
   if (options.write === true) {
     await writeCentralConfig(
       paths,
-      serializeCentralConfig(root, proposal.commands, setupCommands),
+      serializeCentralConfig(root, proposal.commands, setupCommands, noChecks),
       options.writeText,
     );
     written = true;
@@ -912,11 +1076,41 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     policy: existingConfig ? currentPolicy : proposedPolicy,
     proposedPolicy,
     validationCommands: proposedPolicy.validationCommands,
+    noChecks: proposedPolicy.validation === "none",
     setupCommands: proposedPolicy.setupCommands,
     unresolved,
-    discovery: {
-      commands: packageScriptCommands(packageText, runner),
-      ...(manager === undefined ? {} : { lockfile: manager.lockfile }),
-    },
+    discovery: discoveryOf(packageScriptCommands(packageText, runner), ecosystem, manager),
+  };
+}
+
+/**
+ * Each ecosystem file that exists, as text; never executed. One that can't be read safely (a
+ * symlink out of the repository, a directory) only loses its suggestions.
+ */
+async function readEcosystemFiles(
+  root: string,
+  readText: PolicyTextReader | undefined,
+): Promise<Partial<Record<EcosystemFile, string>>> {
+  const files: Partial<Record<EcosystemFile, string>> = {};
+  for (const name of ECOSYSTEM_FILES) {
+    const text = await readRepositoryFile(root, name, readText, false).catch(() => undefined);
+    if (text !== undefined) files[name] = text;
+  }
+  return files;
+}
+
+function discoveryOf(
+  scripts: readonly string[],
+  ecosystem: readonly EcosystemCheck[],
+  manager: PackageManager | undefined,
+): OnboardingDiscovery {
+  const sources = [
+    ...(scripts.length > 0 ? ["package.json scripts"] : []),
+    ...ecosystem.map((check) => check.from),
+  ];
+  return {
+    commands: deduplicateStrings([...scripts, ...ecosystem.map((check) => check.command)]),
+    sources: deduplicateStrings(sources),
+    ...(manager === undefined ? {} : { lockfile: manager.lockfile }),
   };
 }

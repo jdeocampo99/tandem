@@ -35,6 +35,8 @@ export type TandemAction =
       readonly validationCommands?: readonly string[] | undefined;
       /** The user's own install commands, replacing what onboard found. */
       readonly setupCommands?: readonly string[] | undefined;
+      /** The user chose no checks: tasks skip validation and are labeled unvalidated. */
+      readonly noChecks?: boolean | undefined;
     }>
   | Readonly<{ readonly action: "models"; readonly repoPath: string }>
   | Readonly<{ readonly action: "onboard"; readonly repoPath: string }>
@@ -351,7 +353,9 @@ async function approvalPrompt(
     return {
       title: `Save Tandem settings for ${projectName(onboarded.repoPath)}?`,
       message: [
-        `Checks: ${listed(onboarded.validationCommands.map((command) => command.name))}`,
+        onboarded.noChecks
+          ? "Checks: none. Tasks skip validation and are marked unvalidated."
+          : `Checks: ${listed(onboarded.validationCommands.map((command) => command.name))}`,
         `Install in fresh copies: ${listed(onboarded.setupCommands.map((command) => command.name))}`,
         "Saved outside the project.",
       ].join("\n"),
