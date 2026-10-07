@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   readHomeSettings,
+  readHomeSettingsSync,
   saveProjectRoots,
   saveSelfImprovement,
 } from "../../src/config/home-settings.ts";
@@ -58,14 +59,10 @@ test("code folders and the self-improvement mode are saved, replacing a one-line
   }
 });
 
-test("terminal choice is validated and saved beside existing home settings", async () => {
-  const { saveTerminalChoice, readHomeSettingsSync } = await import(
-    "../../src/config/home-settings.ts"
-  );
+test("the terminal setting is read beside existing home settings and validated", async () => {
   const home = await mkdtemp(join(tmpdir(), "tandem-home-terminal-"));
   try {
-    await writeFile(join(home, "settings.toml"), 'selfImprovement = "report"\n');
-    await saveTerminalChoice(home, "tern");
+    await writeFile(join(home, "settings.toml"), 'selfImprovement = "report"\nterminal = "tern"\n');
     expect(readHomeSettingsSync(home).terminal).toBe("tern");
     expect((await readHomeSettings(home)).selfImprovement).toBe("report");
     await writeFile(join(home, "settings.toml"), 'terminal = "another"\n');

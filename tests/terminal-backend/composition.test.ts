@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readHomeSettings, saveTerminalChoice } from "../../src/config/home-settings.ts";
+import { readHomeSettings } from "../../src/config/home-settings.ts";
 import type { CommandRunner } from "../../src/contracts.ts";
 import { openProject } from "../../src/coordinator/open-project.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
@@ -23,7 +23,7 @@ test("an absent terminal setting selects Tern, and settings can still name Herdr
   try {
     expect(savedTerminal(await readHomeSettings(home))).toBe("tern");
     expect(terminalBackend(run, { home }).name).toBe("tern");
-    await saveTerminalChoice(home, "herdr");
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n');
     expect(terminalBackend(run, { home }).name).toBe("herdr");
   } finally {
     await rm(home, { recursive: true, force: true });

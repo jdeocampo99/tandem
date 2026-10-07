@@ -55,7 +55,6 @@ export function onboardingContext(
   return `Setup is unfinished. ${step}`;
 }
 
-/** What the chat says when the setup block opens beside it. */
 export const SETUP_WELCOME_TEXT =
   "Welcome to Tandem.\n\nYour setup is on the right. Add your repositories, check the recommended models, then press Start. Ask me here about any setting.";
 

@@ -1,7 +1,6 @@
 import { afterAll, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { saveTerminalChoice } from "../../../src/config/home-settings.ts";
 import type { CommandRequest, CommandRunner } from "../../../src/contracts.ts";
 import {
   installTerminalPlugin,
@@ -181,7 +180,7 @@ test("installer and update follow the saved terminal, and an absent choice means
     confirm: async () => true,
   };
   try {
-    await saveTerminalChoice(herdr, "herdr");
+    await writeFile(join(herdr, "settings.toml"), 'terminal = "herdr"\n');
     await installTerminalPlugin(herdr, deps);
     expect(await reloadTerminalPlugin(herdr, deps)).toBe(false);
     expect(selected.calls).toHaveLength(0);
@@ -244,7 +243,7 @@ test("invalid Tern preferences never block Herdr launch or update and warn only 
   try {
     await configureTernPluginSettings({ path, approved: true });
     await writeFile(path, '{"tabs_autohide":"yes"}');
-    await saveTerminalChoice(home, "herdr");
+    await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n');
     const deps = {
       ...selected,
       cwd: home,

@@ -2,12 +2,11 @@ import { readFileSync } from "node:fs";
 
 /**
  * Builds Tandem's self-contained HTML pages: every page template inlines the shared stylesheet
- * (`tandem.css`) and, when it needs them, the shared page script (`components.js`), then the page
- * fills its own placeholders. Nothing is fetched at view time except the web fonts.
+ * (`tandem.css`), then the page fills its own placeholders. Nothing is fetched at view time except
+ * the web fonts.
  */
 const SHARED_ASSETS: Readonly<Record<string, URL>> = {
   "tandem.css": new URL("./tandem.css", import.meta.url),
-  "components.js": new URL("./components.js", import.meta.url),
 };
 
 /**

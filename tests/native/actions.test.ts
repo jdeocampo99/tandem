@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { NativeViews } from "../../src/board/native-views.ts";
-import { saveTerminalChoice } from "../../src/config/home-settings.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
 import type { CommandRequest, RequestBriefContent } from "../../src/contracts.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
@@ -63,10 +62,6 @@ async function fixture(terminalName: "herdr" | "tern" = "herdr") {
   const clean = join(poolRoot, "coordinator");
   await mkdir(repo);
   await mkdir(clean, { recursive: true });
-  if (terminalName === "tern") {
-    await mkdir(home, { recursive: true });
-    await saveTerminalChoice(home, "tern");
-  }
   const endpoint = {
     terminal: terminalName,
     ...(terminalName === "tern" ? { terminalSessionId: "1" } : {}),
@@ -1857,7 +1852,6 @@ test("project lookup uses the terminal saved in the block's home, not the proces
         tabId: "301",
       },
     });
-    await saveTerminalChoice(f.home, "tern");
     const [, ctx] = blockArgs(join(f.home, "view.json"), {
       coordinator: "101",
       cwd: f.clean,

@@ -486,7 +486,6 @@ export class TernParityHost {
       },
       print: (text) => printed.push(text),
     });
-    const ready = true;
     const settings: unknown = await readFile(
       join(home, configDirectory, "settings.json"),
       "utf8",
@@ -494,7 +493,7 @@ export class TernParityHost {
       (text) => JSON.parse(text),
       () => undefined,
     );
-    return { ready, questions, printed, settings };
+    return { questions, printed, settings };
   }
 
   /** Lets every open block poll its file again, as Tern's one-second watch timers do. */

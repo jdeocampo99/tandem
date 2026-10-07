@@ -644,7 +644,6 @@ export const inventory: readonly InventoryEntry[] = [
         await host.command("open-task");
         const picker = host.screen(host.pane("task-picker"));
         expect((await picker.render()).text).toContain("Search tasks by title, id or stage");
-        // The two settings shortcuts open one Settings tab, each on its own section.
         await host.command("settings-repositories");
         const settings = host.screen(host.pane("setup"));
         await host.refresh();
@@ -1565,25 +1564,21 @@ export const inventory: readonly InventoryEntry[] = [
           const unchanged = `Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To be asked again, add terminal = "herdr" to Tandem's settings.toml, start Tandem once, then remove that line.\n`;
           const installed = { keybinds: TERN_KEYBINDS, tabs_autohide: true };
           expect(await host.offerTernPreferences("approved", true)).toEqual({
-            ready: true,
             questions: [question],
             printed: [],
             settings: installed,
           });
           expect(await host.offerTernPreferences("approved", false)).toEqual({
-            ready: true,
             questions: [],
             printed: [],
             settings: installed,
           });
           expect(await host.offerTernPreferences("declined", false)).toEqual({
-            ready: true,
             questions: [question],
             printed: [unchanged],
             settings: undefined,
           });
           expect(await host.offerTernPreferences("declined", true)).toEqual({
-            ready: true,
             questions: [],
             printed: [],
             settings: undefined,

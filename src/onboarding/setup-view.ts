@@ -87,7 +87,7 @@ export type SetupRole = Readonly<{
   /** The saved choice, when it is still in the catalogue. */
   pick?: ModelSpec;
   /** The Balanced profile's choice for this role, with its reason; absent when none fits. */
-  recommended?: Readonly<{ model: ModelSpec; reason: string }>;
+  recommended?: Recommendation;
 }>;
 
 export type SetupRepo = Readonly<{
@@ -185,7 +185,7 @@ export const THINKING_NOTES: Readonly<Record<ThinkingLevel, string>> = {
   auto: "model decides",
 };
 
-export type Recommendation = Readonly<{ model: ModelSpec; reason: string }>;
+type Recommendation = Readonly<{ model: ModelSpec; reason: string }>;
 
 const RECOMMENDATION_REASONS: Readonly<Record<AgentRole, string>> = {
   coordinator: "Its plans steer every other role.",

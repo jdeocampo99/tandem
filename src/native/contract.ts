@@ -524,7 +524,6 @@ export const VIEW_MODELS = {
 export type ViewFileKind = keyof typeof VIEW_MODELS;
 export const ViewFileKind = z.enum(["index", "task", "brief", "pr", "setup"]);
 
-/** The setup detail file of `mode`. */
 export function setupFile(mode: SetupMode): string {
   return `setup-${mode}.json`;
 }

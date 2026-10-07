@@ -915,7 +915,6 @@ async function openSetup(act: Act, mode: SetupMode, section?: SetupSection): Pro
   return viewOutcome(await show(act, owner, { kind: "setup", mode }));
 }
 
-/** "api", "api and web", "api, web and docs". */
 function listNames(names: readonly string[]): string {
   return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }

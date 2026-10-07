@@ -51,7 +51,6 @@ local function trim(text: string): string
  return string.match(text, "^%s*(.-)%s*$") or ""
 end
 
--- Trimmed, non-blank, de-duplicated text in order: what an answer carries.
 local function texts(list: {fields.Field}): {string}
  local out, seen = {}, {}
  for _, field in list do
@@ -73,9 +72,7 @@ local function filled(list: {fields.Field}): number
 end
 
 local function current(state: State): View?
- local model = state.file.model
- if model == nil then return nil end
- return model :: View
+ return state.file.model
 end
 
 local function findModel(model: View, selector: string): ModelInfo?
@@ -114,7 +111,6 @@ local function recommendation(model: View, draft: Draft): (boolean, boolean)
  return all, offer
 end
 
--- The supported level nearest to `wanted` along `levels`; a lighter one wins a tie.
 local function nearest(wanted: string, supported: {string}, levels: {{level: string, note: string}}): string
  local rank: {[string]: number} = {}
  for index, entry in levels do rank[entry.level] = index end
@@ -203,7 +199,6 @@ local function answer(model: View, draft: Draft): {[string]: unknown}
  return {tandemSetup = 1, mode = draft.mode, models = models, repositories = tern.json.array(repositories), selfImprovement = draft.selfImprovement}
 end
 
--- Why Start/Save is unavailable, in the words the bottom bar shows.
 local function blocker(model: View, draft: Draft): string?
  for _, role in model.roles do
   if not draft.models[role.id] then return "Choose a model for " .. role.name .. "." end
@@ -223,6 +218,11 @@ local function reflow(state: State)
  state.active, state.fields, state.order = "", {}, {}
 end
 
+local function setStep(state: State, id: string)
+ state.step, state.open, state.adding = id, nil, false
+ reflow(state)
+end
+
 -- The tab a file that opened Settings at a section names. A newer file may name one while the block
 -- is already open, so each file is acted on once and the draft is kept.
 local SECTION_STEPS: {[string]: string} = {models = "models", repositories = "repos", ["bug-reports"] = "self"}
@@ -236,10 +236,7 @@ local function sync(state: State)
   state.step = if model.mode == "setup" then "summary" else "models"
  end
  local step = if model.mode == "settings" and model.section then SECTION_STEPS[model.section] else nil
- if step and state.jumped ~= state.file.seq then
-  state.step, state.open, state.adding = step, nil, false
-  reflow(state)
- end
+ if step and state.jumped ~= state.file.seq then setStep(state, step) end
  state.jumped = state.file.seq
 end
 
@@ -651,13 +648,6 @@ local function settingsView(state: State, model: View, draft: Draft, reason: str
  return {main = ui.col({page(children, true)}), dock = bar(actions)}
 end
 
-local function setStep(state: State, draft: Draft, id: string)
- local known = id == "models" or id == "repos" or id == "self" or (draft.mode == "setup" and (id == "summary" or id == "review"))
- if not known then return end
- state.step, state.open, state.adding = id, nil, false
- reflow(state)
-end
-
 local function choose(state: State, model: View, draft: Draft, index: number?)
  local role = findRole(model, state.open)
  local info = if index then model.models[index] else nil
@@ -692,7 +682,6 @@ local function editCommands(state: State, draft: Draft, cx: BlockCx, name: strin
  local repo = draft.repos[state.selected]
  if not repo then return end
  if name == "cmd-add" then
-  if value ~= "validation" and value ~= "setup" then return end
   local list = if value == "validation" then repo.validation else repo.setup
   local field = fields.create()
   table.insert(list, field)
@@ -795,7 +784,7 @@ local block: BlockDef<State> = {
   local model, draft = current(state), state.draft
   if not model or not draft or state.done then return end
   if name == "send" then send(state, model, draft, cx)
-  elseif name == "go" then setStep(state, draft, value)
+  elseif name == "go" then setStep(state, value)
   elseif name == "use-recommended" then
    for _, role in model.roles do
     local recommended = role.recommended
@@ -804,7 +793,7 @@ local block: BlockDef<State> = {
    state.open = nil
    reflow(state)
   elseif name == "pick" then
-   state.open = if state.open == value or not findRole(model, value) then nil else value
+   state.open = if state.open == value then nil else value
    clearField(state.modelSearch)
    reflow(state)
   elseif name == "model" then choose(state, model, draft, tonumber(value))
@@ -826,10 +815,7 @@ local block: BlockDef<State> = {
    end
    reflow(state)
   elseif name == "cmd-add" or name == "rm" or name == "suggest" then editCommands(state, draft, cx, name, value)
-  elseif name == "self" then
-   for _, option in SELF do
-    if option.id == value then draft.selfImprovement = value end
-   end
+  elseif name == "self" then draft.selfImprovement = value
   elseif name == "discard" then
    local saved = state.saved
    if saved then state.draft = copyDraft(saved) end

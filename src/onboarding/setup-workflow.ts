@@ -33,7 +33,6 @@ export type SetupWorkflowDependencies = Readonly<{
   clock: Clock;
   models: (repoPath: string) => Promise<
     Readonly<{
-      /** OMP's listing. */
       availableModels: readonly ModelRecord[];
       modelSettings: ModelSettings;
       claudeCode: ClaudeCodeAvailability;
@@ -78,7 +77,6 @@ export type SetupApplyResult = Readonly<{
   opened: readonly string[];
 }>;
 
-/** Everything the view and the answer checks read, in one pass. */
 type SetupFacts = Readonly<{
   ompCatalogue: readonly ModelRecord[];
   claudeCode: ClaudeCodeAvailability;
@@ -117,7 +115,6 @@ export class SetupWorkflow {
     };
   }
 
-  /** What the setup block shows, from saved state and read-only discovery. */
   async view(repoPath: string, mode: SetupMode): Promise<SetupView> {
     const facts = await this.facts(repoPath);
     const repos: SetupRepoFacts[] = await Promise.all(

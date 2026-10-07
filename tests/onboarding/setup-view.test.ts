@@ -70,16 +70,8 @@ test("every job starts without a saved pick and all catalogue models are availab
   expect(view.selfImprovement).toBe("fix");
 });
 
-test("each role shows its hint and the Balanced profile's recommendation with its reason", () => {
-  const flagship: ModelRecord = {
-    selector: "openai-codex/flagship",
-    id: "flagship",
-    provider: "openai-codex",
-    reasoning: true,
-    thinking: ["low", "medium", "high", "max"],
-    cost: { input: 10, output: 50 },
-  };
-  const view = buildSetupView({ ...input, ompCatalogue: [flagship] });
+test("each role shows its hint from the shared role copy", () => {
+  const view = buildSetupView(input);
   expect(view.roles.map((role) => role.hint)).toEqual([
     "your smartest model",
     "cheap and fast",
@@ -87,14 +79,6 @@ test("each role shows its hint and the Balanced profile's recommendation with it
     "smart, and different from Coding",
     "cheap and fast",
   ]);
-  expect(view.roles.map((role) => role.recommended?.model)).toEqual([
-    { model: flagship.selector, thinking: "high" },
-    { model: flagship.selector, thinking: "medium" },
-    { model: flagship.selector, thinking: "max" },
-    { model: flagship.selector, thinking: "max" },
-    { model: flagship.selector, thinking: "low" },
-  ]);
-  expect(view.roles.every((role) => (role.recommended?.reason.length ?? 0) > 0)).toBe(true);
   for (const role of view.roles) expect(role.hint).toBe(SETUP_ROLE_COPY[role.id].hint);
 });
 

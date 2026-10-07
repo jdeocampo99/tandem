@@ -171,15 +171,7 @@ export function readHomeSettingsSync(home: string): HomeSettings {
   }
 }
 
-export function readTerminalName(value: unknown): TerminalName {
+function readTerminalName(value: unknown): TerminalName {
   if (value === "herdr" || value === "tern") return value;
   throw new TypeError('terminal must be "herdr" or "tern"');
-}
-
-/** Caller holds the state lock and proves no active task or owned operation spans the switch. */
-export async function saveTerminalChoice(
-  home: string,
-  terminal: TerminalName,
-): Promise<HomeSettings> {
-  return saveHomeSetting(home, "terminal", JSON.stringify(readTerminalName(terminal)));
 }

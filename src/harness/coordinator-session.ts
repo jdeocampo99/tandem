@@ -146,9 +146,7 @@ export function bindCoordinator(
       await publishViews(
         environment.home,
         await canonicalPath(environment.repo, "repoPath"),
-        async () => ({
-          setup,
-        }),
+        async () => ({ setup }),
       );
       return terminal.openSetup({
         sessionId: environment.sessionId,
