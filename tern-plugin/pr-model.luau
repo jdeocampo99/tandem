@@ -1,5 +1,5 @@
 --!strict
--- Shapes the PR screens draw; src/native/contract.ts validates them. TypeScript owns the projection
+-- Shapes the PR screens draw; src/native/view-file.ts validates them. TypeScript owns the projection
 -- and review policy.
 local M = {}
 local rt = require("./rt")

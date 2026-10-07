@@ -3,7 +3,6 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeViewsPublication } from "../../src/board/native-views.ts";
-import { setupFile, ViewFile } from "../../src/native/contract.ts";
 import {
   projectStoreDirectory,
   publishViews,
@@ -12,6 +11,7 @@ import {
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
+import { setupFile, ViewFile } from "../../src/native/view-file.ts";
 import { SETUP_MODES, type SetupView } from "../../src/onboarding/setup-view.ts";
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { taskScreenPublication } from "../tasks/task-screen-fixture.ts";

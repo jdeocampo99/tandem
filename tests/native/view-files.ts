@@ -7,13 +7,13 @@ import {
   nativePrFile,
 } from "../../src/board/native-views.ts";
 import type { NativeProjectRow } from "../../src/board/panel.ts";
-import { ViewFile, type ViewFileKind } from "../../src/native/contract.ts";
 import {
   openDirectories,
   projectStoreDirectory,
   publishViews,
   viewIndexPath,
 } from "../../src/native/store.ts";
+import { ViewFile, type ViewFileKind } from "../../src/native/view-file.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
 let seq = 0;

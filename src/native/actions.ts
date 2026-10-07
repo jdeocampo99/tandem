@@ -37,15 +37,14 @@ import type {
   TerminalBackend,
   TerminalView,
 } from "../terminal-backend/contract.ts";
+import { type BlockContext, parseBlockContext } from "./block.ts";
 import {
   type Action,
   ActionEnvelope,
-  type BlockContext,
   type NoticeCode,
   type Outcome,
-  parseBlockContext,
   type ViewRef,
-} from "./contract.ts";
+} from "./envelope.ts";
 import {
   markNativeAlertsRead,
   nativeAlertCounts,

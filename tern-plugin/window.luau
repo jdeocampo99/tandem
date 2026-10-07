@@ -57,7 +57,7 @@ end
 command("project-prev", "Tandem: Previous project", {verb = "project", target = "prev"}, false)
 command("project-next", "Tandem: Next project", {verb = "project", target = "next"}, false)
 
--- `nativeLink` in src/native/contract.ts writes these; PR links carry a number only.
+-- `nativeLink` in src/native/envelope.ts writes these; PR links carry a number only.
 tern.route.link(function(link, cx)
  local kind, id = string.match(link.url, "^tandem://([a-z]+)/([%w_-]+)$")
  if kind == "task" and id then run(cx, {verb = "open", ref = {kind = "task", taskId = id}})

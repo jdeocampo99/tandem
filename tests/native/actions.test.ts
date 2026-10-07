@@ -11,20 +11,15 @@ import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordina
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
 import { blockOriginProblem, isApprovalVerb, VERB_AUTHORITY } from "../../src/native/actions.ts";
-import {
-  Action,
-  ActionEnvelope,
-  blockArgs,
-  Outcome,
-  setupFile,
-  ViewFile,
-} from "../../src/native/contract.ts";
+import { blockArgs } from "../../src/native/block.ts";
+import { Action, ActionEnvelope, Outcome } from "../../src/native/envelope.ts";
 import {
   projectStoreDirectory,
   recordVisit,
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
+import { setupFile, ViewFile } from "../../src/native/view-file.ts";
 import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
 import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";

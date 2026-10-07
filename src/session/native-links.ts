@@ -1,5 +1,5 @@
 import type { RequestBriefRecord, TaskRecord } from "../contracts.ts";
-import { type LinkKind, nativeLink } from "../native/contract.ts";
+import { type LinkKind, nativeLink } from "../native/envelope.ts";
 import type { CoordinatorMessage } from "./coordinator-reply.ts";
 
 export type NativeReplyLink = Readonly<{ label: string; url: string }>;

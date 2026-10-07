@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { AdapterCommandError, AdapterProtocolError } from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
-import { blockArgs } from "../../../src/native/contract.ts";
+import { blockArgs } from "../../../src/native/block.ts";
 import { viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
