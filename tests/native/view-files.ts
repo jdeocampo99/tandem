@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 import {
   type NativePrIndex,
   type NativeViews,
@@ -7,7 +8,12 @@ import {
 } from "../../src/board/native-views.ts";
 import type { NativeProjectRow } from "../../src/board/panel.ts";
 import { ViewFile, type ViewFileKind } from "../../src/native/contract.ts";
-import { openDirectories, publishViews, viewIndexPath } from "../../src/native/store.ts";
+import {
+  openDirectories,
+  projectStoreDirectory,
+  publishViews,
+  viewIndexPath,
+} from "../../src/native/store.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
 let seq = 0;
@@ -111,4 +117,39 @@ export function prIndexEntry(
       detailFile: nativePrFile(repo, number),
     },
   };
+}
+
+/** The on-disk `state.json` contract; tests read it to assert what a store call committed. */
+const SavedState = z
+  .object({
+    v: z.literal(1),
+    project: z.string(),
+    epoch: z.string(),
+    seq: z.number(),
+    alerts: z.record(z.unknown()).optional(),
+    visit: z
+      .object({
+        lastOpenedAt: z.string(),
+        lastVisibleAt: z.string().optional(),
+        previousSignature: z.string().optional(),
+        dismissedSignature: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    published: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+/** The project's committed `state.json`, or undefined before the store wrote one. */
+export async function savedState(
+  home: string,
+  project: string,
+): Promise<z.infer<typeof SavedState> | undefined> {
+  try {
+    const text = await readFile(join(projectStoreDirectory(home, project), "state.json"), "utf8");
+    return SavedState.parse(JSON.parse(text));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
 }

@@ -3,20 +3,19 @@ import { cp, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { NativeAlerts, nativeAlertCounts } from "../../../src/board/native-alerts.ts";
+import { NativeAlerts } from "../../../src/board/native-alerts.ts";
 import { boardView } from "../../../src/board/view.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { readProjectState } from "../../../src/native/store.ts";
+import { nativeAlertCounts, recordVisit } from "../../../src/native/store.ts";
 import { createTaskStore } from "../../../src/tasks/store.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
 import { state } from "../../board/fixtures.ts";
-import { publishFixture, republishIndex } from "../../native/view-files.ts";
+import { publishFixture, republishIndex, savedState } from "../../native/view-files.ts";
 import { policy } from "../../session/fixtures.ts";
 import { launchTernWindow, recordedActions } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
@@ -360,7 +359,7 @@ const tree = z.object({ tree: z.array(node) });
       await writeFile(join(root, "inbox-tree.json"), JSON.stringify(await ctl("tree")));
       // The inbox activation key selects its recorded helper; the production focus hook redirects.
       await ctl("key", "enter");
-      await until(async () => (await readProjectState(home, first.repo))?.alerts?.read === 3);
+      await until(async () => (await savedState(home, first.repo))?.alerts?.read === 3);
       await until(async () => JSON.stringify(await ctl("tree")).includes("🔔︎ 0"));
       expect(
         z.object({ focused: z.object({ id: z.number() }) }).parse(await ctl("state")).focused.id,
@@ -374,16 +373,13 @@ const tree = z.object({ tree: z.array(node) });
         }),
       ).toBe(true);
       // The production catch-up boundary preserves entry and surfaces a warning in the native panel.
-      await visitNativeProject(
-        {
-          home,
-          project: tenth.repo,
-          signature: "before",
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-        },
-        async () => {},
-      );
-      const visit = (await readProjectState(home, tenth.repo))?.visit;
+      await recordVisit(home, tenth.repo, {
+        kind: "entry",
+        signature: "before",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        showCatchUp: async () => {},
+      });
+      const visit = (await savedState(home, tenth.repo))?.visit;
       expect(visit).toBeDefined();
       await republishIndex(home, tenth.repo, (bundle) => ({
         ...bundle,
@@ -401,7 +397,7 @@ const tree = z.object({ tree: z.array(node) });
       await until(async () =>
         JSON.stringify(await ctl("tree")).includes("Fixture catch-up unavailable"),
       );
-      expect((await readProjectState(home, tenth.repo))?.visit).toEqual(visit);
+      expect((await savedState(home, tenth.repo))?.visit).toEqual(visit);
       expect(
         z.object({ focused: z.object({ id: z.number() }) }).parse(await ctl("state")).focused.id,
       ).toBe(Number(tenth.endpoint.paneId));

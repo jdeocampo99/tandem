@@ -7,7 +7,8 @@ import { setupFile, ViewFile } from "../../src/native/contract.ts";
 import {
   projectStoreDirectory,
   publishViews,
-  readProjectState,
+  readPublished,
+  recordVisit,
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
@@ -15,6 +16,7 @@ import { SETUP_MODES, type SetupView } from "../../src/onboarding/setup-view.ts"
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { taskScreenPublication } from "../tasks/task-screen-fixture.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
+import { savedState } from "./view-files.ts";
 
 function publication(project: string): NativeViewsPublication {
   const fixture = taskScreenPublication(project);
@@ -47,7 +49,7 @@ test("a model its screens cannot draw is refused before anything is written", as
       "Native index model is invalid: board.lanes",
     );
     await expect(stat(viewIndexPath(home, project))).rejects.toHaveProperty("code", "ENOENT");
-    expect(await readProjectState(home, project)).toBeUndefined();
+    expect(await savedState(home, project)).toBeUndefined();
   } finally {
     await rm(home, { recursive: true, force: true });
   }
@@ -61,12 +63,11 @@ test("every write takes the next seq of one epoch, committed before the file car
     await publishViews(home, project, async () => full);
     const index = viewIndexPath(home, project);
     const brief = viewDetailPath(home, project, "brief-req-tern.json");
-    const first = await readProjectState(home, project);
+    const first = await savedState(home, project);
+    const shown = await readPublished(home, project);
     expect(first?.seq).toBe(4);
     expect(await seq(index)).toBe(4);
-    expect(first?.published?.pullRequests).toEqual([
-      { repo: "owner/repo", number: 281, taskId: "102" },
-    ]);
+    expect(shown?.pullRequests).toEqual([{ repo: "owner/repo", number: 281, taskId: "102" }]);
 
     const [saved] = full.details.flatMap((entry) =>
       entry.view.kind === "brief" ? [entry.view.data] : [],
@@ -75,17 +76,17 @@ test("every write takes the next seq of one epoch, committed before the file car
     await publishViews(home, project, async () => ({
       brief: { ...saved, title: "Renamed brief" },
     }));
-    const second = await readProjectState(home, project);
+    const second = await savedState(home, project);
     expect(second?.seq).toBe(5);
     expect(second?.epoch).toBe(first?.epoch);
-    expect(second?.published).toEqual(first?.published);
+    expect(await readPublished(home, project)).toEqual(shown);
     expect(await seq(brief)).toBe(5);
     expect(await seq(index)).toBe(4);
 
     // A store directory that is gone starts a new epoch, so watchers accept its first files.
     await rm(projectStoreDirectory(home, project), { recursive: true });
     await publishViews(home, project, async () => full);
-    const third = await readProjectState(home, project);
+    const third = await savedState(home, project);
     expect(third?.epoch).not.toBe(first?.epoch);
     expect(third?.seq).toBe(4);
   } finally {
@@ -125,6 +126,42 @@ test("a setup model its block cannot draw is refused before anything is written"
     await expect(stat(viewDetailPath(home, project, setupFile("setup")))).rejects.toHaveProperty(
       "code",
       "ENOENT",
+    );
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("a full publication fills a missing visit baseline once; brief and setup publications do not", async () => {
+  const home = await mkdtemp(join(tmpdir(), "tdm-store-"));
+  const project = join(home, "repo");
+  try {
+    await recordVisit(home, project, {
+      kind: "entry",
+      now: "2030-01-02T09:00:00Z",
+      showCatchUp: async () => {
+        throw new Error("a visit without a signature stays quiet");
+      },
+    });
+    expect((await savedState(home, project))?.visit).toEqual({
+      lastOpenedAt: "2030-01-02T09:00:00Z",
+      lastVisibleAt: "2030-01-02T09:00:00Z",
+    });
+    await publishViews(home, project, async () => ({ setup: setupViewFixture("setup") }));
+    expect((await savedState(home, project))?.visit?.previousSignature).toBeUndefined();
+    const full = publication(project);
+    await publishViews(home, project, async () => full);
+    expect((await savedState(home, project))?.visit).toEqual({
+      lastOpenedAt: "2030-01-02T09:00:00Z",
+      lastVisibleAt: "2030-01-02T09:00:00Z",
+      previousSignature: full.bundle.changeSignature,
+    });
+    await publishViews(home, project, async () => ({
+      ...full,
+      bundle: { ...full.bundle, changeSignature: "later-work" },
+    }));
+    expect((await savedState(home, project))?.visit?.previousSignature).toBe(
+      full.bundle.changeSignature,
     );
   } finally {
     await rm(home, { recursive: true, force: true });

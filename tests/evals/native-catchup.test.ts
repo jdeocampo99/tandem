@@ -3,10 +3,11 @@ import { stat } from "node:fs/promises";
 import { NativeViewsPublisher } from "../../src/board/native-read.ts";
 import { boardView } from "../../src/board/view.ts";
 import { maybeShowCatchUp } from "../../src/memory/native-visits.ts";
-import { readProjectState, viewIndexPath } from "../../src/native/store.ts";
+import { readPublished, viewIndexPath } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
 import { state } from "../board/fixtures.ts";
+import { savedState } from "../native/view-files.ts";
 import { viewsWith } from "../terminal-backend/views.ts";
 import { seedScenarioTask, withScenario } from "./scenario.ts";
 
@@ -33,7 +34,7 @@ for (const changed of [true, false]) {
       const input = () => ({ home: world.home, record, now: world.clock() });
       const visitedAt = world.clock();
       const savedVisit = async () => {
-        const visit = (await readProjectState(world.home, world.repoPath))?.visit;
+        const visit = (await savedState(world.home, world.repoPath))?.visit;
         return visit === undefined
           ? undefined
           : {
@@ -61,7 +62,7 @@ for (const changed of [true, false]) {
           sessions: new Map(),
         });
         await publisher.settle();
-        const shown = (await readProjectState(world.home, world.repoPath))?.published;
+        const shown = await readPublished(world.home, world.repoPath);
         if (shown === undefined) throw new Error("the publisher stored no publication");
         return shown;
       };

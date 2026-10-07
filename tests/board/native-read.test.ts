@@ -2,15 +2,16 @@ import { expect, test } from "bun:test";
 import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { markNativeAlertsRead, NativeAlerts } from "../../src/board/native-alerts.ts";
+import { NativeAlerts } from "../../src/board/native-alerts.ts";
 import { NativeViewsReader } from "../../src/board/native-read.ts";
 import { boardView } from "../../src/board/view.ts";
 import { repositoryKey } from "../../src/config/repositories.ts";
 import { ViewFile } from "../../src/native/contract.ts";
 import {
+  markNativeAlertsRead,
   projectStoreDirectory,
   publishViews,
-  readProjectState,
+  readPublished,
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
@@ -18,6 +19,7 @@ import { reviseRequestBriefRecord } from "../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { seedScenarioTask, withScenario } from "../evals/scenario.ts";
+import { savedState } from "../native/view-files.ts";
 import { content, state } from "./fixtures.ts";
 
 test("serialized brief detail exposes the exact native approval input for its displayed revision", async () => {
@@ -590,13 +592,15 @@ test("a state written before the summary lost its terminal tag publishes again a
         },
       }),
     );
-    expect((await readProjectState(world.home, world.repoPath))?.published).toBeUndefined();
+    expect(await readPublished(world.home, world.repoPath)).toBeUndefined();
     await publish();
-    const republished = await readProjectState(world.home, world.repoPath);
+    const republished = await savedState(world.home, world.repoPath);
     if (republished === undefined) throw new Error("Republication left no project state");
     expect(republished).toMatchObject({ epoch: saved.epoch, alerts, visit });
     expect(republished.seq).toBeGreaterThan(saved.seq);
-    expect(republished.published?.summary).toEqual(saved.published.summary);
+    expect((await readPublished(world.home, world.repoPath))?.summary).toEqual(
+      saved.published.summary,
+    );
     const index = ViewFile.parse(
       JSON.parse(await readFile(viewIndexPath(world.home, world.repoPath), "utf8")),
     );

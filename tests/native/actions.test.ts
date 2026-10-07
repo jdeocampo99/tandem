@@ -10,7 +10,6 @@ import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
-import { visitNativeProject } from "../../src/memory/native-visits.ts";
 import {
   Action,
   ActionEnvelope,
@@ -19,7 +18,7 @@ import {
   setupFile,
   ViewFile,
 } from "../../src/native/contract.ts";
-import { projectStoreDirectory, readProjectState, viewDetailPath } from "../../src/native/store.ts";
+import { projectStoreDirectory, recordVisit, viewDetailPath } from "../../src/native/store.ts";
 import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
 import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
@@ -38,7 +37,7 @@ import type { TernParityHost } from "../evals/tern-parity/harness.ts";
 import { seedReview, withParity } from "../evals/tern-parity/inventory.ts";
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { viewsOf, viewsWith } from "../terminal-backend/views.ts";
-import { prIndexEntry, projectRow, publishFixture } from "./view-files.ts";
+import { prIndexEntry, projectRow, publishFixture, savedState } from "./view-files.ts";
 
 const NOW = "2030-01-01T00:00:00.000Z";
 const content: RequestBriefContent = {
@@ -1310,15 +1309,12 @@ test("project switching selects published projects, refusing stale or foreign ta
     const model = { changeSignature: "changed-work", projects: [current] };
     const publish = (change: Partial<NativeViews>) => publishFixture(f.home, f.repo, change);
     await publish(model);
-    await visitNativeProject(
-      {
-        home: f.home,
-        project: f.repo,
-        signature: "earlier-work",
-        now: new Date(Date.now() - 2 * 3600000).toISOString(),
-      },
-      async () => {},
-    );
+    await recordVisit(f.home, f.repo, {
+      kind: "entry",
+      signature: "earlier-work",
+      now: new Date(Date.now() - 2 * 3600000).toISOString(),
+      showCatchUp: async () => {},
+    });
     const project = (target: unknown) => f.act({ verb: "project", target });
     expect((await project("next")).status).toBe("done");
     expect(f.focused).toEqual(["101"]);
@@ -1415,17 +1411,14 @@ for (const failure of [
       ];
       await publishFixture(source.home, source.repo, { changeSignature: "before", projects });
       await publishFixture(source.home, destination.repo, { changeSignature: "after", projects });
-      await visitNativeProject(
-        {
-          home: source.home,
-          project: destination.repo,
-          signature: "before",
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-        },
-        async () => {},
-      );
+      await recordVisit(source.home, destination.repo, {
+        kind: "entry",
+        signature: "before",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        showCatchUp: async () => {},
+      });
       const visit = async () =>
-        JSON.stringify((await readProjectState(source.home, destination.repo))?.visit);
+        JSON.stringify((await savedState(source.home, destination.repo))?.visit);
       const before = await visit();
       const events: string[] = [];
       const outcome = await source.act(
@@ -1677,6 +1670,47 @@ test("owned PR thread replies retain exact context in a worker fix request witho
     expect(calls[0]?.includes("POST")).toBe(false);
     expect((await comment([{ ...reply, commentId: "wrong" }])).status).toBe("refused");
     expect((await f.service.get(task.id)).communication?.messages).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a focus report from a pane that has closed changes no presence state", async () => {
+  const f = await fixture("tern");
+  try {
+    await publishFixture(f.home, f.repo, { changeSignature: "after" });
+    await recordVisit(f.home, f.repo, {
+      kind: "entry",
+      signature: "before",
+      now: new Date(Date.now() - 2 * 3600000).toISOString(),
+      showCatchUp: async () => {},
+    });
+    const path = join(projectStoreDirectory(f.home, f.repo), "state.json");
+    const before = await readFile(path, "utf8");
+    const coordinatorOnly = [{ ...f.endpoint, cwd: f.clean, foregroundCwd: f.clean }];
+    // Pane 102 was a task page. It closed before the report was sent, or while the CLI proved it.
+    for (const [closedAfter, refusal] of [
+      [0, "does not identify exactly one Tandem project"],
+      [1, "Originating pane disappeared"],
+    ] as const) {
+      for (const event of ["entry", "away", "visible"] as const) {
+        let listings = 0;
+        const terminal: TerminalBackend = {
+          ...f.deps.terminal,
+          listPanes: async (input) =>
+            listings++ < closedAfter ? f.deps.terminal.listPanes(input) : coordinatorOnly,
+        };
+        const outcome = await f.act(
+          { verb: "visit", event },
+          { origin: { pane: "102", cwd: f.clean }, deps: { terminal } },
+        );
+        expect(outcome.status).toBe("refused");
+        expect(outcome.notice?.text).toContain(refusal);
+      }
+    }
+    expect(await readFile(path, "utf8")).toBe(before);
+    expect(f.opened).toEqual([]);
+    expect(f.focused).toEqual([]);
   } finally {
     await f.close();
   }

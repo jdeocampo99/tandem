@@ -3,10 +3,10 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
 import { runTerminal } from "../../../src/main.ts";
+import { nativeAlertCounts } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { republishIndex } from "../../native/view-files.ts";
 import { viewsOf } from "../views.ts";
