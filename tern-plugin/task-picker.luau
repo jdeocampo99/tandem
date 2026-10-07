@@ -40,7 +40,7 @@ local block: BlockDef<State> = {
    }))
   end
   if #choices(state) == 0 then table.insert(rows, components.text('No matching tasks.', 'muted')) end
-  return { main = ui.el('div', { class = 'tt-picker' }, rows) }
+  return { main = ui.el('div', {}, rows) }
  end,
  event = function(state, event, cx)
   if event.ev == 'focus' then return end

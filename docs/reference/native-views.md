@@ -55,7 +55,11 @@ dependency, so these tests never skip.
 
 `tests/evals/tern-parity.test.ts` drives every view through the real screens, with
 `tests/evals/tern-parity/host.luau` standing in for Tern. Its inventory is the parity contract
-for what each view shows and does.
+for what each view shows and does. `paint.ts` resolves the plugin stylesheets against Tern's
+light and dark themes, and the inventory requires every string Tandem colors to read at 3:1 or
+better in both. A hard-coded background brings its own text color, and any other plugin color
+uses `light-dark()` so it holds in both appearances. Tern draws a slot's root node only through
+its children, so a class on that root never styles the page.
 
 ## Store layout
 

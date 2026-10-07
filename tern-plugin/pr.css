@@ -1,7 +1,3 @@
-.tdm-pr-pane {
-  display: flex;
-  flex-direction: column;
-}
 .tdm-pr-strip {
   flex-shrink: 0;
   padding-bottom: 6px;
@@ -28,5 +24,5 @@
 /* Muted line numbers without a separate opacity render target for each visible row. */
 .tdm-pr-rows .tdm-gutter {
   opacity: 1;
-  color: #888;
+  color: light-dark(#6e6e6e, #888);
 }
