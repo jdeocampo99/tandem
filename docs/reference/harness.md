@@ -395,10 +395,10 @@ without reaching the session; a failure inside the session gets 500 and `refused
   OMP's `submit_report` is), other `mcp__*`, and everything else as `other`.
 - A worker's guard is the core's `guardToolCall`, the same one OMP runs: the scout's mockup rule,
   read-only tools once the job is settled, timed out, or paused (so an implementer stops editing
-  once it reports, during validation and review), a PR review's read-only shell, an implementer's
-  pinned validation commands, and `reviewerToolRefusal`: a fresh reviewer's Write, Edit, Bash,
-  subagent, and `copy_asset` are refused with "A reviewer only reads: it cannot edit files or run
-  commands." Its `--tools` already leaves those out; the guard holds even if the list widens.
+  once it reports, during validation and review), a PR review's read-only shell, and
+  `reviewerToolRefusal`: a fresh reviewer's Write, Edit, Bash, subagent, and `copy_asset` are
+  refused with "A reviewer only reads: it cannot edit files or run commands." Its `--tools` already
+  leaves those out; the guard holds even if the list widens.
 - The to-do list (`ClaudeCodeTodoList`): `TaskCreate` adds an item, whose id the mod sends from the
   call's result (the only tool whose result it sends); `TaskUpdate` changes its subject or status,
   and `deleted` reads as OMP's `abandoned`, so a worker drops a step that does not apply by

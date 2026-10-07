@@ -20,7 +20,6 @@ import {
   requestWorkerTerminalCommand,
   type WorkerTerminalJob,
 } from "../../src/workers/terminal.ts";
-import { validationCommandLine } from "../../src/workers/validation-commands.ts";
 
 const MODEL = { provider: "openai-codex", id: "gpt-5.6-luna" };
 
@@ -808,29 +807,6 @@ test("a Claude Code job whose plugin never loads is stopped and fails in plain E
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
-
-test("only an implementer job carries validation command lines", () => {
-  const validationCommands = ["bun run check", "bun test"];
-  const job = parseWorkerJob({ ...makeJob("/tmp/worktree"), validationCommands });
-  expect(job.validationCommands).toEqual(validationCommands);
-  expect(() =>
-    parseWorkerJob({ ...makeJob("/tmp/worktree", "scout"), validationCommands }),
-  ).toThrow(TypeError);
-  expect(() => parseWorkerJob({ ...makeJob("/tmp/worktree"), validationCommands: [""] })).toThrow(
-    TypeError,
-  );
-});
-
-test("a shell-string validation command is matched as typed", () => {
-  const command = {
-    name: "tests",
-    argv: ["/bin/sh", "-c", "bun test"],
-    surfaces: [],
-    timeoutMs: 1,
-  };
-  expect(validationCommandLine(command)).toBe("bun test");
-  expect(validationCommandLine({ ...command, argv: ["bun", "run", "lint"] })).toBe("bun run lint");
 });
 
 test("requires absolute paths and strict result fields at the wire boundary", () => {
