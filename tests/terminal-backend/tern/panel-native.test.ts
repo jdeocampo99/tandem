@@ -586,10 +586,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await expect(uncertainClose.closePanel(closeInput)).rejects.toBeInstanceOf(
         TernOutcomeUnknownError,
       );
-      await expect(uncertainClose.closePanel(closeInput)).rejects.toBeInstanceOf(
-        TernOutcomeUnknownError,
-      );
+      // Tern did close it; only the proof was lost. A later close sees no panel and issues nothing.
+      await uncertainClose.closePanel(closeInput);
       expect(panelCloses).toBe(1);
+      expect(
+        (await terminal.quarantinedPanes(home)).some(
+          (entry) => entry.status === "readable" && entry.endpoint.paneId === pane,
+        ),
+      ).toBe(true);
       expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(false);
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,

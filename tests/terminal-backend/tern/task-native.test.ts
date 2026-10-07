@@ -12,7 +12,7 @@ import { blocks, Created, decode } from "../../../src/terminal-backend/tern/prot
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
 import { openFiles } from "../../native/view-files.ts";
 import { taskScreenFixture, taskScreenPublication } from "../../tasks/task-screen-fixture.ts";
-import { launchTernWindow, recordedActions, recordingCli } from "./native-window.ts";
+import { launchTernWindow, recordedActions, recordingCli, resend } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 type ControlNode = {
@@ -107,6 +107,12 @@ type ControlNode = {
       const [x, y, w, h] = row.rect;
       await ctl("click", String(x + w / 2), String(y + h / 2));
     };
+    const shows = (text: string) => async () => JSON.stringify(await tree()).includes(text);
+    /** Clicks `label` in a view that may have just drawn, until `done`. */
+    const clickUntil = async (label: string, done: () => Promise<boolean>) => {
+      await resend(() => click(label), done);
+      await until(done);
+    };
     try {
       await until(async () => {
         await run("ls", "--json");
@@ -178,8 +184,7 @@ type ControlNode = {
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       expect(JSON.stringify(await tree())).toContain("round 1 of 2");
       await ctl("shot", "03-task");
-      await click("Progress");
-      await until(async () => JSON.stringify(await tree()).includes("PASS"));
+      await clickUntil("Progress", shows("PASS"));
       expect(JSON.stringify(await tree())).toContain("FAIL");
       expect(JSON.stringify(await tree())).toContain("adapter.ts:12");
       await ctl("shot", "03-task-progress");
@@ -206,8 +211,7 @@ type ControlNode = {
         file,
       );
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
-      await click("PR");
-      await until(async () => JSON.stringify(await tree()).includes("Overall review…"));
+      await clickUntil("PR", shows("Overall review…"));
       expect(JSON.stringify(await tree())).toContain("Post");
       expect(JSON.stringify(await tree())).toContain("Reviewed commit abc123");
       await ctl("shot", "03-task-pr-review");
@@ -221,6 +225,10 @@ type ControlNode = {
       await ctl("shot", "03b-task-stuck");
       await click("Restart");
       const sent = () => recordedActions(join(root, "actions.log"));
+      const orchestratorOpens = async () =>
+        (await sent()).filter(
+          ({ action }) => action.verb === "open" && action.ref.kind === "orchestrator",
+        ).length;
       await until(async () =>
         (await sent()).some(({ action }) => action.verb === "restart" && action.taskId === "102"),
       );
@@ -264,7 +272,8 @@ type ControlNode = {
         index,
       );
       await until(async () => JSON.stringify(await tree()).includes("Search tasks"));
-      await click("Cancel");
+      const cancelled = (await orchestratorOpens()) + 1;
+      await clickUntil("Cancel", async () => (await orchestratorOpens()) === cancelled);
       await host.open(
         { ...input, origin: { paneId: floatingPicker.paneId, cwd: root } },
         root,
@@ -300,12 +309,8 @@ type ControlNode = {
         [],
       );
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
-      await click("← Orchestrator");
-      await until(async () =>
-        (await sent()).some(
-          ({ action }) => action.verb === "open" && action.ref.kind === "orchestrator",
-        ),
-      );
+      const returned = (await orchestratorOpens()) + 1;
+      await clickUntil("← Orchestrator", async () => (await orchestratorOpens()) === returned);
       await host.open(
         { ...input, origin: { paneId: opened.paneId, cwd: root } },
         root,
@@ -326,7 +331,10 @@ type ControlNode = {
         index,
       );
       await until(async () => JSON.stringify(await tree()).includes("Search tasks"));
-      await ctl("type", JSON.stringify("Tern"));
+      await resend(
+        () => ctl("type", JSON.stringify("Tern")),
+        async () => nodes((await tree()).tree).some((node) => node.text === "Tern"),
+      );
       await ctl("shot", "03-task-picker");
       await ctl("key", "enter");
       await until(async () =>
@@ -348,7 +356,8 @@ type ControlNode = {
         viewDetailPath(env.TANDEM_HOME, root, nativeTaskFile("103")),
       );
       await until(async () => JSON.stringify(await tree()).includes("Task unavailable"));
-      await click("← Orchestrator");
+      const left = (await orchestratorOpens()) + 1;
+      await clickUntil("← Orchestrator", async () => (await orchestratorOpens()) === left);
       await host.open(
         { ...input, origin: { paneId: missing.paneId, cwd: root } },
         root,
@@ -371,8 +380,7 @@ type ControlNode = {
       await host.open(input, root, "task", "task", file);
       await until(async () => JSON.stringify(await tree()).includes("Fix the close guard"));
       const beforeEmpty = await readFile(join(root, "actions.log"), "utf8");
-      await click("Brief");
-      await until(async () => JSON.stringify(await tree()).includes("No brief is linked"));
+      await clickUntil("Brief", shows("No brief is linked"));
       expect(JSON.stringify(await tree())).not.toContain("Open brief");
       await ctl("shot", "03-task-no-brief");
       await click("PR");

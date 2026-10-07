@@ -393,6 +393,12 @@ const tree = z.object({ tree: z.array(node) });
         flag: "wx",
         mode: 0o600,
       });
+      // The switcher refuses a snapshot older than ten seconds; a live coordinator republishes
+      // every tick, and this test has spent longer than that since its first publication.
+      await republishIndex(home, first.repo, (bundle) => {
+        const writtenAt = new Date().toISOString();
+        return { ...bundle, writtenAt, summary: { ...bundle.summary, writtenAt } };
+      });
       await click(find(tree.parse(await ctl("tree")).tree, "tdp-switch")[0]);
       await until(
         async () => find(tree.parse(await ctl("tree")).tree, "tdp-project-row").length === 10,

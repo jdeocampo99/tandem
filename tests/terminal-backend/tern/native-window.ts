@@ -97,6 +97,22 @@ export function hasClass(node: ControlNode, name: string): boolean {
 }
 
 /**
+ * Tern reports a new block before it takes clicks and keys, and input sent in between is dropped.
+ * `send` is repeated only after the view has ignored it for three seconds, at most five times,
+ * until `done`. The caller still waits for `done` with its own evidence on timeout.
+ */
+export async function resend(
+  send: () => Promise<unknown>,
+  done: () => Promise<boolean>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 5 && !(await done()); attempt += 1) {
+    await send();
+    const deadline = Date.now() + 3_000;
+    while (Date.now() < deadline && !(await done())) await Bun.sleep(100);
+  }
+}
+
+/**
  * Lets Tern, Git, `ps` and Tern's process reader through `run` and refuses every other program, so
  * Tandem code under test cannot reach GitHub, a model or a worktree tool. Git only ever sees the
  * test's own repositories under its root. Refusals go to `log`.
