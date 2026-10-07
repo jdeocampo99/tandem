@@ -7,6 +7,14 @@ import {
   type NotificationKind,
   type TaskQuestion,
 } from "../contracts.ts";
+import {
+  absolutePath,
+  enumValue,
+  isRecord,
+  nonNegativeInteger,
+  singleLine as parseSingleLine,
+  text as parseText,
+} from "../runtime/schema.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 export type PendingPresentationNotification = Readonly<{
@@ -75,17 +83,6 @@ export type ValidatedRecordPaths = Readonly<{
 const MAX_NOTIFICATION_BYTES = 4_000;
 const ARTIFACT_FILE = "artifact.html";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function text(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
-    throw new TypeError(`${field} must be non-empty text without NUL characters`);
-  }
-  return value.trim();
-}
-
 function hasPathControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index);
@@ -95,19 +92,21 @@ function hasPathControlCharacter(value: string): boolean {
 }
 
 function pathText(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
-    throw new TypeError(`${field} must be non-empty path without NUL characters`);
-  }
-  if (hasPathControlCharacter(value)) {
+  const path = parseText(value, field, {
+    message: `${field} must be non-empty path without NUL characters`,
+  });
+  if (hasPathControlCharacter(path)) {
     throw new TypeError(`${field} must not contain control characters`);
   }
-  return value;
+  return path;
 }
 
 function singleLine(value: unknown, field: string): string {
-  const result = text(value, field);
-  if (/[\r\n\u2028\u2029]/u.test(result)) throw new TypeError(`${field} must be single-line`);
-  return result;
+  return parseSingleLine(value, field, {
+    trim: true,
+    message: `${field} must be non-empty text without NUL characters`,
+    lineMessage: `${field} must be single-line`,
+  });
 }
 
 function absoluteDirectory(value: unknown, field: string): string {
@@ -116,32 +115,24 @@ function absoluteDirectory(value: unknown, field: string): string {
   return resolve(result);
 }
 
-function nonNegativeInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new TypeError(`${field} must be a non-negative integer`);
-  }
-  return value as number;
-}
-
 function parseQuestion(value: unknown, field: string): TaskQuestion {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new TypeError(`${field} must be an object`);
   }
-  const candidate = value as Record<string, unknown>;
-  for (const key of Object.keys(candidate)) {
+  for (const key of Object.keys(value)) {
     if (key !== "id" && key !== "text" && key !== "recommendation") {
       throw new TypeError(`${field} contains unknown field ${key}`);
     }
   }
-  const id = singleLine(candidate.id, `${field}.id`);
-  const question = singleLine(candidate.text, `${field}.text`);
+  const id = singleLine(value.id, `${field}.id`);
+  const question = singleLine(value.text, `${field}.text`);
   if (question.length > MAX_TASK_MESSAGE_CHARS) {
     throw new TypeError(`${field}.text exceeds the ${MAX_TASK_MESSAGE_CHARS}-character limit`);
   }
   const recommendation =
-    candidate.recommendation === undefined
+    value.recommendation === undefined
       ? undefined
-      : singleLine(candidate.recommendation, `${field}.recommendation`);
+      : singleLine(value.recommendation, `${field}.recommendation`);
   if (recommendation !== undefined && recommendation.length > MAX_TASK_MESSAGE_CHARS) {
     throw new TypeError(
       `${field}.recommendation exceeds the ${MAX_TASK_MESSAGE_CHARS}-character limit`,
@@ -154,21 +145,25 @@ function parseQuestion(value: unknown, field: string): TaskQuestion {
   };
 }
 export function readText(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
-    throw new TypeError(`${field} must be non-empty text without NUL characters`);
-  }
-  return value.trim();
+  return parseText(value, field, {
+    trim: true,
+    message: `${field} must be non-empty text without NUL characters`,
+  });
 }
 
 export function readSingleLine(value: unknown, field: string): string {
-  const text = readText(value, field);
-  if (/[\r\n\u2028\u2029]/u.test(text)) throw new TypeError(`${field} must be single-line value`);
-  return text;
+  return parseSingleLine(value, field, {
+    trim: true,
+    message: `${field} must be non-empty text without NUL characters`,
+    lineMessage: `${field} must be single-line value`,
+  });
 }
 export function readAbsolutePath(value: unknown, field: string): string {
-  const path = readSingleLine(value, field);
-  if (!isAbsolute(path)) throw new TypeError(`${field} must be absolute`);
-  return resolve(path);
+  return absolutePath(value, field, {
+    trim: true,
+    message: `${field} must be non-empty text without NUL characters`,
+    lineMessage: `${field} must be single-line value`,
+  });
 }
 
 export function isWithin(root: string, candidate: string): boolean {
@@ -179,7 +174,7 @@ export function isWithin(root: string, candidate: string): boolean {
   );
 }
 
-export function validateRecordPaths(record: PresentationRecord): ValidatedRecordPaths {
+function validateRecordPaths(record: PresentationRecord): ValidatedRecordPaths {
   const cwd = readAbsolutePath(record.cwd, "record.cwd");
   const artifactPath = readAbsolutePath(record.artifactPath, "record.artifactPath");
   const owned = [
@@ -200,9 +195,7 @@ export function validateRecord(record: PresentationRecord): ValidatedRecordPaths
   }
   readSingleLine(record.id, "record.id");
   readSingleLine(record.taskId, "record.taskId");
-  if (!Number.isSafeInteger(record.generation) || record.generation < 0) {
-    throw new TypeError("record.generation must be a non-negative integer");
-  }
+  nonNegativeInteger(record.generation, "record.generation");
   const statuses: readonly PresentationRecord["status"][] = [
     "queued",
     "running",
@@ -397,16 +390,20 @@ export function presentationNotificationForTransition(
   };
 }
 
-export function parseEndpointValue(value: unknown, field: string): Endpoint {
+function parseEndpointValue(value: unknown, field: string): Endpoint {
   if (!isRecord(value)) throw new TypeError(`${field} must be an endpoint object`);
-  const role = value.role;
   // ponytail: legacy panes may still carry role "verifier"; see LEGACY_ENDPOINT_ROLES.
-  if (typeof role !== "string" || !LEGACY_ENDPOINT_ROLES.includes(role as Endpoint["role"])) {
-    throw new TypeError(`${field}.role is invalid`);
-  }
-  const generation = value.generation;
-  if (!Number.isSafeInteger(generation) || (generation as number) < 0)
-    throw new TypeError(`${field}.generation is invalid`);
+  const role = enumValue(
+    value.role,
+    LEGACY_ENDPOINT_ROLES,
+    `${field}.role`,
+    `${field}.role is invalid`,
+  );
+  const generation = nonNegativeInteger(
+    value.generation,
+    `${field}.generation`,
+    `${field}.generation is invalid`,
+  );
   return {
     terminal: storedEndpointTerminal(value.terminal, field),
     sessionId: singleLine(value.sessionId, `${field}.sessionId`),
@@ -418,8 +415,8 @@ export function parseEndpointValue(value: unknown, field: string): Endpoint {
     workspaceId: singleLine(value.workspaceId, `${field}.workspaceId`),
     tabId: singleLine(value.tabId, `${field}.tabId`),
     paneId: singleLine(value.paneId, `${field}.paneId`),
-    role: role as Endpoint["role"],
-    generation: generation as number,
+    role,
+    generation,
   };
 }
 export function presentationPendingNotifications(
@@ -443,10 +440,7 @@ export function samePresentationRecord(
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
-export function parsePresentationObservation(
-  value: unknown,
-  source: string,
-): PresentationObservation {
+function parsePresentationObservation(value: unknown, source: string): PresentationObservation {
   if (!isRecord(value)) throw new TypeError(`${source} must be an observation object`);
   const statuses: readonly PresentationObservation["status"][] = [
     "feedback",
@@ -460,13 +454,12 @@ export function parsePresentationObservation(
     "ready",
     "user-ended",
   ];
-  const status = value.status;
-  if (
-    typeof status !== "string" ||
-    !statuses.includes(status as PresentationObservation["status"])
-  ) {
-    throw new TypeError(`${source}.status is invalid`);
-  }
+  const status = enumValue(
+    value.status,
+    statuses,
+    `${source}.status`,
+    `${source}.status is invalid`,
+  );
   const readRaw = (field: string): string => {
     const raw = value[field];
     if (typeof raw !== "string" || raw.includes("\0"))
@@ -484,7 +477,7 @@ export function parsePresentationObservation(
   }
   return {
     artifact: absoluteDirectory(value.artifact, `${source}.artifact`),
-    status: status as PresentationObservation["status"],
+    status,
     terminal,
     sessionEnded,
     ...(sessionUrl === undefined ? {} : { sessionUrl }),
@@ -493,13 +486,13 @@ export function parsePresentationObservation(
   };
 }
 
-export function parsePendingPresentationNotification(
+function parsePendingPresentationNotification(
   value: unknown,
   source: string,
 ): PendingPresentationNotification {
   if (!isRecord(value)) throw new TypeError(`${source} must be an object`);
   const id = singleLine(value.id, `${source}.id`);
-  const message = text(value.message, `${source}.message`);
+  const message = readText(value.message, `${source}.message`);
   const kind = value.kind;
   if (kind !== "routine" && kind !== "coordinator") {
     throw new TypeError(`${source}.kind is invalid`);
@@ -507,7 +500,7 @@ export function parsePendingPresentationNotification(
   return { id, message, kind };
 }
 
-export function parsePendingPresentationNotificationQueue(
+function parsePendingPresentationNotificationQueue(
   value: unknown,
   source: string,
 ): readonly PendingPresentationNotification[] {
@@ -540,7 +533,7 @@ function parseRequest(value: unknown, source: string): PresentationRequest {
   };
 }
 
-export function parsePresentationRecord(value: unknown, source: string): PresentationRecord {
+function parsePresentationRecord(value: unknown, source: string): PresentationRecord {
   if (!isRecord(value)) throw new TypeError(`${source} must be an object`);
   const statuses: readonly PresentationRecord["status"][] = [
     "queued",
@@ -550,10 +543,12 @@ export function parsePresentationRecord(value: unknown, source: string): Present
     "ended",
     "failed",
   ];
-  const status = value.status;
-  if (typeof status !== "string" || !statuses.includes(status as PresentationRecord["status"])) {
-    throw new TypeError(`${source}.status is invalid`);
-  }
+  const status = enumValue(
+    value.status,
+    statuses,
+    `${source}.status`,
+    `${source}.status is invalid`,
+  );
   const endpoint =
     value.endpoint === undefined
       ? undefined
@@ -582,9 +577,9 @@ export function parsePresentationRecord(value: unknown, source: string): Present
           value.pendingNotificationQueue,
           `${source}.pendingNotificationQueue`,
         );
-  const error = value.error === undefined ? undefined : text(value.error, `${source}.error`);
+  const error = value.error === undefined ? undefined : readText(value.error, `${source}.error`);
   const objective =
-    value.objective === undefined ? undefined : text(value.objective, `${source}.objective`);
+    value.objective === undefined ? undefined : readText(value.objective, `${source}.objective`);
   const agent = value.agent === undefined ? undefined : parseAgent(value.agent, `${source}.agent`);
   const request =
     value.request === undefined ? undefined : parseRequest(value.request, `${source}.request`);
@@ -594,7 +589,7 @@ export function parsePresentationRecord(value: unknown, source: string): Present
       throw new TypeError(`${source}.pendingFeedback must be an array`);
     }
     pendingFeedback = value.pendingFeedback.map((entry, index) =>
-      text(entry, `${source}.pendingFeedback[${index}]`),
+      readText(entry, `${source}.pendingFeedback[${index}]`),
     );
   }
   const jobPath =
@@ -615,7 +610,7 @@ export function parsePresentationRecord(value: unknown, source: string): Present
     ...(pendingFeedback === undefined ? {} : { pendingFeedback }),
     ...(jobPath === undefined ? {} : { jobPath }),
     ...(resultPath === undefined ? {} : { resultPath }),
-    status: status as PresentationRecord["status"],
+    status,
     createdAt: singleLine(value.createdAt, `${source}.createdAt`),
     updatedAt: singleLine(value.updatedAt, `${source}.updatedAt`),
     ...(question === undefined ? {} : { question }),
@@ -632,7 +627,7 @@ export async function readPresentationRecord(path: string): Promise<Presentation
   const contents = await readFile(path, "utf8");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(contents) as unknown;
+    parsed = JSON.parse(contents);
   } catch (error) {
     throw new TypeError(`presentation record is invalid JSON: ${describeError(error)}`);
   }

@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
 import { runCommand } from "./adapters/commands.ts";
 import type {
   CheckOrigin,
@@ -9,6 +8,14 @@ import type {
   ValidationEvidence,
 } from "./contracts.ts";
 import { writeJsonAtomically } from "./runtime/persistence.ts";
+import {
+  absolutePath,
+  isRecord,
+  nonNegativeInteger,
+  singleLine as parseSingleLine,
+  positiveInteger,
+  text,
+} from "./runtime/schema.ts";
 import { ValidationConfigurationError } from "./tasks/acceptance.ts";
 import { terminalBackend } from "./terminal-backend/compose.ts";
 import {
@@ -61,41 +68,12 @@ export type ValidationWorkerOptions = Readonly<{
   ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function text(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
-    throw new TypeError(`${field} must be a non-empty string without NUL characters`);
-  }
-  return value;
-}
-
 function singleLine(value: unknown, field: string): string {
-  const result = text(value, field);
-  if (/[\r\n\u2028\u2029]/u.test(result)) throw new TypeError(`${field} must be single-line`);
-  return result;
+  return parseSingleLine(value, field, { lineMessage: `${field} must be single-line` });
 }
 
 function absolute(value: unknown, field: string): string {
-  const result = singleLine(value, field);
-  if (!isAbsolute(result)) throw new TypeError(`${field} must be absolute`);
-  return resolve(result);
-}
-
-function nonNegativeInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new TypeError(`${field} must be a non-negative integer`);
-  }
-  return value as number;
-}
-
-function positiveInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
-    throw new TypeError(`${field} must be a positive integer`);
-  }
-  return value as number;
+  return absolutePath(value, field, { lineMessage: `${field} must be single-line` });
 }
 
 function parseExecution(value: unknown): ExecutionIdentity {
@@ -133,11 +111,8 @@ function parseCommand(value: unknown, index: number): ValidationCommand {
       singleLine(value.surfaces[surfaceIndex], `commands[${index}].surfaces[${surfaceIndex}]`),
     );
   }
-  const timeoutMs = value.timeoutMs;
-  if (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) <= 0) {
-    throw new TypeError(`commands[${index}].timeoutMs must be a positive integer`);
-  }
-  return { name, argv, surfaces, timeoutMs: timeoutMs as number };
+  const timeoutMs = positiveInteger(value.timeoutMs, `commands[${index}].timeoutMs`);
+  return { name, argv, surfaces, timeoutMs };
 }
 
 function contractName(value: unknown, field: string): ValidationContractName {
@@ -206,8 +181,8 @@ function resultFor(
   evidence: readonly ValidationEvidence[],
   error?: string,
 ): ValidationResult {
-  const result = {
-    schemaVersion: 1 as const,
+  const result: ValidationResult = {
+    schemaVersion: 1,
     id: job.id,
     taskId: job.taskId,
     generation: job.generation,
@@ -244,12 +219,12 @@ function validateResult(value: unknown): ValidationResult {
       argv.push(singleLine(entry.argv[argumentIndex], `evidence[${index}].argv[${argumentIndex}]`));
     }
     const exitCode = entry.exitCode;
-    if (!Number.isSafeInteger(exitCode))
+    if (typeof exitCode !== "number" || !Number.isSafeInteger(exitCode))
       throw new TypeError(`evidence[${index}].exitCode must be an integer`);
     evidence.push({
       name: singleLine(entry.name, `evidence[${index}].name`),
       argv,
-      exitCode: exitCode as number,
+      exitCode,
       stdout:
         typeof entry.stdout === "string"
           ? entry.stdout
@@ -299,7 +274,7 @@ export async function readValidationResult(
   const contents = await readFile(resultPath, "utf8");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(contents) as unknown;
+    parsed = JSON.parse(contents);
   } catch (error) {
     throw new TypeError(`validation result is invalid JSON: ${describeError(error)}`);
   }
@@ -461,7 +436,7 @@ async function readJobFile(path: string): Promise<ValidationJob> {
   const contents = await readFile(jobPath, "utf8");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(contents) as unknown;
+    parsed = JSON.parse(contents);
   } catch (error) {
     throw new TypeError(`validation job is invalid JSON: ${describeError(error)}`);
   }
