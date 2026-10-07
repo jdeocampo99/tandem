@@ -20,8 +20,6 @@ export function viewsWith(
       open: unexpected,
       close: unexpected,
       recover: async () => {},
-      retained: async () => [],
-      abandon: unexpected,
     }),
     ...overrides,
   };

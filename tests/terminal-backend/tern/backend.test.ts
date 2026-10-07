@@ -456,8 +456,8 @@ test("a window-scoped close never forgets the quarantine of a pane another windo
       terminal.sendKeys({ endpoint, cwd: world.repoPath, keys: ["ctrl+c"] }),
     ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
     const quarantined = async () =>
-      (await terminal.quarantinedPanes(world.home)).flatMap((pane) =>
-        pane.status === "readable" ? [pane.endpoint.paneId] : [],
+      (await terminal.fences.list(world.home)).fences.flatMap((fence) =>
+        fence.status === "readable" ? [fence.protects.endpoint.paneId] : [],
       );
     expect(await quarantined()).toEqual([endpoint.paneId]);
     const close = { verb: "close", endpoint: ternEndpoint(endpoint), cwd: world.repoPath } as const;
