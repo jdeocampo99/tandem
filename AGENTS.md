@@ -111,7 +111,8 @@ bun run lint    # Biome, then the lint ratchet
 
 The lint ratchet (`scripts/lint-ratchet.ts`) counts size, complexity, hidden-clock and type-assertion
 findings per file against a committed baseline; counts may only go down. After cleaning some up, run
-`bun run lint:ratchet --update` to lock in the lower counts.
+`bun run lint:ratchet --update` to lock in the lower counts. After a rename or split, `--update --allow-moves`
+shifts counts between files as long as no rule's total rises.
 `bun run report:dead` (knip) and `bun run report:dupes` (jscpd) print unused code and copy-paste; they never fail.
 
 On Linux (for example a Claude Code cloud session), store-backed tests need

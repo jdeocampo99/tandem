@@ -3,19 +3,20 @@ import { join } from "node:path";
 import { z } from "zod";
 import { findPassThroughs, type PassThrough } from "./lint-ratchet/pass-through.ts";
 import { type RatchetRule, RULES } from "./lint-ratchet/rules.ts";
-
-/** Diagnostic counts per file, then per rule. A missing entry means zero. */
-export type Counts = Readonly<Record<string, Readonly<Record<string, number>>>>;
+import { type Counts, type Scan, type ScanProblem, scanRepo } from "./lint-ratchet/scan.ts";
 
 /** The committed baseline: the rules it covers and their grandfathered counts. */
 export type Baseline = Readonly<{ rules: readonly string[]; counts: Counts }>;
+
+/** `check` is plain lint; `update` may only lower counts; `move` may also shift counts between files. */
+export type Mode = "check" | "update" | "move";
 
 export type CountChange = Readonly<{ file: string; rule: string; before: number; after: number }>;
 
 export type RatchetOutcome = Readonly<{
   exitCode: 0 | 1;
   report: string;
-  /** The baseline to write, present only when `--update` may lower or seed it. */
+  /** The baseline to write, present only when `--update` may lower, seed or move it. */
   nextBaseline?: Baseline;
 }>;
 
@@ -30,15 +31,6 @@ const PASS_THROUGH_GLOB = new Bun.Glob("{src,tests,evals,scripts}/**/*.ts");
 const baselineSchema = z.object({
   rules: z.array(z.string()),
   counts: z.record(z.record(z.number().int().positive())),
-});
-const biomeReportSchema = z.object({
-  diagnostics: z.array(
-    z.object({
-      category: z.string(),
-      message: z.string(),
-      location: z.object({ path: z.string() }),
-    }),
-  ),
 });
 
 function countOf(counts: Counts, file: string, rule: string): number {
@@ -74,22 +66,6 @@ export function compareCounts(
   };
 }
 
-/** Builds counts from (file, rule) hits, keeping only ratcheted rules in the files they apply to. */
-export function tally(
-  hits: Iterable<Readonly<{ file: string; rule: string }>>,
-  rules: readonly RatchetRule[],
-): Counts {
-  const byId = new Map(rules.map((rule) => [rule.id, rule]));
-  const counts: Record<string, Record<string, number>> = {};
-  for (const { file, rule } of hits) {
-    if (byId.get(rule)?.appliesTo(file) !== true) continue;
-    const forFile = counts[file] ?? {};
-    forFile[rule] = (forFile[rule] ?? 0) + 1;
-    counts[file] = forFile;
-  }
-  return counts;
-}
-
 function hintFor(rule: string, rules: readonly RatchetRule[]): string {
   return rules.find((candidate) => candidate.id === rule)?.hint ?? "";
 }
@@ -108,38 +84,106 @@ function onlyRules(counts: Counts, rules: ReadonlySet<string>): Counts {
   );
 }
 
-/**
- * The ratchet's decision. A rise in a baselined rule fails, and `--update` refuses it too. Drops
- * pass. A rule the baseline does not cover yet fails until `--update` seeds its current counts.
- */
-export function decide(
-  input: Readonly<{ baseline: Baseline; current: Counts; update: boolean }>,
+function totals(counts: Counts): Map<string, number> {
+  const byRule = new Map<string, number>();
+  for (const forFile of Object.values(counts)) {
+    for (const [rule, count] of Object.entries(forFile)) {
+      byRule.set(rule, (byRule.get(rule) ?? 0) + count);
+    }
+  }
+  return byRule;
+}
+
+/** Rules whose total across all files rose; only these block a move. */
+function risenTotals(baseline: Counts, current: Counts): ReadonlyArray<CountChange> {
+  const before = totals(baseline);
+  return [...totals(current)]
+    .map(([rule, after]) => ({ file: "total", rule, before: before.get(rule) ?? 0, after }))
+    .filter((change) => change.after > change.before)
+    .toSorted((left, right) => left.rule.localeCompare(right.rule));
+}
+
+function problemReport(problems: readonly ScanProblem[], mode: Mode): string {
+  const verb = mode === "check" ? "" : "refused to update: ";
+  return [
+    `lint:ratchet ${verb}the scan is incomplete, so its counts cannot be trusted. Fix these first:`,
+    ...problems.map((problem) => `  ${problem.file}  ${problem.category}  ${problem.reason}`),
+  ].join("\n");
+}
+
+function riseReport(
+  rises: readonly CountChange[],
+  risen: readonly CountChange[],
+  input: Readonly<{ mode: Mode; rules: readonly RatchetRule[] }>,
+): string {
+  const verb = input.mode === "check" ? "" : "refused to update: ";
+  const blocked = new Set(risen.map((change) => change.rule));
+  const moved = [...new Set(rises.map((change) => change.rule))].filter(
+    (rule) => !blocked.has(rule),
+  );
+  const moveHint =
+    moved.length === 0
+      ? []
+      : [
+          `The total for ${moved.join(", ")} did not rise, so this looks like debt moving between files (a rename or split). If so, run \`bun run lint:ratchet --update --allow-moves\`.`,
+        ];
+  return [
+    `lint:ratchet ${verb}${rises.length} count(s) rose. Fix the code; the baseline only goes down.`,
+    ...rises.map((change) => describeRise(change, input.rules)),
+    ...moveHint,
+  ].join("\n");
+}
+
+function moveRefusal(risen: readonly CountChange[], rules: readonly RatchetRule[]): string {
+  return [
+    `lint:ratchet refused to move debt: ${risen.length} rule total(s) rose. A move only shifts counts between files.`,
+    ...risen.map(
+      (change) =>
+        `  ${change.rule}  total ${change.before} -> ${change.after}  ${hintFor(change.rule, rules)}`,
+    ),
+  ].join("\n");
+}
+
+function signed(change: CountChange): string {
+  const delta = change.after - change.before;
+  return `${change.file} ${delta > 0 ? "+" : ""}${delta}`;
+}
+
+/** One line per rule that rose somewhere: the files it left and the files it went to. */
+function moveLines(rises: readonly CountChange[], drops: readonly CountChange[]): string[] {
+  const rules = [...new Set(rises.map((change) => change.rule))].toSorted();
+  return rules.map((rule) => {
+    const from = drops.filter((change) => change.rule === rule).map(signed);
+    const to = rises.filter((change) => change.rule === rule).map(signed);
+    return `  moved ${rule}: ${from.join(", ")} -> ${to.join(", ")}`;
+  });
+}
+
+function updated(
+  input: Readonly<{
+    current: Counts;
+    rises: readonly CountChange[];
+    drops: readonly CountChange[];
+  }>,
+  unseeded: readonly string[],
   rules: readonly RatchetRule[],
 ): RatchetOutcome {
-  const seeded = new Set(input.baseline.rules);
-  const unseeded = rules.map((rule) => rule.id).filter((id) => !seeded.has(id));
-  const { rises, drops } = compareCounts(
-    onlyRules(input.baseline.counts, seeded),
-    onlyRules(input.current, seeded),
-  );
-  if (rises.length > 0) {
-    const verb = input.update ? "refused to update: " : "";
-    return {
-      exitCode: 1,
-      report: [
-        `lint:ratchet ${verb}${rises.length} count(s) rose. Fix the code; the baseline only goes down.`,
-        ...rises.map((change) => describeRise(change, rules)),
-      ].join("\n"),
-    };
-  }
-  if (input.update) {
-    const seededNow = unseeded.length === 0 ? "" : ` Seeded ${unseeded.join(", ")}.`;
-    return {
-      exitCode: 0,
-      report: `lint:ratchet baseline updated: ${drops.length} count(s) lowered.${seededNow}`,
-      nextBaseline: { rules: rules.map((rule) => rule.id), counts: input.current },
-    };
-  }
+  const seededNow = unseeded.length === 0 ? "" : ` Seeded ${unseeded.join(", ")}.`;
+  const moves = moveLines(input.rises, input.drops);
+  const movedNow = moves.length === 0 ? "" : ` Moved debt in ${moves.length} rule(s).`;
+  const moved = new Set(input.rises.map((change) => change.rule));
+  const lowered = input.drops.filter((change) => !moved.has(change.rule)).length;
+  return {
+    exitCode: 0,
+    report: [
+      `lint:ratchet baseline updated: ${lowered} count(s) lowered.${movedNow}${seededNow}`,
+      ...moves,
+    ].join("\n"),
+    nextBaseline: { rules: rules.map((rule) => rule.id), counts: input.current },
+  };
+}
+
+function checked(drops: readonly CountChange[], unseeded: readonly string[]): RatchetOutcome {
   if (unseeded.length > 0) {
     return {
       exitCode: 1,
@@ -155,6 +199,34 @@ export function decide(
   return { exitCode: 0, report: "lint:ratchet: no counts rose." };
 }
 
+/**
+ * The ratchet's decision. An incomplete scan fails in every mode. A per-file rise in a baselined
+ * rule fails, and `update` refuses it too; `move` accepts it when no rule's total rose. Drops pass.
+ * A rule the baseline does not cover yet fails until an update seeds its current counts.
+ */
+export function decide(
+  input: Readonly<{ baseline: Baseline; scan: Scan; mode: Mode }>,
+  rules: readonly RatchetRule[],
+): RatchetOutcome {
+  if (input.scan.problems.length > 0) {
+    return { exitCode: 1, report: problemReport(input.scan.problems, input.mode) };
+  }
+  const seeded = new Set(input.baseline.rules);
+  const unseeded = rules.map((rule) => rule.id).filter((id) => !seeded.has(id));
+  const before = onlyRules(input.baseline.counts, seeded);
+  const after = onlyRules(input.scan.counts, seeded);
+  const { rises, drops } = compareCounts(before, after);
+  const risen = risenTotals(before, after);
+  if (input.mode === "move" && risen.length > 0) {
+    return { exitCode: 1, report: moveRefusal(risen, rules) };
+  }
+  if (rises.length > 0 && input.mode !== "move") {
+    return { exitCode: 1, report: riseReport(rises, risen, { mode: input.mode, rules }) };
+  }
+  if (input.mode === "check") return checked(drops, unseeded);
+  return updated({ current: input.scan.counts, rises, drops }, unseeded, rules);
+}
+
 function sortedCounts(counts: Counts): Counts {
   return Object.fromEntries(
     Object.keys(counts)
@@ -168,38 +240,6 @@ function sortedCounts(counts: Counts): Counts {
         ),
       ]),
   );
-}
-
-/** Biome files every GritQL plugin diagnostic under "plugin"; the rule id leads its message. */
-function ruleOf(diagnostic: Readonly<{ category: string; message: string }>): string {
-  if (diagnostic.category !== "plugin") return diagnostic.category.replace(/^lint\//u, "");
-  return /^\[(?<id>[^\]]+)\]/u.exec(diagnostic.message)?.groups?.id ?? "plugin";
-}
-
-async function biomeHits(): Promise<ReadonlyArray<Readonly<{ file: string; rule: string }>>> {
-  const child = Bun.spawn(
-    [
-      "bunx",
-      "biome",
-      "lint",
-      `--config-path=${BIOME_CONFIG_PATH}`,
-      "--max-diagnostics=none",
-      "--reporter=json",
-      ".",
-    ],
-    { cwd: ROOT, stdout: "pipe", stderr: "pipe" },
-  );
-  const [stdout, stderr] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-    child.exited,
-  ]);
-  const parsed = biomeReportSchema.safeParse(JSON.parse(stdout.length === 0 ? "null" : stdout));
-  if (!parsed.success) throw new Error(`biome produced no JSON report:\n${stderr}`);
-  return parsed.data.diagnostics.map((diagnostic) => ({
-    file: diagnostic.location.path,
-    rule: ruleOf(diagnostic),
-  }));
 }
 
 async function readBaseline(): Promise<Baseline> {
@@ -226,11 +266,23 @@ function passThroughReport(found: readonly PassThrough[], listAll: boolean): str
   );
 }
 
-async function main(argv: readonly string[]): Promise<number> {
+function modeOf(argv: readonly string[]): Mode | undefined {
   const update = argv.includes("--update");
+  if (!argv.includes("--allow-moves")) return update ? "update" : "check";
+  return update ? "move" : undefined;
+}
+
+async function main(argv: readonly string[]): Promise<number> {
+  const mode = modeOf(argv);
+  if (mode === undefined) {
+    process.stderr.write("lint:ratchet: --allow-moves only works with --update.\n");
+    return 1;
+  }
   process.stdout.write(`${passThroughReport(await passThroughs(), argv.includes("--warnings"))}\n`);
-  const current = tally(await biomeHits(), RULES);
-  const outcome = decide({ baseline: await readBaseline(), current, update }, RULES);
+  const baseline = await readBaseline();
+  const target = { root: ROOT, configPath: BIOME_CONFIG_PATH };
+  const scan = await scanRepo(target, baseline.counts, RULES);
+  const outcome = decide({ baseline, scan, mode }, RULES);
   if (outcome.nextBaseline !== undefined) {
     const { rules, counts } = outcome.nextBaseline;
     const text = JSON.stringify({ rules: rules.toSorted(), counts: sortedCounts(counts) }, null, 2);
