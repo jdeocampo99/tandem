@@ -64,7 +64,11 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
       await recordVisit(world.home, world.repoPath, baseline);
       const focused: string[] = [];
       let opens = 0;
-      const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
+      const base = terminalBackend(world.run, {
+        tern: world.tern,
+        terminal: "tern",
+        home: world.home,
+      });
       const terminal: TerminalBackend = {
         ...base,
         notify: async () => {},

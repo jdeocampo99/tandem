@@ -9,6 +9,10 @@ import { runTerminal } from "../../../src/main.ts";
 import { parseBlockArgs } from "../../../src/native/block.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
+import {
+  type ForegroundReader,
+  readForegroundGroup,
+} from "../../../src/terminal-backend/tern/process-reader.ts";
 import { blocks, Processes } from "../../../src/terminal-backend/tern/protocol.ts";
 import { publishFixture } from "../../native/view-files.ts";
 import { viewsOf } from "../views.ts";
@@ -49,17 +53,21 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
     let sample = 0;
     let transitionGroup: string | undefined;
     let transitionInjected = false;
-    const run: CommandRunner = async (request) => {
+    const readForeground: ForegroundReader = async (group) => {
       if (
         !transitionInjected &&
         transitionGroup !== undefined &&
-        request.argv[1]?.endsWith("process-reader.ts") &&
-        request.argv[2] === transitionGroup
+        String(group) === transitionGroup
       ) {
         transitionInjected = true;
         await writeFile(join(root, "exec-go"), "go");
         await Bun.sleep(300);
       }
+      const members = await readForegroundGroup(group);
+      await writeFile(join(root, `process-${++sample}.json`), JSON.stringify({ group, members }));
+      return members;
+    };
+    const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
         cwd: request.cwd,
         env: { ...env, ...request.env },
@@ -72,7 +80,7 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         new Response(child.stdout).text(),
         new Response(child.stderr).text(),
       ]);
-      if (request.argv[1] === "process" || request.argv[1]?.endsWith("process-reader.ts"))
+      if (request.argv[1] === "process")
         await writeFile(
           join(root, `process-${++sample}.json`),
           JSON.stringify({ argv: request.argv, code, stdout, stderr }),
@@ -152,8 +160,8 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
         cwd: root,
         log: join(root, "window.log"),
       });
-      const terminal = ternBackend(run, { home, environment: env });
-      const commands = ternCli(run, { environment: env });
+      const terminal = ternBackend(run, { home, environment: env, readForeground });
+      const commands = ternCli(run, { environment: env, readForeground });
       // Reproduce B independently of any native views: exec between Tern's process
       // snapshot and the native group read. Both observations come from real processes.
       const race = await terminal.createWorkspace({

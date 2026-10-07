@@ -44,15 +44,22 @@ test("startup rollback retains a quarantined coordinator lease after its convers
           }),
         });
       }
-      const result = await world.run(request);
-      if (
-        owner !== undefined &&
-        request.argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts")
-      )
-        return { ...result, stdout: "[]" }; // Stable native leader disagreement writes quarantine.
-      return result;
+      return world.run(request);
     };
-    const terminal = terminalBackend(run, { home: world.home, terminal: "tern" });
+    // Stable native leader disagreement writes quarantine once startup has saved its owner.
+    const ternReads = {
+      readForeground: async (group: number) => {
+        const members = await world.tern.readForeground(group);
+        return (await listCoordinatorRecords(world.home, world.sessionId)).length > 0
+          ? []
+          : members;
+      },
+    };
+    const terminal = terminalBackend(run, {
+      home: world.home,
+      terminal: "tern",
+      tern: ternReads,
+    });
     const startupTerminal = {
       ...terminal,
       inspect: async (target: Parameters<typeof terminal.inspect>[0]) => {
@@ -152,7 +159,7 @@ test("startup rollback retains a quarantined coordinator lease after its convers
     }
     const fix = await reconcileTandemResources({
       run,
-      terminal: terminalBackend(run, { home: world.home, terminal: "tern" }),
+      terminal: terminalBackend(run, { home: world.home, terminal: "tern", tern: ternReads }),
       home: world.home,
       poolRoot: world.poolRoot,
       repoPaths: [world.repoPath],
@@ -195,7 +202,11 @@ for (const mode of [
           };
         return result;
       };
-      const terminal = terminalBackend(run, { home: world.home, terminal: "tern" });
+      const terminal = terminalBackend(run, {
+        home: world.home,
+        terminal: "tern",
+        tern: world.tern,
+      });
       const launch = (
         operation = launchCoordinator,
         sessionId = world.sessionId,
@@ -215,7 +226,11 @@ for (const mode of [
           },
           {
             run,
-            terminal: terminalBackend(run, { home: world.home, terminal: "tern" }),
+            terminal: terminalBackend(run, {
+              home: world.home,
+              terminal: "tern",
+              tern: world.tern,
+            }),
             startPersistent: async () => undefined,
             runInteractive: async () => {
               throw new Error("interactive launch forbidden");
@@ -292,7 +307,11 @@ for (const mode of [
         if (mode.startsWith("unknown-close")) {
           expect(await listCoordinatorQuarantineRecords(world.home)).toHaveLength(1);
           // A new adapter process must also obey the durable quarantine.
-          const fresh = terminalBackend(run, { home: world.home, terminal: "tern" });
+          const fresh = terminalBackend(run, {
+            home: world.home,
+            terminal: "tern",
+            tern: world.tern,
+          });
           await expect(
             fresh.close({ endpoint: record.endpoint, cwd: record.worktree.path }),
           ).rejects.toThrow("quarantine");
@@ -387,7 +406,11 @@ for (const evidence of ["changed", "ambiguous"] as const) {
         }
         return result;
       };
-      const terminal = terminalBackend(run, { home: world.home, terminal: "tern" });
+      const terminal = terminalBackend(run, {
+        home: world.home,
+        terminal: "tern",
+        tern: world.tern,
+      });
       const launch = () =>
         launchCoordinator(
           {

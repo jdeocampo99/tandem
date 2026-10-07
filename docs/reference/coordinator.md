@@ -172,7 +172,10 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
 
 - Fresh launch and update fetch `origin/main` and start OMP in a distinct clean Treehouse source
   worktree pinned to it. Without `origin`, launch uses the original repository's committed local
-  `HEAD`. A configured remote whose fetch fails never falls back to stale source.
+  `HEAD`. A configured remote whose fetch fails never falls back to stale source. The fetch runs
+  beside the new-coordinator checks. A launch reads each coordinator checkout's HEAD, branch, status
+  and unmerged paths once together (`readCoordinatorCheckoutState`), never a binary diff; after the
+  lease acquire proves the checkout clean on its branch, only its HEAD is read again.
 - The original checkout may be dirty and is never touched. Settings, task records, and delivery use
   the original identity (`TANDEM_REPO`); the owned clean checkout is `TANDEM_SOURCE_REPO`.
 - Before each planning turn the coordinator refreshes only its proven-owned clean checkout. A
@@ -244,7 +247,8 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
 
 Code: src/coordinator/panel.ts. Tests: tests/coordinator/panel.test.ts.
 
-- Once a coordinator in its own workspace is ready and owned, launch opens the `tandem.ui` plugin's
+- Once a coordinator is in its own workspace and its command has been sent, launch opens the
+  `tandem.ui` plugin's
   `panel` pane: `herdr plugin pane open --plugin tandem.ui --entrypoint panel --placement split
   --target-pane <coordinator pane> --direction right --no-focus --env
   TANDEM_PANEL_PROJECT=<repo>`. Herdr refuses `--workspace` together with `--target-pane`.
@@ -271,6 +275,11 @@ Code: src/coordinator/panel.ts. Tests: tests/coordinator/panel.test.ts.
 - A panel that cannot open (plugin not linked, Herdr refused) never blocks the coordinator; launch
   prints `Tandem's panel did not open beside <repo> (<reason>); tandem panel --popup shows it
   anywhere.`.
+- A new coordinator's panel opens while the coordinator starts, beside the ownership wait: a
+  terminal that never confirms the open (Tern waits `RECEIPT_WAIT_MS`) then delays the launch only
+  by what the startup did not already take. The launch still waits for the open to settle before
+  it returns, so the failure notice above is never lost, and a startup that fails waits for it
+  before the rollback retires the workspace and its panel.
 - The caller's-pane (direct) launch path has no record and opens no panel; `tandem` always
   launches coordinators in their own workspaces.
 - `tandem fix` needs no pane scan for it: the panel belongs to its coordinator's record, so a live
@@ -407,8 +416,8 @@ Replaces every saved project's coordinator with one running the current committe
 does not run uncommitted changes from the original checkout; this command is not cancellation or
 recovery.
 
-- Runs the low-level launch with `--restart` per project (restart.ts), prefetching fresh source
-  before closing the old coordinator.
+- Runs the low-level launch with `--restart` per project (restart.ts), fetching fresh source beside
+  the running-coordinator and new-coordinator checks and before closing the old coordinator.
 - Verifies exact recorded ownership, revalidates pane cwd and process immediately before close,
   confirms the close acknowledgement and that the pane is gone, then launches with the same lease
   and session directory and `--continue` (OMP) or `--resume` of the recorded conversation (Claude

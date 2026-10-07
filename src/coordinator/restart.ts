@@ -16,7 +16,7 @@ import {
   findRunningCoordinator,
 } from "./ownership.ts";
 import type { CoordinatorRecord } from "./record.ts";
-import { resolveCoordinatorSourceHead } from "./source.ts";
+import { startCoordinatorSourceHead } from "./source.ts";
 
 export type CoordinatorRestartResult = CoordinatorLaunchResult &
   Readonly<{
@@ -72,22 +72,31 @@ export async function restartCoordinator(
   dependencies: CoordinatorLaunchDependencies,
 ): Promise<CoordinatorRestartResult> {
   return withClaimedCoordinatorRepository(request, dependencies, async (reconciliations) => {
-    const previous = await findRunningCoordinator(dependencies.run, dependencies.terminal, {
-      home: request.home,
-      sessionId: request.sessionId,
-      repoPath: request.repo,
-    });
-    const stopped =
-      previous === undefined
-        ? await findRestartCoordinator(dependencies.run, dependencies.terminal, {
-            home: request.home,
-            sessionId: request.sessionId,
-            repoPath: request.repo,
-          })
-        : undefined;
-    const prior = previous ?? stopped;
-    await checkNewCoordinator(request, dependencies);
-    const sourceHead = await resolveCoordinatorSourceHead(dependencies.run, request.repo);
+    // The fetch needs neither the running coordinator nor the model check, so it runs beside them.
+    // Nothing is closed until it and the checks have all succeeded.
+    const pendingSourceHead = startCoordinatorSourceHead(dependencies.run, request.repo);
+    let prior: CoordinatorRecord | undefined;
+    try {
+      const previous = await findRunningCoordinator(dependencies.run, dependencies.terminal, {
+        home: request.home,
+        sessionId: request.sessionId,
+        repoPath: request.repo,
+      });
+      const stopped =
+        previous === undefined
+          ? await findRestartCoordinator(dependencies.run, dependencies.terminal, {
+              home: request.home,
+              sessionId: request.sessionId,
+              repoPath: request.repo,
+            })
+          : undefined;
+      prior = previous ?? stopped;
+      await checkNewCoordinator(request, dependencies);
+    } catch (error) {
+      await pendingSourceHead.catch(() => undefined);
+      throw error;
+    }
+    const sourceHead = await pendingSourceHead;
     if (prior !== undefined) {
       await closeSupersededPane(dependencies.terminal, prior);
     }

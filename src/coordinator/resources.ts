@@ -129,6 +129,47 @@ async function gitOutput(
   return result.stdout;
 }
 
+/** What git says about one checkout: its commit, its branch (empty when detached), and its changes. */
+export type CoordinatorCheckoutState = Readonly<{
+  readonly head: string;
+  readonly branch: string;
+  readonly dirty: boolean;
+  readonly unmerged: boolean;
+}>;
+
+/**
+ * Reads a checkout's commit, branch, and changes. The four reads are independent, so they are
+ * issued together and cost one git round trip. A git failure or a missing HEAD throws.
+ */
+export async function readCoordinatorCheckoutState(
+  run: CommandRunner,
+  worktreePath: string,
+): Promise<CoordinatorCheckoutState> {
+  const [head, branch, status, unmerged] = await Promise.all([
+    gitOutput(run, worktreePath, ["rev-parse", "HEAD"], "git worktree HEAD"),
+    gitOutput(run, worktreePath, ["branch", "--show-current"], "git worktree branch"),
+    gitOutput(
+      run,
+      worktreePath,
+      ["status", "--porcelain=v1", "--untracked-files=all"],
+      "git worktree status",
+    ),
+    gitOutput(
+      run,
+      worktreePath,
+      ["diff", "--name-only", "--diff-filter=U"],
+      "git worktree unmerged check",
+    ),
+  ]);
+  if (head.trim().length === 0) throw new Error("git reported no HEAD commit");
+  return {
+    head: head.trim(),
+    branch: branch.trim(),
+    dirty: status.trim().length !== 0,
+    unmerged: unmerged.trim().length !== 0,
+  };
+}
+
 /** Reads the previous coordinator checkout without judging or changing it. */
 export async function observeCoordinatorCheckout(
   run: CommandRunner,
@@ -144,34 +185,7 @@ export async function observeCoordinatorCheckout(
     return { status: "unreadable", detail: describeFailure(error) };
   }
   try {
-    const head = (
-      await gitOutput(run, worktreePath, ["rev-parse", "HEAD"], "git worktree HEAD")
-    ).trim();
-    const branch = (
-      await gitOutput(run, worktreePath, ["branch", "--show-current"], "git worktree branch")
-    ).trim();
-    const status = await gitOutput(
-      run,
-      worktreePath,
-      ["status", "--porcelain=v1", "--untracked-files=all"],
-      "git worktree status",
-    );
-    const unmerged = await gitOutput(
-      run,
-      worktreePath,
-      ["diff", "--name-only", "--diff-filter=U"],
-      "git worktree unmerged check",
-    );
-    if (head.length === 0) {
-      return { status: "unreadable", detail: "git reported no HEAD commit" };
-    }
-    return {
-      status: "observed",
-      head,
-      branch,
-      dirty: status.trim().length !== 0,
-      unmerged: unmerged.trim().length !== 0,
-    };
+    return { status: "observed", ...(await readCoordinatorCheckoutState(run, worktreePath)) };
   } catch (error) {
     return { status: "unreadable", detail: describeFailure(error) };
   }

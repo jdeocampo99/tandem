@@ -86,6 +86,20 @@ export async function resolveCoordinatorSourceHead(
   };
 }
 
+/**
+ * Starts resolving the source head now, so its fetch overlaps checks that do not need it. The
+ * caller awaits the result where it is needed; a caller that fails first must still wait for it to
+ * settle (`await pending.catch(() => undefined)`), so no git process outlives the command.
+ */
+export function startCoordinatorSourceHead(
+  run: CommandRunner,
+  repoPath: string,
+): Promise<CoordinatorSourceHead> {
+  const pending = resolveCoordinatorSourceHead(run, repoPath);
+  pending.catch(() => undefined);
+  return pending;
+}
+
 async function refreshOwnedCheckout(
   input: CoordinatorSourceRefreshInput,
   source: CoordinatorSourceHead,

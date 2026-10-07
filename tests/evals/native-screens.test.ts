@@ -47,7 +47,7 @@ async function withScreens(
     const opened: TerminalView[] = [];
     let fail = false;
     // Reuse the scenario's terminal/process ownership ledger; capture only the presentation port.
-    const base = terminalBackend(world.run, { home: world.home });
+    const base = terminalBackend(world.run, { tern: world.tern, home: world.home });
     const terminal: TerminalBackend = {
       ...base,
       views: viewsWith(base, {

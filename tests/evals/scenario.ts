@@ -36,6 +36,7 @@ import type {
 } from "../../src/session/events.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
 import { createTaskStore, type TaskStore } from "../../src/tasks/store.ts";
+import type { TerminalComposition } from "../../src/terminal-backend/compose.ts";
 import { WorkerOutputError } from "../../src/workers/protocol.ts";
 
 export const SCENARIO_NOW: IsoTimestamp = "2030-01-01T00:00:00.000Z";
@@ -257,12 +258,16 @@ type CheckoutState = {
 
 export type ScenarioCheckoutPatch = Readonly<Partial<Omit<CheckoutState, "toplevel">>>;
 
+type ScenarioTern = Required<Pick<NonNullable<TerminalComposition["tern"]>, "readForeground">>;
+
 export type ScenarioWorld = Readonly<{
   readonly home: string;
   readonly repoPath: string;
   readonly poolRoot: string;
   readonly sessionId: string;
   readonly run: CommandRunner;
+  /** Tern options that read this world's foreground processes, for every Tern backend built on `run`. */
+  readonly tern: ScenarioTern;
   readonly clock: Clock;
   readonly idFactory: IdFactory;
   readonly store: TaskStore;
@@ -342,8 +347,6 @@ function describeCommand(argv: readonly string[]): Readonly<{
     return { boundary: "git", action: `git ${verb}${qualifier}` };
   }
   if (program === "omp") return { boundary: "omp", action: `omp ${argv[1] ?? ""}`.trim() };
-  if (argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts"))
-    return { boundary: "ps", action: "Tern foreground process proof" };
   if (argv[1] === "-e" && /^\/dev\/ttys\d+$/u.test(argv[3] ?? ""))
     return { boundary: "tern", action: "tern tty write" };
   if (program === "ps") return { boundary: "ps", action: "ps" };
@@ -1344,13 +1347,6 @@ export async function createScenarioWorld(
     if (program === "omp") {
       return commandResult(JSON.stringify({ models: options.ompModels ?? [] }));
     }
-    if (request.argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts")) {
-      const group = Number(request.argv[2]);
-      const pane = [...panes.values()].find(
-        (entry) => entry.present && entry.processes[0]?.pid === group,
-      );
-      return commandResult(JSON.stringify(pane?.processes ?? []));
-    }
     const ttyPid = /^\/dev\/ttys(\d+)$/u.exec(request.argv[3] ?? "")?.[1];
     if (request.argv[1] === "-e" && ttyPid !== undefined) {
       const owner = [...panes.entries()].find(
@@ -1410,6 +1406,18 @@ export async function createScenarioWorld(
     return result;
   };
 
+  /** The Tern foreground process proof, which Tern reads in-process rather than by command. */
+  const readForeground = async (group: number) => {
+    const action = "Tern foreground process proof";
+    const injected = takeFailure("ps", action);
+    trace.push({ boundary: "ps", action, outcome: injected === undefined ? "ok" : "refused" });
+    if (injected !== undefined) throw new Error(injected.stderr);
+    const pane = [...panes.values()].find(
+      (entry) => entry.present && entry.processes[0]?.pid === group,
+    );
+    return (pane?.processes ?? []).map((entry) => ({ ...entry, argv: [...entry.argv] }));
+  };
+
   let now = Date.parse(options.now ?? SCENARIO_NOW);
   const clock: Clock = () => new Date(now).toISOString();
   const idFactory: IdFactory = () => {
@@ -1435,6 +1443,7 @@ export async function createScenarioWorld(
     poolRoot,
     sessionId,
     run,
+    tern: { readForeground },
     clock,
     idFactory,
     store,

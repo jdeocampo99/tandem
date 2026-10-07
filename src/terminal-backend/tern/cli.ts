@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { quoteShellCommand } from "../../adapters/commands.ts";
 import {
@@ -20,6 +19,7 @@ import {
 import type { Receipt } from "../../native/block.ts";
 import { type EndpointInspection, type EndpointTarget, isWorkerProcess } from "../contract.ts";
 import type { TernEndpoint } from "../identity.ts";
+import { type ForegroundReader, readForegroundGroup as readForeground } from "./process-reader.ts";
 import {
   BlockAck,
   blocks,
@@ -52,6 +52,8 @@ export type TernOptions = Readonly<{
   home?: string;
   clock?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
+  /** Reads a foreground group's native argv. The real reader runs in this process. */
+  readForeground?: ForegroundReader;
 }>;
 
 /** A Tandem block whose program and launch arguments must still match before it is touched. */
@@ -444,6 +446,7 @@ type Core = Readonly<{
   home: string | undefined;
   clock: () => number;
   wait: (milliseconds: number) => Promise<void>;
+  readForeground: ForegroundReader;
 }>;
 
 function request(core: Core, cwd: string, args: readonly string[], timeoutMs?: number) {
@@ -516,25 +519,18 @@ async function exactPane(core: Core, target: EndpointTarget): Promise<LocatedBlo
   return found;
 }
 
-async function readForegroundGroup(core: Core, cwd: string, group: number) {
-  const req = {
-    argv: [
-      process.execPath,
-      fileURLToPath(new URL("./process-reader.ts", import.meta.url)),
-      String(group),
-    ],
-    cwd,
-  };
-  const result = await core.run(req);
-  if (result.code !== 0)
-    throw new AdapterCommandError("Tern foreground process proof", req, result);
-  return decode(
-    result.stdout,
-    z.array(
-      z.object({ pid: z.number().int().positive(), name: z.string(), argv: z.array(z.string()) }),
-    ),
-    "Tern foreground process proof",
-  );
+async function readForegroundGroup(core: Core, group: number) {
+  try {
+    return await core.readForeground(group);
+  } catch (cause) {
+    // A member can exit between the group listing and the argv read; `inspect` retries that
+    // only when fresh pane evidence shows the snapshot changed.
+    throw new AdapterProtocolError(
+      "Tern foreground process proof",
+      cause instanceof Error ? cause.message : String(cause),
+      "",
+    );
+  }
 }
 
 async function inspect(core: Core, target: EndpointTarget): Promise<EndpointInspection> {
@@ -546,8 +542,7 @@ async function inspect(core: Core, target: EndpointTarget): Promise<EndpointInsp
     if (proc.pane !== target.endpoint.paneId)
       throw new EndpointOwnershipError(target.endpoint, "Tern process response names another pane");
     try {
-      nativeProcesses =
-        proc.group === null ? [] : await readForegroundGroup(core, target.cwd, proc.group);
+      nativeProcesses = proc.group === null ? [] : await readForegroundGroup(core, proc.group);
       if (
         proc.foreground !== null &&
         !nativeProcesses.some(
@@ -1046,6 +1041,7 @@ export function ternCli(run: TernRunner, options: TernOptions = {}): TernCli {
     home: options.home,
     clock: options.clock ?? Date.now,
     wait: options.wait ?? Bun.sleep,
+    readForeground: options.readForeground ?? readForeground,
   });
 }
 

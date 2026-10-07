@@ -2,8 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, mkdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { quoteShellCommand } from "../adapters/commands.ts";
-import { readCheckpoint } from "../adapters/git.ts";
-import { AdapterCommandError } from "../adapters/primitives.ts";
+import { AdapterCommandError, readGitText } from "../adapters/primitives.ts";
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import { readModelSettings } from "../config/models.ts";
 import type {
@@ -47,9 +46,10 @@ import {
   type CoordinatorResourceOutcome,
   decideCoordinatorReplacement,
   observeCoordinatorCheckout,
+  readCoordinatorCheckoutState,
   rollbackCoordinatorAllocation,
 } from "./resources.ts";
-import { resolveCoordinatorSourceHead } from "./source.ts";
+import { resolveCoordinatorSourceHead, startCoordinatorSourceHead } from "./source.ts";
 import {
   type CoordinatorWorkspaceRetirement,
   coordinatorWorkspaceLabel,
@@ -292,26 +292,31 @@ async function sameCoordinatorPath(expected: string, actual: string): Promise<bo
   }
 }
 
-function validateCoordinatorCheckout(
+function headMismatch(head: string, expectedHead: string): string | undefined {
+  return head === expectedHead
+    ? undefined
+    : `HEAD ${head} does not match captured source HEAD ${expectedHead}`;
+}
+
+function refuseUnsafeCheckout(path: string, reasons: readonly (string | undefined)[]): void {
+  const found = reasons.filter((reason) => reason !== undefined);
+  if (found.length > 0) {
+    throw new Error(`coordinator worktree ${JSON.stringify(path)} is unsafe: ${found.join("; ")}`);
+  }
+}
+
+/** Reads a checkout and refuses one that is dirty, has unmerged paths, or is not at `expectedHead`. */
+async function assertCleanCheckoutAt(
+  run: CommandRunner,
   path: string,
-  checkpoint: Readonly<{
-    readonly head: string;
-    readonly dirty: boolean;
-    readonly unmerged: boolean;
-  }>,
   expectedHead: string,
-): void {
-  const reasons: string[] = [];
-  if (checkpoint.dirty) reasons.push("worktree is dirty");
-  if (checkpoint.unmerged) reasons.push("worktree has unmerged paths");
-  if (checkpoint.head !== expectedHead) {
-    reasons.push(`HEAD ${checkpoint.head} does not match captured source HEAD ${expectedHead}`);
-  }
-  if (reasons.length > 0) {
-    throw new Error(
-      `coordinator worktree ${JSON.stringify(path)} is unsafe: ${reasons.join("; ")}`,
-    );
-  }
+): Promise<void> {
+  const checkout = await readCoordinatorCheckoutState(run, path);
+  refuseUnsafeCheckout(path, [
+    checkout.dirty ? "worktree is dirty" : undefined,
+    checkout.unmerged ? "worktree has unmerged paths" : undefined,
+    headMismatch(checkout.head, expectedHead),
+  ]);
 }
 
 async function validateBoundCoordinatorSource(
@@ -326,10 +331,7 @@ async function validateBoundCoordinatorSource(
       : (request.sourceRepo ?? dependencies.processEnvironment.TANDEM_SOURCE_REPO);
   if (boundSourcePath === undefined) return undefined;
   const normalizedBoundSourcePath = resolve(boundSourcePath);
-  const boundCheckpoint = await readCheckpoint(dependencies.run, {
-    repo: normalizedBoundSourcePath,
-  });
-  validateCoordinatorCheckout(normalizedBoundSourcePath, boundCheckpoint, expectedHead);
+  await assertCleanCheckoutAt(dependencies.run, normalizedBoundSourcePath, expectedHead);
   return normalizedBoundSourcePath;
 }
 
@@ -349,7 +351,12 @@ async function acquireCoordinatorSourceLease(
   });
 }
 
-/** Proves an acquired coordinator lease is the clean, commit-pinned checkout the launch asked for. */
+/**
+ * Proves an acquired coordinator lease is the clean, commit-pinned checkout the launch asked for.
+ * The acquire has just proven the checkout clean, on its own branch, with no unmerged paths, in
+ * this same launch with nothing between; rereading that would only repeat it, so the commit it sits
+ * on is the one fact left to read.
+ */
 async function validateCoordinatorLease(
   dependencies: CoordinatorLaunchDependencies,
   worktree: WorktreeLease,
@@ -361,8 +368,13 @@ async function validateCoordinatorLease(
       `coordinator lease ${JSON.stringify(worktree.leaseId)} is pinned to ${worktree.baseHead}, expected captured source HEAD ${sourceHead}`,
     );
   }
-  const checkout = await readCheckpoint(dependencies.run, { repo: worktree.path });
-  validateCoordinatorCheckout(worktree.path, checkout, sourceHead);
+  const head = await readGitText(
+    dependencies.run,
+    worktree.path,
+    ["rev-parse", "HEAD"],
+    "git coordinator lease HEAD",
+  );
+  refuseUnsafeCheckout(worktree.path, [headMismatch(head, sourceHead)]);
   if (
     normalizedBoundSourcePath !== undefined &&
     !(await sameCoordinatorPath(normalizedBoundSourcePath, worktree.path))
@@ -554,10 +566,7 @@ async function assertRunningCoordinatorSource(
   running: CoordinatorRecord,
   context: InsidePane | undefined,
 ): Promise<void> {
-  const runningCheckpoint = await readCheckpoint(dependencies.run, {
-    repo: running.worktree.path,
-  });
-  validateCoordinatorCheckout(running.worktree.path, runningCheckpoint, running.worktree.baseHead);
+  await assertCleanCheckoutAt(dependencies.run, running.worktree.path, running.worktree.baseHead);
   const boundSourcePath = await validateBoundCoordinatorSource(
     request,
     dependencies,
@@ -676,10 +685,22 @@ export async function launchCoordinatorUnlocked(
       };
     }
   }
-  // A restart checks before it closes the coordinator it replaces.
-  if (request.restart !== true) await checkNewCoordinator(request, dependencies);
-  const sourceHead =
-    request.sourceHead ?? (await resolveCoordinatorSourceHead(dependencies.run, paths.repo)).head;
+  // The fetch behind the source head does not depend on the new-coordinator check, so they overlap.
+  const pendingSourceHead: Promise<string> =
+    request.sourceHead !== undefined
+      ? Promise.resolve(request.sourceHead)
+      : startCoordinatorSourceHead(dependencies.run, paths.repo).then((source) => source.head);
+  pendingSourceHead.catch(() => undefined);
+  // A restart checked before it closed the coordinator it replaces.
+  if (request.restart !== true) {
+    try {
+      await checkNewCoordinator(request, dependencies);
+    } catch (error) {
+      await pendingSourceHead.catch(() => undefined);
+      throw error;
+    }
+  }
+  const sourceHead = await pendingSourceHead;
   const previous =
     running ?? (await readCoordinatorRecord(recordPath(paths.home, request.sessionId, paths.repo)));
   const { workspaceRetirement, previousResources } =
@@ -1076,16 +1097,31 @@ async function startCoordinator(startup: CoordinatorStartup): Promise<Coordinato
     harness: harnessOf(request.model),
     command: argv,
   });
-  await awaitReadyOrStop(dependencies, harness, started, argv, coordinatorCwd);
-  const owned = await waitForCoordinatorOwnership(
-    dependencies.run,
-    dependencies.terminal,
-    dependencies.sleep,
-    paths.home,
-    request.sessionId,
-    paths.repo,
-  );
-  const panelFailure = await openPanelBeside(dependencies.terminal, paths.home, owned);
+  // The panel needs only this exact pane, not a started coordinator, and its open can wait out a
+  // terminal that never confirms it. Opening it beside the coordinator's startup keeps that wait
+  // off the launch's critical path; it never rejects, so the failure is reported, not thrown.
+  const panelOpening = openPanelBeside(dependencies.terminal, paths.home, {
+    repoPath: paths.repo,
+    endpoint,
+    worktree,
+  });
+  let owned: CoordinatorRecord;
+  try {
+    await awaitReadyOrStop(dependencies, harness, started, argv, coordinatorCwd);
+    owned = await waitForCoordinatorOwnership(
+      dependencies.run,
+      dependencies.terminal,
+      dependencies.sleep,
+      paths.home,
+      request.sessionId,
+      paths.repo,
+    );
+  } catch (error) {
+    // The rollback retires this workspace and its panel, so the open must have settled first.
+    await panelOpening;
+    throw error;
+  }
+  const panelFailure = await panelOpening;
   const catchUp = headless
     ? undefined
     : await tryShowCatchUp(dependencies.terminal, {
