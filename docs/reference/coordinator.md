@@ -125,7 +125,7 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   choices, saved code folders, saved projects other than the Tandem checkout, and a written
   `selfImprovement`. Leaving halfway resumes at the first missing stage. The Tandem coordinator
   opens the block at session start while any stage is missing. Herdr has no native blocks
-  (`openSetup` returns `false`), so there the chat runs the checklist of four steps
+  (no `terminal.views`), so there the chat runs the checklist of four steps
   (src/onboarding/checklist.ts): models, code folders, self-improvement, repositories.
 - Fixed wording wherever a step allows, delivered by code without a model turn
   (src/session/onboarding-guide.ts): at each session start while setup is unfinished, the missing

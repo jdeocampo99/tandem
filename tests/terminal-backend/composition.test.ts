@@ -105,7 +105,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
   });
 });
 
-test("only Tern hosts native views, and the saved choice decides which terminal answers", async () => {
+test("only Tern hosts native views, and the choice saved when the port is composed answers", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const settings = join(world.home, "settings.toml");
     await writeFile(settings, 'terminal = "herdr"\n');
@@ -113,9 +113,11 @@ test("only Tern hosts native views, and the saved choice decides which terminal 
     expect(saved.name).toBe("herdr");
     expect(saved.views).toBeUndefined();
     await writeFile(settings, 'terminal = "tern"\n');
-    expect(saved.name).toBe("tern");
-    expect(saved.views).toBeDefined();
-    expect(await saved.fences.list(world.home)).toEqual({ fences: [], failures: [] });
+    expect(saved.name).toBe("herdr");
+    const composed = terminalBackend(world.run, { home: world.home });
+    expect(composed.name).toBe("tern");
+    expect(composed.views).toBeDefined();
+    expect(await composed.fences.list(world.home)).toEqual({ fences: [], failures: [] });
     expect(
       terminalBackend(world.run, { terminal: "herdr", home: world.home }).views,
     ).toBeUndefined();

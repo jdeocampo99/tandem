@@ -1067,7 +1067,9 @@ newer file and keeps its draft. "Tandem: Change models" and "Tandem: Add or edit
 
 The Tandem coordinator opens the setup block at session start, in the slot where the welcome view
 opened, while `remainingOnboardingSteps` is not empty and the terminal has native views
-(`terminal.openSetup`; Herdr returns `false` and the chat checklist runs). The chat then says the
+(`openSetupBeside` in src/harness/coordinator-session.ts publishes the setup view and calls
+`terminal.views.open` with `{ kind: "setup", mode: "setup" }`; Herdr has no `views` and the chat
+checklist runs). The chat then says the
 setup is beside it, and the coordinator's context says to answer questions, not to ask them. Once
 setup is finished the welcome view behaves as before.
 

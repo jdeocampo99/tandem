@@ -87,8 +87,6 @@ export function herdrBackend(
     checkInstall: (target) => checkInstall(run, target),
     notify: (target) => notify(run, target),
     openWelcome: (target) => openWelcome(run, target),
-    // Herdr has no native blocks, so setup runs in the coordinator's chat.
-    openSetup: async () => false,
     promptAgent: (target) => promptAgent(run, target),
     openPanel: (input) => openPanel(run, input),
     isPanelOpen: (input) => isPanelOpen(run, input),

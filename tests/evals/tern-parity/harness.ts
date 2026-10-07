@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { CommandRunner } from "../../../src/contracts.ts";
+import { openSetupBeside } from "../../../src/harness/coordinator-session.ts";
 import { runTerminal } from "../../../src/main.ts";
 import {
   nativeAlertCounts,
@@ -374,6 +375,23 @@ export class TernParityHost {
     });
     await this.settle();
     return Number(id);
+  }
+
+  /** The setup block opens the way a Tandem coordinator's startup opens it: `openSetupBeside`. */
+  async openSetup(project: ScenarioTernProject = this.project): Promise<boolean> {
+    const opened = await openSetupBeside(
+      terminalBackend(this.#run, { home: this.world.home, tern: { clock: this.#clock } }),
+      this.#service(project),
+      {
+        home: this.world.home,
+        sessionId: this.world.sessionId,
+        repo: project.repoPath,
+        cwd: project.worktree.path,
+        paneId: project.coordinator.paneId,
+      },
+    );
+    await this.settle();
+    return opened;
   }
 
   /** The project's coordinator service, which lives as long as the window. */
