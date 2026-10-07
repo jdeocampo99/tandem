@@ -12,6 +12,7 @@ import { createTandemService, type TandemService } from "../../../src/service/co
 import { installTerminalPlugin, terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { luauBinary } from "../../luau.ts";
 import type { ScenarioTernProject, ScenarioWorld } from "../scenario.ts";
+import { type Appearance, type Painted, paint } from "./paint.ts";
 
 const PLUGIN = fileURLToPath(new URL("../../../tern-plugin/", import.meta.url));
 const HOST = fileURLToPath(new URL("./host.luau", import.meta.url));
@@ -768,6 +769,12 @@ export class Screen {
 
   async render(): Promise<Rendered> {
     return (await this.#draw()).rendered;
+  }
+
+  /** Every string the block draws and its legibility in `appearance`. */
+  async paint(appearance: Appearance): Promise<readonly Painted[]> {
+    const { roots } = await this.#draw();
+    return roots.flatMap(([, root]) => paint(root, appearance));
   }
 
   async #draw(): Promise<Readonly<{ roots: Roots; rendered: Rendered }>> {

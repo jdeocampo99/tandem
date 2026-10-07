@@ -318,6 +318,16 @@ function styleOf(view: Rendered, text: string): string {
   return span.style;
 }
 
+/** Strings Tandem colors that read below 3:1 against their background in either Tern appearance. */
+async function illegible(screen: Screen): Promise<string[]> {
+  const found: string[] = [];
+  for (const appearance of ["light", "dark"] as const)
+    for (const painted of await screen.paint(appearance))
+      if (painted.tandemColored && painted.contrast < 3)
+        found.push(`${appearance}: ${painted.text} at ${painted.contrast.toFixed(2)}:1`);
+  return found;
+}
+
 function opened(host: TernParityHost, mark: number): readonly string[] {
   return host.since(mark).flatMap((event) => (event.open ? [event.open.url] : []));
 }
@@ -574,6 +584,7 @@ export const inventory: readonly InventoryEntry[] = [
           "✓ repo 1 running · 2 needs you 2 ⌘2",
           "+ Open another project…",
         ]);
+        expect(await illegible(panel)).toEqual([]);
         world.advanceClock(-0.5);
         await host.publish();
         let mark = host.events.length;
@@ -644,6 +655,7 @@ export const inventory: readonly InventoryEntry[] = [
         await host.command("open-task");
         const picker = host.screen(host.pane("task-picker"));
         expect((await picker.render()).text).toContain("Search tasks by title, id or stage");
+        expect(await illegible(picker)).toEqual([]);
         await host.command("settings-repositories");
         const settings = host.screen(host.pane("setup"));
         await host.refresh();
@@ -756,6 +768,7 @@ export const inventory: readonly InventoryEntry[] = [
           "Ready",
         ]);
         expect(styleOf(view, "✓ Implement")).toContain("success");
+        expect(await illegible(host.screen(host.pane("task")))).toEqual([]);
       }),
   },
   {
@@ -855,6 +868,7 @@ export const inventory: readonly InventoryEntry[] = [
           "Steers the worker; it reads this at its next safe step",
           "Send ↑",
         ]);
+        expect(await illegible(task)).toEqual([]);
         await task.click("Steer…");
         expect((await task.render()).focused).toBe("Message the worker…");
         await task.type("try the other port");
@@ -972,6 +986,7 @@ export const inventory: readonly InventoryEntry[] = [
           ),
         ).toEqual(["Add dark mode with a toggle", "NEW", "+"]);
         expect(labels(view)).not.toContain("Edit in browser ↗");
+        expect(await illegible(brief)).toEqual([]);
         await brief.click("+", { nth: 2 });
         await brief.focusField("Comment on this line…");
         await brief.type("Default to the system theme");
@@ -1224,6 +1239,7 @@ export const inventory: readonly InventoryEntry[] = [
           "+",
           "Hover a line and click + to comment. Your comments go to the worker as fix requests.",
         ]);
+        expect(await illegible(pr)).toEqual([]);
         await pr.click("Reply");
         expect(await body()).toContain("Comment…");
         await pr.type("Because the port can race");
@@ -1372,6 +1388,7 @@ export const inventory: readonly InventoryEntry[] = [
         await panel.click("▦");
         const board = host.screen(host.pane("board"));
         const view = await board.render();
+        expect(await illegible(board)).toEqual([]);
         expect(view.title).toBe("Tandem board");
         expect(view.text).toEqual([
           "Board · tandem",
@@ -1434,6 +1451,7 @@ export const inventory: readonly InventoryEntry[] = [
         await panel.click("5h unavailable");
         const usage = host.screen(host.pane("usage"));
         const view = await usage.render();
+        expect(await illegible(usage)).toEqual([]);
         expect(view.title).toBe("Tandem usage");
         expect(view.text).toEqual([
           "Usage · tandem",
@@ -1478,6 +1496,7 @@ export const inventory: readonly InventoryEntry[] = [
         await host.stepAway(other, 120, true);
         const catchup = host.screen(host.pane("catchup"));
         const view = await catchup.render();
+        expect(await illegible(catchup)).toEqual([]);
         expect(view.title).toBe("Welcome back · Tandem");
         expect(view.text).toEqual([
           "Welcome back · tandem",

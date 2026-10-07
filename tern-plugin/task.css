@@ -28,9 +28,9 @@
 }
 .tt-glance-card {
   flex: 1;
-  background: #161b22;
+  background: light-dark(#f6f8fa, #161b22);
   padding: 12px;
-  border: 1px solid #30363d;
+  border: 1px solid light-dark(#d0d7de, #30363d);
   border-radius: 6px;
 }
 .tt-tabs {
@@ -79,7 +79,7 @@
   margin: 8px 0;
   padding: 10px;
   border-left: 2px solid #c7a344;
-  background: #161b22;
+  background: light-dark(#f6f8fa, #161b22);
 }
 .tt-stuck {
   display: flex;
@@ -95,9 +95,9 @@
 .tt-message {
   margin: 0 24px 16px;
   padding: 12px;
-  border: 1px solid #30363d;
+  border: 1px solid light-dark(#d0d7de, #30363d);
   border-radius: 6px;
-  background: #161b22;
+  background: light-dark(#f6f8fa, #161b22);
 }
 .tt-picker {
   padding: 24px;
@@ -109,13 +109,13 @@
   width: 100%;
   padding: 12px;
   margin-top: 8px;
-  border: 1px solid #30363d;
+  border: 1px solid light-dark(#d0d7de, #30363d);
   border-radius: 6px;
-  background: #161b22;
-  color: #c9d1d9;
+  background: light-dark(#f6f8fa, #161b22);
+  color: light-dark(#1f2328, #c9d1d9);
 }
 .tt-picker-row:hover {
-  background: #21262d;
+  background: light-dark(#eaeef2, #21262d);
 }
 .tt-picker-selected {
   border-color: #8957e5;
