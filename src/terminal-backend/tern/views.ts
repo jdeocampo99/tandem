@@ -12,7 +12,7 @@ import {
 import type { ViewsCapability } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
-import { type OpenResult, openView, withSettledOpens } from "./host.ts";
+import { exactView, type OpenResult, openView, withSettledOpens } from "./host.ts";
 import { blocks, TernOutcomeUnknownError, TernQuarantinedError } from "./protocol.ts";
 
 class BrowserOpenUnconfirmedError extends AdapterError {
@@ -55,6 +55,32 @@ export function detailForView(
     return pr === undefined ? undefined : nativePrFile(pr.repo, pr.number);
   }
   return undefined;
+}
+
+/**
+ * The detail file a view's block reads, or undefined for a root view. A new draft can open before
+ * the coordinator's background index publication, so a brief or setup needs no published entry.
+ */
+async function detailFile(
+  home: string,
+  project: string,
+  view: Exclude<ViewHostingInput["view"], { kind: "browser" }>,
+): Promise<string | undefined> {
+  if (view.kind === "brief") return nativeBriefFile(view.requestId);
+  if (view.kind === "setup") return setupFile(view.mode);
+  return detailForView((await readProjectState(home, project))?.published, view);
+}
+
+/** Where a view's block is placed; `isView` proves a block only where an open puts it. */
+function placementFor(view: Exclude<ViewHostingInput["view"], { kind: "browser" }>): Placement {
+  if (view.kind === "task") return "task";
+  return view.kind === "brief" ||
+    view.kind === "pr" ||
+    view.kind === "prs" ||
+    view.kind === "task-picker" ||
+    (view.kind === "setup" && view.mode === "setup")
+    ? "split"
+    : "window";
 }
 
 /** File routes are the sole CLI-to-block launch port. An uncertain invocation is never repeated. */
@@ -164,9 +190,52 @@ export function ternViewHost(commands: TernCli) {
     await open(input, project, "panel", "return", viewIndexPath(input.home, project));
     return true;
   };
+  /**
+   * The origin pane is this coordinator's exact block of the view, as Tern lists it: program
+   * `tandem.<kind>`, the launch arguments Tandem gives that view, its session and its placement.
+   */
+  const proveView = async (
+    input: Parameters<ViewsCapability["isView"]>[0],
+    project: string,
+  ): Promise<boolean> => {
+    if (input.origin.paneId === input.coordinator.paneId) return false;
+    const detail = await detailFile(input.home, project, input.view);
+    if (detail === undefined) return false;
+    const cmd = await scoped(input);
+    const args = blockArgs(viewDetailPath(input.home, project, detail), {
+      coordinator: input.coordinator.paneId,
+      cwd: input.cwd,
+      home: input.home,
+      index: viewIndexPath(input.home, project),
+      ...(input.origin.windowId === undefined ? {} : { window: input.origin.windowId }),
+    });
+    let exact: Awaited<ReturnType<typeof exactView>>;
+    try {
+      exact = await exactView(
+        cmd,
+        input.cwd,
+        input.coordinator,
+        input.view.kind,
+        placementFor(input.view),
+        args,
+      );
+    } catch (cause) {
+      if (!(cause instanceof TernOutcomeUnknownError)) throw cause;
+      // A proof only reads, so ambiguity quarantines nothing; it just proves nothing.
+      throw new AdapterError(
+        "Tern lists this view ambiguously: detached, duplicated or outside its placement",
+        "tern ls",
+        cause,
+      );
+    }
+    return exact?.block.id === input.origin.paneId;
+  };
   return {
     open,
     scoped,
+    proveView,
+    isView: async (input: Parameters<ViewsCapability["isView"]>[0]) =>
+      proveView(input, await projectForView(input.home, input.coordinator)),
     close,
     toggleBoard,
     closeView: async (input: Parameters<ViewsCapability["close"]>[0]) =>
@@ -216,34 +285,14 @@ export function ternViewHost(commands: TernCli) {
         );
         return { opened: true, warnings: returned.warnings ?? [] };
       }
-      // A new draft can open before the coordinator's background index publication.
-      const detail =
-        input.view.kind === "brief"
-          ? nativeBriefFile(input.view.requestId)
-          : input.view.kind === "setup"
-            ? setupFile(input.view.mode)
-            : detailForView((await readProjectState(input.home, project))?.published, input.view);
+      const detail = await detailFile(input.home, project, input.view);
       if (["task", "brief", "pr"].includes(input.view.kind) && detail === undefined)
         throw new Error(`Native ${input.view.kind} detail is not ready`);
       const path =
         detail === undefined
           ? viewIndexPath(input.home, project)
           : viewDetailPath(input.home, project, detail);
-      const opened = await open(
-        input,
-        project,
-        input.view.kind,
-        input.view.kind === "task"
-          ? "task"
-          : input.view.kind === "brief" ||
-              input.view.kind === "pr" ||
-              input.view.kind === "prs" ||
-              input.view.kind === "task-picker" ||
-              (input.view.kind === "setup" && input.view.mode === "setup")
-            ? "split"
-            : "window",
-        path,
-      );
+      const opened = await open(input, project, input.view.kind, placementFor(input.view), path);
       if (input.view.kind === "brief" && opened.endpoint === undefined)
         throw new TernOutcomeUnknownError("tern open", "native brief endpoint was not confirmed");
       return {
