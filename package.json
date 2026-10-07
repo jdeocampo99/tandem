@@ -12,12 +12,16 @@
     "lint": "biome check && bun scripts/lint-ratchet.ts",
     "lint:ratchet": "bun scripts/lint-ratchet.ts",
     "format": "biome format --write",
-    "start": "bun src/cli.ts"
+    "start": "bun src/cli.ts",
+    "report:dead": "knip --no-exit-code",
+    "report:dupes": "jscpd"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.2.0",
     "@oh-my-pi/pi-coding-agent": "18.1.18",
     "@types/bun": "^1.2.21",
+    "jscpd": "^5.4.0",
+    "knip": "^6.40.0",
     "typescript": "^5.9.2"
   },
   "dependencies": {
