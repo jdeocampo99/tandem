@@ -922,13 +922,7 @@
       "tandem/type-assertion": 7
     },
     "src/worker.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1,
-      "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1,
-      "suspicious/noUnnecessaryConditions": 1,
-      "tandem/json-parse-cast": 1
+      "suspicious/noUnnecessaryConditions": 1
     },
     "src/workers/admission.ts": {
       "style/noNestedTernary": 2
