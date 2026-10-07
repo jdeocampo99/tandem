@@ -1682,6 +1682,34 @@ test("owned PR thread replies retain exact context in a worker fix request witho
   }
 });
 
+test("returning from a task page by ← Orchestrator reports focus only from panes that still exist", async () => {
+  await withParity(async ({ host, panel, world, project }) => {
+    await panel.click(/^● Port the terminal/);
+    const task = host.pane("task");
+    await host.focus(task);
+    await host.refresh();
+    const mark = host.cli.length;
+    await host.screen(task).click("← Orchestrator");
+    expect(world.paneIsPresent(String(task))).toBe(false);
+    await host.focus(Number(project.coordinator.paneId));
+    const visits = host.cli.slice(mark).flatMap((run) => {
+      const { action, origin } = ActionEnvelope.parse(JSON.parse(run.stdin ?? ""));
+      return action.verb === "visit"
+        ? [
+            {
+              event: action.event,
+              pane: origin.pane,
+              outcome: Outcome.parse(JSON.parse(run.stdout)),
+            },
+          ]
+        : [];
+    });
+    expect(visits).toEqual([
+      { event: "entry", pane: project.coordinator.paneId, outcome: { status: "done" } },
+    ]);
+  });
+}, 60_000);
+
 /** Fires every enabled control `open` draws, reopening the screen whenever a click closed it. */
 async function fireEvery(host: TernParityHost, open: () => Promise<number>): Promise<void> {
   // A new block draws its loading state until its first poll reads the view file.
