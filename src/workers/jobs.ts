@@ -73,6 +73,11 @@ export type WorkerJob = Readonly<{
    */
   readonly quickScope?: "may-ask" | "spent";
   /**
+   * A quick task implementer's worktree starting HEAD. Its scope question says no changes were
+   * made, so it is refused unless the worktree is clean and HEAD still equals this commit.
+   */
+  readonly baseHead?: string;
+  /**
    * A scout job reviewing a pull request: it gets a read-only git/gh shell, and when
    * `structuredReport` is set its report must be one PrReview JSON object.
    */
@@ -472,6 +477,11 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   if (quickScope !== undefined && role !== "implementer") {
     throw new TypeError("quickScope is only permitted for implementer jobs");
   }
+  const baseHead =
+    value.baseHead === undefined ? undefined : readSingleLineText(value.baseHead, "baseHead");
+  if (baseHead !== undefined && quickScope === undefined) {
+    throw new TypeError("baseHead is only permitted for quick task implementer jobs");
+  }
   const prReview = value.prReview === undefined ? undefined : readPrReviewJob(value.prReview);
   if (prReview !== undefined && role !== "scout") {
     throw new TypeError("prReview is only permitted for scout jobs");
@@ -496,6 +506,7 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(setup === undefined ? {} : { setup }),
     ...(playbookSteps === undefined ? {} : { playbookSteps }),
     ...(quickScope === undefined ? {} : { quickScope }),
+    ...(baseHead === undefined ? {} : { baseHead }),
     ...(prReview === undefined ? {} : { prReview }),
   };
 }

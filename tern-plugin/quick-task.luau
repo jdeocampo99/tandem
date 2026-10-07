@@ -24,13 +24,24 @@ local function words(text: string): number
  return count
 end
 
+-- The text's length in UTF-16 code units, as JavaScript's `text.length` counts it in
+-- `checkQuickText`: a code point above U+FFFF is two. Invalid UTF-8 falls back to its bytes.
+local function utf16Length(text: string): number
+ if utf8.len(text) == nil then return #text end
+ local length = 0
+ for _, code in utf8.codes(text) do
+  length += if code > 0xFFFF then 2 else 1
+ end
+ return length
+end
+
 -- The same length and word checks `tandem native act` applies, so Start is disabled for text it
 -- would refuse. Returns why Start is refused, or nil when the text describes a change.
 local function problem(state: State): string?
  local model = state.file.model :: Model?
  if state.file.status ~= "ready" or not model then return "Describe the change in a sentence or two." end
  local text = trimmed(state.field.text)
- local length = utf8.len(text) or #text
+ local length = utf16Length(text)
  if length < model.minChars or words(text) < model.minWords then return model.tooShort end
  if length > model.maxChars then return model.tooLong end
  return nil

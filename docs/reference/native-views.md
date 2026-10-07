@@ -1013,7 +1013,9 @@ The block shows "Small, well-defined changes. No interview.", one multi-line fie
 `<repo> · <branch>` chip and `Start  ⌘↵`. The chip only displays: the project is the one the
 origin proves, and starting in another project means opening its coordinator first. Start is
 disabled until the trimmed text has at least the model's `minChars` characters and `minWords`
-words and at most `maxChars` characters; ⌘↵ on refused text toasts `tooShort` or `tooLong`.
+words and at most `maxChars` characters, counted in UTF-16 code units as `checkQuickText` counts
+them (a character above U+FFFF, such as most emoji, is two); ⌘↵ on refused text toasts
+`tooShort` or `tooLong`.
 Otherwise ⌘↵ or the button sends `quick-start` with the text; Enter adds a line and Escape or ×
 closes the block. A refused start
 keeps the text and toasts the reason under "Quick task didn't start"; a started one closes the

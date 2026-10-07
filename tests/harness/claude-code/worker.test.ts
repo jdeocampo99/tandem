@@ -88,6 +88,7 @@ async function worker(role: WorkerJob["role"] = "scout", extra: Partial<WorkerJo
     },
     readReceipt: async () => files.receipts.at(-1),
     gitStatus: async () => "",
+    gitHead: async () => "base-head",
     readFile: async () => "",
     copyAsset: async (input) => `${input.artifactDir}/${input.name}`,
     trace: () => undefined,

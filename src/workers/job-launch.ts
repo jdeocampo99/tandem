@@ -124,6 +124,9 @@ function workerJobSpec(
     ...(role === "implementer" && task.quick !== undefined
       ? { quickScope: quickScopeQuestionAllowed(task) ? ("may-ask" as const) : ("spent" as const) }
       : {}),
+    ...(role === "implementer" && task.quick !== undefined && runtime.worktree !== undefined
+      ? { baseHead: runtime.worktree.baseHead }
+      : {}),
     ...(prReview === undefined
       ? {}
       : {

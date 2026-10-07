@@ -261,6 +261,8 @@ export type WorkerDeps = Pick<SessionDeps, "clock" | "timers" | "status"> &
     readReceipt(receiptPath: string): Promise<WorkerReceipt | undefined>;
     /** `git status --porcelain=v1` of `cwd`, or undefined when git cannot report it. */
     gitStatus(cwd: string): Promise<string | undefined>;
+    /** The commit `cwd` has checked out, or undefined when git cannot report it. */
+    gitHead(cwd: string): Promise<string | undefined>;
     readFile(path: string): Promise<string>;
     /** Copies `from` in the checkout to `artifactDir/name`; returns the target path. */
     copyAsset(
@@ -268,6 +270,27 @@ export type WorkerDeps = Pick<SessionDeps, "clock" | "timers" | "status"> &
     ): Promise<string>;
     trace(event: string, detail?: Readonly<Record<string, unknown>>): void;
   }>;
+
+/**
+ * Why a quick task's scope question is refused, or undefined when the worktree provably holds no
+ * change: clean, with HEAD still on the commit the job started from. Anything unverifiable refuses.
+ */
+export function scopeQuestionRefusal(
+  input: Readonly<{
+    status: string | undefined;
+    head: string | undefined;
+    baseHead: string | undefined;
+  }>,
+): string | undefined {
+  const onlyBefore = "you may only ask the scope question before changing or committing anything";
+  if (input.status === undefined || input.head === undefined || input.baseHead === undefined)
+    return `a scope question says no changes were made, but Tandem could not verify the worktree is unchanged; ${onlyBefore}`;
+  if (input.status.trim().length > 0)
+    return `a scope question says no changes were made, but the worktree has uncommitted changes; ${onlyBefore}`;
+  if (input.head.trim() !== input.baseHead)
+    return `a scope question says no changes were made, but HEAD has moved from the commit the task started at; ${onlyBefore}`;
+  return undefined;
+}
 
 type AgentEnd = Extract<SessionEvent, { type: "agentEnd" }>;
 type ToolEnd = Extract<SessionEvent, { type: "toolEnd" }>;
@@ -740,13 +763,14 @@ export class WorkerSession {
           return new ReportRejection(openStepsRejection(open));
         }
       }
-      // The scope question tells the user no changes were made, so it must be true.
-      if (job.role === "implementer" && submission.scopeExceeded !== undefined) {
-        const status = await this.deps.gitStatus(job.cwd);
-        if (status !== undefined && status.trim().length > 0)
-          return new ReportRejection(
-            "a scope question says no changes were made, but the worktree has changes; undo them before asking",
-          );
+      // The scope question tells the user no changes were made, so it must be provably true.
+      if (job.quickScope === "may-ask" && submission.scopeExceeded !== undefined) {
+        const [status, head] = await Promise.all([
+          this.deps.gitStatus(job.cwd),
+          this.deps.gitHead(job.cwd),
+        ]);
+        const refusal = scopeQuestionRefusal({ status, head, baseHead: job.baseHead });
+        if (refusal !== undefined) return new ReportRejection(refusal);
       }
       const report = resolveSubmittedReport(job, submission, await this.reviewAnchors());
       const revision = await this.instructionRevision(report.status !== "failed");

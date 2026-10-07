@@ -230,3 +230,32 @@ test("Proceed records the stretched scope for review and tells the worker not to
     await service.shutdown();
   });
 });
+
+test("Cancel or Convert whose worker cannot be proven stopped is refused and keeps the question open", async () => {
+  for (const text of ["Cancel", "Convert to request"]) {
+    await withScenario({}, async (world) => {
+      const service = serviceFor(world);
+      await askScope(world, service);
+      world.failAt({ boundary: "herdr", action: "herdr pane process-info" });
+
+      await expect(
+        service.answer({ taskId: SCENARIO_TASK_ID, questionId: "job-1", text }),
+      ).rejects.toThrow("could not be stopped yet");
+
+      const task = await service.get(SCENARIO_TASK_ID);
+      expect(task.stage).toBe("blocked");
+      expect(task.communication?.question?.id).toBe("job-1");
+      expect(task.notifications.some((entry) => entry.message.includes("Converted"))).toBe(false);
+
+      // Once the pane can be proven stopped, the same answer goes through.
+      await service.answer({ taskId: SCENARIO_TASK_ID, questionId: "job-1", text });
+      const answered = await service.get(SCENARIO_TASK_ID);
+      expect(answered.stage).toBe("cancelled");
+      expect(answered.communication?.question).toBeUndefined();
+      expect(answered.notifications.some((entry) => entry.message.includes("Converted"))).toBe(
+        text === "Convert to request",
+      );
+      await service.shutdown();
+    });
+  }
+});

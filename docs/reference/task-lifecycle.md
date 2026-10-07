@@ -72,7 +72,10 @@ src/service/quick-start.ts (the one start path).
   question (`quickScopeLines`):
   `<task id> · Scope exceeds quick task` / `Affects <N> files across <areas>.` /
   `Open decision: <decision>.` (only when given) / `No changes made.` / `Proposed: <plan>.`
-  The report is rejected while the worktree has changes. The job carries `quickScope:
+  The report is rejected unless the worker can prove it changed nothing: a clean worktree whose
+  HEAD still equals the job's `baseHead` (the task worktree's starting commit). Uncommitted
+  changes, a commit, or an unreadable status, HEAD or base all refuse it, telling the worker it
+  may only ask before changing or committing anything. The job carries `quickScope:
   "may-ask" | "spent"`; once asked, `quick.scopeQuestionId` is recorded and a second
   `scopeExceeded` is refused at the worker and, if one arrives anyway, stored as an ordinary
   question. The task blocks with the question, so it is a Needs you question that notifies, not a
@@ -82,10 +85,13 @@ src/service/quick-start.ts (the one start path).
   - Proceed records `quick.scopeExtendedAt` (timeline `quick-scope-extended`), answers the worker
     with a fixed instruction to go ahead and not ask again, and resumes it. The review brief,
     task page and PR body show the stretched scope.
-  - Convert to request clears the question, gives the coordinator a notification with the user's
-    words and the worker's findings, and cancels the task through the ordinary cancel path. The
-    coordinator then runs the usual research, interview and brief.
-  - Cancel clears the question and cancels the task through the ordinary cancel path.
+  - Convert to request cancels the task through the ordinary cancel path, then clears the
+    question and gives the coordinator a notification with the user's words and the worker's
+    findings. The coordinator then runs the usual research, interview and brief.
+  - Cancel cancels the task through the ordinary cancel path, then clears the question.
+  - Either one is refused when the cancel cannot prove the worker stopped (the task stays
+    blocked): the question stays open, nothing reaches the coordinator, and the answer may be
+    given again once the pane is stopped.
 
 ## Stages
 

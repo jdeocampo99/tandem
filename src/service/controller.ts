@@ -1897,7 +1897,8 @@ class TandemController {
    * Answers a quick task's scope question. Proceed records the stretched scope on the approval, so
    * review sees it, and resumes the worker, which may not ask again. Convert to request hands the
    * user's words and the worker's findings to the coordinator for the normal interview and cancels
-   * the quick task. Cancel cancels it. Anything else leaves the question open.
+   * the quick task. Cancel cancels it. Both cancel first and refuse, leaving the question open, when
+   * the task could not be proven stopped. Anything else leaves the question open.
    */
   private async answerQuickScope(
     taskId: string,
@@ -1916,6 +1917,19 @@ class TandemController {
       await this.answerWorker(taskId, questionId, QUICK_SCOPE_PROCEED_TEXT);
       return;
     }
+    // Stop the worker first: the answer is final only once the task is provably cancelled. A pane
+    // that cannot be proven stopped leaves the task blocked, so the question stays open and
+    // nothing is handed to the coordinator.
+    const stopped = await this.cancel(
+      taskId,
+      choice === "convert"
+        ? "The user turned this quick task into a request."
+        : "The user cancelled this quick task at its scope question.",
+    );
+    if (stopped.stage !== "cancelled")
+      throw new Error(
+        `Task ${taskId} could not be stopped yet: Tandem couldn't confirm its worker stopped, so it was not ${choice === "convert" ? "converted" : "cancelled"}. The question is still open; answer it again once the worker has stopped.`,
+      );
     await this.updateQuickScopeQuestion(taskId, questionId, (task) => {
       const { question: _question, ...communication } = task.communication ?? {
         revision: 0,
@@ -1938,12 +1952,6 @@ class TandemController {
           : {}),
       };
     });
-    await this.cancel(
-      taskId,
-      choice === "convert"
-        ? "The user turned this quick task into a request."
-        : "The user cancelled this quick task at its scope question.",
-    );
   }
 
   /** One write to a quick task while its scope question is still the one asked. */
