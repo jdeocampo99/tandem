@@ -242,7 +242,7 @@ function sortedCounts(counts: Counts): Counts {
   );
 }
 
-async function readBaseline(): Promise<Baseline> {
+export async function readBaseline(): Promise<Baseline> {
   if (!(await Bun.file(BASELINE_PATH).exists())) return { rules: [], counts: {} };
   return baselineSchema.parse(JSON.parse(await readFile(BASELINE_PATH, "utf8")));
 }
