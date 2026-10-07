@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HomeSettings } from "../../src/config/home-settings.ts";
@@ -12,6 +12,8 @@ import {
   type SetupWorkflowDependencies,
 } from "../../src/onboarding/setup-workflow.ts";
 import { findCheckoutsByName } from "../../src/repos/locate.ts";
+import { changeHomeSpecialist, type SpecialistChange } from "../../src/specialists/home-files.ts";
+import { loadSpecialists, specialistFileRevision } from "../../src/specialists/registry.ts";
 
 const catalogue: readonly ModelRecord[] = [
   {
@@ -45,6 +47,8 @@ async function machine(
   const root = await realpath(await mkdtemp(join(tmpdir(), "tandem-setup-")));
   roots.push(root);
   const home = join(root, "home");
+  const tandemHome = join(root, "tandem-home");
+  await mkdir(tandemHome);
   const code = join(root, "code");
   const outside = join(root, "elsewhere", "my-app");
   for (const repo of ["api", "old", "api/src"]) await mkdir(join(code, repo), { recursive: true });
@@ -109,6 +113,11 @@ async function machine(
         `update ${path} ${JSON.stringify([commands.validationCommands, commands.setupCommands])}`,
       )(),
     openProject: async (path) => record(`open ${path}`)(),
+    specialists: (repoPath) => loadSpecialists({ repositoryCheckout: repoPath, tandemHome }),
+    changeSpecialist: async (change) => {
+      saved.push(`specialist ${change.op} ${change.name}`);
+      return changeHomeSpecialist(tandemHome, change);
+    },
   };
   return {
     workflow: new SetupWorkflow(deps),
@@ -116,6 +125,7 @@ async function machine(
     code,
     outside,
     find: (name: string) => findCheckoutsByName(name, settings.projectRoots, run),
+    tandemHome,
   };
 }
 
@@ -123,6 +133,7 @@ function answerOf(
   repositories: SetupAnswer["repositories"],
   mode: SetupAnswer["mode"] = "settings",
   scoutModel = "anthropic/opus",
+  specialists: readonly SpecialistChange[] = [],
 ): SetupAnswer {
   const pick = (model: string) => ({ model, thinking: "high" as const });
   return {
@@ -136,6 +147,7 @@ function answerOf(
     },
     repositories,
     selfImprovement: "fix",
+    specialists,
   };
 }
 
@@ -281,4 +293,66 @@ test("setup opens the chat of a repository that was already set up", async () =>
     `open ${join(code, "old")}`,
   ]);
   expect(report.opened).toEqual(["old"]);
+});
+
+const NOTES = { label: "Notes", instructions: "Keep it short.", steps: ["Draft"] };
+
+test("Settings shows the project's specialists; first-time setup does not", async () => {
+  const { workflow, tandemHome } = await machine();
+  await changeHomeSpecialist(tandemHome, { op: "create", name: "notes", fields: NOTES });
+  const settings = await workflow.view("/tandem", "settings");
+  expect(settings.specialists?.project).toBe("tandem");
+  expect(settings.specialists?.rows.find((row) => row.origin === "home")).toMatchObject({
+    name: "notes",
+    state: "ready",
+    summary: "Only when named",
+  });
+  expect((await workflow.view("/tandem", "setup")).specialists).toBeUndefined();
+});
+
+test("each specialist change is one step after the rest of the settings", async () => {
+  const { workflow, saved, code, tandemHome } = await machine();
+  const old = await changeHomeSpecialist(tandemHome, { op: "create", name: "old", fields: NOTES });
+  const revision = specialistFileRevision(await readFile(old.path));
+  const report = await workflow.apply(
+    "/tandem",
+    answerOf([], "settings", "anthropic/opus", [
+      { op: "create", name: "notes", fields: NOTES },
+      { op: "remove", name: "old", revision },
+    ]),
+  );
+  expect(saved).toEqual([
+    "models anthropic",
+    "mode fix",
+    `folders ${code}`,
+    "specialist create notes",
+    "specialist remove old",
+  ]);
+  expect(report.complete).toBe(true);
+  expect(report.message).toContain("Saved your specialist notes.");
+  expect(report.message).toContain("Removed your specialist old.");
+  expect(await readdir(join(tandemHome, "specialists"))).toEqual(["notes.md"]);
+});
+
+test("one specialist change that can't be saved refuses the whole answer and writes nothing", async () => {
+  const { workflow, saved, tandemHome } = await machine();
+  const kept = await changeHomeSpecialist(tandemHome, {
+    op: "create",
+    name: "kept",
+    fields: NOTES,
+  });
+  const shown = specialistFileRevision(await readFile(kept.path));
+  await writeFile(kept.path, "---\nname: kept\n---\nEdited by hand.\n");
+  await expect(
+    workflow.apply(
+      "/tandem",
+      answerOf([], "settings", "anthropic/opus", [
+        { op: "create", name: "fresh", fields: NOTES },
+        { op: "update", name: "kept", revision: shown, fields: NOTES },
+      ]),
+    ),
+  ).rejects.toThrow("kept changed on disk since Settings showed it. Reopen Settings.");
+  expect(saved).toEqual([]);
+  expect(await readdir(join(tandemHome, "specialists"))).toEqual(["kept.md"]);
+  expect(await readFile(kept.path, "utf8")).toContain("Edited by hand.");
 });

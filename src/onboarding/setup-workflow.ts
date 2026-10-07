@@ -6,6 +6,8 @@ import type { Clock, CommandRunner, RepoPolicy } from "../contracts.ts";
 import type { ClaudeCodeAvailability } from "../harness/claude-code/availability.ts";
 import type { ModelRecord } from "../harness/contract.ts";
 import { expandHome, findCheckoutsByName, listCheckouts } from "../repos/locate.ts";
+import type { SpecialistChange } from "../specialists/home-files.ts";
+import type { SpecialistRegistry } from "../specialists/registry.ts";
 import {
   checkSetupAnswer,
   type SetupAnswer,
@@ -68,6 +70,10 @@ export type SetupWorkflowDependencies = Readonly<{
     }>,
   ) => Promise<unknown>;
   openProject: (path: string) => Promise<unknown>;
+  /** The project's specialists, read from its clean checkout and the Tandem home. */
+  specialists: (repoPath: string) => Promise<SpecialistRegistry>;
+  /** Writes or removes one Just-me file; changeHomeSpecialist bound to the Tandem home. */
+  changeSpecialist: (change: SpecialistChange) => Promise<unknown>;
 }>;
 
 /** `opened` names the repositories whose chats are open after the save. */
@@ -116,7 +122,10 @@ export class SetupWorkflow {
   }
 
   async view(repoPath: string, mode: SetupMode): Promise<SetupView> {
-    const facts = await this.facts(repoPath);
+    const [facts, specialists] = await Promise.all([
+      this.facts(repoPath),
+      mode === "settings" ? this.#deps.specialists(repoPath) : undefined,
+    ]);
     const repos: SetupRepoFacts[] = await Promise.all(
       facts.checkouts.map(async (checkout) => {
         const setUp = facts.registered.has(checkout.path);
@@ -140,6 +149,9 @@ export class SetupWorkflow {
       ...(facts.settings.selfImprovementChosen
         ? { selfImprovement: facts.settings.selfImprovement }
         : {}),
+      ...(specialists === undefined
+        ? {}
+        : { specialists: { registry: specialists, project: basename(repoPath) } }),
     });
   }
 
@@ -192,7 +204,21 @@ export class SetupWorkflow {
     for (const repo of answer.repositories) {
       repositories.set(repo.path, await this.checkRepo(repo.path, facts.registered));
     }
-    const problems = checkSetupAnswer(answer, { catalogue: facts.catalogue, repositories });
+    const homeSpecialists = new Map<string, Readonly<{ revision?: string }>>();
+    if (answer.specialists.length > 0) {
+      for (const file of (await this.#deps.specialists(repoPath)).files) {
+        if (file.origin !== "home") continue;
+        homeSpecialists.set(
+          file.name,
+          file.revision === undefined ? {} : { revision: file.revision },
+        );
+      }
+    }
+    const problems = checkSetupAnswer(answer, {
+      catalogue: facts.catalogue,
+      repositories,
+      homeSpecialists,
+    });
     if (problems.length > 0) {
       throw new Error(`The setup answer can't be saved: ${problems.join(" ")}`);
     }
@@ -233,6 +259,18 @@ export class SetupWorkflow {
     for (const repo of answer.repositories) {
       const name = await this.applyRepo(repo, answer.mode, facts, step);
       if (name !== undefined) opened.push(name);
+    }
+    // Each change re-checks its own file as it writes, so one that changed since the check above
+    // fails alone and the rest still save.
+    for (const change of answer.specialists) {
+      const removing = change.op === "remove";
+      await step(
+        removing
+          ? `Removed your specialist ${change.name}.`
+          : `Saved your specialist ${change.name}.`,
+        removing ? `${change.name} was not removed` : `${change.name} was not saved`,
+        () => this.#deps.changeSpecialist(change),
+      );
     }
     return { message: lines.join("\n"), complete, opened };
   }

@@ -47,7 +47,17 @@ const facts: SetupAnswerFacts = {
     ["/code/api", { kind: "root", root: "/code/api", setUp: false }],
     ["~/pasted", { kind: "root", root: "/Users/me/pasted", setUp: false }],
   ]),
+  homeSpecialists: new Map<string, Readonly<{ revision?: string }>>([
+    ["seo-blog", { revision: "a".repeat(64) }],
+    ["too-big", {}],
+  ]),
 };
+
+const FIELDS = { label: "Notes", instructions: "Keep it short.", steps: ["Draft"] };
+
+function settingsWith(specialists: readonly unknown[]): SetupAnswer {
+  return parsed({ ...answer, mode: "settings", repositories: [], specialists });
+}
 
 function parsed(value: unknown): SetupAnswer {
   const result = parseSetupAnswer(JSON.stringify(value));
@@ -59,6 +69,66 @@ test("a well-formed answer passes every check on this machine", () => {
   const value = parsed(answer);
   expect(value.repositories[1]).toEqual({ path: "~/pasted", validationCommands: ["make check"] });
   expect(checkSetupAnswer(value, facts)).toEqual([]);
+});
+
+test("specialist changes parse strictly, and an answer without them changes none", () => {
+  expect(parsed(answer).specialists).toEqual([]);
+  expect(
+    settingsWith([
+      { op: "create", name: "notes", fields: { ...FIELDS, description: "When to pick it" } },
+      { op: "update", name: "seo-blog", revision: "a".repeat(64), fields: FIELDS },
+      { op: "remove", name: "old", revision: "b".repeat(64) },
+    ]).specialists.map((change) => change.op),
+  ).toEqual(["create", "update", "remove"]);
+  const result = parseSetupAnswer(
+    JSON.stringify({
+      ...answer,
+      specialists: [
+        { op: "rename", name: "a" },
+        { op: "remove", name: "a" },
+        { op: "create", name: "b", fields: { ...FIELDS, model: "opus" } },
+        { op: "create", name: "c", fields: { ...FIELDS, steps: [1] } },
+      ],
+    }),
+  );
+  expect(result).toEqual({
+    ok: false,
+    problems: [
+      'specialists[0].op must be "create", "update", or "remove".',
+      "specialists[1] has no revision.",
+      "specialists[2].fields has an unknown field model.",
+      "specialists[3].fields must be text, with steps a list of text.",
+    ],
+  });
+});
+
+test("one specialist that can't be saved refuses the whole answer, naming each problem", () => {
+  const value = settingsWith([
+    { op: "create", name: "notes", fields: FIELDS },
+    { op: "create", name: "seo-blog", fields: FIELDS },
+    { op: "update", name: "seo-blog", revision: "c".repeat(64), fields: FIELDS },
+    { op: "remove", name: "too-big", revision: "d".repeat(64) },
+    { op: "remove", name: "gone", revision: "d".repeat(64) },
+    { op: "create", name: "fix-round", fields: FIELDS },
+    { op: "create", name: "fenced", fields: { ...FIELDS, instructions: "```\nopen" } },
+  ]);
+  expect(checkSetupAnswer(value, facts)).toEqual([
+    "Just me already has seo-blog. Pick another name.",
+    "seo-blog is changed twice.",
+    "seo-blog changed on disk since Settings showed it. Reopen Settings.",
+    "too-big changed on disk since Settings showed it. Reopen Settings.",
+    "gone is no longer in Just me. Reopen Settings.",
+    "fix-round is Tandem's own fix-round checklist; pick another name.",
+    "fenced: the instructions would not read back as written; close every code fence and leave out a ## Steps heading.",
+  ]);
+  expect(
+    checkSetupAnswer(settingsWith([{ op: "create", name: "notes", fields: FIELDS }]), facts),
+  ).toEqual([]);
+});
+
+test("first-time setup never changes specialists", () => {
+  const value = parsed({ ...answer, specialists: [{ op: "create", name: "n", fields: FIELDS }] });
+  expect(checkSetupAnswer(value, facts)).toEqual(["Specialists are changed in Settings."]);
 });
 
 test("selected models authorize only their providers, regardless of the rest of the catalogue", () => {

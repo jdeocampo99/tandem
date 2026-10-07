@@ -175,6 +175,7 @@ import {
   SelfImprovement,
 } from "../self-improvement/service.ts";
 import type { SpecialistClassifier } from "../specialists/classify.ts";
+import { changeHomeSpecialist } from "../specialists/home-files.ts";
 import {
   loadSpecialists,
   pinSpecialist,
@@ -725,6 +726,8 @@ class TandemController {
             : { setupCommands: readTextList(commands.setupCommands, "setupCommands") }),
         }),
       openProject: (path) => this.openProject(path),
+      specialists: (repoPath) => this.specialists(repoPath),
+      changeSpecialist: (change) => changeHomeSpecialist(deps.home, change),
     });
     this.#prWatch = new PrWatcher({
       home: deps.home,

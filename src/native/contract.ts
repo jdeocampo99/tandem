@@ -1,6 +1,7 @@
 import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { SETUP_MODES, SETUP_SECTIONS, type SetupMode } from "../onboarding/setup-view.ts";
+import { SPECIALIST_ORIGINS } from "../specialists/specialist.ts";
 
 /** Every native block Tandem defines, as `tandem.<kind>` programs. */
 export const VIEW_KINDS = [
@@ -470,6 +471,44 @@ const SetupRepoModel = z.object({
   detectedFrom: opt(str),
   inspectionError: opt(str),
 });
+const SpecialistFieldsModel = z.object({
+  label: str,
+  description: opt(str),
+  instructions: str,
+  steps: strings,
+});
+const SpecialistRowBase = {
+  name: str,
+  origin: z.enum(SPECIALIST_ORIGINS),
+  status: z.object({ text: str, tone: z.enum(["muted", "info", "error"]) }),
+  hiddenBy: opt(z.enum(["repository", "home"])),
+  shownPath: opt(str),
+  revision: opt(str),
+};
+const SetupSpecialistsModel = z.object({
+  project: str,
+  homeFolder: str,
+  teamFolder: str,
+  rows: z.array(
+    z.discriminatedUnion("state", [
+      z.object({
+        ...SpecialistRowBase,
+        state: z.literal("ready"),
+        summary: str,
+        fields: SpecialistFieldsModel,
+      }),
+      z.object({ ...SpecialistRowBase, state: z.literal("broken"), problem: str }),
+    ]),
+  ),
+  problems: strings,
+  limits: z.object({
+    nameLength: num,
+    labelLength: num,
+    descriptionLength: num,
+    contentBytes: num,
+    reserved: strings,
+  }),
+});
 const SetupModel = z.object({
   schemaVersion: z.literal(1),
   mode: z.enum(SETUP_MODES),
@@ -511,6 +550,7 @@ const SetupModel = z.object({
   candidates: z.array(SetupRepoModel),
   selfImprovement: z.enum(["off", "fix", "report"]),
   section: opt(z.enum(SETUP_SECTIONS)),
+  specialists: opt(SetupSpecialistsModel),
 });
 
 /** The model schema of each view file kind. The index feeds every screen without a detail file. */
