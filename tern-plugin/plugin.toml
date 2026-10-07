@@ -38,6 +38,11 @@ title = "Tandem setup"
 palette = false
 
 [[blocks]]
+id = "quick-task"
+title = "Quick task"
+palette = false
+
+[[blocks]]
 id = "task"
 title = "Task"
 palette = false

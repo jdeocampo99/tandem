@@ -10,6 +10,7 @@ export type TerminalCommand =
   | "config"
   | "configure"
   | "memory"
+  | "quick"
   | "panel"
   | "welcome";
 
@@ -51,6 +52,7 @@ export type TerminalRunResult = Readonly<{
     | "report"
     | "watch"
     | "memory"
+    | "quick"
     | "fixed"
     | "reset"
     | "panel"
@@ -94,6 +96,7 @@ const COMMANDS: Readonly<Record<string, TerminalCommand>> = {
   config: "config",
   configure: "configure",
   memory: "memory",
+  quick: "quick",
   panel: "panel",
   welcome: "welcome",
 };
@@ -146,6 +149,8 @@ const ALLOWED: Readonly<
   config: { flags: [], maxPaths: 1 },
   configure: { flags: [], maxPaths: 1 },
   memory: { flags: ["json"], maxPaths: 1 },
+  // The words after `quick` are the request; quoting them is optional.
+  quick: { flags: ["json"], maxPaths: Number.POSITIVE_INFINITY },
   panel: { flags: ["popup"], maxPaths: 1 },
   welcome: { flags: [], maxPaths: 0 },
 };

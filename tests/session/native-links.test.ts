@@ -140,3 +140,25 @@ test("explicit references refuse ambiguous scoped task and brief identities", ()
     ),
   ).toEqual([]);
 });
+
+test("an open quick-task scope question links its three answers once the reply names the task", () => {
+  const scope = { files: 9, areas: ["billing"], plan: "turn it into a request" };
+  const asking = task({
+    id: "task-q1",
+    repoPath: "/repo",
+    communication: { revision: 0, messages: [], question: { id: "job-1", text: "q", scope } },
+  });
+  const reply = [{ role: "assistant", content: "task-q1 · Scope exceeds quick task" }];
+  expect(nativeReplyLinks(reply, [asking], [], "/repo")).toEqual([
+    { url: "tandem://answer/task-q1/job-1/proceed", label: "Proceed" },
+    { url: "tandem://answer/task-q1/job-1/convert", label: "Convert to request" },
+    { url: "tandem://answer/task-q1/job-1/cancel", label: "Cancel" },
+  ]);
+  const ordinary = task({
+    id: "task-q1",
+    repoPath: "/repo",
+    communication: { revision: 0, messages: [], question: { id: "job-1", text: "q" } },
+  });
+  expect(nativeReplyLinks(reply, [ordinary], [], "/repo")).toEqual([]);
+  expect(nativeReplyLinks(reply, [{ ...asking, repoPath: "/other" }], [], "/repo")).toEqual([]);
+});

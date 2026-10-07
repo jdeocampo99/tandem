@@ -2,7 +2,13 @@ import { z } from "zod";
 import { AdapterError, EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { nativeBriefFile, nativePrFile, nativeTaskFile } from "../../board/native-views.ts";
 import type { Endpoint } from "../../contracts.ts";
-import { blockArgs, type Placement, setupFile, type ViewKind } from "../../native/contract.ts";
+import {
+  blockArgs,
+  type Placement,
+  QUICK_TASK_FILE,
+  setupFile,
+  type ViewKind,
+} from "../../native/contract.ts";
 import {
   type Published,
   readProjectState,
@@ -222,7 +228,9 @@ export function ternViewHost(commands: TernCli) {
           ? nativeBriefFile(input.view.requestId)
           : input.view.kind === "setup"
             ? setupFile(input.view.mode)
-            : detailForView((await readProjectState(input.home, project))?.published, input.view);
+            : input.view.kind === "quick-task"
+              ? QUICK_TASK_FILE
+              : detailForView((await readProjectState(input.home, project))?.published, input.view);
       if (["task", "brief", "pr"].includes(input.view.kind) && detail === undefined)
         throw new Error(`Native ${input.view.kind} detail is not ready`);
       const path =
@@ -239,6 +247,7 @@ export function ternViewHost(commands: TernCli) {
               input.view.kind === "pr" ||
               input.view.kind === "prs" ||
               input.view.kind === "task-picker" ||
+              input.view.kind === "quick-task" ||
               (input.view.kind === "setup" && input.view.mode === "setup")
             ? "split"
             : "window",

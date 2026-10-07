@@ -70,6 +70,14 @@
   border-radius: 4px;
   font-size: 11px;
 }
+.tdm-quick {
+  color: light-dark(#57606a, #b1bac4);
+  border: 1px solid currentColor;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
 .tdm-branch {
   font-family: monospace;
   opacity: 0.55;

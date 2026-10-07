@@ -1,6 +1,7 @@
 import { basename, isAbsolute } from "node:path";
 import { z } from "zod";
 import { SETUP_MODES, SETUP_SECTIONS, type SetupMode } from "../onboarding/setup-view.ts";
+import { QUICK_SCOPE_CHOICES, type QuickScopeChoice } from "../tasks/quick.ts";
 
 /** Every native block Tandem defines, as `tandem.<kind>` programs. */
 export const VIEW_KINDS = [
@@ -15,6 +16,7 @@ export const VIEW_KINDS = [
   "usage",
   "catchup",
   "setup",
+  "quick-task",
 ] as const;
 export const ViewKind = z.enum(VIEW_KINDS);
 export type ViewKind = z.infer<typeof ViewKind>;
@@ -152,6 +154,7 @@ const PanelRow = z.object({
   detail: opt(str),
   secondary: str,
   target: PanelTarget,
+  badge: opt(z.literal("QUICK")),
   pullRequest: opt(z.object({ number: num, url: str })),
 });
 const ProjectRow = z.object({
@@ -185,6 +188,7 @@ const BoardCard = z.object({
   model: opt(str),
   costLabel: opt(str),
   harnessGlyph: opt(str),
+  badge: opt(z.literal("QUICK")),
   pullRequest: opt(z.object({ number: num, draft: bool, url: str })),
 });
 const Board = z.object({
@@ -300,6 +304,7 @@ const TaskModel = z.object({
   stuck: opt(z.object({ reason: str })),
   requestId: opt(str),
   pullRequest: opt(z.object({ number: num })),
+  scope: opt(z.object({ label: str, text: str, note: opt(str) })),
   message: z.object({ placeholder: str, model: opt(str) }),
   cost: opt(
     z.object({
@@ -513,6 +518,20 @@ const SetupModel = z.object({
   section: opt(z.enum(SETUP_SECTIONS)),
 });
 
+/**
+ * The quick task composer's model: `QuickTaskView` (src/tasks/quick.ts), the project the click
+ * is proved against and the validation the block mirrors so Start is disabled for too-short text.
+ */
+const QuickTaskModel = z.object({
+  schemaVersion: z.literal(1),
+  repo: str,
+  branch: str,
+  placeholder: str,
+  minChars: num.int().positive(),
+  minWords: num.int().positive(),
+  tooShort: str,
+});
+
 /** The model schema of each view file kind. The index feeds every screen without a detail file. */
 export const VIEW_MODELS = {
   index: IndexModel,
@@ -520,9 +539,13 @@ export const VIEW_MODELS = {
   brief: BriefModel,
   pr: PrModel,
   setup: SetupModel,
+  "quick-task": QuickTaskModel,
 } as const;
 export type ViewFileKind = keyof typeof VIEW_MODELS;
-export const ViewFileKind = z.enum(["index", "task", "brief", "pr", "setup"]);
+export const ViewFileKind = z.enum(["index", "task", "brief", "pr", "setup", "quick-task"]);
+
+/** The composer's one detail file; like every detail file it starts with its block kind. */
+export const QUICK_TASK_FILE = "quick-task-composer.json";
 
 export function setupFile(mode: SetupMode): string {
   return `setup-${mode}.json`;
@@ -555,6 +578,20 @@ export const ViewFile = z
   })
   .strict();
 export type ViewFile = z.infer<typeof ViewFile>;
+
+/**
+ * The only spelling of a scope-question answer link, `tandem://answer/TASK/QUESTION/CHOICE`.
+ * `window.luau` turns it into a `quick-answer` action from the focused pane.
+ */
+export function nativeAnswerLink(
+  taskId: string,
+  questionId: string,
+  choice: QuickScopeChoice,
+): string {
+  if (!/^[\w-]+$/u.test(taskId) || !/^[\w-]+$/u.test(questionId))
+    throw new Error(`Not a native answer link: ${taskId}/${questionId}`);
+  return `tandem://answer/${taskId}/${questionId}/${choice}`;
+}
 
 /** Reply links a coordinator prints and `host.luau`'s `route.link` turns into an `open` action. */
 export const LINK_KINDS = ["task", "brief", "pr"] as const;
@@ -600,6 +637,7 @@ export const ViewRef = z.discriminatedUnion("kind", [
         "inbox",
         "task-picker",
         "new-request",
+        "quick-task",
       ]),
     })
     .strict(),
@@ -678,6 +716,20 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("merged-link"), url: z.string().url() }).strict(),
   /** The setup block's answer: parsed by `parseSetupAnswer`, so its shape lives in one place. */
   z.object({ verb: z.literal("setup-save"), answer: z.record(z.string(), z.unknown()) }).strict(),
+  /**
+   * The quick task composer's Start: the user's text, verbatim. The click is their approval of it
+   * as the scope; `checkQuickText` (src/tasks/quick.ts) validates it, never a model.
+   */
+  z.object({ verb: z.literal("quick-start"), text: z.string().max(16_000) }).strict(),
+  /** The user's answer to a quick task's scope question, clicked from its chat link. */
+  z
+    .object({
+      verb: z.literal("quick-answer"),
+      taskId: Id,
+      questionId: Id,
+      choice: z.enum(QUICK_SCOPE_CHOICES),
+    })
+    .strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -701,6 +753,7 @@ export const NOTICE_CODES = [
   "review-unconfirmed",
   "feedback-saved",
   "setup-incomplete",
+  "quick-warning",
 ] as const;
 export const NoticeCode = z.enum(NOTICE_CODES);
 export type NoticeCode = z.infer<typeof NoticeCode>;

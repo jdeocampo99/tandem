@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
-import { ActionEnvelope, LINK_KINDS, nativeLink, VIEW_KINDS } from "../../src/native/contract.ts";
+import {
+  ActionEnvelope,
+  LINK_KINDS,
+  nativeAnswerLink,
+  nativeLink,
+  VIEW_KINDS,
+} from "../../src/native/contract.ts";
+import { QUICK_SCOPE_CHOICES } from "../../src/tasks/quick.ts";
 import { withParity } from "../evals/tern-parity/inventory.ts";
 
 const plugin = (name: string) =>
@@ -48,5 +55,22 @@ test("T3: every reply link Tandem writes routes to an open action the contract a
     }
     expect(() => nativeLink("pr", "owner/repo#281")).toThrow();
     expect(() => nativeLink("task", "../escape")).toThrow();
+  });
+});
+
+test("T3: every scope-question answer link routes to a quick-answer action the contract accepts", async () => {
+  await withParity(async ({ host }) => {
+    for (const choice of QUICK_SCOPE_CHOICES) {
+      const before = host.cli.length;
+      expect(await host.link(nativeAnswerLink("port", "job-1", choice))).toBe(true);
+      const answers = host.cli
+        .slice(before)
+        .map((run) => ActionEnvelope.parse(JSON.parse(run.stdin ?? "")).action)
+        .filter((action) => action.verb === "quick-answer");
+      expect(answers).toEqual([
+        { verb: "quick-answer", taskId: "port", questionId: "job-1", choice },
+      ]);
+    }
+    expect(() => nativeAnswerLink("../escape", "job-1", "proceed")).toThrow();
   });
 });

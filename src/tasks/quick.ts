@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import type {
   IsoTimestamp,
   QuickScopeReport,
@@ -11,6 +12,33 @@ import type {
  * model ever decides that a request is quick; only the user does, through the native composer's
  * Start or `tandem quick`. Everything here is pure: the native verb and the CLI share it.
  */
+
+/** What the quick task composer draws: its project chip and the checks that gate Start. */
+export type QuickTaskView = Readonly<{
+  schemaVersion: 1;
+  /** The project the click is proved against: the focused coordinator's. */
+  repo: string;
+  /** The branch the task's pull request targets. */
+  branch: string;
+  placeholder: string;
+  minChars: number;
+  minWords: number;
+  tooShort: string;
+}>;
+
+export function quickTaskView(
+  input: Readonly<{ repoPath: string; branch: string }>,
+): QuickTaskView {
+  return {
+    schemaVersion: 1,
+    repo: basename(input.repoPath),
+    branch: input.branch,
+    placeholder: "Describe the change",
+    minChars: QUICK_TASK_MIN_CHARS,
+    minWords: QUICK_TASK_MIN_WORDS,
+    tooShort: QUICK_TASK_TOO_SHORT,
+  };
+}
 
 /** Fewer characters or words than this is not yet a description of a change. */
 export const QUICK_TASK_MIN_CHARS = 15;

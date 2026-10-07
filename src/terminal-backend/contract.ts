@@ -70,7 +70,15 @@ export type FocusResult =
 export type TerminalView =
   | Readonly<{ kind: "browser"; url: string }>
   | Readonly<{
-      kind: "board" | "usage" | "prs" | "catchup" | "orchestrator" | "inbox" | "task-picker";
+      kind:
+        | "board"
+        | "usage"
+        | "prs"
+        | "catchup"
+        | "orchestrator"
+        | "inbox"
+        | "task-picker"
+        | "quick-task";
     }>
   | Readonly<{ kind: "task" | "pr"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>

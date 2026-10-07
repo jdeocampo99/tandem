@@ -184,7 +184,7 @@ function draftTitle(objective: string): string {
 
 // ponytail: reads the clone's cached origin/HEAD; a clone without one gets a failed-open
 // diagnostic, and the coordinator's draft action still works. Ask the remote if that shows up.
-async function defaultBranch(run: CommandRunner, cwd: string): Promise<string> {
+export async function defaultBranch(run: CommandRunner, cwd: string): Promise<string> {
   const ref = await readGitText(
     run,
     cwd,

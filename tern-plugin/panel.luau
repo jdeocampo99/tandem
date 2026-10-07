@@ -1,6 +1,6 @@
 --!strict
 local rt=require("./rt")
-type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,repo:string?,number:number?},pullRequest:{number:number,url:string}?}
+type Row={key:string,title:string,state:string,stage:string,time:string?,model:string?,detail:string?,secondary:string,target:{kind:string,taskId:string?,requestId:string?,repo:string?,number:number?},badge:string?,pullRequest:{number:number,url:string}?}
 type State={file:rt.Watch,origin:rt.Origin,dropdown:boolean,selected:number}
 local function el(class:string,children:{Node},action:string?,key:string?):Node
  return tern.ui.node("el",{class=class,key=key,actions=if action then {click=action} else nil},children)
@@ -51,8 +51,12 @@ local def:BlockDef<State> ={
     index+=1
     local second={text(row.secondary,"tdp-secondary")}
     if row.pullRequest then second={text((row.model or "") .. " · " .. (row.detail or ""),"tdp-secondary"),el("tdp-pr",{text("#" .. tostring(row.pullRequest.number) .. " ↗")},"url:" .. tostring(index))} end
+    local primary={text("●","tdp-dot tdp-" .. row.state),text(row.title,"tdp-name")}
+    if row.badge then table.insert(primary,text(row.badge,"tdp-badge")) end
+    table.insert(primary,text(row.stage,"tdp-stage"))
+    table.insert(primary,text(row.time or "","tdp-time"))
     table.insert(body,el("tdp-row" .. (if state.selected==index then " tdp-selected" else ""),{
-     el("tdp-primary",{text("●","tdp-dot tdp-" .. row.state),text(row.title,"tdp-name"),text(row.stage,"tdp-stage"),text(row.time or "","tdp-time")}),el("tdp-second",second)},"row:" .. tostring(index),row.key))
+     el("tdp-primary",primary),el("tdp-second",second)},"row:" .. tostring(index),row.key))
    end
   end
   if panel.footer then table.insert(body,text(panel.footer,"tdp-footer")) end

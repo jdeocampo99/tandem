@@ -28,6 +28,9 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import { defaultBranch } from "../service/draft-refresh.ts";
+import { startQuickTask } from "../service/quick-start.ts";
+import { checkQuickText, QUICK_SCOPE_LABELS, quickTaskView } from "../tasks/quick.ts";
 import {
   DEFAULT_COORDINATOR_SESSION,
   environmentSource,
@@ -288,6 +291,8 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
     );
   },
   "setup-save": saveSetup,
+  "quick-start": startQuick,
+  "quick-answer": answerQuickScope,
 };
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
@@ -412,16 +417,23 @@ async function open(act: Act, ref: ViewRef): Promise<Outcome> {
       return newRequest(act);
     case "setup":
       return openSetup(act, ref.mode, ref.section);
+    case "quick-task":
+      return openQuickTask(act);
   }
 }
 
-async function requireBriefProject(act: Act, briefRepoPath: string): Promise<void> {
-  const [briefRepo, selectedRepo] = await Promise.all([
-    canonicalPath(briefRepoPath, "brief repoPath"),
+/** A brief or task named by id acts only in the project its origin proved. */
+async function requireSelectedProject(act: Act, repoPath: string, what: string): Promise<void> {
+  const [named, selectedRepo] = await Promise.all([
+    canonicalPath(repoPath, `${what} repoPath`),
     canonicalPath(act.environment.repo, "selected repoPath"),
   ]);
-  if (briefRepo !== selectedRepo)
-    throw new Error("This brief does not belong to the selected Tandem project");
+  if (named !== selectedRepo)
+    throw new Error(`This ${what} does not belong to the selected Tandem project`);
+}
+
+function requireBriefProject(act: Act, briefRepoPath: string): Promise<void> {
+  return requireSelectedProject(act, briefRepoPath, "brief");
 }
 
 async function taskForPrNumber(act: Act, number: number): Promise<TaskRecord | undefined> {
@@ -913,6 +925,64 @@ async function openSetup(act: Act, mode: SetupMode, section?: SetupSection): Pro
     throw new Error("Finish setting up Tandem first. Settings open once setup is saved.");
   await publishSetup(act, owner, mode, section);
   return viewOutcome(await show(act, owner, { kind: "setup", mode }));
+}
+
+/**
+ * Opens the quick task composer beside the conversation, after publishing its model: the proved
+ * project and the branch its pull request targets. Only a Tern coordinator hosts it.
+ */
+async function openQuickTask(act: Act): Promise<Outcome> {
+  const owner = await ternOwner(act, "starting a quick task");
+  const branch = await defaultBranch(act.run, owner.worktree.path).catch(() => "default branch");
+  await publishViews(act.environment.home, owner.repoPath, async () => ({
+    quickTask: quickTaskView({ repoPath: owner.repoPath, branch }),
+  }));
+  return viewOutcome(await show(act, owner, { kind: "quick-task" }));
+}
+
+/**
+ * Start in the quick task composer. The click is the user's approval of exactly the text they
+ * typed, like Approve on a brief: Tandem's code checks the text, records that approval, creates
+ * and approves the task, and tells the coordinator in fixed words. No model takes part.
+ */
+async function startQuick(
+  act: Act,
+  action: Extract<Action, { verb: "quick-start" }>,
+): Promise<Outcome> {
+  const checked = checkQuickText(action.text);
+  if (!checked.ok) return notice("refused", "failed", checked.problem);
+  const owner = await coordinator(act, act.environment.repo, "starting a quick task");
+  const started = await startQuickTask(
+    act.service(),
+    { repoPath: owner.repoPath, text: checked.text, via: "native" },
+    (text) => promptCoordinator(act, owner, text),
+  );
+  return started.told
+    ? DONE
+    : notice(
+        "done",
+        "quick-warning",
+        `Task ${started.task.id} started, but the coordinator could not be told: ${started.problem}. Do not start it again.`,
+      );
+}
+
+/** A scope-question link: the user's own choice, sent through the ordinary answer path. */
+async function answerQuickScope(
+  act: Act,
+  action: Extract<Action, { verb: "quick-answer" }>,
+): Promise<Outcome> {
+  const service = act.service();
+  const task = await service.get(action.taskId);
+  await requireSelectedProject(act, task.repoPath, "task");
+  const question = task.communication?.question;
+  if (question?.id !== action.questionId || question.scope === undefined)
+    throw new Error("That scope question is no longer open; nothing was answered");
+  await service.answer({
+    taskId: task.id,
+    questionId: question.id,
+    text: QUICK_SCOPE_LABELS[action.choice],
+  });
+  return DONE;
 }
 
 function listNames(names: readonly string[]): string {

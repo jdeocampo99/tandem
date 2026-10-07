@@ -12,8 +12,15 @@ import { repositoryKey } from "../config/repositories.ts";
 import { ensurePrivateDirectoryTree } from "../coordinator/lock.ts";
 import { SETUP_MODES, type SetupView } from "../onboarding/setup-view.ts";
 import type { BriefView } from "../requests/native-view.ts";
+import type { QuickTaskView } from "../tasks/quick.ts";
 import { acquireDarwinFileLock } from "../tasks/store-lock.ts";
-import { setupFile, VIEW_MODELS, ViewFile, type ViewFileKind } from "./contract.ts";
+import {
+  QUICK_TASK_FILE,
+  setupFile,
+  VIEW_MODELS,
+  ViewFile,
+  type ViewFileKind,
+} from "./contract.ts";
 
 /*
  * `<home>/tern/<projectKey>/` holds everything Tandem keeps for one project's native views:
@@ -22,7 +29,10 @@ import { setupFile, VIEW_MODELS, ViewFile, type ViewFileKind } from "./contract.
  * (staged open tickets and receipts). One lock serializes `views/` and `state.json`.
  */
 
-/** The details a full publication keeps and prunes. Setup details are written on their own. */
+/**
+ * The details a full publication keeps and prunes. Setup details and the quick task composer's
+ * model are written on their own and never pruned.
+ */
 const DETAIL_FILE = /^(task-|brief-|pr-)[^/\\\0]+\.json$/u;
 const SETUP_FILE = new RegExp(`^setup-(${SETUP_MODES.join("|")})\\.json$`, "u");
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -42,8 +52,8 @@ export function viewIndexPath(home: string, project: string): string {
 
 /** Detail references are filenames within this project's views, never paths into another project. */
 export function viewDetailPath(home: string, project: string, file: string): string {
-  if (!DETAIL_FILE.test(file) && !SETUP_FILE.test(file))
-    throw new TypeError("Native detail must be a task, brief, PR or setup filename");
+  if (!DETAIL_FILE.test(file) && !SETUP_FILE.test(file) && file !== QUICK_TASK_FILE)
+    throw new TypeError("Native detail must be a task, brief, PR, setup or quick task filename");
   return join(projectStoreDirectory(home, project), "views", file);
 }
 
@@ -232,14 +242,21 @@ export async function publishViews<
   Publication extends
     | NativeViewsPublication
     | Readonly<{ brief: BriefView }>
-    | Readonly<{ setup: SetupView }>,
+    | Readonly<{ setup: SetupView }>
+    | Readonly<{ quickTask: QuickTaskView }>,
 >(home: string, project: string, build: () => Promise<Publication>): Promise<Publication> {
   return withProjectLock(home, project, async (store) => {
     const publication = await build();
     const full = "bundle" in publication ? (publication as NativeViewsPublication) : undefined;
     const writes: ViewWrite[] = [];
     let retained: ReadonlySet<string> | undefined;
-    if (full === undefined && "setup" in publication) {
+    if (full === undefined && "quickTask" in publication) {
+      writes.push({
+        path: viewDetailPath(home, project, QUICK_TASK_FILE),
+        kind: "quick-task",
+        model: (publication as Readonly<{ quickTask: QuickTaskView }>).quickTask,
+      });
+    } else if (full === undefined && "setup" in publication) {
       const setup = (publication as Readonly<{ setup: SetupView }>).setup;
       writes.push({
         path: viewDetailPath(home, project, setupFile(setup.mode)),

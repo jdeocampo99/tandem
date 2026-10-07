@@ -15,6 +15,7 @@ type Model = {
  progress: { events: { Event }, unreadableEvents: number, checks: { { name: string, passed: boolean, head: string, contract: string } },
   findings: { { id: string, severity: string, description: string, file: string?, line: number?, status: string } } },
  stuck: { reason: string }?, requestId: string?, pullRequest: { number: number }?,
+ scope: { label: string, text: string, note: string? }?,
  message: { placeholder: string, model: string? },
  cost: { recorded: boolean, charges: { amountMicros: number, unavailableSamples: number },
   tokens: { actualInputTokens: number, actualOutputTokens: number, estimatedInputTokens: number, estimatedOutputTokens: number, unavailableSamples: number },
@@ -217,6 +218,12 @@ local block: BlockDef<State> = {
    }), ui.el('div', { class = 'tt-tabs' }, tabs),
   })
   local children = { header }
+  -- A quick task's approved scope is the user's own words, shown verbatim under its heading.
+  if model.scope then
+   local scope = { text(model.scope.label, 'strong'), text(model.scope.text) }
+   if model.scope.note then table.insert(scope, text(model.scope.note, 'warn')) end
+   table.insert(children, ui.el('div', { class = 'tt-scope', key = 'scope' }, scope))
+  end
   if state.view.status ~= 'ready' then table.insert(children, text('Saved view unavailable. Actions are disabled until fresh data arrives.', 'warn')) end
   if model.stuck then table.insert(children, ui.el('div', { class = 'tt-stuck' }, {
    ui.col({ text('Stuck', 'warn'), text(model.stuck.reason, 'strong') }), button('Restart', 'restart', true), button('Steer…', 'steer'),
