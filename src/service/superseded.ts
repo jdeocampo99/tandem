@@ -1,7 +1,7 @@
 import type { CommandRunner, TaskRecord, WorktreeLease } from "../contracts.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import type { RuntimeState } from "../runtime/schema.ts";
-import { observeScoutCheckout } from "./scout-cleanup.ts";
+import { observeScoutCheckout } from "./scout-checkout.ts";
 
 /** A git ref that may already carry a task's commits, named the way a person would recognise it. */
 export type ContainerRef = Readonly<{ readonly ref: string; readonly label: string }>;

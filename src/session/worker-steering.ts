@@ -290,7 +290,9 @@ export class WorkerSteering {
       await this.deps.writeReceipt(this.receipt);
       this.lastWriteAt = this.deps.clock.now();
     });
-    this.writeQueue = write.catch(() => {});
+    this.writeQueue = write.catch(() => {
+      // The await below reports this failure; the queue only orders later writes.
+    });
     try {
       await write;
     } catch (error) {

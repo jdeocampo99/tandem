@@ -424,14 +424,16 @@ test("closing a finished Claude Code worker sends Claude Code's two exit keys at
         }
       });
     }, 10);
-    await prepareWorkerTerminal(terminalBackend(run, { terminal: "herdr" }), {
-      endpoint,
-      cwd: root,
-      job,
-    }).finally(async () => {
+    try {
+      await prepareWorkerTerminal(terminalBackend(run, { terminal: "herdr" }), {
+        endpoint,
+        cwd: root,
+        job,
+      });
+    } finally {
       clearInterval(answering);
       await acknowledgements;
-    });
+    }
     expect(sent).toEqual([["ctrl+d", "ctrl+d"]]);
   } finally {
     await rm(root, { recursive: true, force: true });

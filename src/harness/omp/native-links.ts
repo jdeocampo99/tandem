@@ -16,7 +16,12 @@ const linksSchema = z.array(
 export const renderNativeLinks: MessageRenderer = (message) => {
   const parsed = linksSchema.safeParse(message.details);
   if (!parsed.success) return undefined;
-  return { render: () => [nativeLinkLine(parsed.data)], invalidate: () => {} };
+  return {
+    render: () => [nativeLinkLine(parsed.data)],
+    invalidate: () => {
+      // The rendered line keeps no cache to drop.
+    },
+  };
 };
 
 export function registerNativeLinks(pi: ExtensionAPI): void {
