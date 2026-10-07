@@ -35,19 +35,22 @@ src/instructions.ts
 
 - `onboard`, `doctor`, and `models` are read-only and create no directory or file. A read-only
   proposal is not a completed setup.
-- Discovery reads `package.json`, the lockfiles below, and the central record. It never executes
-  scripts or inspects CI. It reads from the source checkout when one is given. `discovery` in the
-  result names every `package.json` script as the command that runs it, and the lockfile behind
-  the proposed install. The setup block offers the scripts the validation commands do not run yet
-  as suggestions.
+- Discovery reads `package.json`, the lockfiles below, the ecosystem files under
+  [Proposed commands](#proposed-commands), and the central record. It never executes scripts or
+  inspects CI. It reads from the source checkout when one is given. `discovery` in the result has
+  `commands` (every `package.json` script as the command that runs it, then the ecosystem
+  suggestions), `sources` (the files those came from) and the lockfile behind the proposed
+  install. The setup block offers the commands the validation commands do not run yet as one-click
+  suggestions, headed "Suggested from" those files.
 - The write (`setup --yes`, or `onboard --write --yes`) creates only a missing record, exclusively
   (`wx`), re-checking for either settings file just before writing. An existing, malformed, or
   mismatched record is refused, never repaired or replaced. The CLI has no custom-command override.
 - In chat, the Tandem coordinator runs the same steps with the same approvals (see
   [coordinator.md](coordinator.md#the-tandem-coordinator)); `open-project` then opens the saved
   project's own coordinator. Before that first write the user may replace the discovered commands:
-  `setup` takes `validationCommands` and `setupCommands`, which replace the proposal. The write is
-  still the one exclusive create.
+  `setup` takes `validationCommands` and `setupCommands`, which replace the proposal, or
+  `noChecks: true` (never with `validationCommands`) when the user explicitly wants no checks. The
+  write is still the one exclusive create.
 - In chat, these two home settings each retain their own approval through `saveHomeSetting` in
   src/config/home-settings.ts (a one-line value is replaced, a missing key is added first, a
   multi-line value or a file changed since reading is refused): `projectRoots`, the absolute
@@ -64,13 +67,33 @@ src/instructions.ts
   user to choose MCP servers or worker skills; OMP determines skills and MCP availability from
   each coordinator or child worker's checkout and user configuration. Herdr has no native blocks,
   so its coordinator runs the same steps as the chat checklist.
-- Every repository needs at least one non-blank validation command to be saved by the setup block.
-  The block's Start and Save changes are disabled, and the answer is refused by the backend, while
-  any chosen repository has none. The bottom bar names the repository.
+- Every repository needs at least one non-blank validation command, or the deliberate **No checks
+  (tasks will be marked unvalidated)** choice (`noChecks: true` in the answer), to be saved by the
+  setup block. Both at once is refused. The block's Start and Save changes are disabled, and the
+  answer is refused by the backend (`checkSetupAnswer`, src/onboarding/setup-answer.ts), while any
+  chosen repository has neither. The bottom bar names the repository. Adding a command or a
+  suggestion clears No checks.
 - The same block in `settings` mode changes those choices later, for new tasks only. A repository
-  that is already set up has its `validationCommands` and `setupCommands` replaced in place
-  (`saveRepositoryCommands`, src/config/repositories.ts), which touches only those two keys of its
-  `settings.toml` and refuses a file changed since it was read.
+  that is already set up has its `validationCommands` and `setupCommands` replaced in place, and
+  its `validation = "none"` line set or removed (`saveRepositoryCommands`,
+  src/config/repositories.ts), which touches only those keys of its `settings.toml`, re-parses the
+  result as a policy, and refuses a file changed since it was read.
+
+### No checks
+
+- `validation = "none"` in `settings.toml` (`RepoPolicy.validation`) is the user's explicit "no
+  checks". It is valid only with no validation commands: one layer setting both is refused, and
+  commands a later layer adds replace an inherited `"none"`. It is written only when chosen, so
+  policies pinned before it keep their digest.
+- It is distinct from never configuring checks: a project with no commands and no choice still
+  blocks setup, and a task pinned to it is refused at validation (`validation-config-refused`).
+- A task pinned to it skips validation, is still reviewed, and reaches `ready` on review alone. Every
+  surface that could read as validated says "Unvalidated: no validation commands configured"
+  (`UNVALIDATED_LABEL`, src/tasks/acceptance.ts): the ready notification, the reviewer's brief, the
+  pull request and draft bodies, and the task page's stage track. See
+  [review-and-validation.md](review-and-validation.md#validation-commands).
+- In another repository (`targetRepo`), a saved `"none"` lets implementation start without
+  `validationCommands`; with neither, creation is refused as before.
 - The native terminal asks **Save settings** / **Not now** before writing; **Not now** or Ctrl+C
   creates no project record and leaves saved model choices intact. The interview text and choice
   rules live in `src/terminal/onboarding.ts` and `src/instructions.ts`.
@@ -88,7 +111,13 @@ src/instructions.ts
   `pnpm-lock.yaml`, `yarn.lock`, `package-lock.json`, `uv.lock`. No lockfile, no setup command.
 - `validationCommands`: a non-empty `ci:local` script wins alone. Otherwise non-empty `check`,
   `typecheck`, `lint`, `test`, in that order. Each runs as `<runner> run <script>` with the
-  lockfile's package manager, `bun` when there is none (including `uv.lock`).
+  lockfile's package manager, `bun` when there is none, and `npm` beside a `uv.lock` (a Python
+  project never gets a `bun` runner).
+- Ecosystem suggestions (`detectEcosystemChecks`, pure), never proposed or prefilled, only offered:
+  `go.mod` → `go vet ./...`, `go test ./...`; `Cargo.toml` → `cargo clippy`, `cargo test`;
+  `pyproject.toml` with `uv.lock` → `uv run pytest`; `check`, `lint` and `test` targets of a
+  `Makefile`/`makefile` or recipes of a `justfile`/`Justfile`, found by matching the file's text
+  (never run) → `make <target>` / `just <target>`.
 - Proposals are plain strings, so they cover every surface and get the 10-minute default timeout.
 - Missing or invalid `package.json`, no scripts, no `ci:local`, or no discovered scripts are
   reported in `unresolved`. Unresolved discovery is never a passing check; a missing validation
@@ -164,8 +193,9 @@ Contracts the parser does not make obvious:
   are stripped out of task policy and never pinned. Legacy `coordinatorMcpServers` is accepted
   when decoding old project settings but ignored; it is not an MCP allowlist. Everything else is
   policy, pinned with the task at creation, so edits apply to new tasks.
-- Setup writes the file once with discovered commands filled in and every other setting commented
-  out with a description and example. A test uncomments them all and checks the result parses;
+- Setup writes the file once with discovered commands filled in (or `validation = "none"` and an
+  empty `validationCommands` for no checks) and every other setting commented out with a
+  description and example. A test uncomments them all and checks the result parses;
   keep that true when adding a setting.
 - A project saved before `settings.toml` keeps its `config.json` envelope
   (`{ schemaVersion: 1, repoPath, policy }`), which is read and validated but never rewritten.

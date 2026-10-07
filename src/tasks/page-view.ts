@@ -5,6 +5,7 @@ import type { TodoItem } from "../playbooks/progress.ts";
 import { elapsed } from "../pr-watch/view.ts";
 import type { TaskCostView } from "../runtime/usage-view.ts";
 import type { WorkerActivity } from "../workers/worker-activity.ts";
+import { isUnvalidatedPolicy } from "./acceptance.ts";
 import type { TaskInspection } from "./inspection.ts";
 import { approvedScopeLabel, clockTime } from "./quick.ts";
 import type { StoredTimelineEvent } from "./timeline.ts";
@@ -120,7 +121,9 @@ export function taskPageView(input: TaskPageInput): TaskPageView {
           },
     stageTrack: track.map(([step, label]) => ({
       stage: step,
-      label,
+      // A project that chose no checks shows its skipped validation as unvalidated, never as passed.
+      label:
+        step === "validating" && isUnvalidatedPolicy(task.policy.config) ? "Unvalidated" : label,
       state:
         (step === "reviewing" && task.requiredStages?.review === false) ||
         (step === "validating" && task.requiredStages?.validation === false)

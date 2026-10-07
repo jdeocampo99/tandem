@@ -91,6 +91,12 @@ export const tandemRequestSchema = z.strictObject({
       repoPath: z.string(),
       validationCommands: z.array(z.string()).optional(),
       setupCommands: z.array(z.string()).optional(),
+      noChecks: z
+        .boolean()
+        .optional()
+        .describe(
+          "Only when the user explicitly chose no checks: tasks skip validation and are labeled unvalidated. Never with validationCommands.",
+        ),
     }),
     z.strictObject({ action: z.literal("open-project"), repoPath: z.string() }),
     z.strictObject({ action: z.literal("find-repo"), name: z.string() }),

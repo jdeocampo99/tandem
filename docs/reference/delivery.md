@@ -50,6 +50,9 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
   policy), or a failing result; each pending review lens; and the runner-owned required GitHub
   checks. A surface set matching no pinned validation command is shown as the configuration failure
   the final gate refuses, never as a pass.
+- A task pinned to a project's [no checks](policy.md#no-checks) never claims checks passed: the
+  final requirements say it has no validation commands, the remaining checks open with
+  "Unvalidated: no validation commands configured", and a ready draft says only the review passed.
 
 ## Draft refresh
 
@@ -77,7 +80,9 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
 
 - The summary has exactly `tldr`, `what`, and `why` arrays of non-empty single-line entries; `tldr`
   has at most three, and entries may not inject Markdown headings.
-- Tandem adds `# Validation` from recorded runner evidence, `# Manual verification` as unticked
+- Tandem adds `# Validation` from recorded runner evidence (for a project with
+  [no checks](policy.md#no-checks), the single line "Unvalidated: no validation commands
+  configured. No automated checks ran; this change passed review only, ..."), `# Manual verification` as unticked
   `- [ ]` items when the task has manual verification, and `# Known issues` listing every finding
   on the ledger not yet `addressed`.
 - A [quick task](task-lifecycle.md#quick-tasks)'s description, and its draft body, start with
@@ -101,7 +106,8 @@ repository is always read from `origin`), a failed GitHub lookup, or an open PR 
 
 - The task must be `ready`. Publish verifies a clean worktree, the task branch, non-empty successful
   validation evidence, a passing current review lens, and worktree HEAD exactly equal to the
-  reviewed HEAD.
+  reviewed HEAD. Empty evidence is accepted only when the pinned policy is the project's
+  [no checks](policy.md#no-checks); anywhere else it is evidence loss and refused.
 - It pushes that exact SHA to the task branch of the GitHub repository named by the worktree's
   `origin`. `publish` takes no repository argument.
 - When the task's own draft is the pull request, publishing marks it ready for review

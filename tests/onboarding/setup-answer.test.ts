@@ -170,13 +170,41 @@ test("every repository needs a non-blank validation command, and the repository 
         ["/code/done", { kind: "root", root: "/code/done", setUp: true }],
       ]),
     }),
-  ).toEqual(["api needs a validation command.", "pasted needs a validation command."]);
+  ).toEqual([
+    "api needs a validation command, or choose No checks.",
+    "pasted needs a validation command, or choose No checks.",
+  ]);
   const omitted = parseSetupAnswer(
     JSON.stringify({ ...answer, repositories: [{ path: "/code/api" }] }),
   );
   expect(omitted.ok && omitted.answer.repositories).toEqual([
     { path: "/code/api", validationCommands: [] },
   ]);
+});
+
+test("no checks stands in for a validation command, but never beside one", () => {
+  const value = parsed({
+    ...answer,
+    repositories: [
+      { path: "/code/api", validationCommands: [], noChecks: true },
+      { path: "~/pasted", validationCommands: ["make check"], noChecks: true },
+    ],
+  });
+  expect(value.repositories[0]).toEqual({
+    path: "/code/api",
+    validationCommands: [],
+    noChecks: true,
+  });
+  expect(checkSetupAnswer(value, facts)).toEqual([
+    "pasted has validation commands and No checks; choose one.",
+  ]);
+  const unchosen = parseSetupAnswer(
+    JSON.stringify({ ...answer, repositories: [{ path: "/code/api", noChecks: "yes" }] }),
+  );
+  expect(unchosen).toEqual({
+    ok: false,
+    problems: ["repositories[0].noChecks must be true or false."],
+  });
 });
 
 test("setup needs a repository; settings may have none", () => {

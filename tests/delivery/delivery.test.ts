@@ -316,6 +316,47 @@ test("refuses delivery when only targeted iteration checks passed at the reviewe
   );
 });
 
+test("a project that chose no checks publishes on review alone and the PR says it is unvalidated", () => {
+  const noChecks: ResolvedPolicy = {
+    ...policy,
+    config: { ...policyConfig, validationCommands: [], validation: "none" },
+  };
+  const unvalidated: TaskRecord = { ...task(), policy: noChecks, validationEvidence: [] };
+  const rendered = describeTaskPr(unvalidated, summary);
+  expect(rendered).toContain("Unvalidated: no validation commands configured.");
+  expect(rendered).toContain("passed review only, at HEAD head-1");
+  expect(rendered).not.toContain("final acceptance manifest at HEAD");
+
+  // Without the explicit choice, missing evidence stays evidence loss.
+  const lost: TaskRecord = {
+    ...task(),
+    policy: { ...policy, config: { ...policyConfig, validationCommands: [] } },
+    validationEvidence: [],
+  };
+  expect(() => describeTaskPr(lost, summary)).toThrow(
+    "delivery requires nonempty validation evidence",
+  );
+  expect(() => describeTaskPr({ ...task(), validationEvidence: [] }, summary)).toThrow(
+    "delivery requires nonempty validation evidence",
+  );
+});
+
+test("a no-checks draft never claims the checks passed", () => {
+  const noChecks: ResolvedPolicy = {
+    ...policy,
+    config: { ...policyConfig, validationCommands: [], validation: "none" },
+  };
+  const body = describeTaskDraftPr({
+    task: { ...task(), policy: noChecks, validationEvidence: [] },
+    publishedHead: "head-1",
+    worktreeHead: "head-1",
+    uncommittedChanges: false,
+  });
+  expect(body).toContain("Unvalidated: no validation commands configured. The review passes");
+  expect(body).toContain("no validation commands (unvalidated: no validation commands configured");
+  expect(body).not.toContain("The final acceptance manifest and the review pass");
+});
+
 test("refuses to publish a ready task whose evidence predates validation contracts", () => {
   const {
     contract: _contract,

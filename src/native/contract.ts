@@ -470,6 +470,7 @@ const SetupRepoModel = z.object({
   repo: opt(str),
   setUp: bool,
   validationCommands: strings,
+  noChecks: bool,
   setupCommands: strings,
   suggestions: strings,
   detectedFrom: opt(str),

@@ -390,11 +390,25 @@ function projectSetupLines(record: Record<string, unknown>, saved: boolean): rea
   const checks = commandNames(record.validationCommands);
   const install = commandNames(record.setupCommands);
   const verb = saved ? "runs" : "would run";
-  lines.push(
-    checks.length === 0
-      ? "Checks: none found; ask the user which commands prove a change works."
-      : `Checks it ${verb} before calling work done: ${checks.join("; ")}`,
-  );
+  const discovery = summaryRecord(record.discovery);
+  const suggested = stringList(discovery?.commands).filter((command) => !checks.includes(command));
+  const sources = stringList(discovery?.sources);
+  if (record.noChecks === true) {
+    lines.push(
+      "Checks: none, by the user's choice. Tasks here skip validation and are marked unvalidated.",
+    );
+  } else {
+    lines.push(
+      checks.length === 0
+        ? "Checks: none configured. Ask the user which commands prove a change works; offer the suggestions below, or no checks (setup with noChecks: true), which marks every task here unvalidated."
+        : `Checks it ${verb} before calling work done: ${checks.join("; ")}`,
+    );
+  }
+  if (suggested.length > 0) {
+    lines.push(
+      `Suggested from ${sources.length === 0 ? "the repository's files" : sources.join(", ")} (not saved unless the user picks them): ${suggested.join("; ")}`,
+    );
+  }
   lines.push(
     install.length === 0
       ? "Install step for fresh copies: none."
@@ -402,7 +416,7 @@ function projectSetupLines(record: Record<string, unknown>, saved: boolean): rea
   );
   if (!saved) {
     lines.push(
-      "The user may change either list; pass their lists to setup as validationCommands and setupCommands.",
+      "The user may change either list; pass their lists to setup as validationCommands and setupCommands, or noChecks: true when they want no checks.",
     );
   }
   if (Array.isArray(record.mcpServers)) {

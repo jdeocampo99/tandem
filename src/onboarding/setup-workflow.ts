@@ -57,14 +57,19 @@ export type SetupWorkflowDependencies = Readonly<{
     repo: Readonly<{
       validationCommands?: readonly string[] | undefined;
       setupCommands?: readonly string[] | undefined;
+      noChecks: boolean;
     }>,
   ) => Promise<unknown>;
-  /** Replaces the commands of a repository that is already set up; a list left undefined stays. */
+  /**
+   * Replaces the commands of a repository that is already set up, and sets or clears its "no
+   * checks"; a setup list left undefined stays.
+   */
   updateRepoCommands: (
     path: string,
     commands: Readonly<{
       validationCommands: readonly string[];
       setupCommands?: readonly string[] | undefined;
+      noChecks: boolean;
     }>,
   ) => Promise<unknown>;
   openProject: (path: string) => Promise<unknown>;
@@ -250,6 +255,7 @@ export class SetupWorkflow {
     const commands = {
       validationCommands: repo.validationCommands,
       setupCommands: repo.setupCommands,
+      noChecks: repo.noChecks === true,
     };
     const existing = check.kind === "root" && check.setUp;
     const saved = existing

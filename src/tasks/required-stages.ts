@@ -1,4 +1,5 @@
 import type { RequiredStages, TaskRecord } from "../contracts.ts";
+import { isUnvalidatedPolicy } from "./acceptance.ts";
 
 /** What an implementation task's required stages depend on, gathered when it is created or steered. */
 export type RequiredStageFacts = Readonly<{
@@ -9,6 +10,11 @@ export type RequiredStageFacts = Readonly<{
    * back to the pull request, whose own CI checks it.
    */
   readonly pullRequestPublished: boolean;
+  /**
+   * The pinned policy is the project's deliberate "no checks" (`validation = "none"`). Validation
+   * is skipped and review always runs, so at least one gate stands.
+   */
+  readonly unvalidated: boolean;
 }>;
 
 /**
@@ -19,11 +25,20 @@ export type RequiredStageFacts = Readonly<{
  * | ---------------------------------- | ---------- | ------ |
  * | Normal new task                    | yes        | yes    |
  * | Brief approved with "skip review"  | yes        | no     |
+ * | Project chose no checks (any PR)   | no         | yes    |
  * | Steering a task whose PR is open   | no         | no     |
  */
 export function decideRequiredStages(facts: RequiredStageFacts): RequiredStages {
+  if (facts.unvalidated) return { validation: false, review: true };
   if (facts.pullRequestPublished) return { validation: false, review: false };
   return { validation: true, review: !facts.briefSkipsReview };
+}
+
+/** The required-stage facts that come from the task's own pinned policy. */
+export function policyStageFacts(
+  task: Pick<TaskRecord, "policy">,
+): Pick<RequiredStageFacts, "unvalidated"> {
+  return { unvalidated: isUnvalidatedPolicy(task.policy.config) };
 }
 
 /** Whether the task's pull request is published, the fact steering re-reads. */
@@ -33,16 +48,17 @@ export function pullRequestPublished(task: Pick<TaskRecord, "pullRequest">): boo
 
 /**
  * The task's recorded required stages. A record saved before they existed derives them from its
- * own pull request; the service backfills the brief's part on its next tick.
+ * own pull request and pinned policy; the service backfills the brief's part on its next tick.
  */
 export function requiredStagesOf(
-  task: Pick<TaskRecord, "requiredStages" | "pullRequest">,
+  task: Pick<TaskRecord, "requiredStages" | "pullRequest" | "policy">,
 ): RequiredStages {
   return (
     task.requiredStages ??
     decideRequiredStages({
       briefSkipsReview: false,
       pullRequestPublished: pullRequestPublished(task),
+      ...policyStageFacts(task),
     })
   );
 }

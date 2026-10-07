@@ -28,6 +28,13 @@ src/instructions.ts
 - Argv-only, run in declaration order, stopping at the first non-zero exit, timeout, or cancellation.
 - A command applies when its `surfaces` is empty, contains `*`, or intersects the task surfaces (a
   task surface `*` matches all). No configured or matching command is a failure, never a pass.
+- The one exception is a policy pinned with the project's explicit "no checks" (`validation =
+  "none"`, no commands; see [policy.md](policy.md#no-checks)): the final manifest has no
+  requirements and `unvalidated: true`, so acceptance rests on the review lens alone, and empty
+  evidence is accepted at delivery for that policy only. Commands that exist but match no surface
+  stay a failure. Everything that reports the result says "Unvalidated: no validation commands
+  configured": the ready notification, the review brief (it tells the reviewer no automated checks
+  ran), the pull request body, the draft body, and the task page.
 - Evidence records command, argv, exit code, output, HEAD, contract, origin, and policy digest.
 - Runner evidence is `origin: "local"` and satisfies only local requirements. Remote required checks
   are the GitHub `RemoteCheck` rollup asserted at merge; a local pass is never relabeled remote.

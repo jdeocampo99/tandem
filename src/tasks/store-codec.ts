@@ -361,6 +361,7 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
       "instructions",
       "instructionFiles",
       "validationCommands",
+      "validation",
       "setupCommands",
       "maxWorkers",
       "maxFixRounds",
@@ -423,6 +424,9 @@ function parseRepoPolicy(value: unknown, source: string): RepoPolicy {
     validationCommands: validationCommands.map((entry, index) =>
       parseValidationCommand(entry, `${source}.validationCommands[${index}]`),
     ),
+    ...(Object.hasOwn(value, "validation")
+      ? { validation: parseValidationChoice(value, validationCommands.length, source) }
+      : {}),
     setupCommands: parseSetupCommands(value, source),
     ...(Object.hasOwn(value, "maxWorkers")
       ? { maxWorkers: requiredInteger(value, "maxWorkers", source, 1) }
@@ -456,6 +460,16 @@ function parseSetupCommands(record: UnknownRecord, source: string): readonly Set
       timeoutMs: requiredInteger(entry, "timeoutMs", entrySource, 1),
     };
   });
+}
+
+/** The pinned "no checks" choice, which only a policy with no validation commands may carry. */
+function parseValidationChoice(record: UnknownRecord, commands: number, source: string): "none" {
+  const value = requiredValue(record, "validation", source);
+  if (value !== "none") failState(`${source}.validation`, 'validation must be "none" when present');
+  if (commands > 0) {
+    failState(`${source}.validation`, 'validation "none" requires no validation commands');
+  }
+  return value;
 }
 
 function parseStandards(record: UnknownRecord, source: string): "none" {

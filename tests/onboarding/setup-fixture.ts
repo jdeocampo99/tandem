@@ -28,7 +28,9 @@ export function setupViewFixture(mode: SetupMode): SetupView {
         setUp: true,
         details: {
           validationCommands: ["bun run check", "bun test"],
-          scriptCommands: ["bun run check", "bun test", "bun run lint"],
+          noChecks: false,
+          discoveredCommands: ["bun run check", "bun test", "bun run lint"],
+          sources: ["package.json scripts"],
           setupCommands: ["bun install --frozen-lockfile"],
           lockfile: "bun.lock",
         },
@@ -38,7 +40,9 @@ export function setupViewFixture(mode: SetupMode): SetupView {
         setUp: false,
         details: {
           validationCommands: ["pnpm typecheck"],
-          scriptCommands: ["pnpm typecheck", "pnpm lint"],
+          noChecks: false,
+          discoveredCommands: ["pnpm typecheck", "pnpm lint"],
+          sources: ["package.json scripts"],
           setupCommands: ["pnpm install --frozen-lockfile"],
           lockfile: "pnpm-lock.yaml",
         },
