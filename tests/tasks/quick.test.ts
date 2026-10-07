@@ -11,6 +11,7 @@ import {
   checkQuickText,
   clockTime,
   parseQuickScopeAnswer,
+  QUICK_START_GRACE_MS,
   QUICK_TASK_TOO_SHORT,
   quickApproval,
   quickConvertedText,
@@ -20,6 +21,7 @@ import {
   quickScopeQuestionAllowed,
   quickScopeQuestionText,
   quickStartedText,
+  quickStartUnfinished,
   quickTaskInstructions,
   quickTaskTitle,
   quickTextDigest,
@@ -356,8 +358,38 @@ test("a recorded scope answer names only the effects still missing, and a tried 
   for (const choice of ["proceed", "convert", "cancel"] as const)
     expect(quickScopeNextStep(answered(choice, { communication: closed }), false)).toBeUndefined();
 
+  // A crash between Proceed's answer and its resume leaves the task blocked on that question.
+  const cause = {
+    group: "unusable-result",
+    kind: "worker-failed",
+    summary: "s",
+    detail: "d",
+  } as const;
+  const stuck = answered("proceed", {
+    communication: closed,
+    blockCause: { ...cause, jobId: "j" },
+  });
+  expect(quickScopeNextStep(stuck, false)).toBe("resume");
+  expect(quickScopeNextStep({ ...stuck, stage: "implementing" }, false)).toBeUndefined();
+  expect(
+    quickScopeNextStep({ ...stuck, blockCause: { ...cause, jobId: "later" } } as TaskRecord, false),
+  ).toBeUndefined();
+  expect(quickScopeNextStep({ ...stuck, previousStage: "paused" }, false)).toBeUndefined();
+
   const stored = (choice: "proceed" | "cancel") =>
     ({ ...asked, quick: { ...quick, scopeAnswer: { choice, at: SCENARIO_NOW } } }) as TaskRecord;
   expect(parseTaskRecord(JSON.parse(JSON.stringify(stored("cancel"))))).toEqual(stored("cancel"));
   expect(() => parseTaskRecord(stored("proceed"))).toThrow("must extend the quick scope");
+});
+
+test("a quick task left awaiting approval past the grace is a Start that never finished", () => {
+  const later = (ms: number) => new Date(Date.parse(SCENARIO_NOW) + ms).toISOString();
+  const waiting = quickTask({ stage: "awaiting-approval" });
+  expect(quickStartUnfinished(waiting, later(QUICK_START_GRACE_MS - 1))).toBe(false);
+  expect(quickStartUnfinished(waiting, later(QUICK_START_GRACE_MS))).toBe(true);
+  expect(quickStartUnfinished({ ...waiting, stage: "queued" }, later(QUICK_START_GRACE_MS))).toBe(
+    false,
+  );
+  const { quick: _quick, ...ordinary } = waiting;
+  expect(quickStartUnfinished(ordinary, later(QUICK_START_GRACE_MS))).toBe(false);
 });

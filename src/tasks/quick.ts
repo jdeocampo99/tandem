@@ -229,22 +229,52 @@ export function quickScopeAwaitingAnswer(task: Pick<TaskRecord, "quick" | "stage
   );
 }
 
+/** How long a quick task may sit unapproved before a tick decides its Start never finished. */
+export const QUICK_START_GRACE_MS = 60_000;
+export const QUICK_START_UNFINISHED = "Quick task did not finish starting";
+
+/**
+ * Whether a quick task's Start stopped between creating and approving it: a quick task is never
+ * shown for approval, so one still awaiting it past the grace (which spares a Start in flight)
+ * is cancelled.
+ */
+export function quickStartUnfinished(
+  task: Pick<TaskRecord, "quick" | "stage" | "createdAt">,
+  now: IsoTimestamp,
+): boolean {
+  return (
+    task.quick !== undefined &&
+    task.stage === "awaiting-approval" &&
+    Date.parse(now) - Date.parse(task.createdAt) >= QUICK_START_GRACE_MS
+  );
+}
+
 /**
  * What is left of a recorded scope answer, or undefined when nothing is: the answer is recorded
  * first, so each step here is one of its effects that has not happened yet. Proceed answers the
- * worker while the question is still open. Cancel and Convert cancel the task, then close the
+ * worker while the question is still open, then resumes the task still blocked on that question
+ * (its block names the question's job). Cancel and Convert cancel the task, then close the
  * question in one write that, for Convert, also hands the request to the coordinator. A cancel that
  * was already tried and could not prove the worker stopped `waits`: it is never retried on its own,
  * only when the user answers again.
  */
 export function quickScopeNextStep(
-  task: Pick<TaskRecord, "quick" | "stage" | "communication">,
+  task: Pick<TaskRecord, "quick" | "stage" | "previousStage" | "blockCause" | "communication">,
   cancelTried: boolean,
-): "answer-worker" | "cancel" | "close-question" | "wait" | undefined {
+): "answer-worker" | "resume" | "cancel" | "close-question" | "wait" | undefined {
   const answer = task.quick?.scopeAnswer;
   const questionId = task.quick?.scopeQuestionId;
   if (answer === undefined || questionId === undefined) return undefined;
-  if (task.communication?.question?.id !== questionId) return undefined;
+  if (task.communication?.question?.id !== questionId)
+    return answer.choice === "proceed" &&
+      task.communication?.question === undefined &&
+      task.stage === "blocked" &&
+      task.blockCause?.jobId === questionId &&
+      task.previousStage !== undefined &&
+      task.previousStage !== "paused" &&
+      task.previousStage !== "blocked"
+      ? "resume"
+      : undefined;
   if (answer.choice === "proceed") return task.stage === "cancelled" ? undefined : "answer-worker";
   if (task.stage === "cancelled") return "close-question";
   return cancelTried ? "wait" : "cancel";

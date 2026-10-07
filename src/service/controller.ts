@@ -193,10 +193,12 @@ import {
   QUICK_SCOPE_ANSWER_REFUSAL,
   QUICK_SCOPE_LABELS,
   QUICK_SCOPE_PROCEED_TEXT,
+  QUICK_START_UNFINISHED,
   type QuickScopeChoice,
   quickApproval,
   quickConvertedText,
   quickScopeNextStep,
+  quickStartUnfinished,
   quickTaskTitle,
 } from "../tasks/quick.ts";
 import {
@@ -1971,6 +1973,12 @@ class TandemController {
       await this.answerWorker(taskId, questionId, QUICK_SCOPE_PROCEED_TEXT);
       return;
     }
+    if (step === "resume") {
+      const resumed = await this.#control.resumeTask(taskId, QUESTION_ANSWERED);
+      if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage))
+        await this.reconcileTask(resumed);
+      return;
+    }
     if (step === "cancel") {
       const stopped = await this.cancel(
         taskId,
@@ -2028,6 +2036,20 @@ class TandemController {
   /** Each tick finishes scope answers a crash left part-way; a failure waits for the next tick. */
   private async finishQuickScopeAnswers(tasks: readonly TaskRecord[]): Promise<void> {
     for (const task of tasks) {
+      if (quickStartUnfinished(task, this.#deps.clock())) {
+        await this.cancel(task.id, QUICK_START_UNFINISHED).catch((error: unknown) =>
+          appendDiagnosticEvent(
+            this.#deps.home,
+            {
+              event: "quick-start-unfinished",
+              taskId: task.id,
+              details: { errorClass: errorClassName(error) },
+            },
+            this.#deps.clock,
+          ),
+        );
+        continue;
+      }
       if (quickScopeNextStep(task, false) === undefined) continue;
       try {
         await this.finishQuickScopeAnswer(task.id, false);
