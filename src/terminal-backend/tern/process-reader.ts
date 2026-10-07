@@ -59,43 +59,56 @@ function loadSysctl(): Sysctl {
   return sysctl;
 }
 
-/** Only foreground group members' exact argv is returned, never their environment. */
-export const readForegroundGroup: ForegroundReader = async (group) => {
-  if (process.platform !== "darwin") throw new Error("Tern native process proof requires macOS");
-  if (!Number.isSafeInteger(group) || group < 1)
-    throw new Error("a positive foreground group id is required");
+type GroupMember = Readonly<{ pid: number; name: string }>;
+
+async function listGroupMembers(group: number): Promise<readonly GroupMember[]> {
   const listed = await ps(["-axo", "pid=,pgid=,comm="]);
   if (listed.code !== 0) throw new Error("native process group listing failed");
-  const members = listed.stdout.split("\n").flatMap((line) => {
+  return listed.stdout.split("\n").flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line);
     return match === null || Number(match[2]) !== group
       ? []
       : [{ pid: Number(match[1]), name: match[3] ?? "" }];
   });
+}
+
+// A shell's prompt helpers come and go between `ps` and `sysctl`. One that exited, even if its
+// parent has not reaped it yet, is no longer running, so only a live member must give its argv.
+async function gone(pid: number): Promise<boolean> {
+  const state = await ps(["-o", "stat=", "-p", String(pid)]);
+  return state.code !== 0 || state.stdout.trim().startsWith("Z");
+}
+
+/** The member's exact argv, or undefined when it exited before it could be read. */
+async function readMemberArgv(read: Sysctl, member: GroupMember): Promise<string[] | undefined> {
+  const mib = new Int32Array([1, 49, member.pid]); // CTL_KERN, KERN_PROCARGS2, pid
+  const length = new BigUint64Array(1);
+  if (read(mib, length, null) !== 0) {
+    if (await gone(member.pid)) return undefined;
+    throw new Error(`native argv unavailable for pid ${member.pid}`);
+  }
+  const size = Number(length[0]);
+  if (!Number.isSafeInteger(size) || size < 4 || size > 16_777_216)
+    throw new Error("invalid native argv buffer size");
+  const bytes = new Uint8Array(size);
+  if (read(mib, length, bytes) !== 0) {
+    if (await gone(member.pid)) return undefined;
+    throw new Error(`native argv changed for pid ${member.pid}`);
+  }
+  return processArguments(bytes.subarray(0, Number(length[0]))).slice();
+}
+
+/** Only foreground group members' exact argv is returned, never their environment. */
+export const readForegroundGroup: ForegroundReader = async (group) => {
+  if (process.platform !== "darwin") throw new Error("Tern native process proof requires macOS");
+  if (!Number.isSafeInteger(group) || group < 1)
+    throw new Error("a positive foreground group id is required");
+  const members = await listGroupMembers(group);
   const read = loadSysctl();
-  // A shell's prompt helpers come and go between `ps` and `sysctl`. One that exited, even if its
-  // parent has not reaped it yet, is no longer running, so only a live member must give its argv.
-  const gone = async (pid: number) => {
-    const state = await ps(["-o", "stat=", "-p", String(pid)]);
-    return state.code !== 0 || state.stdout.trim().startsWith("Z");
-  };
   const proved: ForegroundMember[] = [];
   for (const member of members) {
-    const mib = new Int32Array([1, 49, member.pid]); // CTL_KERN, KERN_PROCARGS2, pid
-    const length = new BigUint64Array(1);
-    if (read(mib, length, null) !== 0) {
-      if (await gone(member.pid)) continue;
-      throw new Error(`native argv unavailable for pid ${member.pid}`);
-    }
-    const size = Number(length[0]);
-    if (!Number.isSafeInteger(size) || size < 4 || size > 16_777_216)
-      throw new Error("invalid native argv buffer size");
-    const bytes = new Uint8Array(size);
-    if (read(mib, length, bytes) !== 0) {
-      if (await gone(member.pid)) continue;
-      throw new Error(`native argv changed for pid ${member.pid}`);
-    }
-    const argv = processArguments(bytes.subarray(0, Number(length[0]))).slice();
+    const argv = await readMemberArgv(read, member);
+    if (argv === undefined) continue;
     proved.push({ pid: member.pid, name: member.name.split("/").at(-1) ?? member.name, argv });
   }
   return proved;

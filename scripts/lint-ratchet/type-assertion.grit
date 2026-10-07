@@ -1,7 +1,7 @@
 language js
 
-`$value as $type` as $cast where {
-  $type <: not "const",
-  $value <: not `JSON.parse($text)`,
+TsAsExpression() as $cast where {
+  $cast <: not `$_ as const`,
+  $cast <: not `JSON.parse($_) as $_`,
   register_diagnostic(span=$cast, message="[tandem/type-assertion] Type assertion: narrow, parse, or fix the type instead of asserting it.", severity="error")
 }

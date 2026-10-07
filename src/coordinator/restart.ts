@@ -66,6 +66,18 @@ async function closeSupersededPane(
   await terminal.closeOwned({ endpoint, cwd, strictProof: true });
 }
 
+/** The coordinator a restart replaces: the running one, else the last one that stopped. */
+async function findPriorCoordinator(
+  request: CoordinatorLaunchRequest,
+  dependencies: CoordinatorLaunchDependencies,
+): Promise<CoordinatorRecord | undefined> {
+  const where = { home: request.home, sessionId: request.sessionId, repoPath: request.repo };
+  return (
+    (await findRunningCoordinator(dependencies.run, dependencies.terminal, where)) ??
+    (await findRestartCoordinator(dependencies.run, dependencies.terminal, where))
+  );
+}
+
 /** Replaces an owned coordinator without touching managed worker panes or task state. */
 export async function restartCoordinator(
   request: CoordinatorLaunchRequest,
@@ -77,20 +89,7 @@ export async function restartCoordinator(
     const pendingSourceHead = startCoordinatorSourceHead(dependencies.run, request.repo);
     let prior: CoordinatorRecord | undefined;
     try {
-      const previous = await findRunningCoordinator(dependencies.run, dependencies.terminal, {
-        home: request.home,
-        sessionId: request.sessionId,
-        repoPath: request.repo,
-      });
-      const stopped =
-        previous === undefined
-          ? await findRestartCoordinator(dependencies.run, dependencies.terminal, {
-              home: request.home,
-              sessionId: request.sessionId,
-              repoPath: request.repo,
-            })
-          : undefined;
-      prior = previous ?? stopped;
+      prior = await findPriorCoordinator(request, dependencies);
       await checkNewCoordinator(request, dependencies);
     } catch (error) {
       await pendingSourceHead.catch(() => undefined);

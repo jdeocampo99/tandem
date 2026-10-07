@@ -63,7 +63,7 @@
       "complexity/useMaxParams": 3,
       "style/noExcessiveLinesPerFile": 1,
       "suspicious/noShadow": 1,
-      "tandem/type-assertion": 2
+      "tandem/type-assertion": 1
     },
     "src/adapters/typesafe.ts": {
       "complexity/noExcessiveCognitiveComplexity": 3,
@@ -279,8 +279,7 @@
       "tandem/type-assertion": 2
     },
     "src/harness/omp/registration.ts": {
-      "complexity/useMaxParams": 1,
-      "tandem/type-assertion": 1
+      "complexity/useMaxParams": 1
     },
     "src/harness/omp/task-messages.ts": {
       "tandem/type-assertion": 3
@@ -362,8 +361,7 @@
       "complexity/noExcessiveCognitiveComplexity": 1,
       "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 2,
-      "tandem/type-assertion": 2
+      "suspicious/noUnnecessaryConditions": 2
     },
     "src/pool/policy.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -994,8 +992,7 @@
     },
     "src/workers/terminal-control.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
-      "tandem/hidden-clock": 2,
-      "tandem/type-assertion": 1
+      "tandem/hidden-clock": 2
     },
     "src/workers/terminal.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
