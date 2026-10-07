@@ -1803,6 +1803,32 @@ test("reset --hard stops Tandem, then deletes its home, pool, and remembered set
   }
 });
 
+test("reset --hard fails, without claiming success, when a running Tandem writes its home again", async () => {
+  const [repo] = await gitProjects(1);
+  if (repo === undefined) throw new Error("test project was not created");
+  const home = join(repo, "..", "home");
+  await onboardRepo({ repoPath: repo, home, write: true });
+  const output: string[] = [];
+  const result = await runTerminal(["reset", "--hard", "--yes"], {
+    cwd: repo,
+    processEnvironment: { TANDEM_HOME: home, TANDEM_POOL_ROOT: join(repo, "..", "pool") },
+    run: async (request) => {
+      if (request.argv.includes("prune")) {
+        await mkdir(home, { recursive: true });
+        await writeFile(join(home, "state.sqlite"), "");
+      }
+      return runCommand(request);
+    },
+    resetCoordinators: async () => [],
+    isTTY: false,
+    stdout: (text) => output.push(text),
+    stderr: (text) => output.push(text),
+  });
+  expect(result.exitCode).toBe(1);
+  expect(result.error?.message).toContain(`Tandem is not reset: ${home} still exists`);
+  expect(output.join("")).not.toContain("Tandem is reset.");
+});
+
 test("config opens the project's settings in $EDITOR and re-checks them after", async () => {
   const [repo] = await gitProjects(1);
   if (repo === undefined) throw new Error("test project was not created");

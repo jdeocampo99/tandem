@@ -55,7 +55,9 @@ for (const [chosen, selection] of [
         worktree: lease,
       });
       expect(result.outcome).toBe("quarantined");
-      expect(result.reason).toContain(`${endpoint.terminal} endpoint under ${chosen}`);
+      expect(result.reason).toContain(
+        `it is a ${endpoint.terminal} pane but this Tandem home uses ${chosen}`,
+      );
       const views = terminal.views;
       for (const operation of [
         () => terminal.inspect({ endpoint, cwd: home }),

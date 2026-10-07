@@ -72,7 +72,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
       ...record,
       endpoint: { ...endpoint, terminal: "herdr" },
     });
-    await expect(alert()).rejects.toThrow("quarantined herdr endpoint under tern");
+    await expect(alert()).rejects.toThrow('set terminal = "herdr" in Tandem\'s settings.toml');
     const foreignHelper = terminalBackend(world.run, {
       terminal: "tern",
       home: world.home,
@@ -87,7 +87,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
         title: "Needs you",
         body: "Review ready",
       }),
-    ).rejects.toThrow("quarantined herdr endpoint under tern");
+    ).rejects.toThrow('set terminal = "herdr" in Tandem\'s settings.toml');
     await expect(
       openProject(async () => ({ code: 0, stdout: "", stderr: "" }), terminal, {
         repoPath: world.repoPath,
@@ -95,7 +95,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
         sessionId: world.sessionId,
         poolRoot: world.poolRoot,
       }),
-    ).rejects.toThrow("quarantined herdr endpoint under tern");
+    ).rejects.toThrow('set terminal = "herdr" in Tandem\'s settings.toml');
     expect(world.ttyWrites()).toHaveLength(1);
     const path = recordPath(world.home, world.sessionId, world.repoPath);
     await writeFile(
