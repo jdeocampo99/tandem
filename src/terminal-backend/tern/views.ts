@@ -5,7 +5,7 @@ import type { Endpoint } from "../../contracts.ts";
 import { blockArgs, type Placement, setupFile, type ViewKind } from "../../native/contract.ts";
 import {
   type Published,
-  readProjectState,
+  readPublished,
   viewDetailPath,
   viewIndexPath,
 } from "../../native/store.ts";
@@ -74,7 +74,7 @@ async function detailFile(
 ): Promise<string | undefined> {
   if (view.kind === "brief") return nativeBriefFile(view.requestId);
   if (view.kind === "setup") return setupFile(view.mode);
-  return detailForView((await readProjectState(home, project))?.published, view);
+  return detailForView(await readPublished(home, project), view);
 }
 
 /** Where a view's block is placed; `isView` proves a block only where an open puts it. */

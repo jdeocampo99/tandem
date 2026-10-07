@@ -76,18 +76,29 @@ with the same basename have different directories. The directory holds:
   `views/pr-<encodedOwnerRepo>-<number>.json` and `views/setup-<mode>.json`, the detail files
   (`viewDetailPath(home, canonicalRepoPath, detailFile)`). Identifiers use `encodeURIComponent`,
   so each filename is one path segment. PR filenames include the repository.
-- `state.json`: the store's `epoch` and `seq`, the alert cursors (`board/native-alerts.ts`), the
-  visit record (`memory/native-visits.ts`) and `published`, what the last full publication showed.
-  `published` is a cache: a value in an older shape reads as absent, and the next publication
-  rebuilds it while keeping `epoch`, `seq`, alerts and visit.
+- `state.json`: the store's `epoch` and `seq`, the alert cursors, the visit record and
+  `published`, what the last full publication showed. `published` is a cache: a value in an older
+  shape reads as absent, and the next publication rebuilds it while keeping `epoch`, `seq`, alerts
+  and visit.
 - `open/<coordinatorKey>.<token>.{ticket,receipt}.json`, staged open tickets and their receipts
   (`terminal-backend/tern/host.ts`).
 
 One lock per project (`state.lock`) serializes `views/` and `state.json` across coordinator and
-CLI processes. `withProjectLock` is the only way to change `state.json`. Staged opens keep their
-own per-coordinator lock in `open/`, because an open holds it while Tern applies the layout, and
-publication must not wait for that. For the same reason a project visit decides under the lock,
-opens catch-up outside it, and records the visit under it again.
+CLI processes. `store.ts` keeps the lock and the `state.json` schema private and changes the file
+only through its own entry points:
+
+- `publishViews` writes views, `seq` and `published`, and fills a missing visit baseline.
+- `recordVisit(home, project, event)` applies one `VisitEvent` (`entry`, `visible`, `away` or
+  `dismiss`) and returns whether the entry showed catch-up. The visit and catch-up rules live
+  here.
+- `deliverNewAlerts(home, project, observe, delivery)` claims new transitions against the alert
+  cursors and counts successful sends. `board/native-alerts.ts` builds the observation and sends.
+  `nativeAlertCounts` and `markNativeAlertsRead` read and advance the bell's read cursor.
+- `readPublished` returns what the last full publication showed.
+
+Staged opens keep their own per-coordinator lock in `open/`, because an open holds it while Tern
+applies the layout, and publication must not wait for that. For the same reason a project visit
+decides under the lock, opens catch-up outside it, and records the visit under it again.
 
 The project's coordinator is the single writer of full publications. The existing
 `writeBoardSnapshot` service operation schedules them, and only when the active terminal has the
@@ -991,7 +1002,8 @@ first saved brief, task or inbox destination. Dismiss and Open what needs me ack
 current signature only after confirmed navigation. A merged PR click sends `merged-link`,
 resolved only against `published.merged`.
 
-`tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger
+`tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger,
+which records an `entry` visit through `recordVisit` and opens catch-up when the visit decides to,
 with the single non-fatal boundary shared by every entry path. Visible front-door launches and
 reconnects, `coordinator/open-project.ts`, dropdown and shortcut switches, and window focus
 entries (including inbox helper activation) invoke it. Background launches defer to visible

@@ -6,11 +6,10 @@ import { runCommand } from "../../src/adapters/commands.ts";
 import type { CommandRequest } from "../../src/contracts.ts";
 import { openProject, openProjectCommand } from "../../src/coordinator/open-project.ts";
 import { listCoordinatorRecords, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
-import { visitNativeProject } from "../../src/memory/native-visits.ts";
-import { readProjectState } from "../../src/native/store.ts";
+import { recordVisit } from "../../src/native/store.ts";
 import { createTandemService } from "../../src/service/controller.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
-import { publishFixture } from "../native/view-files.ts";
+import { publishFixture, savedState } from "../native/view-files.ts";
 import { viewsWith } from "../terminal-backend/views.ts";
 import { saveCoordinator } from "./fake-workspace-order.ts";
 
@@ -134,16 +133,13 @@ for (const outcome of ["opened", "unfocused", "ambiguous-window", "unavailable"]
       };
       await saveCoordinatorRecord(home, record);
       await publishFixture(home, repo, { changeSignature: "after" });
-      await visitNativeProject(
-        {
-          home,
-          project: repo,
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-          signature: "before",
-        },
-        async () => {},
-      );
-      const visit = async () => JSON.stringify((await readProjectState(home, repo))?.visit);
+      await recordVisit(home, repo, {
+        kind: "entry",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        signature: "before",
+        showCatchUp: async () => {},
+      });
+      const visit = async () => JSON.stringify((await savedState(home, repo))?.visit);
       const previousVisit = await visit();
       const events: string[] = [];
       const run = async () => {

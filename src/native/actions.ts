@@ -1,5 +1,4 @@
 import { runCommand } from "../adapters/commands.ts";
-import { markNativeAlertsRead, nativeAlertCounts } from "../board/native-alerts.ts";
 import {
   resolveTandemEnvironment,
   type TandemBoundaryEnvironment,
@@ -11,11 +10,7 @@ import { type CoordinatorRecord, canonicalPath, pathIsWithin } from "../coordina
 import { decideRecordedOwner } from "../coordinator/recorded-owner.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
-import {
-  dismissNativeCatchUp,
-  recordNativeVisibility,
-  tryShowCatchUp,
-} from "../memory/native-visits.ts";
+import { tryShowCatchUp } from "../memory/native-visits.ts";
 import { remainingOnboardingSteps } from "../onboarding/checklist.ts";
 import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
 import { SETUP_MODES, type SetupMode, type SetupSection } from "../onboarding/setup-view.ts";
@@ -51,7 +46,15 @@ import {
   parseBlockContext,
   type ViewRef,
 } from "./contract.ts";
-import { type Published, publishViews, readProjectState, viewIndexPath } from "./store.ts";
+import {
+  markNativeAlertsRead,
+  nativeAlertCounts,
+  type Published,
+  publishViews,
+  readPublished,
+  recordVisit,
+  viewIndexPath,
+} from "./store.ts";
 
 /** Review submissions are the largest envelopes; brief feedback alone is capped at 64,000 bytes. */
 const MAX_ENVELOPE_BYTES = 1024 * 1024;
@@ -439,7 +442,7 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
 async function published(act: Act, repoPath: string): Promise<Published> {
-  const shown = (await readProjectState(act.environment.home, repoPath))?.published;
+  const shown = await readPublished(act.environment.home, repoPath);
   if (shown === undefined) throw new Error("This project's native views are not published yet");
   return shown;
 }
@@ -673,7 +676,7 @@ async function newRequest(act: Act): Promise<Outcome> {
 
 async function switchProject(act: Act, action: Extract<Action, { verb: "project" }>) {
   const current = await ternOwner(act, "navigating");
-  const model = (await readProjectState(act.environment.home, current.repoPath))?.published;
+  const model = await readPublished(act.environment.home, current.repoPath);
   const age = Date.now() - Date.parse(model?.summary.writtenAt ?? "");
   if (model === undefined || !Number.isFinite(age) || Math.abs(age) > 10_000)
     throw new Error("Project switcher is stale; wait for the coordinator snapshot");
@@ -704,9 +707,8 @@ async function switchProject(act: Act, action: Extract<Action, { verb: "project"
   });
   if (!focused) throw new Error("Tern could not focus the exact project coordinator");
   if (destination.repoPath !== current.repoPath)
-    await recordNativeVisibility({
-      home: act.environment.home,
-      project: current.repoPath,
+    await recordVisit(act.environment.home, current.repoPath, {
+      kind: "away",
       now: new Date().toISOString(),
       signature: model.changeSignature,
     }).catch(() => {});
@@ -741,11 +743,9 @@ async function visit(act: Act, action: Extract<Action, { verb: "visit" }>): Prom
   });
   if (action.event !== "entry") {
     const shown = await published(act, current.repoPath);
-    await recordNativeVisibility({
-      home: act.environment.home,
-      project: current.repoPath,
+    await recordVisit(act.environment.home, current.repoPath, {
+      kind: action.event,
       now: new Date().toISOString(),
-      heartbeat: action.event === "visible",
       signature: shown.changeSignature,
     });
     return DONE;
@@ -805,9 +805,8 @@ async function leaveCatchUp(act: Act, openNeeds: boolean): Promise<Outcome> {
         cwd: owner.worktree.path,
       }),
     );
-  await dismissNativeCatchUp({
-    home: act.environment.home,
-    project: owner.repoPath,
+  await recordVisit(act.environment.home, owner.repoPath, {
+    kind: "dismiss",
     now: new Date().toISOString(),
     signature,
   });
