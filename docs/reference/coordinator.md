@@ -467,4 +467,6 @@ Owned by src/terminal/hard-reset.ts.
   pool worktree, including unpushed or unmerged work), the pool root when outside the home, and
   the remembered setup file only when it names that home.
 - Runs `git worktree prune` in each onboarded repository so deleted worktrees are unregistered.
+- Then checks that every deleted path is gone. A Tandem process it could not stop writes its home
+  again, so a path that still exists fails the reset with that path instead of reporting success.
 - Unreadable project records do not stop it. The next `tandem` onboards from scratch.

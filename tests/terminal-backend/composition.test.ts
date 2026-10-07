@@ -72,7 +72,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
       ...record,
       endpoint: { ...endpoint, terminal: "herdr" },
     });
-    await expect(alert()).rejects.toThrow("quarantined herdr endpoint under tern");
+    await expect(alert()).rejects.toThrow('set terminal = "herdr" in Tandem\'s settings.toml');
     const foreignHelper = terminalBackend(world.run, {
       terminal: "tern",
       home: world.home,
@@ -87,7 +87,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
         title: "Needs you",
         body: "Review ready",
       }),
-    ).rejects.toThrow("quarantined herdr endpoint under tern");
+    ).rejects.toThrow('set terminal = "herdr" in Tandem\'s settings.toml');
     await expect(
       openProject(async () => ({ code: 0, stdout: "", stderr: "" }), terminal, {
         repoPath: world.repoPath,
@@ -95,7 +95,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
         sessionId: world.sessionId,
         poolRoot: world.poolRoot,
       }),
-    ).rejects.toThrow("quarantined herdr endpoint under tern");
+    ).rejects.toThrow('set terminal = "herdr" in Tandem\'s settings.toml');
     expect(world.ttyWrites()).toHaveLength(1);
     const path = recordPath(world.home, world.sessionId, world.repoPath);
     await writeFile(
@@ -122,7 +122,7 @@ test("only Tern hosts native views, and the saved choice decides which terminal 
   });
 });
 
-test("Tern launch context needs its injected workspace and namespace, and mixed contexts fail closed", () => {
+test("Tern launch context needs its injected workspace and namespace, a user's own Tern pane is outside, and mixed contexts fail closed", () => {
   const tern = { TERN_PANE: "42", TANDEM_SESSION: "daemon", TANDEM_TERN_WORKSPACE_ID: "tab" };
   expect(terminalContext.inheritedPane(tern)).toEqual({
     status: "inside",
@@ -130,7 +130,10 @@ test("Tern launch context needs its injected workspace and namespace, and mixed 
     workspaceId: "tab",
     paneId: "42",
   });
-  expect(terminalContext.inheritedPane({ TERN_PANE: "42" }).status).toBe("invalid");
+  expect(terminalContext.inheritedPane({ TERN_PANE: "42" }).status).toBe("outside");
+  expect(
+    terminalContext.inheritedPane({ TERN_PANE: "42", TANDEM_TERN_WORKSPACE_ID: "tab" }).status,
+  ).toBe("invalid");
   const herdr = {
     HERDR_ENV: "1",
     HERDR_SESSION: "other",

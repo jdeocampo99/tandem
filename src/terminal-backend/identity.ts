@@ -14,7 +14,7 @@ export function assertTerminalEndpoint(terminal: TerminalName, endpoint: Endpoin
   if (endpoint.terminal !== terminal) {
     throw new EndpointOwnershipError(
       endpoint,
-      `quarantined ${endpoint.terminal} endpoint under ${terminal}; switch back to inspect it`,
+      `it is a ${endpoint.terminal} pane but this Tandem home uses ${terminal}; set terminal = "${endpoint.terminal}" in Tandem's settings.toml to manage it`,
     );
   }
 }
