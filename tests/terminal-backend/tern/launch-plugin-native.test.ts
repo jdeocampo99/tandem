@@ -5,9 +5,8 @@ import { fileURLToPath } from "node:url";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { findRunningCoordinator } from "../../../src/coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { type Action, Outcome, parseBlockArgs } from "../../../src/native/contract.ts";
-import { publishViews, viewIndexPath } from "../../../src/native/store.ts";
+import { publishViews, recordVisit, viewIndexPath } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks } from "../../../src/terminal-backend/tern/protocol.ts";
@@ -302,17 +301,14 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
           };
         });
       // Switch through the actual CLI. An aged, changed visit must automatically open B's catch-up.
-      await visitNativeProject(
-        {
-          home,
-          project: b,
-          now: new Date(Date.now() - 7_200_000).toISOString(),
-          signature: "before",
-        },
-        async () => {
+      await recordVisit(home, b, {
+        kind: "entry",
+        now: new Date(Date.now() - 7_200_000).toISOString(),
+        signature: "before",
+        showCatchUp: async () => {
           throw new Error("baseline visit must not show catch-up");
         },
-      );
+      });
       await publish(a);
       await publish(b);
       const target = records.findIndex((r) => r.repoPath === b) + 1;

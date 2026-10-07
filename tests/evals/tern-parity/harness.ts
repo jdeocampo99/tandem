@@ -3,11 +3,15 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { nativeAlertCounts } from "../../../src/board/native-alerts.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { runTerminal } from "../../../src/main.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { readProjectState, viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
+import {
+  nativeAlertCounts,
+  readPublished,
+  recordVisit,
+  viewDetailPath,
+  viewIndexPath,
+} from "../../../src/native/store.ts";
 import { createTandemService, type TandemService } from "../../../src/service/controller.ts";
 import { installTerminalPlugin, terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { luauBinary } from "../../luau.ts";
@@ -453,18 +457,14 @@ export class TernParityHost {
    */
   async stepAway(away: ScenarioTernProject, minutes: number, changed: boolean): Promise<void> {
     const { home, repoPath } = this.world;
-    const signature = (await readProjectState(home, this.project.repoPath))?.published
-      ?.changeSignature;
+    const signature = (await readPublished(home, this.project.repoPath))?.changeSignature;
     await this.focus(Number(away.coordinator.paneId));
-    await visitNativeProject(
-      {
-        home,
-        project: repoPath,
-        now: new Date(Date.parse(this.world.clock()) - minutes * 60_000).toISOString(),
-        signature: changed ? "before" : (signature ?? ""),
-      },
-      async () => {},
-    );
+    await recordVisit(home, repoPath, {
+      kind: "entry",
+      now: new Date(Date.parse(this.world.clock()) - minutes * 60_000).toISOString(),
+      signature: changed ? "before" : (signature ?? ""),
+      showCatchUp: async () => {},
+    });
     await this.focus(Number(this.project.coordinator.paneId));
   }
 

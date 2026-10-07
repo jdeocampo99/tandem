@@ -5,7 +5,7 @@ import type { Endpoint } from "../../contracts.ts";
 import { blockArgs, type Placement, setupFile, type ViewKind } from "../../native/contract.ts";
 import {
   type Published,
-  readProjectState,
+  readPublished,
   viewDetailPath,
   viewIndexPath,
 } from "../../native/store.ts";
@@ -228,7 +228,7 @@ export function ternViewHost(commands: TernCli) {
           ? nativeBriefFile(input.view.requestId)
           : input.view.kind === "setup"
             ? setupFile(input.view.mode)
-            : detailForView((await readProjectState(input.home, project))?.published, input.view);
+            : detailForView(await readPublished(input.home, project), input.view);
       if (["task", "brief", "pr"].includes(input.view.kind) && detail === undefined)
         throw new Error(`Native ${input.view.kind} detail is not ready`);
       const path =
