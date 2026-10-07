@@ -405,14 +405,12 @@
       "style/noNestedTernary": 1,
       "suspicious/noShadow": 2
     },
+    "src/pr-review/receipts.ts": {
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "complexity/noExcessiveLinesPerFunction": 2
+    },
     "src/pr-review/render.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
-    },
-    "src/pr-review/reply-posting.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 2,
-      "complexity/useMaxParams": 1,
-      "style/noNestedTernary": 1
     },
     "src/pr-review/review.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -431,11 +429,10 @@
       "tandem/type-assertion": 1
     },
     "src/pr-review/service.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 3,
-      "complexity/noExcessiveLinesPerFunction": 3,
-      "complexity/useMaxParams": 1,
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 3
+      "suspicious/noShadow": 2
     },
     "src/pr-review/state.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
