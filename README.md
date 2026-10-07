@@ -91,6 +91,13 @@ it. A task keeps a copy of its specialist, so editing the file later never chang
 under way. `tandem specialists` lists them all and any file problems. See
 [task-lifecycle.md](docs/reference/task-lifecycle.md#specialists) for the full format.
 
+On Tern, **Settings › Specialists** shows every specialist and what replaces what. Create, edit,
+or remove your own there, start from a built-in with **Customize**, and use **Share with team…**
+to start a task that adds yours to a repository in a pull request once you approve it. You can
+also just ask in chat ("make me a specialist that writes release notes from merged PRs"): Tandem
+drafts it and opens it in Settings for you to review and save. On Herdr it shows you the whole file
+and saves it to `~/.tandem/specialists/` only after you say yes.
+
 ### Validation and independent review
 
 Every change runs your project's tests, types, and lint first. Then **a fresh reviewer agent that

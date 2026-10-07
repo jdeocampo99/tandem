@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, dirname, relative } from "node:path";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
 import {
   type BalancedProfileProposal,
@@ -17,6 +17,14 @@ import {
 import { type ClaudeCodeAvailability, modsOffReason } from "../harness/claude-code/availability.ts";
 import { CLAUDE_CODE_MODELS } from "../harness/claude-code/models.ts";
 import { harnessOfSelector, type KnownHarness, type ModelRecord } from "../harness/contract.ts";
+import { BUILT_IN_SPECIALISTS } from "../specialists/built-in.ts";
+import { RESERVED_SPECIALIST_NAME, type SpecialistRegistry } from "../specialists/registry.ts";
+import {
+  SPECIALIST_LIMITS,
+  type SpecialistFields,
+  type SpecialistOrigin,
+  specialistFields,
+} from "../specialists/specialist.ts";
 
 /**
  * The setup block's view model: everything it shows and every choice it offers, assembled from
@@ -29,7 +37,7 @@ export type SetupMode = (typeof SETUP_MODES)[number];
  * The Settings tab to show first, set only by a publication that opens Settings at one; an
  * absent section leaves the block where it is.
  */
-export const SETUP_SECTIONS = ["models", "repositories", "bug-reports"] as const;
+export const SETUP_SECTIONS = ["models", "repositories", "specialists", "bug-reports"] as const;
 export type SetupSection = (typeof SETUP_SECTIONS)[number];
 
 export type SetupView = Readonly<{
@@ -48,6 +56,21 @@ export type SetupView = Readonly<{
   candidates: readonly SetupRepo[];
   selfImprovement: SelfImprovementMode;
   section?: SetupSection;
+  /** Settings only: every specialist the project's new tasks could use, and the Just-me files. */
+  specialists?: SetupSpecialists;
+  /**
+   * Settings only, set by the publication `draft-specialist` makes; the block adopts it once per
+   * newer file as an unsaved specialist. Every other publication leaves it out.
+   */
+  chatDraft?: SpecialistChatDraft;
+}>;
+
+/** A specialist the coordinator drafted from the user's words, shown unsaved in Settings. */
+export type SpecialistChatDraft = Readonly<{
+  /** The user's words, quoted in the banner. */
+  request: string;
+  name: string;
+  fields: SpecialistFields;
 }>;
 
 /** One harness's group in the model pickers; `unavailable` says why it offers no models. */
@@ -120,6 +143,42 @@ export type SetupRepoFacts = Readonly<{
   inspectionError?: string;
 }>;
 
+export type SetupSpecialists = Readonly<{
+  /** The project whose `.tandem/specialists` holds the team's files. */
+  project: string;
+  /** Where Just-me files live, such as `~/.tandem/specialists`. */
+  homeFolder: string;
+  teamFolder: string;
+  /** Team, then Just me, then built-in, each by name. */
+  rows: readonly SetupSpecialistRow[];
+  /** Problems no row shows: unreadable folders, misnamed files, too many descriptions to guess between. */
+  problems: readonly string[];
+  /** What the block checks a form against before Save; TypeScript checks everything again on save. */
+  limits: typeof SPECIALIST_LIMITS & Readonly<{ reserved: readonly string[] }>;
+}>;
+
+type SpecialistRowBase = Readonly<{
+  name: string;
+  /** `repository` is the team's, `home` is Just me. */
+  origin: SpecialistOrigin;
+  status: Readonly<{ text: string; tone: "muted" | "info" | "error" }>;
+  /** A file of higher precedence with the same name replaces this one; drawn dimmed. */
+  hiddenBy?: "repository" | "home";
+  /** File rows: `~/…` for Just me, relative to the repository for the team. */
+  shownPath?: string;
+  /** Just-me rows read whole: echoed by an update, a remove and a share so a changed file is refused. */
+  revision?: string;
+}>;
+export type SetupSpecialistRow =
+  | (SpecialistRowBase &
+      Readonly<{
+        state: "ready";
+        /** The description, or "Only when named". */
+        summary: string;
+        fields: SpecialistFields;
+      }>)
+  | (SpecialistRowBase & Readonly<{ state: "broken"; problem: string }>);
+
 export type SetupViewInput = Readonly<{
   mode: SetupMode;
   generatedAt: IsoTimestamp;
@@ -132,6 +191,8 @@ export type SetupViewInput = Readonly<{
   repos: readonly SetupRepoFacts[];
   /** Saved mode; absent when the user never chose, so setup starts at fix. */
   selfImprovement?: SelfImprovementMode;
+  /** Settings only: the project's specialists, and the project's folder name for the team's. */
+  specialists?: Readonly<{ registry: SpecialistRegistry; project: string }>;
 }>;
 
 type RoleCopy = Omit<SetupRole, "id" | "pick" | "recommended">;
@@ -343,6 +404,108 @@ export function buildSetupView(input: SetupViewInput): SetupView {
     repos: repos.filter((repo) => repo.setUp),
     candidates: repos.filter((repo) => !repo.setUp),
     selfImprovement: input.selfImprovement ?? "fix",
+    ...(input.specialists === undefined
+      ? {}
+      : {
+          specialists: setupSpecialists(
+            input.specialists.registry,
+            input.homeFolder,
+            input.specialists.project,
+          ),
+        }),
+  };
+}
+
+const ORIGIN_RANK: Readonly<Record<SpecialistOrigin, number>> = {
+  repository: 0,
+  home: 1,
+  "built-in": 2,
+};
+
+/** Every team file, every Just-me file and every built-in, with the words each row shows. */
+export function setupSpecialists(
+  registry: SpecialistRegistry,
+  homeFolder: string,
+  project: string,
+): SetupSpecialists {
+  const checkout = dirname(dirname(registry.folders.repository));
+  const shown = (path: string) =>
+    path.startsWith(`${registry.folders.repository}/`)
+      ? relative(checkout, path)
+      : shownPath(path, homeFolder);
+  const row = (
+    origin: SpecialistOrigin,
+    name: string,
+    content: Readonly<{ fields: SpecialistFields } | { problem: string }>,
+    file?: Readonly<{ path: string; revision?: string }>,
+  ): SetupSpecialistRow => {
+    // Files come team first, so the first file above this row is the one that replaces it.
+    const hiddenBy = registry.files.find(
+      (other) => other.name === name && ORIGIN_RANK[other.origin] < ORIGIN_RANK[origin],
+    )?.origin;
+    const replacesBuiltIn =
+      origin !== "built-in" && BUILT_IN_SPECIALISTS.some((builtIn) => builtIn.name === name);
+    const base = {
+      name,
+      origin,
+      ...(hiddenBy === undefined ? {} : { hiddenBy }),
+      ...(file === undefined ? {} : { shownPath: shown(file.path) }),
+      ...(file?.revision === undefined || origin !== "home" ? {} : { revision: file.revision }),
+    };
+    if ("problem" in content) {
+      return {
+        ...base,
+        state: "broken",
+        status: { text: content.problem, tone: "error" },
+        problem: content.problem,
+      };
+    }
+    const steps = content.fields.steps.length;
+    const status =
+      hiddenBy === "repository"
+        ? { text: "Replaced by team", tone: "muted" as const }
+        : hiddenBy === "home"
+          ? { text: "Replaced by yours", tone: "muted" as const }
+          : replacesBuiltIn
+            ? { text: "Replaces built-in", tone: "info" as const }
+            : {
+                text:
+                  steps === 0 ? "Instructions only" : `${steps} ${steps === 1 ? "step" : "steps"}`,
+                tone: "muted" as const,
+              };
+    return {
+      ...base,
+      state: "ready",
+      status,
+      summary: content.fields.description ?? "Only when named",
+      fields: content.fields,
+    };
+  };
+  const rows = [
+    ...registry.files.map((file) =>
+      row(
+        file.origin,
+        file.name,
+        file.result.valid
+          ? { fields: specialistFields(file.result.specialist) }
+          : { problem: file.result.defect },
+        file,
+      ),
+    ),
+    ...BUILT_IN_SPECIALISTS.map((specialist) =>
+      row("built-in", specialist.name, { fields: specialistFields(specialist) }),
+    ),
+  ];
+  const filePaths = new Set(registry.files.map((file) => file.path));
+  return {
+    project,
+    homeFolder: shownPath(registry.folders.home, homeFolder),
+    teamFolder: relative(checkout, registry.folders.repository),
+    rows,
+    problems: registry.problems.flatMap(({ path, problem }) =>
+      path === undefined ? [problem] : filePaths.has(path) ? [] : [`${shown(path)} ${problem}`],
+    ),
+    limits: { ...SPECIALIST_LIMITS, reserved: [RESERVED_SPECIALIST_NAME] },
   };
 }
 

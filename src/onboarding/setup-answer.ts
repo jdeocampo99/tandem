@@ -3,6 +3,9 @@ import type { SelfImprovementMode } from "../config/home-settings.ts";
 import { type AgentRole, MODEL_ROLE_ORDER, type ModelSpec, THINKING_LEVELS } from "../contracts.ts";
 import { CLAUDE_CODE_PROVIDER } from "../harness/claude-code/models.ts";
 import type { ModelRecord } from "../harness/contract.ts";
+import type { SpecialistChange } from "../specialists/home-files.ts";
+import { RESERVED_SPECIALIST_NAME } from "../specialists/registry.ts";
+import { type SpecialistFields, specialistMarkdown } from "../specialists/specialist.ts";
 import { SETUP_MODES, SETUP_ROLE_COPY, type SetupMode } from "./setup-view.ts";
 
 /**
@@ -15,6 +18,8 @@ export type SetupAnswer = Readonly<{
   models: Readonly<Record<AgentRole, ModelSpec>>;
   repositories: readonly SetupAnswerRepo[];
   selfImprovement: SelfImprovementMode;
+  /** Just-me files to change, at most one change per name; settings only. A missing key is none. */
+  specialists: readonly SpecialistChange[];
 }>;
 
 /**
@@ -44,6 +49,8 @@ export type SetupAnswerFacts = Readonly<{
   catalogue: readonly ModelRecord[];
   /** Keyed by the answer's own path spelling. */
   repositories: ReadonlyMap<string, SetupRepoCheck>;
+  /** Just-me files by name; the revision is absent when the file could not be read whole. */
+  homeSpecialists: ReadonlyMap<string, Readonly<{ revision?: string }>>;
 }>;
 
 export type ParsedSetupAnswer =
@@ -51,8 +58,16 @@ export type ParsedSetupAnswer =
   | Readonly<{ ok: false; problems: readonly string[] }>;
 
 const SELF_IMPROVEMENT_MODES: readonly SelfImprovementMode[] = ["off", "fix", "report"];
-const ANSWER_KEYS = ["tandemSetup", "mode", "models", "repositories", "selfImprovement"] as const;
+const ANSWER_KEYS = [
+  "tandemSetup",
+  "mode",
+  "models",
+  "repositories",
+  "selfImprovement",
+  "specialists",
+] as const;
 const REPO_KEYS = ["path", "validationCommands", "setupCommands"];
+const REVISION = /^[0-9a-f]{64}$/u;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -95,6 +110,8 @@ export function parseSetupAnswer(text: string): ParsedSetupAnswer {
   unknownKeys(value, ANSWER_KEYS, "The answer", problems);
   const models = parseModels(value.models, problems);
   const repositories = parseRepositories(value.repositories, problems);
+  const specialists =
+    value.specialists === undefined ? [] : parseSpecialistChanges(value.specialists, problems);
   const selfImprovement = SELF_IMPROVEMENT_MODES.find((mode) => mode === value.selfImprovement);
   if (selfImprovement === undefined) {
     problems.push('selfImprovement must be "off", "fix", or "report".');
@@ -109,7 +126,7 @@ export function parseSetupAnswer(text: string): ParsedSetupAnswer {
   ) {
     return { ok: false, problems };
   }
-  return { ok: true, answer: { mode, models, repositories, selfImprovement } };
+  return { ok: true, answer: { mode, models, repositories, selfImprovement, specialists } };
 }
 
 function parseModels(
@@ -172,6 +189,76 @@ function parseRepositories(value: unknown, problems: string[]): readonly SetupAn
   });
 }
 
+/** The shape only: whether a change can be saved is checkSetupAnswer's question. */
+function parseSpecialistChanges(value: unknown, problems: string[]): readonly SpecialistChange[] {
+  if (!Array.isArray(value)) {
+    problems.push("specialists must be a list.");
+    return [];
+  }
+  return value.flatMap((entry: unknown, index): SpecialistChange[] => {
+    const where = `specialists[${index}]`;
+    if (!isRecord(entry) || typeof entry.name !== "string") {
+      problems.push(`${where} has no name.`);
+      return [];
+    }
+    const name = entry.name;
+    const op = entry.op;
+    const revision =
+      typeof entry.revision === "string" && REVISION.test(entry.revision)
+        ? entry.revision
+        : undefined;
+    if (op !== "create" && op !== "update" && op !== "remove") {
+      problems.push(`${where}.op must be "create", "update", or "remove".`);
+      return [];
+    }
+    const keys = { create: ["fields"], update: ["revision", "fields"], remove: ["revision"] }[op];
+    unknownKeys(entry, ["op", "name", ...keys], where, problems);
+    if (op !== "create" && revision === undefined) {
+      problems.push(`${where} has no revision.`);
+      return [];
+    }
+    if (op === "remove") return revision === undefined ? [] : [{ op, name, revision }];
+    const fields = parseSpecialistFields(entry.fields, where, problems);
+    if (fields === undefined) return [];
+    if (op === "create") return [{ op, name, fields }];
+    return revision === undefined ? [] : [{ op, name, revision, fields }];
+  });
+}
+
+function parseSpecialistFields(
+  value: unknown,
+  where: string,
+  problems: string[],
+): SpecialistFields | undefined {
+  if (!isRecord(value)) {
+    problems.push(`${where} has no fields.`);
+    return undefined;
+  }
+  const keys = ["label", "description", "instructions", "steps"];
+  unknownKeys(value, keys, `${where}.fields`, problems);
+  const { label, description, instructions, steps } = value;
+  const stepList = Array.isArray(steps)
+    ? steps.filter((step): step is string => typeof step === "string")
+    : undefined;
+  if (
+    typeof label !== "string" ||
+    (description !== undefined && typeof description !== "string") ||
+    typeof instructions !== "string" ||
+    stepList === undefined ||
+    !Array.isArray(steps) ||
+    stepList.length !== steps.length
+  ) {
+    problems.push(`${where}.fields must be text, with steps a list of text.`);
+    return undefined;
+  }
+  return {
+    label,
+    ...(description === undefined ? {} : { description }),
+    instructions,
+    steps: stepList,
+  };
+}
+
 /**
  * Everything wrong with an answer on this machine, each as one sentence the user can act on; empty
  * when it can be saved as it is.
@@ -208,6 +295,41 @@ export function checkSetupAnswer(answer: SetupAnswer, facts: SetupAnswerFacts): 
   }
   if (answer.mode === "setup" && answer.repositories.length === 0) {
     problems.push("Add at least one repository.");
+  }
+  problems.push(...specialistProblems(answer, facts));
+  return problems;
+}
+
+/**
+ * Refuses the whole answer before anything is saved: a name changed twice, a create over a file
+ * Just me has, an update or remove of a file that changed since Settings showed it, and a file
+ * that would not read back as itself.
+ */
+function specialistProblems(answer: SetupAnswer, facts: SetupAnswerFacts): readonly string[] {
+  if (answer.specialists.length === 0) return [];
+  if (answer.mode === "setup") return ["Specialists are changed in Settings."];
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  for (const change of answer.specialists) {
+    const { name } = change;
+    if (seen.has(name)) problems.push(`${name} is changed twice.`);
+    seen.add(name);
+    const existing = facts.homeSpecialists.get(name);
+    if (change.op === "create") {
+      if (name === RESERVED_SPECIALIST_NAME) {
+        problems.push(`${name} is Tandem's own fix-round checklist; pick another name.`);
+      } else if (existing !== undefined) {
+        problems.push(`Just me already has ${name}. Pick another name.`);
+      }
+    } else if (existing === undefined) {
+      problems.push(`${name} is no longer in Just me. Reopen Settings.`);
+    } else if (existing.revision !== change.revision) {
+      problems.push(`${name} changed on disk since Settings showed it. Reopen Settings.`);
+    }
+    if (change.op !== "remove") {
+      const written = specialistMarkdown(name, change.fields);
+      if (!written.ok) problems.push(`${name}: ${written.problem}.`);
+    }
   }
   return problems;
 }

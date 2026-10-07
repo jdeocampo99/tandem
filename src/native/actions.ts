@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { runCommand } from "../adapters/commands.ts";
 import { markNativeAlertsRead, nativeAlertCounts } from "../board/native-alerts.ts";
 import {
@@ -9,13 +10,11 @@ import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import { type CoordinatorRecord, canonicalPath, pathIsWithin } from "../coordinator/record.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
-import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import {
   dismissNativeCatchUp,
   recordNativeVisibility,
   tryShowCatchUp,
 } from "../memory/native-visits.ts";
-import { remainingOnboardingSteps } from "../onboarding/checklist.ts";
 import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
 import type { SetupMode, SetupSection } from "../onboarding/setup-view.ts";
 import { parseReviewSubmission } from "../pr-review/page.ts";
@@ -288,6 +287,7 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
     );
   },
   "setup-save": saveSetup,
+  "specialist-share": shareSpecialist,
 };
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
@@ -898,19 +898,15 @@ async function publishSetup(
   mode: SetupMode,
   section?: SetupSection,
 ): Promise<void> {
-  const view = await act.service().setupView(owner.repoPath, mode);
-  const setup = section === undefined ? view : { ...view, section };
+  const setup = await act
+    .service()
+    .setupView(owner.repoPath, mode, section === undefined ? {} : { section });
   await publishViews(act.environment.home, owner.repoPath, async () => ({ setup }));
 }
 
+/** Settings refuses through `setupView` while the Tandem checkout's own setup is unfinished. */
 async function openSetup(act: Act, mode: SetupMode, section?: SetupSection): Promise<Outcome> {
   const owner = await ternOwner(act, "opening setup");
-  if (
-    mode === "settings" &&
-    (await isTandemCheckout(owner.repoPath)) &&
-    remainingOnboardingSteps(await act.service().onboardingFacts(owner.repoPath)).length > 0
-  )
-    throw new Error("Finish setting up Tandem first. Settings open once setup is saved.");
   await publishSetup(act, owner, mode, section);
   return viewOutcome(await show(act, owner, { kind: "setup", mode }));
 }
@@ -954,4 +950,36 @@ async function saveSetup(
   if (!result.complete)
     return notice("kept", "setup-incomplete", [result.message, ...warnings].join("\n"));
   return warnings.length === 0 ? DONE : notice("done", "setup-incomplete", warnings.join("\n"));
+}
+
+/**
+ * Starts the task that proposes one Just-me specialist to a repository's team, then tells the
+ * coordinator in fixed words so it can ask the user to approve it. The task exists once this
+ * returns; failing to tell the coordinator only adds to the notice.
+ */
+async function shareSpecialist(
+  act: Act,
+  { name, revision, repoPath }: Extract<Action, { verb: "specialist-share" }>,
+): Promise<Outcome> {
+  const owner = await ternOwner(act, "sharing a specialist");
+  const task = await act
+    .service()
+    .shareSpecialist(owner.repoPath, { name, revision, target: repoPath });
+  const where = basename(task.target?.checkout ?? task.repoPath);
+  const file = `.tandem/specialists/${name}.md`;
+  const warnings: string[] = [];
+  try {
+    await promptCoordinator(
+      act,
+      owner,
+      `From Settings: the user asked to share their specialist ${name} with their team. Task ${task.id} adds ${file} to ${where} in a pull request and is waiting for approval. Show it to the user and ask whether to approve it.`,
+    );
+  } catch (error) {
+    warnings.push(`The coordinator could not be told: ${message(error)}`);
+  }
+  return notice(
+    "done",
+    "specialist-shared",
+    [`Started a task to add ${file} to ${where}. Approve it in the chat.`, ...warnings].join("\n"),
+  );
 }

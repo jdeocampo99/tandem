@@ -7,6 +7,15 @@ export const SPECIALIST_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 export const MAX_SPECIALIST_BYTES = 8 * 1024;
 const MAX_LABEL_LENGTH = 60;
 const MAX_DESCRIPTION_LENGTH = 300;
+/** The numbers the Settings block checks against, so the Luau holds no copies of them. */
+export const SPECIALIST_LIMITS = {
+  nameLength: 40,
+  /** UTF-16 units, as `String.length` counts them. */
+  labelLength: MAX_LABEL_LENGTH,
+  descriptionLength: MAX_DESCRIPTION_LENGTH,
+  /** Instructions plus the steps joined by newlines, in UTF-8 bytes; also the whole file's cap. */
+  contentBytes: MAX_SPECIALIST_BYTES,
+} as const;
 export const SPECIALIST_ORIGINS = ["built-in", "repository", "home"] as const;
 export type SpecialistOrigin = (typeof SPECIALIST_ORIGINS)[number];
 const FRONTMATTER_KEYS = ["name", "label", "description"] as const;
@@ -42,6 +51,19 @@ export type Specialist = SpecialistContent &
 export type SpecialistCheck =
   | Readonly<{ readonly valid: true; readonly specialist: Specialist }>
   | Readonly<{ readonly valid: false; readonly defect: string }>;
+
+/** What a person writes: everything in a specialist file except its name, which is the file name. */
+export type SpecialistFields = Readonly<{
+  readonly label: string;
+  /** Absent: used only when named. */
+  readonly description?: string;
+  readonly instructions: string;
+  readonly steps: readonly string[];
+}>;
+
+export type SpecialistText =
+  | Readonly<{ readonly ok: true; readonly text: string }>
+  | Readonly<{ readonly ok: false; readonly problem: string }>;
 
 type SpecialistField = "name" | "label" | "description" | "content" | "steps" | "digest" | "path";
 type Defect = Readonly<{ readonly field: SpecialistField; readonly message: string }>;
@@ -183,6 +205,102 @@ export function checkSpecialist(value: unknown): SpecialistCheck {
   return defect === undefined
     ? { valid: true, specialist }
     : { valid: false, defect: defect.message };
+}
+
+/**
+ * The file Tandem writes for `name` and `fields`: flat frontmatter, the instructions, then a
+ * `## Steps` list. Trims the fields first, and refuses anything the parser refuses, a file over
+ * MAX_SPECIALIST_BYTES (the loader's whole-file cap), a value no quoting can hold, and fields that
+ * would not read back as themselves, such as an unclosed code fence or a `## Steps` heading inside
+ * the instructions: it serializes, reads the text back, and compares.
+ */
+export function specialistMarkdown(name: string, fields: SpecialistFields): SpecialistText {
+  if (!SPECIALIST_NAME_PATTERN.test(name)) {
+    return {
+      ok: false,
+      problem: `"${name}" is not a specialist name; use lowercase letters, digits, and hyphens (at most 40)`,
+    };
+  }
+  const wanted = trimmedFields(fields);
+  const source: SpecialistSource = { origin: "home", path: `/${name}.md` };
+  const content: SpecialistContent = { ...source, name, ...wanted };
+  const defect = specialistDefect({ ...content, digest: specialistDigest(content) });
+  if (defect !== undefined) return { ok: false, problem: defect.message };
+  const label = frontmatterText("label", wanted.label);
+  if (!label.ok) return label;
+  const description =
+    wanted.description === undefined
+      ? undefined
+      : frontmatterText("description", wanted.description);
+  if (description !== undefined && !description.ok) return description;
+  const steps =
+    wanted.steps.length === 0 ? [] : ["## Steps", ...wanted.steps.map((step) => `- ${step}`)];
+  const body = [wanted.instructions, steps.join("\n")].filter((part) => part.length > 0);
+  const text = [
+    "---",
+    `name: ${name}`,
+    `label: ${label.text}`,
+    ...(description === undefined ? [] : [`description: ${description.text}`]),
+    "---",
+    `${body.join("\n\n")}\n`,
+  ].join("\n");
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > MAX_SPECIALIST_BYTES) {
+    return {
+      ok: false,
+      problem: `the file would be ${bytes} bytes; a specialist file is at most ${MAX_SPECIALIST_BYTES}`,
+    };
+  }
+  const read = readSpecialistMarkdown(text, source);
+  if (!read.valid) return { ok: false, problem: read.defect.replace(/^line \d+: /u, "") };
+  if (read.specialist.name !== name || !sameFields(specialistFields(read.specialist), wanted)) {
+    return {
+      ok: false,
+      problem:
+        "the instructions would not read back as written; close every code fence and leave out a ## Steps heading",
+    };
+  }
+  return { ok: true, text };
+}
+
+/** The inverse of specialistMarkdown: what Settings shows in a specialist's form. */
+export function specialistFields(specialist: SpecialistContent): SpecialistFields {
+  return {
+    label: specialist.label,
+    ...(specialist.description === undefined ? {} : { description: specialist.description }),
+    instructions: specialist.instructions,
+    steps: specialist.steps,
+  };
+}
+
+function trimmedFields(fields: SpecialistFields): SpecialistFields {
+  const description = fields.description?.trim() ?? "";
+  return {
+    label: fields.label.trim(),
+    ...(description.length === 0 ? {} : { description }),
+    instructions: fields.instructions.replace(/\r\n/gu, "\n").trim(),
+    steps: fields.steps.map((step) => step.trim()),
+  };
+}
+
+function sameFields(left: SpecialistFields, right: SpecialistFields): boolean {
+  return (
+    left.label === right.label &&
+    left.description === right.description &&
+    left.instructions === right.instructions &&
+    left.steps.length === right.steps.length &&
+    left.steps.every((step, index) => step === right.steps[index])
+  );
+}
+
+/** The quoting frontmatterValue reads back: bare unless ` #` or a leading quote needs quotes. */
+function frontmatterText(field: string, value: string): SpecialistText {
+  if (!value.includes(" #") && !value.startsWith('"') && !value.startsWith("'")) {
+    return { ok: true, text: value };
+  }
+  if (!value.includes('"')) return { ok: true, text: `"${value}"` };
+  if (!value.includes("'")) return { ok: true, text: `'${value}'` };
+  return { ok: false, problem: `${field} can't hold both quote kinds and " #"` };
 }
 
 /** The one invariant both readers end in: name, label, description, steps, size, digest, path. */

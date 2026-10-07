@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { NativeViews } from "../../src/board/native-views.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
@@ -37,6 +37,7 @@ import { seedScenarioTask, seedTernProject } from "../evals/scenario.ts";
 import type { TernParityHost } from "../evals/tern-parity/harness.ts";
 import { seedReview, withParity } from "../evals/tern-parity/inventory.ts";
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
+import { task as taskFixture } from "../session/fixtures.ts";
 import { viewsOf, viewsWith } from "../terminal-backend/views.ts";
 import { prIndexEntry, projectRow, publishFixture } from "./view-files.ts";
 
@@ -1857,10 +1858,12 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     for (const { action } of envelopes(host)) verbs.add(action.verb);
   });
   // Merged-PR links have no control in these seeds; the native-screens eval sends them directly.
+  // Share with team needs a registered repository with a GitHub remote, which these seeds lack;
+  // render.test.ts clicks it through the real block and specialist-share.test.ts runs the service.
   expect([...verbs].toSorted()).toEqual(
     Action.options
       .map((option) => option.shape.verb.value)
-      .filter((verb) => verb !== "merged-link")
+      .filter((verb) => verb !== "merged-link" && verb !== "specialist-share")
       .toSorted(),
   );
 }, 240_000);
@@ -2074,6 +2077,45 @@ test("setup-save refuses an answer the CLI cannot parse before saving or prompti
     expect(Action.safeParse({ verb: "setup-save" }).success).toBe(false);
     expect(Action.safeParse({ verb: "setup-save", answer: [] }).success).toBe(false);
     expect(Action.safeParse({ verb: "setup-save", answer: {}, extra: 1 }).success).toBe(false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("specialist-share starts the task and tells the coordinator in fixed words which one to approve", async () => {
+  const f = await fixture("tern");
+  try {
+    const shares: unknown[] = [];
+    const service: TandemService = {
+      ...f.service,
+      shareSpecialist: async (repoPath, share) => {
+        shares.push(share);
+        return taskFixture({ id: "task-9", repoPath });
+      },
+    };
+    const revision = "a".repeat(64);
+    const share = { verb: "specialist-share", name: "release-notes", revision, repoPath: f.repo };
+    const file = ".tandem/specialists/release-notes.md";
+    const where = basename(f.repo);
+    expect(await f.act(share, { deps: { service } })).toEqual({
+      status: "done",
+      notice: {
+        code: "specialist-shared",
+        text: `Started a task to add ${file} to ${where}. Approve it in the chat.`,
+      },
+    });
+    expect(shares).toEqual([{ name: "release-notes", revision, target: f.repo }]);
+    expect(f.prompts).toEqual([
+      `From Settings: the user asked to share their specialist release-notes with their team. Task task-9 adds ${file} to ${where} in a pull request and is waiting for approval. Show it to the user and ask whether to approve it.`,
+    ]);
+
+    for (const bad of [
+      { ...share, name: "Release Notes" },
+      { ...share, revision: "abc" },
+      { ...share, repoPath: "relative" },
+      { ...share, extra: true },
+    ])
+      expect(Action.safeParse(bad).success).toBe(false);
   } finally {
     await f.close();
   }

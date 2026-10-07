@@ -9,7 +9,9 @@ import {
   type SetupModel,
   type SetupView,
   type SetupViewInput,
+  setupSpecialists,
 } from "../../src/onboarding/setup-view.ts";
+import { specialistsFixture } from "./setup-fixture.ts";
 
 const catalogue: readonly ModelRecord[] = [
   {
@@ -262,4 +264,74 @@ test("a recommended thinking level the model lacks moves to the nearest one it s
   // Medium sits one step from both; the lighter level wins the tie.
   expect(recommended.scout?.model).toEqual({ model: "claude-code/sonnet", thinking: "low" });
   expect(recommended.coordinator?.model).toEqual({ model: "claude-code/fable", thinking: "high" });
+});
+
+test("Settings lists every team, Just-me and built-in specialist with what replaces what", () => {
+  const section = setupSpecialists(specialistsFixture(), "/Users/me", "tandem");
+  expect(section.homeFolder).toBe("~/.tandem/specialists");
+  expect(section.teamFolder).toBe(".tandem/specialists");
+  expect(
+    section.rows.map((row) => [
+      row.origin,
+      row.name,
+      row.status.text,
+      row.state === "ready" ? row.summary : row.problem,
+      row.hiddenBy ?? "",
+      row.shownPath ?? "",
+      row.revision ?? "",
+    ]),
+  ).toEqual([
+    [
+      "repository",
+      "blog-writer",
+      "3 steps",
+      "A post about a shipped feature",
+      "",
+      ".tandem/specialists/blog-writer.md",
+      "",
+    ],
+    [
+      "repository",
+      "seo",
+      'line 3: unknown key "model"; a specialist\'s keys are name, label, description',
+      'line 3: unknown key "model"; a specialist\'s keys are name, label, description',
+      "",
+      ".tandem/specialists/seo.md",
+      "",
+    ],
+    [
+      "home",
+      "release-notes",
+      "1 step",
+      "Only when named",
+      "",
+      "~/.tandem/specialists/release-notes.md",
+      "a".repeat(64),
+    ],
+    [
+      "home",
+      "bug-fix",
+      "Replaces built-in",
+      "Fix a reported bug, test first",
+      "",
+      "~/.tandem/specialists/bug-fix.md",
+      "b".repeat(64),
+    ],
+    ["built-in", "bug-fix", "Replaced by yours", expect.any(String), "home", "", ""],
+    ["built-in", "feature", expect.stringMatching(/^\d+ steps$/u), expect.any(String), "", "", ""],
+    ["built-in", "refactor", "4 steps", expect.any(String), "", "", ""],
+    ["built-in", "perf", "4 steps", expect.any(String), "", "", ""],
+    ["built-in", "general", expect.any(String), expect.any(String), "", "", ""],
+  ]);
+  expect(section.rows.find((row) => row.name === "seo")?.status.tone).toBe("error");
+  expect(section.problems).toEqual([
+    '~/.tandem/specialists/Notes.md "Notes" is not a specialist name',
+  ]);
+  expect(section.limits).toEqual({
+    nameLength: 40,
+    labelLength: 60,
+    descriptionLength: 300,
+    contentBytes: 8192,
+    reserved: ["fix-round"],
+  });
 });

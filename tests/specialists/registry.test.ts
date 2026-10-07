@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -55,6 +56,21 @@ test("repository beats home beats built-in for the same name", async () => {
       )?.replaces,
     ).toEqual(["home", "built-in"]);
     expect(await pinSpecialist(registry, "writer", noGuess)).toMatchObject({ origin: "home" });
+  });
+});
+
+test("files lists hidden layers too, each with the hash of the bytes it was read from", async () => {
+  await withFolders(async (search) => {
+    const home = "---\nname: bug-fix\n---\nHome version.";
+    await writeHome(search, "bug-fix", home);
+    await writeRepository(search, "bug-fix", "---\nname: bug-fix\n---\nRepository version.");
+    const registry = await loadSpecialists(search);
+    expect(registry.files.map((file) => [file.origin, file.name, file.result.valid])).toEqual([
+      ["repository", "bug-fix", true],
+      ["home", "bug-fix", true],
+    ]);
+    expect(registry.files[1]?.revision).toBe(createHash("sha256").update(home).digest("hex"));
+    expect(registry.entries.filter((entry) => entry.status === "ready")).toHaveLength(5);
   });
 });
 
