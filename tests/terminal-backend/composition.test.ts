@@ -13,7 +13,6 @@ import {
   terminalBackend,
   terminalContext,
   terminalContextFor,
-  terminalLaunchEnvironment,
 } from "../../src/terminal-backend/compose.ts";
 import { withScenario } from "../evals/scenario.ts";
 
@@ -115,7 +114,8 @@ test("only Tern hosts native views, and the saved choice decides which terminal 
     expect(saved.views).toBeUndefined();
     await writeFile(settings, 'terminal = "tern"\n');
     expect(saved.name).toBe("tern");
-    expect(await saved.views?.retained(world.home)).toEqual([]);
+    expect(saved.views).toBeDefined();
+    expect(await saved.fences.list(world.home)).toEqual({ fences: [], failures: [] });
     expect(
       terminalBackend(world.run, { terminal: "herdr", home: world.home }).views,
     ).toBeUndefined();
@@ -142,7 +142,11 @@ test("Tern launch context needs its injected workspace and namespace, a user's o
   };
   expect(terminalContext.inheritedPane({ ...herdr, ...tern }).status).toBe("invalid");
   expect(terminalContextFor("tern").inheritedPane(herdr).status).toBe("outside");
-  const env = terminalLaunchEnvironment("tern", { ...herdr, ...tern, PATH: "/bin" });
+  const run: CommandRunner = async () => ({ code: 0, stdout: "", stderr: "" });
+  const env = terminalBackend(run, { terminal: "tern" }).launchEnvironment({
+    overrides: {},
+    inherited: { ...herdr, ...tern, PATH: "/bin" },
+  });
   expect(terminalContext.inheritedPane(env)).toEqual({
     status: "inside",
     sessionId: "daemon",

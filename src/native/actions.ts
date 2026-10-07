@@ -1,5 +1,4 @@
 import { runCommand } from "../adapters/commands.ts";
-import { markNativeAlertsRead, nativeAlertCounts } from "../board/native-alerts.ts";
 import {
   resolveTandemEnvironment,
   type TandemBoundaryEnvironment,
@@ -8,16 +7,13 @@ import {
 import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import { type CoordinatorRecord, canonicalPath, pathIsWithin } from "../coordinator/record.ts";
+import { decideRecordedOwner } from "../coordinator/recorded-owner.ts";
 import { discoverCoordinatorRecords } from "../coordinator/registry.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
-import {
-  dismissNativeCatchUp,
-  recordNativeVisibility,
-  tryShowCatchUp,
-} from "../memory/native-visits.ts";
+import { tryShowCatchUp } from "../memory/native-visits.ts";
 import { remainingOnboardingSteps } from "../onboarding/checklist.ts";
 import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
-import type { SetupMode, SetupSection } from "../onboarding/setup-view.ts";
+import { SETUP_MODES, type SetupMode, type SetupSection } from "../onboarding/setup-view.ts";
 import { parseReviewSubmission } from "../pr-review/page.ts";
 import { validateThreadReplies } from "../pr-review/replies.ts";
 import { parseReviewReplies } from "../pr-review/review.ts";
@@ -40,6 +36,7 @@ import { terminalBackend } from "../terminal-backend/compose.ts";
 import type {
   OpenViewResult,
   PaneListing,
+  ProvableView,
   TerminalBackend,
   TerminalView,
 } from "../terminal-backend/contract.ts";
@@ -52,7 +49,15 @@ import {
   parseBlockContext,
   type ViewRef,
 } from "./contract.ts";
-import { type Published, publishViews, readProjectState, viewIndexPath } from "./store.ts";
+import {
+  markNativeAlertsRead,
+  nativeAlertCounts,
+  type Published,
+  publishViews,
+  readPublished,
+  recordVisit,
+  viewIndexPath,
+} from "./store.ts";
 
 /** Review submissions are the largest envelopes; brief feedback alone is capped at 64,000 bytes. */
 const MAX_ENVELOPE_BYTES = 1024 * 1024;
@@ -74,6 +79,8 @@ type Act = Readonly<{
   origin: Origin;
   /** The context a block origin echoed; a window command has none. It proves nothing alone. */
   block?: BlockContext;
+  /** The one recorded coordinator whose session lists the origin pane; no process is proved. */
+  record: CoordinatorRecord;
   run: CommandRunner;
   terminal: TerminalBackend;
   service: () => TandemService;
@@ -146,6 +153,18 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
         return created;
       },
     };
+    // The authority table's mapped type pairs each verb with its own action variant.
+    const authority = VERB_AUTHORITY[envelope.action.verb] as Authority<Action>;
+    if (authority.kind === "approval") {
+      const refusal = await proveBlockOrigin(act, authority.views(envelope.action));
+      if (refusal !== undefined) return refusal;
+    }
+    if (authority.kind === "reply" && act.origin.paneId !== act.record.endpoint.paneId)
+      return notice(
+        "refused",
+        "origin-unproven",
+        "Only a link in the coordinator conversation can answer this. Nothing was changed.",
+      );
     // The verb table's mapped type pairs each handler with its own action variant.
     const handler = HANDLERS[envelope.action.verb] as Handler<Action["verb"]>;
     return await handler(act, envelope.action as never);
@@ -252,8 +271,146 @@ async function locate(
     },
     origin,
     ...(block === undefined ? {} : { block }),
+    record,
     terminal,
   };
+}
+
+/**
+ * What a verb may do on the user's behalf. `navigation` only shows, focuses or records what the
+ * user looked at, so any pane the project's session lists may send it. `reply` answers from a
+ * reply link Tandem wrote into the coordinator conversation, so only the recorded coordinator's own
+ * pane may send it. `approval` approves or changes scope, answers or directs work in the user's
+ * name, posts, restarts or saves settings, so only one of `views(action)`, proved by
+ * `proveBlockOrigin`, may send it.
+ */
+type Authority<A extends Action> =
+  | Readonly<{ kind: "navigation" }>
+  | Readonly<{ kind: "reply" }>
+  | Readonly<{ kind: "approval"; views: (action: A) => readonly ProvableView[] }>;
+
+const NAVIGATION = { kind: "navigation" } as const;
+const taskViews = (action: Readonly<{ taskId: string }>): readonly ProvableView[] => [
+  { kind: "task", taskId: action.taskId },
+  { kind: "pr", taskId: action.taskId },
+];
+
+/**
+ * Every verb's authority, next to the verb table. The mapped type makes it exhaustive: a new verb
+ * does not compile until it is classified here.
+ */
+export const VERB_AUTHORITY: {
+  readonly [V in Action["verb"]]: Authority<Extract<Action, { verb: V }>>;
+} = {
+  open: NAVIGATION,
+  "open-project": NAVIGATION,
+  project: NAVIGATION,
+  visit: NAVIGATION,
+  "catchup-dismiss": NAVIGATION,
+  "catchup-open-needs": NAVIGATION,
+  "board-link": NAVIGATION,
+  "merged-link": NAVIGATION,
+  restart: { kind: "approval", views: (action) => [{ kind: "task", taskId: action.taskId }] },
+  steer: { kind: "approval", views: (action) => [{ kind: "task", taskId: action.taskId }] },
+  "brief-approve": {
+    kind: "approval",
+    views: (action) => [{ kind: "brief", requestId: action.requestId }],
+  },
+  "brief-request-changes": {
+    kind: "approval",
+    views: (action) => [{ kind: "brief", requestId: action.requestId }],
+  },
+  "quick-start": { kind: "approval", views: () => [{ kind: "quick-task" }] },
+  // A scope answer is a reply link in the conversation; the question itself is rechecked.
+  "quick-answer": { kind: "reply" },
+  "pr-comment": { kind: "approval", views: taskViews },
+  "review-submit": { kind: "approval", views: taskViews },
+  // A setup block of either mode proves the click; saving then parses the answer itself.
+  "setup-save": {
+    kind: "approval",
+    views: ({ answer }) => {
+      const named = SETUP_MODES.filter((mode) => answer.mode === mode);
+      return (named.length > 0 ? named : SETUP_MODES).map((mode) => ({ kind: "setup", mode }));
+    },
+  },
+};
+
+/** Whether a verb acts on the user's behalf and so needs a proven block origin. */
+export function isApprovalVerb(verb: Action["verb"]): boolean {
+  return VERB_AUTHORITY[verb].kind === "approval";
+}
+
+/**
+ * Why an approval-bearing click's origin cannot be this coordinator's block, or undefined when its
+ * echoed context names exactly that coordinator, worktree, home and project. Pure: the terminal
+ * still has to list the pane as that block.
+ */
+export function blockOriginProblem(
+  block: BlockContext | undefined,
+  originPane: string,
+  expected: Readonly<{ coordinator: string; cwd: string; home: string; index: string }>,
+): string | undefined {
+  if (block === undefined)
+    return "Only Tandem's own view can do this. Open it and make the choice there.";
+  if (originPane === expected.coordinator)
+    return "The conversation pane is not a Tandem view. Open the view and make the choice there.";
+  return block.coordinator === expected.coordinator &&
+    block.cwd === expected.cwd &&
+    block.home === expected.home &&
+    block.index === expected.index
+    ? undefined
+    : "This view belongs to another coordinator. Open it again from this project.";
+}
+
+/**
+ * An approval-bearing click must come from the exact block Tandem opened for this coordinator. A
+ * pane the project's session lists is not enough: a worker runs in one, knows its own id and can
+ * pipe an envelope into `tandem native act`. Only Tern's listing of the pane's program and launch
+ * arguments proves a block, so Herdr, which hosts none, refuses every such click.
+ */
+async function proveBlockOrigin(
+  act: Act,
+  views: readonly ProvableView[],
+): Promise<Outcome | undefined> {
+  const refuse = (text: string) => notice("refused", "origin-unproven", text);
+  const terminal = act.terminal.views;
+  if (terminal === undefined)
+    return refuse(
+      "Herdr has no Tandem views to prove this click came from you. Make the choice in the coordinator conversation.",
+    );
+  // Tern proves the recorded coordinator pane exactly before it lists the origin; the handler
+  // proves the coordinator's process before it changes anything.
+  const owner = act.record;
+  const problem = blockOriginProblem(act.block, act.origin.paneId, {
+    coordinator: owner.endpoint.paneId,
+    cwd: owner.worktree.path,
+    home: act.environment.home,
+    index: viewIndexPath(act.environment.home, owner.repoPath),
+  });
+  if (problem !== undefined) return refuse(`${problem} Nothing was changed.`);
+  for (const view of views) {
+    let proved: boolean;
+    try {
+      proved = await terminal.isView({
+        coordinator: owner.endpoint,
+        cwd: owner.worktree.path,
+        home: act.environment.home,
+        origin: {
+          paneId: act.origin.paneId,
+          ...(act.origin.windowId === undefined ? {} : { windowId: act.origin.windowId }),
+        },
+        view,
+      });
+    } catch (error) {
+      return refuse(
+        `Tandem could not prove this click came from its own view: ${message(error)}. Nothing was changed.`,
+      );
+    }
+    if (proved) return undefined;
+  }
+  return refuse(
+    "This click did not come from this project's Tandem view for it. Open the view and make the choice there. Nothing was changed.",
+  );
 }
 
 const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
@@ -302,7 +459,7 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
 async function published(act: Act, repoPath: string): Promise<Published> {
-  const shown = (await readProjectState(act.environment.home, repoPath))?.published;
+  const shown = await readPublished(act.environment.home, repoPath);
   if (shown === undefined) throw new Error("This project's native views are not published yet");
   return shown;
 }
@@ -339,19 +496,18 @@ async function coordinator(
 ): Promise<CoordinatorRecord> {
   const canonical = await canonicalPath(repoPath, "repoPath");
   const discovery = await discoverCoordinatorRecords({ home: act.environment.home });
-  const candidates = discovery.records
-    .filter((entry) => entry.placement === "session-directory")
-    .map((entry) => entry.record)
-    .filter(
-      (record) =>
-        record.endpoint.sessionId === act.environment.sessionId &&
-        (record.repoPath === canonical || record.worktree.path === canonical),
-    );
-  if (candidates.length > 1) throw new Error("More than one coordinator claims this project");
+  const claimed = decideRecordedOwner(
+    discovery.records
+      .filter((entry) => entry.placement === "session-directory")
+      .map((entry) => entry.record),
+    { by: "project", sessionId: act.environment.sessionId, path: canonical, terminal: "any" },
+  );
+  if (claimed.status === "ambiguous")
+    throw new Error("More than one coordinator claims this project");
   const owned = await findRunningCoordinator(act.run, act.terminal, {
     home: act.environment.home,
     sessionId: act.environment.sessionId,
-    repoPath: candidates[0]?.repoPath ?? canonical,
+    repoPath: claimed.status === "owned" ? claimed.record.repoPath : canonical,
   });
   if (owned === undefined) throw new Error(`Open this project's coordinator before ${purpose}`);
   return owned;
@@ -544,7 +700,7 @@ async function newRequest(act: Act): Promise<Outcome> {
 
 async function switchProject(act: Act, action: Extract<Action, { verb: "project" }>) {
   const current = await ternOwner(act, "navigating");
-  const model = (await readProjectState(act.environment.home, current.repoPath))?.published;
+  const model = await readPublished(act.environment.home, current.repoPath);
   const age = Date.now() - Date.parse(model?.summary.writtenAt ?? "");
   if (model === undefined || !Number.isFinite(age) || Math.abs(age) > 10_000)
     throw new Error("Project switcher is stale; wait for the coordinator snapshot");
@@ -575,9 +731,8 @@ async function switchProject(act: Act, action: Extract<Action, { verb: "project"
   });
   if (!focused) throw new Error("Tern could not focus the exact project coordinator");
   if (destination.repoPath !== current.repoPath)
-    await recordNativeVisibility({
-      home: act.environment.home,
-      project: current.repoPath,
+    await recordVisit(act.environment.home, current.repoPath, {
+      kind: "away",
       now: new Date().toISOString(),
       signature: model.changeSignature,
     }).catch(() => {});
@@ -612,11 +767,9 @@ async function visit(act: Act, action: Extract<Action, { verb: "visit" }>): Prom
   });
   if (action.event !== "entry") {
     const shown = await published(act, current.repoPath);
-    await recordNativeVisibility({
-      home: act.environment.home,
-      project: current.repoPath,
+    await recordVisit(act.environment.home, current.repoPath, {
+      kind: action.event,
       now: new Date().toISOString(),
-      heartbeat: action.event === "visible",
       signature: shown.changeSignature,
     });
     return DONE;
@@ -676,9 +829,8 @@ async function leaveCatchUp(act: Act, openNeeds: boolean): Promise<Outcome> {
         cwd: owner.worktree.path,
       }),
     );
-  await dismissNativeCatchUp({
-    home: act.environment.home,
-    project: owner.repoPath,
+  await recordVisit(act.environment.home, owner.repoPath, {
+    kind: "dismiss",
     now: new Date().toISOString(),
     signature,
   });
@@ -779,20 +931,9 @@ async function requestChanges(
   const prompt = briefFeedbackPrompt(brief.record, feedback, true);
   const owned = await coordinator(act, brief.record.repoPath);
   await promptCoordinator(act, owned, prompt);
-  if (act.terminal.views !== undefined) {
-    const kept = await closeNativeBrief(act, owned, feedback);
-    return kept === undefined ? DONE : notice("kept", kept.code, kept.text);
-  }
-  try {
-    await service.closeRequestBriefReview(feedback.requestId, feedback.briefRevision);
-    return DONE;
-  } catch (error) {
-    return notice(
-      "kept",
-      "brief-warning",
-      `Feedback was delivered, but the review pane could not be retired: ${message(error)}. Do not resubmit this feedback.`,
-    );
-  }
+  // Only a proven native brief block sends this, so there is no Herdr review pane to retire.
+  const kept = await closeNativeBrief(act, owned, feedback);
+  return kept === undefined ? DONE : notice("kept", kept.code, kept.text);
 }
 
 async function approveBrief(
@@ -955,7 +1096,6 @@ async function startQuick(
   action: Extract<Action, { verb: "quick-start" }>,
 ): Promise<Outcome> {
   const owner = await ternOwner(act, "starting a quick task");
-  await requireQuickTaskBlock(act, owner);
   const checked = checkQuickText(action.text);
   if (!checked.ok) return notice("refused", "failed", checked.problem);
   const started = await startQuickTask(
@@ -970,53 +1110,6 @@ async function startQuick(
         "quick-warning",
         `Task ${started.task.id} started, but the coordinator could not be told: ${started.problem}. Do not start it again.`,
       );
-}
-
-/**
- * Why a click's echoed context is not the quick task composer this coordinator's views launch, or
- * undefined when it names exactly that block's owner. Pure; the terminal still has to prove the pane.
- */
-export function quickTaskContextProblem(
-  block: BlockContext | undefined,
-  expected: Readonly<{ coordinator: string; cwd: string; home: string; index: string }>,
-): string | undefined {
-  if (block === undefined) return "Start a quick task from the quick task composer";
-  return block.coordinator === expected.coordinator &&
-    block.cwd === expected.cwd &&
-    block.home === expected.home &&
-    block.index === expected.index
-    ? undefined
-    : "The quick task composer belongs to another coordinator; open it again from the palette";
-}
-
-/**
- * Start approves scope, so it must come from the composer itself. A pane listed in the project's
- * session is not enough: a worker runs in one, knows its own id and can pipe an envelope into
- * `tandem native act`. Only Tern's record that the exact pane runs this coordinator's
- * `tandem.quick-task` block with the arguments Tandem launched it with proves the click.
- */
-async function requireQuickTaskBlock(act: Act, owner: CoordinatorRecord): Promise<void> {
-  const problem = quickTaskContextProblem(act.block, {
-    coordinator: owner.endpoint.paneId,
-    cwd: owner.worktree.path,
-    home: act.environment.home,
-    index: viewIndexPath(act.environment.home, owner.repoPath),
-  });
-  if (problem !== undefined) throw new Error(`${problem}; no task was started`);
-  const proved = await act.terminal.views?.isView({
-    coordinator: owner.endpoint,
-    cwd: owner.worktree.path,
-    home: act.environment.home,
-    origin: {
-      paneId: act.origin.paneId,
-      ...(act.origin.windowId === undefined ? {} : { windowId: act.origin.windowId }),
-    },
-    view: { kind: "quick-task" },
-  });
-  if (proved !== true)
-    throw new Error(
-      "This click did not come from this project's quick task composer; no task was started",
-    );
 }
 
 /** A scope-question link: the user's own choice, sent through the ordinary answer path. */

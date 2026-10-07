@@ -186,9 +186,9 @@ Install Tern and sign in with your Stencil account before you run Tandem. Tern i
 so you need access as well as an account. Tandem never asks which terminal to use. If Tern is
 missing or Tandem can't link into it, Tandem stops with one message saying it needs Tern.
 
-Tandem asks separately before hiding Tern's sidebar and adding shortcuts for Board, PRs, Usage,
-Settings and switching projects. Decline and you can still use the panel buttons and command
-palette. Setup preserves custom keys; use the palette if a shortcut is already assigned elsewhere.
+The first time Tandem links into Tern, it hides Tern's sidebar (the panel takes its place) and adds
+shortcuts for Board, PRs, Usage, Settings and switching projects. It keeps any custom keys you
+already set; use the command palette if a shortcut is taken.
 
 - **Tasks:** click a task in the panel, follow a task link below Tandem's reply, or choose
   **Tandem: Open task…** in the command palette and search by title, id or stage. The task page
@@ -268,7 +268,7 @@ cd tandem
 
 The script installs Tandem's tools (it still includes Herdr, which Tandem uses only if you opt
 into it) and links Tandem's views into Tern. It stops with a plain message if Tern isn't
-installed. Tandem asks separately about Tern's global sidebar and shortcuts. With
+installed. It also hides Tern's sidebar and adds Tandem's shortcuts. With
 `terminal = "herdr"` in your settings, it instead updates Herdr when older than 0.8.2 and offers
 the panel, keys, tab-bar summary and notifications, showing the changes before asking. Read
 [setup.sh](setup.sh) first if you want to check; it is safe to run again. Keep Bun's global bin

@@ -1,14 +1,9 @@
 import type { TerminalContext } from "../contract.ts";
+import { PANE_IDENTITY_VARIABLES } from "../identity.ts";
 
 /** Tern exports only a pane id. Tandem launch context supplies the daemon and tab ids. */
 export const TERN_CONTEXT: TerminalContext = {
-  variables: [
-    "TERN_PANE",
-    "TERN_PANE_SOCKET",
-    "TERN_WINDOW_KEY",
-    "TERN_WINDOW_SOCKET",
-    "TANDEM_TERN_WORKSPACE_ID",
-  ],
+  variables: PANE_IDENTITY_VARIABLES.tern,
   inheritedPane: (source) => {
     const workspaceId = source.TANDEM_TERN_WORKSPACE_ID;
     // Tandem marks the panes it launches; any other Tern pane is the user's own shell.

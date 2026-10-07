@@ -1,5 +1,6 @@
 import type { CommandRunner } from "../../contracts.ts";
-import type { TerminalBackend } from "../contract.ts";
+import type { LaunchEnvironmentInput, TerminalBackend } from "../contract.ts";
+import { withoutForeignPaneIdentity } from "../identity.ts";
 import {
   close,
   closeOwned,
@@ -36,6 +37,11 @@ import {
   workspaceLabel,
 } from "./workspaces.ts";
 
+// Herdr panes inherit the server's environment, so a pane gets the same environment as the server.
+function launchEnvironment({ overrides, inherited }: LaunchEnvironmentInput) {
+  return withoutForeignPaneIdentity("herdr", { ...inherited, ...overrides });
+}
+
 export type HerdrBackendOptions = Readonly<{ moveWorkspace?: WorkspaceMover }>;
 
 /** The terminal port over `herdr --session <session>` commands sent through `run`. */
@@ -45,9 +51,12 @@ export function herdrBackend(
 ): TerminalBackend {
   return {
     name: "herdr",
-    quarantinedPanes: async () => [],
-    clearPaneQuarantine: async () => {
-      throw new Error("Herdr keeps no pane quarantine records to clear");
+    fences: {
+      list: async () => ({ fences: [], failures: [] }),
+      settle: async (fence) => ({
+        status: "kept",
+        reason: `Herdr keeps no ${fence.kind} records, so it never listed ${fence.path}`,
+      }),
     },
     inspect: (target) => inspect(run, target),
     runCommand: (target) => runCommand(run, target),
@@ -71,6 +80,10 @@ export function herdrBackend(
     sessionDetail: (target) => sessionDetail(run, target),
     serverCommand: (sessionId) => ["herdr", "--session", sessionId, "server"],
     clientCommand: (sessionId) => ["herdr", "--session", sessionId],
+    launchEnvironment,
+    paneEnvironment: launchEnvironment,
+    // Herdr exports its own pane identity into every pane it starts.
+    paneIdentity: () => ({}),
     checkInstall: (target) => checkInstall(run, target),
     notify: (target) => notify(run, target),
     openWelcome: (target) => openWelcome(run, target),

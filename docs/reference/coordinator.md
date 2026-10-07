@@ -5,7 +5,8 @@ one coordinator per repository, and what `update`, `reset`, and `reset --hard` p
 
 Code: src/main.ts, src/terminal/arguments.ts, src/terminal/launch.ts, src/terminal/hard-reset.ts,
 src/config/environment.ts, src/coordinator/launch.ts, src/coordinator/ownership.ts,
-src/coordinator/registry.ts, src/coordinator/record.ts, src/coordinator/lock.ts,
+src/coordinator/registry.ts, src/coordinator/recorded-owner.ts, src/coordinator/record.ts,
+src/coordinator/lock.ts,
 src/coordinator/exclusivity.ts, src/coordinator/resources.ts, src/coordinator/quarantine.ts,
 src/coordinator/workspace.ts,
 src/coordinator/restart.ts, src/coordinator/reset.ts, src/coordinator/source.ts,
@@ -179,6 +180,11 @@ src/coordinator/tandem-checkout.ts). It is where a new user starts and where any
   or new HEAD. Dirty, foreign, or unexpectedly moved checkouts fail closed.
 - Existing task records are never migrated on relaunch; they stay attached to their original
   project identity and pinned source until an explicit recovery decision.
+- `recorded-owner.ts` answers which recorded coordinator owns a pane or a project. A pane claim
+  needs the one record in that session with the same terminal, native session, workspace, tab,
+  pane, generation and worktree cwd; a project claim needs the one record whose repository or
+  worktree is the canonical path, optionally on one terminal and pane. No match and two matches
+  are separate refusals, and neither yields an owner.
 
 ## Launch readiness
 

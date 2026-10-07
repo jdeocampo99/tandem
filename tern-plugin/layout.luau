@@ -78,7 +78,9 @@ local function host(path: string, receipt: string, run: Run): {[string]: string}
   error("Closed pane is still present")
  end
  local pane: number?
- local previous=if ticket.replaced then tonumber(ticket.replaced) else nil
+ -- `replaced` is retired by this open; `returnTo` is the task a picker return keeps.
+ local previousId=ticket.replaced or ticket.returnTo
+ local previous=if previousId then tonumber(previousId) else nil
  local function previousTask(cx: WindowCx, liveSource: PaneInfo?)
   local current=if previous==origin then liveSource elseif previous then cx.session:pane(previous) else nil
   if not current or current.block~="tandem.task" or current.tab~=owner.tab or current.floating then

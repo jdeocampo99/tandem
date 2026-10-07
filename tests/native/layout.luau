@@ -223,11 +223,10 @@ ticket.origin="40"; ticket.replaced="40"
 open(); drain()
 assert(#toasts==0 and panes[40]==nil and not panes[20].floating and done("20"))
 
-reset("panel","return")
+reset("panel","return-picker")
 panes[20].floating=true
 panes[40]={tab=21,block="tandem.task",floating=false}
 panes[50]={tab=21,block="tandem.task-picker",floating=false}
-ticket.origin="50"; ticket.replaced="40"
 open(); drain()
 assert(#toasts==0 and panes[50]==nil and panes[40] and panes[20].floating and done("20"))
 
@@ -239,7 +238,8 @@ for _,source in {"tandem.task-picker","tandem.panel"} do
   panes[20].floating=true
   panes[40]={tab=21,block="tandem.task",floating=false}
   panes[50]={tab=21,block=source,floating=false}
-  ticket.origin="50"; ticket.replaced="40"
+  ticket.origin="50"
+  if source=="tandem.task-picker" then ticket.returnTo="40" else ticket.replaced="40" end
   open()
   drain(function(index)
    if index==6 then
@@ -276,9 +276,10 @@ expire()
 -- T4: every TS-built ticket, with a fault injected at each stage in turn. Each run prints its
 -- receipt and the panes it left, so the test can check `decide()` against them.
 local function setup(name)
- if name=="task/task-replace" or name=="panel/return-task" then
+ if name=="task/task-replace" or name=="panel/return-task" or name=="panel/return-picker" then
   panes[20].floating=true
   panes[40]={tab=21,block="tandem.task",floating=false}
+  if name=="panel/return-picker" then panes[50]={tab=21,block="tandem.task-picker",floating=false} end
  elseif name=="panel/return-board" then
   panes[30]={tab=22,block="tandem.catchup",floating=false}
  end

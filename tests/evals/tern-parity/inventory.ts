@@ -1574,33 +1574,21 @@ export const inventory: readonly InventoryEntry[] = [
   },
   {
     view: "Setup",
-    item: "One consent for sidebar autohide and keys",
+    item: "Sidebar autohide and keys apply once, without a question",
     run: () =>
       withParity(
         async ({ host, world }) => {
-          const question =
-            "Hide Tern's sidebar and use Tandem's board, PR, usage and project shortcuts? These settings apply to every Tern window. Your custom shortcuts stay unchanged. Palette commands and panel buttons work either way.";
-          const unchanged = `Tern's sidebar and shortcuts are unchanged. Tandem is available from the palette and panel buttons. To be asked again, add terminal = "herdr" to Tandem's settings.toml, start Tandem once, then remove that line.\n`;
           const installed = { keybinds: TERN_KEYBINDS, tabs_autohide: true };
-          expect(await host.offerTernPreferences("approved", true)).toEqual({
-            questions: [question],
-            printed: [],
+          expect(await host.applyTernPreferences("fresh")).toEqual({
+            printed: [
+              "Tandem hid Tern's sidebar; the panel replaces it.\n",
+              "Tandem added Tern shortcuts: ⌘⇧B board, ⌘⇧P PRs, ⌘⇧U usage, ⌘⇧, settings, ⌘1–9 projects.\n",
+            ],
             settings: installed,
           });
-          expect(await host.offerTernPreferences("approved", false)).toEqual({
-            questions: [],
+          expect(await host.applyTernPreferences("fresh")).toEqual({
             printed: [],
             settings: installed,
-          });
-          expect(await host.offerTernPreferences("declined", false)).toEqual({
-            questions: [question],
-            printed: [unchanged],
-            settings: undefined,
-          });
-          expect(await host.offerTernPreferences("declined", true)).toEqual({
-            questions: [],
-            printed: [],
-            settings: undefined,
           });
           expect(world.ternPluginLinks()).toHaveLength(1);
         },

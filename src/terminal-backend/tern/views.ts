@@ -11,7 +11,7 @@ import {
 } from "../../native/contract.ts";
 import {
   type Published,
-  readProjectState,
+  readPublished,
   viewDetailPath,
   viewIndexPath,
 } from "../../native/store.ts";
@@ -33,17 +33,23 @@ class BrowserOpenUnconfirmedError extends AdapterError {
 }
 const Clients = z.object({ clients: z.array(z.object({ kind: z.string() })) });
 export type ViewHostingInput = Parameters<ViewsCapability["open"]>[0];
-export async function projectForView(home: string, coordinator: Endpoint): Promise<string> {
-  const { listCoordinatorRecords } = await import("../../coordinator/registry.ts");
-  const records = (await listCoordinatorRecords(home, coordinator.sessionId)).filter(
-    (record) =>
-      record.endpoint.terminal === "tern" &&
-      record.endpoint.paneId === coordinator.paneId &&
-      record.endpoint.terminalSessionId === coordinator.terminalSessionId,
-  );
-  if (records.length !== 1 || records[0] === undefined)
+/** The project of the one recorded coordinator in this exact pane, tab and worktree. */
+export async function projectForView(
+  home: string,
+  coordinator: Endpoint,
+  cwd: string,
+): Promise<string> {
+  const { canonicalPath } = await import("../../coordinator/record.ts");
+  const { findRecordedOwner } = await import("../../coordinator/recorded-owner.ts");
+  const owner = await findRecordedOwner(home, {
+    by: "pane",
+    pane: { ...coordinator, terminal: "tern" },
+    // Records keep the worktree's real path; a harness may report it through a symlink like /tmp.
+    cwd: await canonicalPath(cwd, "cwd"),
+  });
+  if (owner.status !== "owned")
     throw new Error("Native view requires exactly one recorded coordinator");
-  return records[0].repoPath;
+  return owner.record.repoPath;
 }
 
 export function detailForView(
@@ -61,6 +67,34 @@ export function detailForView(
     return pr === undefined ? undefined : nativePrFile(pr.repo, pr.number);
   }
   return undefined;
+}
+
+/**
+ * The detail file a view's block reads, or undefined for a root view. A new draft can open before
+ * the coordinator's background index publication, so a brief or setup needs no published entry.
+ */
+async function detailFile(
+  home: string,
+  project: string,
+  view: Exclude<ViewHostingInput["view"], { kind: "browser" }>,
+): Promise<string | undefined> {
+  if (view.kind === "brief") return nativeBriefFile(view.requestId);
+  if (view.kind === "setup") return setupFile(view.mode);
+  if (view.kind === "quick-task") return QUICK_TASK_FILE;
+  return detailForView(await readPublished(home, project), view);
+}
+
+/** Where a view's block is placed; `isView` proves a block only where an open puts it. */
+function placementFor(view: Exclude<ViewHostingInput["view"], { kind: "browser" }>): Placement {
+  if (view.kind === "task") return "task";
+  return view.kind === "brief" ||
+    view.kind === "pr" ||
+    view.kind === "prs" ||
+    view.kind === "task-picker" ||
+    view.kind === "quick-task" ||
+    (view.kind === "setup" && view.mode === "setup")
+    ? "split"
+    : "window";
 }
 
 /** File routes are the sole CLI-to-block launch port. An uncertain invocation is never repeated. */
@@ -170,39 +204,58 @@ export function ternViewHost(commands: TernCli) {
     await open(input, project, "panel", "return", viewIndexPath(input.home, project));
     return true;
   };
-  /** The origin pane is this coordinator's exact quick task block, as Tern lists it. */
-  const isView = async (input: Parameters<ViewsCapability["isView"]>[0]): Promise<boolean> => {
+  /**
+   * The origin pane is this coordinator's exact block of the view, as Tern lists it: program
+   * `tandem.<kind>`, the launch arguments Tandem gives that view, its session and its placement.
+   */
+  const proveView = async (
+    input: Parameters<ViewsCapability["isView"]>[0],
+    project: string,
+  ): Promise<boolean> => {
     if (input.origin.paneId === input.coordinator.paneId) return false;
-    const project = await projectForView(input.home, input.coordinator);
+    const detail = await detailFile(input.home, project, input.view);
+    if (detail === undefined) return false;
     const cmd = await scoped(input);
-    const index = viewIndexPath(input.home, project);
-    const args = blockArgs(viewDetailPath(input.home, project, QUICK_TASK_FILE), {
+    const args = blockArgs(viewDetailPath(input.home, project, detail), {
       coordinator: input.coordinator.paneId,
       cwd: input.cwd,
       home: input.home,
-      index,
+      index: viewIndexPath(input.home, project),
       ...(input.origin.windowId === undefined ? {} : { window: input.origin.windowId }),
     });
-    const exact = await exactView(
-      cmd,
-      input.cwd,
-      input.coordinator,
-      input.view.kind,
-      "split",
-      args,
-    );
+    let exact: Awaited<ReturnType<typeof exactView>>;
+    try {
+      exact = await exactView(
+        cmd,
+        input.cwd,
+        input.coordinator,
+        input.view.kind,
+        placementFor(input.view),
+        args,
+      );
+    } catch (cause) {
+      if (!(cause instanceof TernOutcomeUnknownError)) throw cause;
+      // A proof only reads, so ambiguity quarantines nothing; it just proves nothing.
+      throw new AdapterError(
+        "Tern lists this view ambiguously: detached, duplicated or outside its placement",
+        "tern ls",
+        cause,
+      );
+    }
     return exact?.block.id === input.origin.paneId;
   };
   return {
     open,
     scoped,
+    proveView,
+    isView: async (input: Parameters<ViewsCapability["isView"]>[0]) =>
+      proveView(input, await projectForView(input.home, input.coordinator, input.cwd)),
     close,
-    isView,
     toggleBoard,
     closeView: async (input: Parameters<ViewsCapability["close"]>[0]) =>
-      close(input, await projectForView(input.home, input.coordinator)),
+      close(input, await projectForView(input.home, input.coordinator, input.cwd)),
     openView: async (input: ViewHostingInput) => {
-      const project = await projectForView(input.home, input.coordinator);
+      const project = await projectForView(input.home, input.coordinator, input.cwd);
       if (input.view.kind === "browser") {
         const url = new URL(input.view.url);
         if (url.protocol !== "https:") throw new Error("PR links require an HTTPS URL");
@@ -246,37 +299,14 @@ export function ternViewHost(commands: TernCli) {
         );
         return { opened: true, warnings: returned.warnings ?? [] };
       }
-      // A new draft can open before the coordinator's background index publication.
-      const detail =
-        input.view.kind === "brief"
-          ? nativeBriefFile(input.view.requestId)
-          : input.view.kind === "setup"
-            ? setupFile(input.view.mode)
-            : input.view.kind === "quick-task"
-              ? QUICK_TASK_FILE
-              : detailForView((await readProjectState(input.home, project))?.published, input.view);
+      const detail = await detailFile(input.home, project, input.view);
       if (["task", "brief", "pr"].includes(input.view.kind) && detail === undefined)
         throw new Error(`Native ${input.view.kind} detail is not ready`);
       const path =
         detail === undefined
           ? viewIndexPath(input.home, project)
           : viewDetailPath(input.home, project, detail);
-      const opened = await open(
-        input,
-        project,
-        input.view.kind,
-        input.view.kind === "task"
-          ? "task"
-          : input.view.kind === "brief" ||
-              input.view.kind === "pr" ||
-              input.view.kind === "prs" ||
-              input.view.kind === "task-picker" ||
-              input.view.kind === "quick-task" ||
-              (input.view.kind === "setup" && input.view.mode === "setup")
-            ? "split"
-            : "window",
-        path,
-      );
+      const opened = await open(input, project, input.view.kind, placementFor(input.view), path);
       if (input.view.kind === "brief" && opened.endpoint === undefined)
         throw new TernOutcomeUnknownError("tern open", "native brief endpoint was not confirmed");
       return {

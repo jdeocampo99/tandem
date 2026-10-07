@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { EndpointOwnershipError } from "../../adapters/primitives.ts";
 import type { Endpoint } from "../../contracts.ts";
@@ -23,7 +23,7 @@ import {
 } from "../../native/store.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
-import type { RetainedViewOpen, ViewOrigin, ViewsCapability } from "../contract.ts";
+import type { ViewOrigin } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli, ViewTarget } from "./cli.ts";
 import {
@@ -484,24 +484,30 @@ export async function openView(
 
   async function dispatch(directory: string, key: string): Promise<OpenResult> {
     const closing = await closingOrigin(cmd, input, placement, index, project);
-    const ownedTasks =
-      placement === "task" || placement === "return"
-        ? blocks(await cmd.ls(input.cwd)).filter((entry) => {
-            const listed = parseBlockArgs(entry.block.args);
-            return (
-              entry.tab.id === input.coordinator.tabId &&
-              entry.block.program === "tandem.task" &&
-              listed?.ctx.coordinator === input.coordinator.paneId &&
-              listed.ctx.index === index
-            );
-          })
-        : [];
+    const listed =
+      placement === "task" || placement === "return" ? blocks(await cmd.ls(input.cwd)) : [];
+    const ownedTasks = listed.filter((entry) => {
+      const parsed = parseBlockArgs(entry.block.args);
+      return (
+        entry.tab.id === input.coordinator.tabId &&
+        entry.block.program === "tandem.task" &&
+        parsed?.ctx.coordinator === input.coordinator.paneId &&
+        parsed.ctx.index === index
+      );
+    });
     if (ownedTasks.length > 1)
       throw new EndpointOwnershipError(
         input.coordinator,
         "several task blocks claim this coordinator",
       );
-    const replaced = ownedTasks[0]?.block.id;
+    const task = ownedTasks[0]?.block.id;
+    // Cancelling the task picker closes only the picker and returns to the task it covered.
+    const keepsTask =
+      placement === "return" &&
+      listed.some(
+        (entry) =>
+          entry.block.id === input.origin?.paneId && entry.block.program === "tandem.task-picker",
+      );
     const token = randomUUID();
     const route = join(directory, `${key}.${token}${TICKET}`);
     const receiptPath = join(directory, `${key}.${token}${RECEIPT}`);
@@ -520,7 +526,7 @@ export async function openView(
         generation: input.coordinator.generation,
       },
       receipt: receiptPath,
-      ...(replaced === undefined ? {} : { replaced }),
+      ...(task === undefined ? {} : keepsTask ? { returnTo: task } : { replaced: task }),
       ...(closing === undefined ? {} : { closeOrigin: closing.endpoint.paneId }),
     };
     await writeTicket(route, ticket);
@@ -587,8 +593,10 @@ export async function withSettledOpens<T>(
   operation: (lease: Readonly<{ directory: string; key: string; opened: boolean }>) => Promise<T>,
   onRetained?: () => Promise<T>,
 ): Promise<T> {
-  const directory = openDirectory(ctx.home, project);
-  await ensurePrivateDirectoryTree(directory, "native route directory");
+  await ensurePrivateDirectoryTree(openDirectory(ctx.home, project), "native route directory");
+  // Tern hands the plugin the opened path with symlinks resolved, and the plugin accepts a ticket
+  // only when it names the receipt beside that path, so the ticket uses the resolved directory.
+  const directory = await realpath(openDirectory(ctx.home, project));
   const key = coordinatorKey(coordinator, ctx);
   const release = await lockFor(directory, key);
   try {
@@ -691,6 +699,21 @@ function retainedReason(receipt: ObservedReceipt): string {
     : failureReason(receipt);
 }
 
+/** A staged open ticket whose outcome was never proved, so it pauses new opens for its owner. */
+export type RetainedViewOpen =
+  | Readonly<{
+      status: "readable";
+      path: string;
+      /** The record exactly as listed, so an abandon never removes one that changed since. */
+      record: string;
+      coordinator: Endpoint;
+      cwd: string;
+      view: string;
+      /** Why the open is still unproven, in the user's terms. */
+      reason: string;
+    }>
+  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+
 /** Every project's staged open tickets, read without changing anything. */
 export async function listRetainedNativeOpens(home: string): Promise<RetainedViewOpen[]> {
   const opens: RetainedViewOpen[] = [];
@@ -735,7 +758,14 @@ export async function listRetainedNativeOpens(home: string): Promise<RetainedVie
   return opens;
 }
 
-export const abandonRetainedNativeOpen: ViewsCapability["abandon"] = async (open, conclusive) => {
+/**
+ * Removes one ticket and its receipt, never a pane, under its open lock: only while the ticket is
+ * exactly as listed and `conclusive` re-proves its coordinator's state.
+ */
+export async function abandonRetainedNativeOpen(
+  open: Readonly<{ path: string; record: string }>,
+  conclusive: () => Promise<boolean>,
+): Promise<"abandoned" | "settled" | "changed" | "unproven"> {
   const name = basename(open.path);
   const key = name.slice(0, name.indexOf("."));
   const directory = open.path.slice(0, open.path.length - name.length - 1);
@@ -756,4 +786,4 @@ export const abandonRetainedNativeOpen: ViewsCapability["abandon"] = async (open
   } finally {
     await release();
   }
-};
+}

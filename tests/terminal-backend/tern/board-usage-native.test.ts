@@ -5,17 +5,17 @@ import { fileURLToPath } from "node:url";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { maybeShowCatchUp, visitNativeProject } from "../../../src/memory/native-visits.ts";
+import { maybeShowCatchUp } from "../../../src/memory/native-visits.ts";
 import { parseBlockContext } from "../../../src/native/contract.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
+import { recordVisit, viewIndexPath } from "../../../src/native/store.ts";
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { NativeViewNotOpenedError } from "../../../src/terminal-backend/tern/host.ts";
 import { blocks, Created, decode, Listing } from "../../../src/terminal-backend/tern/protocol.ts";
-import { viewFileText } from "../../native/view-files.ts";
+import { publishFixture } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
 import { viewsOf } from "../views.ts";
-import { recordedActions } from "./native-window.ts";
+import { launchTernWindow, recordedActions } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
 (enabled ? test : test.skip)(
@@ -48,10 +48,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     await cp(fileURLToPath(new URL("../../../tern-plugin", import.meta.url)), plugin, {
       recursive: true,
     });
-    await mkdir(join(home, "native-views"));
-    await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }), {
-      mode: 0o600,
-    });
+    await publishFixture(home, project);
     await writeFile(
       join(plugin, "tandem.sh"),
       `#!/bin/sh\ninput="$(cat)"\nprintf '%s\\n' "$input" >> '${log}'\nif [ -f '${fail}' ]; then printf 'isolated action failure\\n' >&2; exit 1; fi\nprintf '{"status":"done"}'\n`,
@@ -62,7 +59,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       stdout: "ignore",
       stderr: "ignore",
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     const runner: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
         env,
@@ -93,6 +90,9 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       }
     };
     const ctl = (...args: string[]) => run("ctl", "--control", control, ...args);
+    // The window records visits as panes gain focus; only the screens' own actions are counted.
+    const clicks = async () =>
+      (await recordedActions(log)).filter(({ action }) => action.verb !== "visit");
     try {
       await until(async () => {
         await run("ls", "--json");
@@ -137,26 +137,13 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         },
       });
       const origin = { paneId: coordinator.paneId, cwd: project };
-      window = Bun.spawn(
-        [
-          binary,
-          "--control",
-          control,
-          "--dir",
-          root,
-          "--out",
-          process.env.TANDEM_TERN_SHOTS ?? join(root, "shots"),
-        ],
-        {
-          env,
-          cwd: root,
-          stdout: "ignore",
-          stderr: Bun.file(join(root, "window.log")),
-        },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", process.env.TANDEM_TERN_SHOTS ?? join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
       // An open fired during the window's startup tick either opens or fails cleanly with
       // nothing changed; it never pauses the opens below.
@@ -201,22 +188,18 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           console.log(await ctl("shot", kind));
         }
         if (kind === "usage") {
-          const fixture = { ...nativeScreensFixture(), project };
+          const fixture = nativeScreensFixture();
           const warning = "Provider limit refresh failed; last known limits may be stale";
           const warnings = [warning];
           const writtenAt = "2030-01-02T12:02:00Z";
-          await writeFile(
-            path,
-            viewFileText("index", {
-              ...fixture,
-              writtenAt,
-              warnings,
-              usage: {
-                ...fixture.usage,
-                display: usageDisplay(fixture.usage, { writtenAt, warnings }),
-              },
-            }),
-          );
+          await publishFixture(home, project, {
+            writtenAt,
+            warnings,
+            usage: {
+              ...fixture.usage,
+              display: usageDisplay(fixture.usage, { writtenAt, warnings }),
+            },
+          });
           await until(async () => (await ctl("tree")).includes(warning));
           const stale = await ctl("tree");
           expect(stale).toContain("62% left");
@@ -225,17 +208,17 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
           expect(stale).toContain("View updated at 2030-01-02 12:02:00 UTC");
           expect(stale.indexOf(warning)).toBeLessThan(stale.indexOf("cost today"));
           if (shots) console.log(await ctl("shot", "usage-stale"));
-          await writeFile(path, viewFileText("index", fixture));
+          await publishFixture(home, project);
           await until(async () => !(await ctl("tree")).includes(warning));
         }
         if (kind === "catchup") {
           await writeFile(fail, "fail");
           await ctl("key", "escape");
           actionCount += 1;
-          await until(async () => (await recordedActions(log)).length === actionCount);
+          await until(async () => (await clicks()).length === actionCount);
           await until(async () => (await ctl("tree")).includes("isolated action failure"));
           await Bun.sleep(100);
-          expect((await recordedActions(log)).length).toBe(actionCount);
+          expect((await clicks()).length).toBe(actionCount);
           expect(
             blocks(decode(await run("ls", "--json"), Listing, "failed action")).some(
               (entry) => entry.block.id === viewPane,
@@ -253,7 +236,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         // A status-0 shell action exits its own block; the guarded backend return is proven separately.
         await ctl("key", "escape");
         actionCount += 1;
-        await until(async () => (await recordedActions(log)).length === actionCount);
+        await until(async () => (await clicks()).length === actionCount);
         await until(
           async () =>
             !blocks(decode(await run("ls", "--json"), Listing, "callback exit")).some(
@@ -267,7 +250,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         expect(remaining.some((entry) => entry.block.id === viewPane)).toBe(false);
         expect(remaining.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
       }
-      await writeFile(path, viewFileText("index", { ...nativeScreensFixture(), project }));
+      await publishFixture(home, project);
       expect(
         (
           await viewsOf(backend).open({
@@ -297,17 +280,14 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       const afterToggle = blocks(decode(await run("ls", "--json"), Listing, "toggle close"));
       expect(afterToggle.some((entry) => entry.block.id === toggled)).toBe(false);
       expect(afterToggle.some((entry) => entry.block.id === coordinator.paneId)).toBe(true);
-      await visitNativeProject(
-        {
-          home,
-          project,
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-          signature: "before-changes",
-        },
-        async () => {
+      await recordVisit(home, project, {
+        kind: "entry",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        signature: "before-changes",
+        showCatchUp: async () => {
           throw new Error("First visit cannot show catch-up");
         },
-      );
+      });
       expect(
         await maybeShowCatchUp(backend, {
           home,
@@ -354,7 +334,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         view: { kind: "browser", url: "https://example.invalid/pull/281" },
       });
       expect(browser.opened).toBe(true);
-      const actions = await recordedActions(log);
+      const actions = await clicks();
       expect(actions).toHaveLength(actionCount);
       for (const { origin } of actions)
         expect("ctx" in origin && parseBlockContext(origin.ctx)).toMatchObject({

@@ -2,17 +2,18 @@ import { expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { quoteShellArgument } from "../../../src/adapters/commands.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { findRunningCoordinator } from "../../../src/coordinator/ownership.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
 import { type Action, Outcome, parseBlockArgs } from "../../../src/native/contract.ts";
-import { publishViews, viewIndexPath } from "../../../src/native/store.ts";
+import { publishViews, recordVisit } from "../../../src/native/store.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks } from "../../../src/terminal-backend/tern/protocol.ts";
-import { openFiles, viewFileText } from "../../native/view-files.ts";
+import { openFiles, publishFixture } from "../../native/view-files.ts";
 import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { launchTernWindow } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -49,6 +50,8 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
     await Promise.all(
       [home, env.ZDOTDIR, env.TERN_CONFIG_DIR, join(root, "shots")].map((p) => mkdir(p)),
     );
+    // Tern panes start the user's login shell; a real profile puts the harness on PATH.
+    await writeFile(join(env.ZDOTDIR, ".zshrc"), `export PATH=${quoteShellArgument(env.PATH)}\n`);
     const run: CommandRunner = async (request) => {
       const child = Bun.spawn([...request.argv], {
         cwd: request.cwd,
@@ -102,26 +105,20 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(
         async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
       );
       await checked([binary, "plugin", "link", join(checkout, "tern-plugin"), "--json"]);
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        {
-          cwd: root,
-          env,
-          stdout: "ignore",
-          stderr: Bun.file(join(root, "window.log")),
-        },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", root, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
       const repos: string[] = [];
       for (const name of ["repo-a", "repo-b", "repo-c"]) {
         const repo = join(root, name);
@@ -165,22 +162,15 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       await Bun.sleep(5000);
       // Authentic coordinator and launch paths, realistic derived view data, no model turn or task mutation.
       const panel = panelFixture(a);
-      await mkdir(join(home, "native-views"), { recursive: true });
       const writePanelFixture = () =>
-        writeFile(
-          viewIndexPath(home, a),
-          viewFileText("index", {
-            version: 1,
-            project: a,
-            writtenAt: new Date().toISOString(),
-            panel,
-            projects: panel.header.projects,
-            tasks: {},
-            briefs: {},
-            pullRequests: {},
-            warnings: [],
-          }),
-        );
+        publishFixture(home, a, {
+          panel,
+          projects: panel.header.projects,
+          tasks: {},
+          briefs: {},
+          pullRequests: {},
+          warnings: [],
+        });
       await writePanelFixture();
       await terminal.openPanel({
         coordinator: record.endpoint,
@@ -302,17 +292,14 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
           };
         });
       // Switch through the actual CLI. An aged, changed visit must automatically open B's catch-up.
-      await visitNativeProject(
-        {
-          home,
-          project: b,
-          now: new Date(Date.now() - 7_200_000).toISOString(),
-          signature: "before",
-        },
-        async () => {
+      await recordVisit(home, b, {
+        kind: "entry",
+        now: new Date(Date.now() - 7_200_000).toISOString(),
+        signature: "before",
+        showCatchUp: async () => {
           throw new Error("baseline visit must not show catch-up");
         },
-      );
+      });
       await publish(a);
       await publish(b);
       const target = records.findIndex((r) => r.repoPath === b) + 1;
@@ -348,13 +335,16 @@ const native = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE =
       expect(secondPanel?.session.id).toBe(second.endpoint.terminalSessionId);
       expect(secondPanel?.block.program).toBe("tandem.panel");
       expect(parseBlockArgs(secondPanel?.block.args)?.ctx.coordinator).toBe(second.endpoint.paneId);
-      await publish(b);
       await terminal.focusWorkspace({
         sessionId: env.TANDEM_SESSION,
         cwd: b,
         workspaceId: second.endpoint.workspaceId,
       });
-      await until(async () => (await ctl("tree")).includes("Tern backend adapter"));
+      // B's live coordinator publishes its own empty board, so hold the fixture through a poll.
+      await until(async () => {
+        await publish(b);
+        return (await ctl("tree")).includes("Tern backend adapter");
+      });
       await ctl("shot", "03-project-b-panel");
       const catchup = blocks(await commands.ls(b)).find(
         (p) =>

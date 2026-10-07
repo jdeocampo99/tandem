@@ -112,6 +112,11 @@ src/native/actions.ts, tern-plugin/brief.luau
 
 ## Native brief feedback
 
+- `brief-approve` and `brief-request-changes` are accepted only from the `tandem.brief` block
+  Tandem opened for that request beside this coordinator, as Tern lists it. A worker pane, a
+  window command or any Herdr origin is refused before anything changes; in Herdr, approve or
+  request changes in the coordinator conversation
+  ([approval-bearing clicks](native-views.md#approval-bearing-clicks)).
 - The `brief-request-changes` action carries the
   displayed `briefRevision`, `contentDigest`, and `agreementDigest`, plus optional overall `text`
   and `comments: [{lineId, text}]`. Copy each stable string `lineId` from the displayed

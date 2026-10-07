@@ -70,54 +70,82 @@ export type FocusResult =
 export type TerminalView =
   | Readonly<{ kind: "browser"; url: string }>
   | Readonly<{
-      kind:
-        | "board"
-        | "usage"
-        | "prs"
-        | "catchup"
-        | "orchestrator"
-        | "inbox"
-        | "task-picker"
-        | "quick-task";
+      kind: "board" | "usage" | "prs" | "catchup" | "orchestrator" | "inbox" | "task-picker";
     }>
+  | Readonly<{ kind: "quick-task" }>
   | Readonly<{ kind: "task" | "pr"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>
   | Readonly<{ kind: "pr"; repo: string; number: number }>
   | Readonly<{ kind: "setup"; mode: SetupMode }>;
 
+/** The views whose blocks carry the user's approval-bearing clicks; see `ViewsCapability.isView`. */
+export type ProvableView = Extract<
+  TerminalView,
+  { taskId: string } | { kind: "brief" | "setup" | "quick-task" }
+>;
+
 /** Presentation context from the initiating view; it grants no pane ownership. */
 export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
 
-/** A native view open whose outcome was never proved, so it pauses new opens for its owner. */
-export type RetainedViewOpen =
-  | Readonly<{
-      status: "readable";
-      path: string;
-      /** The record exactly as listed, so an abandon never removes one that changed since. */
-      record: string;
-      coordinator: Endpoint;
-      cwd: string;
-      view: string;
-      /** Why the open is still unproven, in the user's terms. */
-      reason: string;
-    }>
-  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+/** The ledgers of unknown-outcome effects a terminal keeps; each is one kind in `tandem fix`. */
+export type FenceKind = "native-open" | "tern-quarantine";
 
-/** A pane whose last Tandem effect ended with an unknown outcome, so Tandem refuses to touch it. */
-export type QuarantinedPane =
+/**
+ * Whether a fence's pane, read when it was listed, proves the doubted effect can no longer matter,
+ * and why, in the user's terms. A settleable fence is still re-proved before it is removed.
+ */
+export type FenceProof = Readonly<{ settleable: boolean; why: string }>;
+
+/**
+ * A durable record of an owned terminal effect whose outcome was never proved. While it stays,
+ * Tandem refuses what it protects; only `settle` removes it, and never the pane itself.
+ */
+export type Fence =
   | Readonly<{
       status: "readable";
+      kind: FenceKind;
       path: string;
-      /** The record exactly as listed, so a clear never removes one that changed since. */
-      record: string;
-      key: string;
-      operation: string;
-      reason: string;
-      at: string;
-      endpoint: Endpoint;
-      cwd: string;
+      /** The record exactly as listed, so settling never removes one that changed since. */
+      token: string;
+      /** The exact pane whose state decides whether the fence can go. */
+      protects: EndpointTarget;
+      /** The doubted effect, in the user's terms. */
+      description: string;
+      proof: FenceProof;
     }>
-  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+  | Readonly<{
+      status: "unreadable";
+      kind: FenceKind;
+      path: string;
+      /** Why the record is left in place, in the user's terms. */
+      reason: string;
+    }>;
+
+export type ReadableFence = Extract<Fence, Readonly<{ status: "readable" }>>;
+
+/** One ledger that could not be listed at all; the terminal's other ledgers are still listed. */
+export type FenceListingFailure = Readonly<{ kind: FenceKind; subject: string; reason: string }>;
+
+export type FenceListing = Readonly<{
+  fences: readonly Fence[];
+  failures: readonly FenceListingFailure[];
+}>;
+
+/** `removed` covers a record already gone; `kept` says why the fence stays. */
+export type FenceSettlement =
+  | Readonly<{ status: "removed" }>
+  | Readonly<{ status: "kept"; reason: string }>;
+
+/** The fences a terminal keeps. A terminal with none lists none and settles nothing. */
+export type FencesCapability = Readonly<{
+  /** Every fence under `home`, each proved against its pane, read without changing any. */
+  list(home: string): Promise<FenceListing>;
+  /**
+   * Removes one fence's records, never a pane, under that record's lock: only while the record is
+   * exactly as listed and its pane re-proves the fence settleable.
+   */
+  settle(fence: ReadableFence): Promise<FenceSettlement>;
+}>;
 
 export type OpenViewResult = Readonly<{
   opened: boolean;
@@ -161,9 +189,9 @@ export type ViewsCapability = Readonly<{
   /**
    * Whether `origin.paneId` is the exact native block of `view` this coordinator's views launched
    * for `home` and `cwd`, with `origin.windowId` as its window key: a read that changes nothing.
-   * Process and terminal state a worker can reach (its own pane id, a cwd, an echoed context) never
-   * satisfy it; only the terminal's own record of which program a pane runs, with which arguments.
-   * An ambiguous listing throws.
+   * Only the terminal's own record of which program a pane runs, with which launch arguments,
+   * satisfies it; a pane id, a cwd or an echoed context never does. The coordinator's own pane is
+   * never a view. An ambiguous listing throws.
    */
   isView(
     input: Readonly<{
@@ -171,24 +199,11 @@ export type ViewsCapability = Readonly<{
       cwd: string;
       home: string;
       origin: ViewOrigin & Readonly<{ paneId: string }>;
-      view: Readonly<{ kind: "quick-task" }>;
+      view: ProvableView;
     }>,
   ): Promise<boolean>;
   /** Settles every retained native view open under `home` whose outcome is now proved. */
   recover(home: string): Promise<void>;
-  /**
-   * Native view opens under `home` whose outcome was never proved, read without changing them.
-   * Throws when the opens themselves cannot be listed.
-   */
-  retained(home: string): Promise<readonly RetainedViewOpen[]>;
-  /**
-   * Removes one retained open's records, never a pane, under that open's lock: only while the
-   * record is unchanged and `conclusive` re-proves its coordinator's state.
-   */
-  abandon(
-    open: Extract<RetainedViewOpen, Readonly<{ status: "readable" }>>,
-    conclusive: () => Promise<boolean>,
-  ): Promise<"abandoned" | "settled" | "changed" | "unproven">;
 }>;
 
 /** The last proven window width, and any limitation that prevented fitting the panel. */
@@ -217,6 +232,12 @@ export type TerminalFocus = Readonly<{ workspaceId?: string; cwd?: string }>;
 export type SplitAnchor =
   | Readonly<{ anchor: Endpoint }>
   | Readonly<{ sessionId: string; anchorPaneId: string }>;
+
+/** Tandem's own variables, and the environment its process inherited. */
+export type LaunchEnvironmentInput = Readonly<{
+  overrides: Readonly<Record<string, string>>;
+  inherited: Readonly<Record<string, string>>;
+}>;
 
 /**
  * The terminal port: every pane, workspace, and session effect Tandem has. Implementations are
@@ -343,19 +364,8 @@ export type TerminalBackend = Readonly<{
 
   /** Native view hosting; absent when the terminal has none. */
   views?: ViewsCapability | undefined;
-  /**
-   * Panes Tandem refuses to touch because an effect there ended with an unknown outcome, read
-   * without changing them. Throws when the records themselves cannot be listed.
-   */
-  quarantinedPanes(home: string): Promise<readonly QuarantinedPane[]>;
-  /**
-   * Removes one pane's quarantine record, never the pane, under the record's lock: only while
-   * the record is unchanged and `conclusive` re-proves the pane gone or idle.
-   */
-  clearPaneQuarantine(
-    pane: Extract<QuarantinedPane, Readonly<{ status: "readable" }>>,
-    conclusive: () => Promise<boolean>,
-  ): Promise<"cleared" | "settled" | "changed" | "unproven">;
+  /** Records of owned effects whose outcome is unknown, and the only way to remove them. */
+  fences: FencesCapability;
 
   /** Whether the session's server runs; throws when the terminal cannot say. */
   sessionRunning(target: SessionTarget): Promise<boolean>;
@@ -365,6 +375,25 @@ export type TerminalBackend = Readonly<{
   serverCommand(sessionId: string): readonly string[];
   /** The command that opens the session in this terminal window, starting it if needed. */
   clientCommand(sessionId: string): readonly string[];
+  /**
+   * The environment of a process Tandem starts itself for this terminal, such as its server or a
+   * coordinator run in the current pane: `inherited` with `overrides` on top, never carrying
+   * another terminal's pane identity.
+   */
+  launchEnvironment(input: LaunchEnvironmentInput): Readonly<Record<string, string>>;
+  /**
+   * The `env` for `createWorkspace` and `runCommand` on a pane this terminal starts. Every
+   * override reaches the pane, and no other terminal's pane identity does; whether `inherited`
+   * is passed along depends on where the terminal's panes get the rest of their environment.
+   */
+  paneEnvironment(input: LaunchEnvironmentInput): Readonly<Record<string, string>>;
+  /**
+   * The variables a process needs to recognise `pane` as a Tandem pane of this terminal; empty
+   * when the terminal sets them itself.
+   */
+  paneIdentity(
+    pane: Readonly<{ sessionId: string; workspaceId: string }>,
+  ): Readonly<Record<string, string>>;
   /** Whether the terminal, and Tandem's integration with it, are installed for onboarding. */
   checkInstall(target: SessionTarget): Promise<readonly ToolCheck[]>;
 

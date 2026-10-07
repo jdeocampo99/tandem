@@ -1,13 +1,19 @@
-import { readdir } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { z } from "zod";
 import {
   type NativePrIndex,
   type NativeViews,
   nativePrFile,
 } from "../../src/board/native-views.ts";
 import type { NativeProjectRow } from "../../src/board/panel.ts";
-import type { ViewFileKind } from "../../src/native/contract.ts";
-import { openDirectories, publishViews } from "../../src/native/store.ts";
+import { ViewFile, type ViewFileKind } from "../../src/native/contract.ts";
+import {
+  openDirectories,
+  projectStoreDirectory,
+  publishViews,
+  viewIndexPath,
+} from "../../src/native/store.ts";
 import { nativeScreensFixture } from "../tern-view/screens-fixture.ts";
 
 let seq = 0;
@@ -40,6 +46,17 @@ export async function publishFixture(
     catchup: { ...base.catchup, project },
     ...change,
   };
+  await publishViews(home, project, async () => ({ bundle, details: [] }));
+}
+
+/** Republishes the index this project last published through the store, edited by `change`. */
+export async function republishIndex(
+  home: string,
+  project: string,
+  change: (bundle: NativeViews) => NativeViews,
+): Promise<void> {
+  const file = ViewFile.parse(JSON.parse(await readFile(viewIndexPath(home, project), "utf8")));
+  const bundle = change(file.model as NativeViews);
   await publishViews(home, project, async () => ({ bundle, details: [] }));
 }
 
@@ -100,4 +117,39 @@ export function prIndexEntry(
       detailFile: nativePrFile(repo, number),
     },
   };
+}
+
+/** The on-disk `state.json` contract; tests read it to assert what a store call committed. */
+const SavedState = z
+  .object({
+    v: z.literal(1),
+    project: z.string(),
+    epoch: z.string(),
+    seq: z.number(),
+    alerts: z.record(z.unknown()).optional(),
+    visit: z
+      .object({
+        lastOpenedAt: z.string(),
+        lastVisibleAt: z.string().optional(),
+        previousSignature: z.string().optional(),
+        dismissedSignature: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    published: z.record(z.unknown()).optional(),
+  })
+  .strict();
+
+/** The project's committed `state.json`, or undefined before the store wrote one. */
+export async function savedState(
+  home: string,
+  project: string,
+): Promise<z.infer<typeof SavedState> | undefined> {
+  try {
+    const text = await readFile(join(projectStoreDirectory(home, project), "state.json"), "utf8");
+    return SavedState.parse(JSON.parse(text));
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  }
 }

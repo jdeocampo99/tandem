@@ -8,6 +8,7 @@ import {
   Listing,
   type TernListing,
 } from "../../../src/terminal-backend/tern/protocol.ts";
+import { launchTernWindow } from "./native-window.ts";
 
 // Each probe records what real Tern does into its isolated root, for the Tern seam redesign.
 // A probe asserts only that its observation was captured; the observation is the result.
@@ -186,23 +187,17 @@ async function startTern(
     if (!(await until(async () => (await run(["ls", "--json"])).code === 0)))
       throw new Error(`Tern daemon did not start: ${root}`);
     if (phase === "before") await checked("plugin", "link", plugin, "--json");
-    windows = windowKeys.map((key) =>
-      Bun.spawn([binary, "--control", control(key), "--dir", root, "--out", join(root, "shots")], {
-        cwd: root,
-        env: { ...env, PROBE_PHASE: phase, TERN_WINDOW_KEY: key },
-        stdout: "ignore",
-        stderr: Bun.file(join(root, `window-${key}-${phase}.log`)),
-      }),
-    );
-    for (const key of windowKeys) {
-      if (
-        !(await until(
-          async () => (await run(["ctl", "--control", control(key), "state"])).code === 0,
-        ))
-      )
-        throw new Error(`Tern window ${key} did not start: ${root}`);
-      await ctl(key, "account", "signed-in");
-    }
+    for (const key of windowKeys)
+      windows.push(
+        await launchTernWindow({
+          binary,
+          control: control(key),
+          args: ["--dir", root, "--out", join(root, "shots")],
+          env: { ...env, PROBE_PHASE: phase, TERN_WINDOW_KEY: key },
+          cwd: root,
+          log: join(root, `window-${key}-${phase}.log`),
+        }),
+      );
   };
   const stop = async () => {
     for (const [index, window] of windows.entries()) {

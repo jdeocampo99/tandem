@@ -15,10 +15,9 @@ import {
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { blocks, TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
 import { ternViewHost } from "../../../src/terminal-backend/tern/views.ts";
-import { viewFileText } from "../../native/view-files.ts";
-import { nativeScreensFixture } from "../../tern-view/screens-fixture.ts";
+import { publishFixture } from "../../native/view-files.ts";
 import { viewsOf } from "../views.ts";
-import { recordedActions, recordingCli } from "./native-window.ts";
+import { launchTernWindow, recordedActions, recordingCli } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -109,7 +108,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
     console.log(
       `Native proof process: ${JSON.stringify({ pid: daemon.pid, argv: [binary, "daemon", "--socket", env.TERN_DAEMON_SOCKET] })}`,
     );
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(
         async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
@@ -125,40 +124,30 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         label: "coordinator · tandem",
       });
       const coordinator = created.endpoint;
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", root, "--out", join(root, "shots")],
-        { env, cwd: root, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
-      );
-      console.log(
-        `Native proof process: ${JSON.stringify({ pid: window.pid, argv: [binary, "--control", control, "--dir", root, "--out", join(root, "shots")] })}`,
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      const args = ["--dir", root, "--out", join(root, "shots")];
+      window = await launchTernWindow({
+        binary,
+        control,
+        args,
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
+      console.log(
+        `Native proof process: ${JSON.stringify({ pid: window.pid, argv: [binary, "--control", control, ...args] })}`,
+      );
       await Bun.sleep(500);
-      await mkdir(join(home, "native-views"));
       const path = viewIndexPath(home, root);
       const panel = panelFixture(root);
-      await writeFile(
-        path,
-        viewFileText("index", {
-          version: 1,
-          project: root,
-          writtenAt: new Date().toISOString(),
-          summary: {},
-          panel,
-          projects: panel.header.projects,
-          tasks: {},
-          briefs: {},
-          pullRequests: {},
-          board: nativeScreensFixture().board,
-          usage: nativeScreensFixture().usage,
-          catchup: nativeScreensFixture().catchup,
-          warnings: [],
-        }),
-      );
+      const fixture = {
+        panel,
+        projects: panel.header.projects,
+        tasks: {},
+        briefs: {},
+        pullRequests: {},
+        warnings: [],
+      };
+      await publishFixture(home, root, fixture);
       await terminal.runCommand({
         endpoint: coordinator,
         cwd: root,
@@ -218,16 +207,8 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await until(async () => JSON.stringify(await ctl("tree")).includes("+ Open another project"));
       await ctl("shot", "02-projects");
       await ctl("key", "escape");
-      const envelope = JSON.parse(await readFile(path, "utf8")) as {
-        model: Record<string, unknown>;
-      };
-      await writeFile(
-        path,
-        viewFileText("index", {
-          ...envelope.model,
-          panel: { ...panel, footer: undefined },
-        }),
-      );
+      const { footer: _declined, ...withoutFooter } = panel;
+      await publishFixture(home, root, { ...fixture, panel: withoutFooter });
       await until(async () => !JSON.stringify(await ctl("tree")).includes("⌘⇧B board"));
       const declined = JSON.stringify(await ctl("tree"));
       expect(declined).toContain("⎇");
@@ -235,7 +216,11 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       const row = visit((await ctl("tree")).tree as Node[], "tdp-row")?.rect;
       if (!row) throw new Error("task row missing");
       await ctl("click", String((row[0] ?? 0) + 80), String((row[1] ?? 0) + 12));
-      const sent = () => recordedActions(join(root, "actions.log"));
+      // The window records a visit on start; only the clicks below are under test.
+      const sent = async () =>
+        (await recordedActions(join(root, "actions.log"))).filter(
+          ({ action }) => action.verb !== "visit",
+        );
       await until(async () => (await sent()).length > 0);
       const clicked = (await sent())[0];
       expect(clicked?.action).toEqual({ verb: "open", ref: { kind: "brief", requestId: "tern" } });
@@ -546,7 +531,7 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         if (request.argv[1] === "browser") {
           browserOpens++;
           expect(result.code).toBe(0);
-          loseBrowserListing = true;
+          loseBrowserListing = browserOpens === 1;
         }
         return result;
       };
@@ -556,14 +541,16 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         cwd: root,
         view: { kind: "browser", url: "https://example.invalid/pull/281" } as const,
       };
+      // A browser open whose confirmation is lost is reported once and pauses nothing (#335).
       await expect(
         viewsOf(ternBackend(browserRunner, { home, environment: env })).open(browserInput),
-      ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-      await expect(
-        viewsOf(ternBackend(browserRunner, { home, environment: env })).open(browserInput),
-      ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-      expect(browserOpens).toBe(1);
-      await ctl("shot", "10-browser-quarantined");
+      ).rejects.toThrow("Tern did not confirm the PR opened in its browser");
+      expect(
+        (await viewsOf(ternBackend(browserRunner, { home, environment: env })).open(browserInput))
+          .opened,
+      ).toBe(true);
+      expect(browserOpens).toBe(2);
+      await ctl("shot", "10-browser-unconfirmed");
       const safeReturn = await viewsOf(fresh).open({
         coordinator,
         cwd: root,
@@ -571,12 +558,12 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
         view: { kind: "orchestrator" },
       });
       expect(safeReturn.opened).toBe(true);
-      expect(safeReturn.warnings[0]).toContain("Returned to your conversation");
+      expect(safeReturn.warnings).toEqual([]);
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,
       );
       await Bun.sleep(200);
-      await ctl("shot", "13-safe-return-quarantined");
+      await ctl("shot", "13-safe-return");
 
       let panelCloses = 0;
       let loseCloseListing = false;
@@ -599,10 +586,17 @@ const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE 
       await expect(uncertainClose.closePanel(closeInput)).rejects.toBeInstanceOf(
         TernOutcomeUnknownError,
       );
-      await expect(uncertainClose.closePanel(closeInput)).rejects.toBeInstanceOf(
-        TernOutcomeUnknownError,
-      );
+      // Tern did close it; only the proof was lost. A later close sees no panel and issues nothing.
+      await uncertainClose.closePanel(closeInput);
       expect(panelCloses).toBe(1);
+      expect(
+        (await terminal.fences.list(home)).fences.some(
+          (fence) =>
+            fence.kind === "tern-quarantine" &&
+            fence.status === "readable" &&
+            fence.protects.endpoint.paneId === pane,
+        ),
+      ).toBe(true);
       expect(await terminal.isPanelOpen({ coordinator, cwd: root, panelPaneId: pane })).toBe(false);
       expect((await terminal.inspect({ endpoint: coordinator, cwd: root })).activeWorker).toBe(
         true,

@@ -1,10 +1,7 @@
 import { expect, test } from "bun:test";
-import {
-  markNativeAlertsRead,
-  NativeAlerts,
-  nativeAlertCounts,
-} from "../../src/board/native-alerts.ts";
+import { NativeAlerts } from "../../src/board/native-alerts.ts";
 import { boardView } from "../../src/board/view.ts";
+import { markNativeAlertsRead, nativeAlertCounts } from "../../src/native/store.ts";
 import type { DurableExecutionRoutingPause } from "../../src/runtime/schema.ts";
 import { transitionStoredTask } from "../../src/tasks/store.ts";
 import { recordTimelineEvents } from "../../src/tasks/timeline-store.ts";

@@ -9,8 +9,7 @@ import { saveProjectRoots } from "../../../src/config/home-settings.ts";
 import { centralConfigPath, onboardRepo } from "../../../src/config/repositories.ts";
 import type { CommandRunner, IsoTimestamp, TaskRecord } from "../../../src/contracts.ts";
 import { listCoordinatorRecords } from "../../../src/coordinator/registry.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { publishViews } from "../../../src/native/store.ts";
+import { publishViews, recordVisit } from "../../../src/native/store.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import {
   readRuntimeState,
@@ -30,6 +29,7 @@ import {
   flatten,
   hasClass,
   isolatedRunner,
+  resend,
   type SeededCoordinator,
   seedCoordinator,
   type TernWindow,
@@ -196,21 +196,14 @@ async function briefTabs(window: TernWindow): Promise<readonly string[]> {
     .map((block) => block.tab);
 }
 
-/**
- * Tern reports a new block before it takes clicks and keys, and input sent in between is dropped.
- * `send` is repeated only after the view has ignored it for three seconds, until `done`.
- */
+/** Sends until `done` (see `resend`), then waits for it with labelled evidence. */
 async function sendUntil(
   window: TernWindow,
   label: string,
   send: () => Promise<unknown>,
   done: () => Promise<boolean>,
 ): Promise<void> {
-  for (let attempt = 0; attempt < 5 && !(await done()); attempt += 1) {
-    await send();
-    const deadline = Date.now() + 3_000;
-    while (Date.now() < deadline && !(await done())) await Bun.sleep(100);
-  }
+  await resend(send, done);
   await window.until(label, done);
 }
 
@@ -398,7 +391,15 @@ workflow(
       await window.shot("02-stuck-banner");
 
       const steer = "Match the exact pane id before closing.";
-      await window.typeInto("Steer…", steer);
+      await sendUntil(
+        window,
+        "steer text in the message box",
+        async () => {
+          await window.click("Steer…");
+          await window.ctl("type", JSON.stringify(steer));
+        },
+        async () => (await window.screen()).includes(steer),
+      );
       await window.ctl("key", "enter");
       await window.until("steer message in the worker inbox", async () => {
         const inbox = await readTaskInbox(taskInboxPath(window.home, "guard"));
@@ -784,17 +785,14 @@ workflow(
         reported = latest;
         return settled;
       });
-      await visitNativeProject(
-        {
-          home: window.home,
-          project: project.repo,
-          now: new Date(Date.now() - 2 * 3_600_000).toISOString(),
-          signature: "before-you-left",
-        },
-        async () => {
+      await recordVisit(window.home, project.repo, {
+        kind: "entry",
+        now: new Date(Date.now() - 2 * 3_600_000).toISOString(),
+        signature: "before-you-left",
+        showCatchUp: async () => {
           throw new Error("The earlier visit cannot show catch-up");
         },
-      );
+      });
       await focusConversation();
       // Entering the project is the only trigger; the catch-up must appear on its own.
       await escapeFullWindowView(

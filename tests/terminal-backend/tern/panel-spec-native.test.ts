@@ -1,25 +1,23 @@
 import { expect, test } from "bun:test";
-import { cp, mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { NativeAlerts, nativeAlertCounts } from "../../../src/board/native-alerts.ts";
+import { NativeAlerts } from "../../../src/board/native-alerts.ts";
 import { boardView } from "../../../src/board/view.ts";
-import { repositoryKey } from "../../../src/config/repositories.ts";
 import type { CommandRunner } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { visitNativeProject } from "../../../src/memory/native-visits.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
+import { nativeAlertCounts, recordVisit } from "../../../src/native/store.ts";
 import { createTaskStore } from "../../../src/tasks/store.ts";
 import {
   ternBackend,
   ternNotificationEndpoint,
 } from "../../../src/terminal-backend/tern/backend.ts";
 import { state } from "../../board/fixtures.ts";
-import { viewFileText } from "../../native/view-files.ts";
+import { publishFixture, republishIndex, savedState } from "../../native/view-files.ts";
 import { policy } from "../../session/fixtures.ts";
-import { recordedActions } from "./native-window.ts";
+import { launchTernWindow, recordedActions } from "./native-window.ts";
 import { panelFixture } from "./panel-fixture.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
@@ -112,7 +110,7 @@ const tree = z.object({ tree: z.array(node) });
       stdout: "ignore",
       stderr: Bun.file(join(root, "daemon.log")),
     });
-    let window: ReturnType<typeof Bun.spawn> | undefined;
+    let window: Bun.Subprocess | undefined;
     try {
       await until(
         async () => (await run({ argv: [binary, "ls", "--json"], cwd: root })).code === 0,
@@ -162,7 +160,6 @@ const tree = z.object({ tree: z.array(node) });
       const first = projects[0],
         tenth = projects[1];
       if (!first || !tenth) throw new Error("fixture projects missing");
-      await mkdir(join(home, "native-views"));
       for (const project of projects) {
         const base = panelFixture(project.repo);
         const firstRow = base.header.projects[0];
@@ -201,35 +198,24 @@ const tree = z.object({ tree: z.array(node) });
             projects: switcher,
           },
         };
-        await writeFile(
-          viewIndexPath(home, project.repo),
-          viewFileText("index", {
-            version: 1,
-            project: project.repo,
-            writtenAt: new Date().toISOString(),
-            summary: {},
-            panel,
-            projects: panel.header.projects,
-            changeSignature: "fixture",
-            tasks: {},
-            briefs: {},
-            pullRequests: {},
-            board: {},
-            usage: {},
-            catchup: {},
-            warnings: [],
-          }),
-        );
+        await publishFixture(home, project.repo, {
+          panel,
+          projects: panel.header.projects,
+          changeSignature: "fixture",
+          tasks: {},
+          briefs: {},
+          pullRequests: {},
+          warnings: [],
+        });
       }
-      window = Bun.spawn(
-        [binary, "--control", control, "--dir", first.repo, "--out", join(root, "shots")],
-        { env, cwd: root, stdout: "ignore", stderr: Bun.file(join(root, "window.log")) },
-      );
-      await until(async () => {
-        await ctl("state");
-        return true;
+      window = await launchTernWindow({
+        binary,
+        control,
+        args: ["--dir", first.repo, "--out", join(root, "shots")],
+        env,
+        cwd: root,
+        log: join(root, "window.log"),
       });
-      await ctl("account", "signed-in");
       await Bun.sleep(500);
       const firstPanel = await terminal.openPanel({
         coordinator: first.endpoint,
@@ -361,10 +347,10 @@ const tree = z.object({ tree: z.array(node) });
       }));
       await alerts.observe(brief, first.repo, "fixture");
       expect(await nativeAlertCounts(home, first.repo)).toEqual({ delivered: 3, unread: 3 });
-      const path = viewIndexPath(home, first.repo);
-      const envelope = JSON.parse(await readFile(path, "utf8"));
-      envelope.model.panel.header.bellCount = 3;
-      await writeFile(path, viewFileText("index", envelope.model));
+      await republishIndex(home, first.repo, (bundle) => ({
+        ...bundle,
+        panel: { ...bundle.panel, header: { ...bundle.panel.header, bellCount: 3 } },
+      }));
       await until(async () => JSON.stringify(await ctl("tree")).includes("🔔︎ 3"));
       await ctl("shot", "04-three-unread");
       await ctl("inbox");
@@ -373,12 +359,7 @@ const tree = z.object({ tree: z.array(node) });
       await writeFile(join(root, "inbox-tree.json"), JSON.stringify(await ctl("tree")));
       // The inbox activation key selects its recorded helper; the production focus hook redirects.
       await ctl("key", "enter");
-      await until(async () => {
-        const saved = JSON.parse(
-          await readFile(join(home, "native-alerts", `${repositoryKey(first.repo)}.json`), "utf8"),
-        );
-        return saved.read === 3;
-      });
+      await until(async () => (await savedState(home, first.repo))?.alerts?.read === 3);
       await until(async () => JSON.stringify(await ctl("tree")).includes("🔔︎ 0"));
       expect(
         z.object({ focused: z.object({ id: z.number() }) }).parse(await ctl("state")).focused.id,
@@ -392,26 +373,27 @@ const tree = z.object({ tree: z.array(node) });
         }),
       ).toBe(true);
       // The production catch-up boundary preserves entry and surfaces a warning in the native panel.
-      await visitNativeProject(
-        {
-          home,
-          project: tenth.repo,
-          signature: "before",
-          now: new Date(Date.now() - 2 * 3600000).toISOString(),
-        },
-        async () => {},
-      );
-      const visitPath = join(home, "native-visits", `${repositoryKey(tenth.repo)}.json`);
-      const visit = await readFile(visitPath, "utf8");
-      const destinationPath = viewIndexPath(home, tenth.repo);
-      const latest = JSON.parse(await readFile(destinationPath, "utf8"));
-      await writeFile(
-        destinationPath,
-        viewFileText("index", { ...latest.model, changeSignature: "after" }),
-      );
+      await recordVisit(home, tenth.repo, {
+        kind: "entry",
+        signature: "before",
+        now: new Date(Date.now() - 2 * 3600000).toISOString(),
+        showCatchUp: async () => {},
+      });
+      const visit = (await savedState(home, tenth.repo))?.visit;
+      expect(visit).toBeDefined();
+      await republishIndex(home, tenth.repo, (bundle) => ({
+        ...bundle,
+        changeSignature: "after",
+      }));
       await writeFile(join(home, "fixture-catchup-failure"), "fixture", {
         flag: "wx",
         mode: 0o600,
+      });
+      // The switcher refuses a snapshot older than ten seconds; a live coordinator republishes
+      // every tick, and this test has spent longer than that since its first publication.
+      await republishIndex(home, first.repo, (bundle) => {
+        const writtenAt = new Date().toISOString();
+        return { ...bundle, writtenAt, summary: { ...bundle.summary, writtenAt } };
       });
       await click(find(tree.parse(await ctl("tree")).tree, "tdp-switch")[0]);
       await until(
@@ -421,7 +403,7 @@ const tree = z.object({ tree: z.array(node) });
       await until(async () =>
         JSON.stringify(await ctl("tree")).includes("Fixture catch-up unavailable"),
       );
-      expect(await readFile(visitPath, "utf8")).toBe(visit);
+      expect((await savedState(home, tenth.repo))?.visit).toEqual(visit);
       expect(
         z.object({ focused: z.object({ id: z.number() }) }).parse(await ctl("state")).focused.id,
       ).toBe(Number(tenth.endpoint.paneId));

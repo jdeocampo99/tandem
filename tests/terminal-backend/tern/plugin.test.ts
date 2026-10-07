@@ -38,35 +38,28 @@ const ready = JSON.stringify({
   problems: [],
 });
 
-test("onboarding links palette actions even when global preferences are declined", async () => {
-  const declined = runner([missing, ready]);
-  const approved = runner([missing, ready]);
+test("onboarding links Tern's package with the chosen binary and directory", async () => {
+  const linked = runner([missing, ready]);
   const root = await mkdtemp("/tmp/tandem-plugin-");
   try {
     expect(
       await ensureTernPlugin({
-        ...declined,
-        cwd: root,
-        settingsPath: join(root, "declined.json"),
-        confirm: async () => false,
-      }),
-    ).toBe(true);
-    expect(declined.calls.map((call) => call.argv[2])).toEqual(["list", "link", "list"]);
-    expect(await Bun.file(join(root, "declined.json")).exists()).toBe(false);
-    expect(
-      await ensureTernPlugin({
-        ...approved,
+        ...linked,
         binary: TERN_BINARY,
         cwd: "/tmp",
         directory: "/plugin with spaces",
         settingsPath: join(root, "settings.json"),
-        confirm: async () => true,
       }),
     ).toBe(true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-  expect(approved.calls[1]?.argv).toEqual([
+  expect(linked.calls.map((call) => call.argv.slice(1, 3))).toEqual([
+    ["plugin", "list"],
+    ["plugin", "link"],
+    ["plugin", "list"],
+  ]);
+  expect(linked.calls[1]?.argv).toEqual([
     "/Applications/Tern.app/Contents/MacOS/tern",
     "plugin",
     "link",
@@ -85,7 +78,6 @@ test("first-time setup links and configures Tern before its config directory exi
         ...fresh,
         cwd: root,
         env: { TERN_CONFIG_DIR: config },
-        confirm: async () => true,
       }),
     ).toBe(true);
     expect(fresh.calls.map((call) => call.argv[2])).toEqual(["list", "link", "list"]);
@@ -112,7 +104,6 @@ for (const selection of ["injected-path", "explicit-binary", "app-fallback"] as 
         env,
         ...(selection === "explicit-binary" ? { binary: "/explicit/tern" } : {}),
         settingsPath: join(root, "settings.json"),
-        confirm: async () => false,
       };
       expect(await ensureTernPlugin(deps)).toBe(true);
       expect(await reloadTernPlugin(deps)).toBe(true);
@@ -152,9 +143,9 @@ test("update reloads an existing integration and refuses a broken reload", async
 
 test("malformed catalog fails closed before installation", async () => {
   const invalid = runner(["not JSON"]);
-  await expect(
-    ensureTernPlugin({ ...invalid, cwd: "/tmp", settingsPath, confirm: async () => true }),
-  ).rejects.toThrow("invalid plugin catalog");
+  await expect(ensureTernPlugin({ ...invalid, cwd: "/tmp", settingsPath })).rejects.toThrow(
+    "invalid plugin catalog",
+  );
   expect(invalid.calls).toHaveLength(1);
 });
 
@@ -241,7 +232,7 @@ test("invalid Tern preferences never block Herdr launch or update and warn only 
   const selected = runner([]);
   const notices: string[] = [];
   try {
-    await configureTernPluginSettings({ path, approved: true });
+    await configureTernPluginSettings({ path });
     await writeFile(path, '{"tabs_autohide":"yes"}');
     await writeFile(join(home, "settings.toml"), 'terminal = "herdr"\n');
     const deps = {
@@ -263,12 +254,11 @@ test("invalid Tern preferences never block Herdr launch or update and warn only 
   }
 });
 
-test("declined global preferences print once and explain how to change the decision later", async () => {
+test("first link prints what it changed and kept, once", async () => {
   const home = await mkdtemp("/tmp/tandem-plugin-notices-");
   const path = join(home, "settings.json");
   const selected = runner([ready, ready]);
   const notices: string[] = [];
-  let prompts = 0;
   try {
     await writeFile(path, '{"keybinds":{"cmd+shift+b":"palette"}}');
     const deps = {
@@ -276,31 +266,27 @@ test("declined global preferences print once and explain how to change the decis
       cwd: home,
       settingsPath: path,
       print: (text: string) => notices.push(text),
-      confirm: async () => {
-        prompts++;
-        return false;
-      },
     };
     expect(await ensureTernPlugin(deps)).toBe(true);
     expect(await ensureTernPlugin(deps)).toBe(true);
-    expect(prompts).toBe(1);
-    expect(notices).toHaveLength(2);
-    expect(notices[0]).toContain("custom Tern shortcuts: Command+Shift+B");
-    expect(notices[1]).toContain('To be asked again, add terminal = "herdr"');
+    expect(notices).toEqual([
+      "Tandem hid Tern's sidebar; the panel replaces it.\n",
+      "Tandem added Tern shortcuts: ⌘⇧B board, ⌘⇧P PRs, ⌘⇧U usage, ⌘⇧, settings, ⌘1–9 projects.\n",
+      "Tandem kept your custom Tern shortcuts: Command+Shift+B.\n",
+    ]);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
 });
 
-test("two projects starting together link Tern once and ask the consent question once", async () => {
+test("two projects starting together link Tern once and apply its preferences once", async () => {
   const root = await mkdtemp("/tmp/tandem-plugin-concurrent-");
   const settings = join(root, "settings.json");
   let linked = false;
   let links = 0;
-  let prompts = 0;
   const run: CommandRunner = async (request) => {
     // A caller waiting on the real file lock polls silently, so there is no event to await. Real
-    // delays keep each Tern command and the consent answer slow enough that callers overlap.
+    // delays keep each Tern command slow enough that callers overlap.
     await Bun.sleep(10);
     if (request.argv.includes("link")) {
       links += 1;
@@ -312,28 +298,24 @@ test("two projects starting together link Tern once and ask the consent question
       stderr: "",
     };
   };
+  const notices: string[] = [];
   const project = async (name: string) => {
     const home = join(root, name);
     return installTerminalPlugin(home, {
       run,
       cwd: home,
       settingsPath: settings,
-      confirm: async () => {
-        prompts += 1;
-        await Bun.sleep(50);
-        return true;
-      },
+      print: (text) => notices.push(text),
     });
   };
   try {
     await writeFile(settings, "{}");
     await Promise.all([project("first"), project("second")]);
     expect(links).toBe(1);
-    expect(prompts).toBe(1);
+    expect(notices).toHaveLength(2);
     const applied = JSON.parse(await readFile(settings, "utf8"));
     expect(applied.tabs_autohide).toBe(true);
     expect(applied.keybinds["cmd+shift+b"]).toBe("plugin.tandem.board");
-    expect(JSON.parse(await readFile(`${settings}.tandem.json`, "utf8")).approved).toBe(true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

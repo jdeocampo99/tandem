@@ -562,8 +562,7 @@ test("the plan classifies each observed resource without touching any of them", 
     quarantines: [],
     settledQuarantineIds: [],
     failures: [],
-    nativeOpens: [],
-    quarantinedPanes: [],
+    fences: [],
   });
   expect(plan.items.map((item) => item.action)).toEqual([
     "retain",

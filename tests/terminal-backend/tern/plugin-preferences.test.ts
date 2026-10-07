@@ -36,35 +36,9 @@ test("both Tern character and physical digit shortcuts route to the same project
   expect(upgraded.keybinds["cmd+digit_1"]).toBe("plugin.tandem.project-1");
 });
 
-test("declining keys leaves settings byte-identical and a concurrent edit is refused", async () => {
-  const root = await mkdtemp("/tmp/tandem-keys-");
-  const path = join(root, "settings.json");
-  try {
-    await writeFile(path, '{"opacity":42}\n');
-    expect(
-      (await configureTernPluginSettings({ path, confirm: async () => false })).configured,
-    ).toBe(false);
-    expect(await readFile(path, "utf8")).toBe('{"opacity":42}\n');
-    await rm(`${path}.tandem.json`);
-    await expect(
-      configureTernPluginSettings({
-        path,
-        confirm: async () => {
-          await writeFile(path, '{"opacity":60}\n');
-          return true;
-        },
-      }),
-    ).rejects.toThrow("changed while configuring");
-    expect(await readFile(path, "utf8")).toBe('{"opacity":60}\n');
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("one global consent records exact changes and restoration preserves later customizations", async () => {
+test("first link records exact changes and restoration preserves later customizations", async () => {
   const root = await mkdtemp("/tmp/tandem-keys-restore-");
   const path = join(root, "settings.json");
-  const questions: string[] = [];
   try {
     await writeFile(
       path,
@@ -74,18 +48,10 @@ test("one global consent records exact changes and restoration preserves later c
         keybinds: { "super+shift+B": "my-board" },
       }),
     );
-    const configured = await configureTernPluginSettings({
-      path,
-      confirm: async (question) => {
-        questions.push(question);
-        return true;
-      },
-    });
+    const configured = await configureTernPluginSettings({ path });
+    expect(configured.applied).toEqual({ sidebar: true, keys: true });
     expect(configured.skipped).toEqual(["cmd+shift+b"]);
     expect(describeTernPluginKeys(configured.skipped)).toBe("Command+Shift+B");
-    expect(questions).toHaveLength(1);
-    expect(questions[0]).toContain("sidebar");
-    expect(questions[0]).toContain("shortcuts");
     const installed = JSON.parse(await readFile(path, "utf8"));
     expect(installed.tabs_autohide).toBe(true);
     const receipt = JSON.parse(await readFile(`${path}.tandem.json`, "utf8"));
@@ -115,34 +81,9 @@ test("restoring an inherited sidebar default removes only Tandem's additions", a
   const path = join(root, "settings.json");
   try {
     await writeFile(path, '{"opacity":42}');
-    await configureTernPluginSettings({ path, approved: true });
+    await configureTernPluginSettings({ path });
     await restoreTernPluginSettings({ path });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ opacity: 42 });
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
-
-test("declining global preferences is remembered without changing preferences or asking again", async () => {
-  const root = await mkdtemp("/tmp/tandem-keys-decline-");
-  const path = join(root, "settings.json");
-  let prompts = 0;
-  try {
-    await writeFile(path, '{"opacity":42}\n');
-    const input = {
-      path,
-      confirm: async () => {
-        prompts++;
-        return false;
-      },
-    };
-    expect((await configureTernPluginSettings(input)).configured).toBe(false);
-    expect((await configureTernPluginSettings(input)).configured).toBe(false);
-    expect(prompts).toBe(1);
-    expect(await readFile(path, "utf8")).toBe('{"opacity":42}\n');
-    const record = JSON.parse(await readFile(`${path}.tandem.json`, "utf8"));
-    expect(record.keys).toEqual([]);
-    expect(record.sidebar).toBeUndefined();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -165,7 +106,7 @@ test("an alternate keymap and explicit custom bindings are never overridden", ()
   expect(JSON.parse(mixedAliases.text).keybinds["cmd+digit_1"]).toBe("my-custom-project");
 });
 
-test("a settings-write failure removes its consent record so the next attempt really applies", async () => {
+test("a settings-write failure removes its record so the next attempt really applies", async () => {
   const root = await mkdtemp("/tmp/tandem-keys-failure-");
   const path = join(root, "settings.json");
   const original = '{"tabs_autohide":false}';
@@ -173,7 +114,7 @@ test("a settings-write failure removes its consent record so the next attempt re
     await writeFile(path, original);
     await expect(
       configureTernPluginSettings(
-        { path, approved: true },
+        { path },
         {
           replaceFile: async (destination, _before, text) => {
             if (destination === path)
@@ -185,7 +126,7 @@ test("a settings-write failure removes its consent record so the next attempt re
     ).rejects.toThrow("settings disk write failed");
     expect(await readFile(path, "utf8")).toBe(original);
     expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(false);
-    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(true);
+    expect((await configureTernPluginSettings({ path })).configured).toBe(true);
     expect(JSON.parse(await readFile(path, "utf8")).keybinds["cmd+shift+b"]).toBe(
       "plugin.tandem.board",
     );
@@ -202,7 +143,7 @@ test("a committed write with a later failure retains the exact record for restor
     await writeFile(path, '{"tabs_autohide":false}');
     await expect(
       configureTernPluginSettings(
-        { path, approved: true },
+        { path },
         {
           replaceFile: async (destination, _before, text) => {
             await writeFile(destination, text, { mode: 0o600 });
@@ -219,18 +160,18 @@ test("a committed write with a later failure retains the exact record for restor
   }
 });
 
-test("an interrupted pre-settings write never reports the saved approval as applied", async () => {
+test("an interrupted pre-settings write never reports the saved record as applied", async () => {
   const root = await mkdtemp("/tmp/tandem-keys-interrupted-");
   const path = join(root, "settings.json");
   try {
     await writeFile(path, '{"tabs_autohide":false}');
-    await configureTernPluginSettings({ path, approved: true });
+    await configureTernPluginSettings({ path });
     // The receipt is durable but its settings were never committed, as after abrupt termination.
     await writeFile(path, '{"tabs_autohide":false}');
-    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(false);
+    expect((await configureTernPluginSettings({ path })).configured).toBe(false);
     expect(await readFile(path, "utf8")).toBe('{"tabs_autohide":false}');
     await restoreTernPluginSettings({ path });
-    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(true);
+    expect((await configureTernPluginSettings({ path })).configured).toBe(true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -243,7 +184,7 @@ test("post-commit formatting and unrelated edits keep restoration ownership afte
     await writeFile(path, '{"tabs_autohide":false,"opacity":42}');
     await expect(
       configureTernPluginSettings(
-        { path, approved: true },
+        { path },
         {
           replaceFile: async (destination, _before, text) => {
             await writeFile(destination, text, { mode: 0o600 });
@@ -274,7 +215,7 @@ test("an unclassified write failure preserves its receipt without claiming confi
     await writeFile(path, '{"tabs_autohide":false}');
     await expect(
       configureTernPluginSettings(
-        { path, approved: true },
+        { path },
         {
           replaceFile: async (destination, _before, text) => {
             if (destination === path) throw new Error("write outcome unknown");
@@ -284,7 +225,7 @@ test("an unclassified write failure preserves its receipt without claiming confi
       ),
     ).rejects.toThrow("write outcome unknown");
     expect(await Bun.file(`${path}.tandem.json`).exists()).toBe(true);
-    expect((await configureTernPluginSettings({ path, approved: true })).configured).toBe(false);
+    expect((await configureTernPluginSettings({ path })).configured).toBe(false);
     await restoreTernPluginSettings({ path });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({ tabs_autohide: false });
   } finally {

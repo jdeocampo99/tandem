@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { quoteShellCommand } from "../../adapters/commands.ts";
@@ -18,12 +18,7 @@ import {
   MODEL_ROLE_ORDER,
 } from "../../contracts.ts";
 import type { Receipt } from "../../native/contract.ts";
-import {
-  type EndpointInspection,
-  type EndpointTarget,
-  isWorkerProcess,
-  type QuarantinedPane,
-} from "../contract.ts";
+import { type EndpointInspection, type EndpointTarget, isWorkerProcess } from "../contract.ts";
 import type { TernEndpoint } from "../identity.ts";
 import {
   BlockAck,
@@ -365,6 +360,22 @@ async function forgetQuarantine(home: string | undefined, endpoint: Endpoint): P
   }
 }
 
+/** A pane whose last Tandem effect ended with an unknown outcome, so Tandem refuses to touch it. */
+export type QuarantinedPane =
+  | Readonly<{
+      status: "readable";
+      path: string;
+      /** The record exactly as listed, so a clear never removes one that changed since. */
+      record: string;
+      key: string;
+      operation: string;
+      reason: string;
+      at: string;
+      endpoint: Endpoint;
+      cwd: string;
+    }>
+  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
+
 /** Every record under `<home>/tern-quarantine/`, read without changing anything. */
 export async function listTernQuarantine(home: string): Promise<QuarantinedPane[]> {
   const directory = join(home, QUARANTINE_DIRECTORY);
@@ -406,12 +417,11 @@ export async function listTernQuarantine(home: string): Promise<QuarantinedPane[
 
 /** Removes one record under its lock, only while it is unchanged and `conclusive` re-proves it. */
 export async function clearTernQuarantine(
-  pane: Extract<QuarantinedPane, Readonly<{ status: "readable" }>>,
+  pane: Readonly<{ path: string; record: string }>,
   conclusive: () => Promise<boolean>,
 ): Promise<"cleared" | "settled" | "changed" | "unproven"> {
-  const file = quarantineFile(pane.key);
-  const directory = pane.path.slice(0, pane.path.length - file.length - 1);
-  return withRecordLock(directory, file, async () => {
+  // A listed record's file name is its key's digest, the same lock every mutate of that pane takes.
+  return withRecordLock(dirname(pane.path), basename(pane.path), async () => {
     let current: string;
     try {
       current = await readFile(pane.path, "utf8");

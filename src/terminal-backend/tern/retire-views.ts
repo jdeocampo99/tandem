@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { EndpointOwnershipError } from "../../adapters/primitives.ts";
-import { listCoordinatorRecords } from "../../coordinator/registry.ts";
+import { findRecordedOwner } from "../../coordinator/recorded-owner.ts";
 import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
 import { isWindowView, parseBlockArgs, ViewKind } from "../../native/contract.ts";
 import { viewDetailPath, viewIndexPath } from "../../native/store.ts";
@@ -13,18 +13,12 @@ import { blocks, type LocatedBlock, TernOutcomeUnknownError } from "./protocol.t
 const detailKinds: readonly ViewKind[] = ["task", "brief", "pr", "setup", "quick-task"];
 
 async function recordedCoordinator(home: string, target: EndpointTarget) {
-  const owners = (await listCoordinatorRecords(home, target.endpoint.sessionId)).filter(
-    (record) =>
-      record.endpoint.terminal === "tern" &&
-      record.endpoint.paneId === target.endpoint.paneId &&
-      record.endpoint.terminalSessionId === target.endpoint.terminalSessionId &&
-      record.endpoint.workspaceId === target.endpoint.workspaceId &&
-      record.endpoint.tabId === target.endpoint.tabId &&
-      record.endpoint.generation === target.endpoint.generation &&
-      record.worktree.path === target.cwd,
-  );
-  const owner = owners[0];
-  return owners.length === 1 ? owner : undefined;
+  const owner = await findRecordedOwner(home, {
+    by: "pane",
+    pane: { ...target.endpoint, terminal: "tern" },
+    cwd: target.cwd,
+  });
+  return owner.status === "owned" ? owner.record : undefined;
 }
 
 /** Preserve a recorded coordinator when independent native identity evidence stays ambiguous. */

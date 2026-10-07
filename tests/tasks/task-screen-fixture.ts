@@ -323,7 +323,15 @@ export function taskScreenPublication(project: string, review = false): NativeVi
     pullRequests: {
       "owner/repo#281": { header: pr.header, readAt: pr.readAt, detailFile: prFile },
     },
-    board: { viewOnly: true, returnLabel: "← Orchestrator", lanes: [] },
+    board: {
+      viewOnly: true,
+      returnLabel: "← Orchestrator",
+      lanes: (["Working", "Needs you", "In review", "Ready to merge"] as const).map((title) => ({
+        title,
+        count: 0,
+        cards: [],
+      })),
+    },
     usage: usageView({
       now: at,
       todayStart: at,

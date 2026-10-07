@@ -4,10 +4,9 @@ import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
 import { harnessOfSelector } from "../harness/contract.ts";
 import { readOmpUsageLimits } from "../harness/omp/usage-limits.ts";
 import { nativeCatchUpView } from "../memory/native-view.ts";
-import { recordNativePublication } from "../memory/native-visits.ts";
 import { listWorkstreams, memoryPath, memoryRoot } from "../memory/store.ts";
 import { catchUpView, recentWork } from "../memory/workstream.ts";
-import { publishViews, readProjectSummaries } from "../native/store.ts";
+import { nativeAlertCounts, publishViews, readProjectSummaries } from "../native/store.ts";
 import { type CachedPullRequest, type PrPaneView, prPaneView } from "../pr-review/native-view.ts";
 import { reviewPostNotes } from "../pr-review/render.ts";
 import { latestRound, prReviewRunDiffPath } from "../pr-review/state.ts";
@@ -37,7 +36,7 @@ import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { parseWorkerJob } from "../workers/jobs.ts";
 import { readWorkerActivity } from "../workers/worker-activity.ts";
 import { nativeBoardView } from "./native.ts";
-import { NativeAlerts, nativeAlertCounts } from "./native-alerts.ts";
+import { NativeAlerts } from "./native-alerts.ts";
 import {
   type NativeProjectSummary,
   type NativeViewsPublication,
@@ -557,14 +556,9 @@ export class NativeViewsPublisher {
               await this.#recoverOpens();
               await this.#alerts.observe(next.snapshot, next.project, sessionId);
             }
-            const view = await publishViews(this.#deps.home, next.project, () =>
+            await publishViews(this.#deps.home, next.project, () =>
               this.#reader.read(next.snapshot, next.project, next.sessions),
             );
-            await recordNativePublication({
-              home: this.#deps.home,
-              project: next.project,
-              signature: view.bundle.changeSignature,
-            });
           } catch (error) {
             await appendDiagnosticEvent(
               this.#deps.home,

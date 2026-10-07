@@ -49,7 +49,7 @@ dependency, so these tests never skip.
 | --- | --- | --- | --- |
 | View file envelope and models | `ViewFile` and `VIEW_MODELS`; written only by `publishViews` in `store.ts` | `rt.watch` checks the envelope; screens read model fields by name | `tests/native/render.test.ts` (T1): every view the store writes draws through its real screen, and a model that cannot draw keeps the last good one. `tests/native/store.test.ts`: undrawable models are refused and `seq` is committed before a file carries it |
 | Block arguments | `blockArgs` and `parseBlockArgs` | `rt.origin(args)` keeps `args[2]` opaque; screens watch `args[1]` and `args[3]` | `tests/native/actions.test.ts`: an echoed context that `blockArgs` did not write is refused. The parity harness sends every click through the real `tandem native act` |
-| Action input and outcome | `ActionEnvelope`, `Outcome` and `NOTICE_CODES` | `rt.act` builds one table per verb and toasts by `notice.code` | `tests/native/actions.test.ts` (T2): every click in every rendered view sends an envelope the contract accepts |
+| Action input and outcome | `ActionEnvelope`, `Outcome` and `NOTICE_CODES` | `rt.act` builds one table per verb and toasts by `notice.code` | `tests/native/actions.test.ts` (T2): every click in every rendered view sends an envelope the contract accepts. `tests/native/routes.test.ts`: `rt.luau` toasts every notice code, window commands send only navigational or reply verbs, and only provable blocks send approval-bearing ones |
 | Block and link names | `VIEW_KINDS`, `LINK_KINDS`, `nativeLink` and `nativeAnswerLink` | `host.luau` registrations, `plugin.toml` blocks and the `window.luau` link pattern | `tests/native/routes.test.ts` (T3): manifest, registrations and `VIEW_KINDS` name the same views, and every `nativeLink` output routes to an accepted `open`, every `nativeAnswerLink` to an accepted `quick-answer` |
 | Open ticket and receipt | `Ticket` and `Receipt`; lifecycle in `host.ts` | `layout.luau` reads ticket fields by name and writes the receipt | `tests/native/layout.test.ts` (T4): `layout.luau` runs TypeScript-built tickets and `decide()` gives every receipt the table's answer. `tests/native/decide.test.ts` covers the state machine |
 
@@ -78,18 +78,29 @@ with the same basename have different directories. The directory holds:
   (`viewDetailPath(home, canonicalRepoPath, detailFile)`). Setup and composer files are written on
   their own and never pruned by a full publication. Identifiers use `encodeURIComponent`,
   so each filename is one path segment. PR filenames include the repository.
-- `state.json`: the store's `epoch` and `seq`, the alert cursors (`board/native-alerts.ts`), the
-  visit record (`memory/native-visits.ts`) and `published`, what the last full publication showed.
-  `published` is a cache: a value in an older shape reads as absent, and the next publication
-  rebuilds it while keeping `epoch`, `seq`, alerts and visit.
+- `state.json`: the store's `epoch` and `seq`, the alert cursors, the visit record and
+  `published`, what the last full publication showed. `published` is a cache: a value in an older
+  shape reads as absent, and the next publication rebuilds it while keeping `epoch`, `seq`, alerts
+  and visit.
 - `open/<coordinatorKey>.<token>.{ticket,receipt}.json`, staged open tickets and their receipts
   (`terminal-backend/tern/host.ts`).
 
 One lock per project (`state.lock`) serializes `views/` and `state.json` across coordinator and
-CLI processes. `withProjectLock` is the only way to change `state.json`. Staged opens keep their
-own per-coordinator lock in `open/`, because an open holds it while Tern applies the layout, and
-publication must not wait for that. For the same reason a project visit decides under the lock,
-opens catch-up outside it, and records the visit under it again.
+CLI processes. `store.ts` keeps the lock and the `state.json` schema private and changes the file
+only through its own entry points:
+
+- `publishViews` writes views, `seq` and `published`, and fills a missing visit baseline.
+- `recordVisit(home, project, event)` applies one `VisitEvent` (`entry`, `visible`, `away` or
+  `dismiss`) and returns whether the entry showed catch-up. The visit and catch-up rules live
+  here.
+- `deliverNewAlerts(home, project, observe, delivery)` claims new transitions against the alert
+  cursors and counts successful sends. `board/native-alerts.ts` builds the observation and sends.
+  `nativeAlertCounts` and `markNativeAlertsRead` read and advance the bell's read cursor.
+- `readPublished` returns what the last full publication showed.
+
+Staged opens keep their own per-coordinator lock in `open/`, because an open holds it while Tern
+applies the layout, and publication must not wait for that. For the same reason a project visit
+decides under the lock, opens catch-up outside it, and records the visit under it again.
 
 The project's coordinator is the single writer of full publications. The existing
 `writeBoardSnapshot` service operation schedules them, and only when the active terminal has the
@@ -246,7 +257,8 @@ when known. Without an absolute cwd the command toasts and sends nothing. No use
 interpolated into a shell command, and no input file is written.
 
 `src/native/actions.ts` reads the envelope (at most 1 MiB) and proves the origin: exactly one
-recorded coordinator session must list the pane. It then dispatches its verb table to the
+recorded coordinator session must list the pane. An approval-bearing verb also needs a
+[proven block origin](#approval-bearing-clicks). It then dispatches its verb table to the
 existing services and prints the outcome. The verbs are `open`, `open-project`, `project`,
 `visit`, `restart`, `steer`, `brief-approve`, `brief-request-changes`, `pr-comment`,
 `review-submit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link`,
@@ -258,6 +270,61 @@ existing services and prints the outcome. The verbs are `open`, `open-project`, 
 `done` means the click did what it asked. `kept` means part of it did not happen, typically a
 view that could not be closed or proved, and the originating view stays. `refused` means Tandem
 refused the click or it failed. The notice says why, and the user may try again.
+
+### Approval-bearing clicks
+
+The main conversation owns approvals, and a listed pane does not prove the user clicked. Worker
+panes are in the coordinator's session too, and a worker's shell can pipe any envelope into
+`tandem native act`. So `VERB_AUTHORITY`, next to the verb table in `actions.ts`, classifies every
+verb. Its mapped type is exhaustive over the `Action` union, so a new verb does not compile until it
+is classified.
+
+| Verb | Authority | Block that may send it |
+| --- | --- | --- |
+| `open`, `open-project`, `project`, `visit`, `catchup-dismiss`, `catchup-open-needs`, `board-link`, `merged-link` | Navigation: shows, focuses, or records what the user saw | Any listed pane, window commands included |
+| `brief-approve`, `brief-request-changes` | Approval: approves scope or answers for the user | `tandem.brief` for that `requestId` |
+| `steer`, `restart` | Approval: directs or restarts work | `tandem.task` for that `taskId` |
+| `pr-comment`, `review-submit` | Approval: directs work, or posts a review | `tandem.task` or `tandem.pr` for that `taskId` |
+| `setup-save` | Approval: saves settings and policy | `tandem.setup` of the answer's mode, or either mode when the answer names none |
+| `quick-start` | Approval: approves a quick task's scope | `tandem.quick-task`, this coordinator's composer |
+| `quick-answer` | Reply: answers a quick task's open scope question from a reply link | The recorded coordinator's own pane, where Tandem wrote the link; anything else is refused with `origin-unproven` |
+
+Before an approval-bearing handler runs, `proveBlockOrigin` needs all of the following, and refuses
+with `origin-unproven` otherwise. Nothing has changed at that point:
+
+1. The terminal hosts native views. Herdr hosts none, so it refuses every approval-bearing verb, and
+   approvals go through the coordinator conversation's own consent.
+2. The origin is a block origin (`{pane, ctx}`), never a window command (`{pane, cwd}`), and its pane
+   is not the coordinator's own pane.
+3. The echoed context is canonical and names the coordinator pane, worktree, Tandem home, and
+   project index of the one recorded coordinator whose session lists the pane
+   (`blockOriginProblem`, pure).
+4. `ViewsCapability.isView` lists the pane as that coordinator's exact block for the subject. In
+   Tern (`views.ts`), the coordinator pane is proved exactly. The block's program is
+   `tandem.<kind>` and its three launch arguments equal `blockArgs` for that subject's detail file and
+   context, including the window key. Its session and its placement tab match where an open puts
+   it. A task or PR block counts only for a task the project's views published. Detached, duplicate,
+   or misplaced look-alikes are ambiguous, and an ambiguous listing refuses. The proof only reads.
+
+Window commands and reply links send only navigational verbs. A reply link opens the brief, task, or
+PR view, and the user makes the choice there.
+
+Residual risk: this check stops a worker from passing off its own pane, a window command, or the
+conversation as the user's click. It is not an OS boundary. Workers run as the same user without a
+sandbox, so a determined worker can still forge a click:
+
+- It can name a genuine open block. Pane ids and launch arguments are readable from `tern ls`
+  and from the Tandem home, and the envelope's `pane` is self-asserted. Tern's listing does not
+  record who spawned `tandem native act`, so a replayed pane id passes the proof.
+- It can open a look-alike block. `tern open` on a ticket it writes under the home makes
+  `layout.luau` launch `tandem.<kind>` with Tandem's arguments. Tern records no opener and has
+  no plugin-only open path.
+- It can skip the CLI entirely and call Tandem's service, or the task store, from its own Bun
+  process.
+
+Closing these gaps needs a boundary between the user and the workers that Tern and the OS do
+not provide: separate users, a sandbox, or a secret held only in the Tern daemon's memory and
+never written to the home. See [roles and approvals](operating-model.md#roles-and-approvals).
 
 `rt.act` holds one action per origin at a time and toasts by `notice.code`. Each code has one
 title and level in `rt.luau`. `failed` and unknown codes take the asking screen's title. A
@@ -317,12 +384,8 @@ directly.
 `restart` names the task and goes through central recovery. `steer` names the task and carries
 the user's direction as `text`. `quick-start` carries the composer's `text` exactly as typed (at
 most 16,000 characters on the wire; the CLI applies the quick task limits). Start approves scope,
-so a pane listed in the project's session is not enough: a worker runs in one and can pipe an
-envelope with its own pane into `tandem native act`. `quick-start` is refused unless its origin is
-a block origin whose echoed context names this coordinator, its worktree, the Tandem home and the
-project index, and Tern lists that exact pane as the coordinator's `tandem.quick-task` split with
-exactly the arguments Tandem launched it with (`ViewsCapability.isView`). A window command, the
-coordinator's own pane, a worker's pane and any terminal without native views are refused. `quick-answer`
+so it needs a [proven block origin](#approval-bearing-clicks) from the coordinator's
+`tandem.quick-task` split. `quick-answer`
 carries `taskId`, `questionId` and `choice` (`proceed`, `convert` or `cancel`) from an answer
 link. Renderers only collect input and call `rt.act`.
 
@@ -960,7 +1023,8 @@ first saved brief, task or inbox destination. Dismiss and Open what needs me ack
 current signature only after confirmed navigation. A merged PR click sends `merged-link`,
 resolved only against `published.merged`.
 
-`tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger
+`tryShowCatchUp` in `src/memory/native-visits.ts` wraps the guarded `maybeShowCatchUp` trigger,
+which records an `entry` visit through `recordVisit` and opens catch-up when the visit decides to,
 with the single non-fatal boundary shared by every entry path. Visible front-door launches and
 reconnects, `coordinator/open-project.ts`, dropdown and shortcut switches, and window focus
 entries (including inbox helper activation) invoke it. Background launches defer to visible

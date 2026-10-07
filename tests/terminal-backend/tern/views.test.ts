@@ -1,7 +1,11 @@
 import { expect, test } from "bun:test";
 import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { AdapterCommandError, AdapterProtocolError } from "../../../src/adapters/primitives.ts";
+import {
+  AdapterCommandError,
+  AdapterError,
+  AdapterProtocolError,
+} from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
@@ -552,7 +556,7 @@ test("only the exact quick task block Tandem launched for this coordinator prove
       block("tandem.quick-task", composer),
       { ...block("tandem.quick-task", composer), id: 6 },
     ];
-    await expect(proves("4")).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    await expect(proves("4")).rejects.toBeInstanceOf(AdapterError);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

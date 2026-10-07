@@ -28,18 +28,20 @@ export type TerminalComposition = Readonly<{
 /** Resolve the dedicated helper from the one durable project owner, never a substitute pane. */
 async function notificationEndpointFor(home: string, target: SessionTarget) {
   // Keep coordinator harness imports out of validation and worker startup.
-  const [{ canonicalPath }, { listCoordinatorRecords }] = await Promise.all([
+  const [{ canonicalPath }, { findRecordedOwner }] = await Promise.all([
     import("../coordinator/record.ts"),
-    import("../coordinator/registry.ts"),
+    import("../coordinator/recorded-owner.ts"),
   ]);
-  const cwd = await canonicalPath(target.cwd, "notification cwd");
-  const records = (await listCoordinatorRecords(home, target.sessionId)).filter(
-    (record) => record.repoPath === cwd || record.worktree.path === cwd,
-  );
-  if (records.length > 1)
+  const found = await findRecordedOwner(home, {
+    by: "project",
+    sessionId: target.sessionId,
+    path: await canonicalPath(target.cwd, "notification cwd"),
+    terminal: "any",
+  });
+  if (found.status === "ambiguous")
     throw new AdapterError("Tern alert project owner is ambiguous", "tern notify");
-  const owner = records[0]?.endpoint;
-  if (owner === undefined) return undefined;
+  if (found.status === "none") return undefined;
+  const owner = found.record.endpoint;
   assertTerminalEndpoint("tern", owner);
   return ternNotificationEndpoint(owner);
 }
@@ -97,8 +99,10 @@ export function terminalBackend(
     get views() {
       return select().views;
     },
-    quarantinedPanes: (home) => select().quarantinedPanes(home),
-    clearPaneQuarantine: (pane, conclusive) => select().clearPaneQuarantine(pane, conclusive),
+    fences: {
+      list: (home) => select().fences.list(home),
+      settle: (fence) => select().fences.settle(fence),
+    },
     inspect: (input) => select().inspect(input),
     runCommand: (input) => select().runCommand(input),
     sendKeys: (input) => select().sendKeys(input),
@@ -121,6 +125,9 @@ export function terminalBackend(
     sessionDetail: (input) => select().sessionDetail(input),
     serverCommand: (input) => select().serverCommand(input),
     clientCommand: (input) => select().clientCommand(input),
+    launchEnvironment: (input) => select().launchEnvironment(input),
+    paneEnvironment: (input) => select().paneEnvironment(input),
+    paneIdentity: (pane) => select().paneIdentity(pane),
     checkInstall: (input) => select().checkInstall(input),
     notify: (input) => select().notify(input),
     openWelcome: (input) => select().openWelcome(input),
@@ -137,17 +144,6 @@ export function terminalBackend(
 /** A launch uses its selected backend's context, so foreign inherited ids are ignored. */
 export function terminalContextFor(terminal: TerminalName): TerminalContext {
   return terminal === "tern" ? TERN_CONTEXT : HERDR_CONTEXT;
-}
-
-/** A newly launched terminal must not inherit the other terminal's pane identity. */
-export function terminalLaunchEnvironment(
-  terminal: TerminalName,
-  environment: Readonly<Record<string, string>>,
-): Readonly<Record<string, string>> {
-  const foreign = terminalContextFor(terminal === "tern" ? "herdr" : "tern").variables;
-  return Object.fromEntries(
-    Object.entries(environment).filter(([name]) => !foreign.includes(name)),
-  );
 }
 
 function inheritedContext(source: TandemEnvironmentSource): TerminalContext | undefined {
