@@ -47,20 +47,30 @@ function foregroundGroup(group: number) {
       returns: FFIType.int32_t,
     },
   });
+  // A shell's prompt helpers come and go between `ps` and `sysctl`. One that exited, even if its
+  // parent has not reaped it yet, is no longer running, so only a live member must give its argv.
+  const gone = (pid: number) => {
+    const state = Bun.spawnSync(["/bin/ps", "-o", "stat=", "-p", String(pid)], { stdout: "pipe" });
+    return state.exitCode !== 0 || state.stdout.toString().trim().startsWith("Z");
+  };
   try {
-    return members.map((member) => {
+    return members.flatMap((member) => {
       const mib = new Int32Array([1, 49, member.pid]); // CTL_KERN, KERN_PROCARGS2, pid
       const length = new BigUint64Array(1);
-      if (library.symbols.sysctl(ptr(mib), mib.length, null, ptr(length), null, 0) !== 0)
+      if (library.symbols.sysctl(ptr(mib), mib.length, null, ptr(length), null, 0) !== 0) {
+        if (gone(member.pid)) return [];
         throw new Error(`native argv unavailable for pid ${member.pid}`);
+      }
       const size = Number(length[0]);
       if (!Number.isSafeInteger(size) || size < 4 || size > 16_777_216)
         throw new Error("invalid native argv buffer size");
       const bytes = new Uint8Array(size);
-      if (library.symbols.sysctl(ptr(mib), mib.length, ptr(bytes), ptr(length), null, 0) !== 0)
+      if (library.symbols.sysctl(ptr(mib), mib.length, ptr(bytes), ptr(length), null, 0) !== 0) {
+        if (gone(member.pid)) return [];
         throw new Error(`native argv changed for pid ${member.pid}`);
+      }
       const argv = processArguments(bytes.subarray(0, Number(length[0])));
-      return { pid: member.pid, name: member.name.split("/").at(-1) ?? member.name, argv };
+      return [{ pid: member.pid, name: member.name.split("/").at(-1) ?? member.name, argv }];
     });
   } finally {
     library.close();
