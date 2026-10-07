@@ -92,6 +92,13 @@ src/service/quick-start.ts (the one start path).
   - Either one is refused when the cancel cannot prove the worker stopped (the task stays
     blocked): the question stays open, nothing reaches the coordinator, and the answer may be
     given again once the pane is stopped.
+- **Crash safety.** The choice is recorded first, as `quick.scopeAnswer {choice, at}` (with
+  `scopeExtendedAt` in the same write for Proceed), and only then do its effects run. Each effect
+  is guarded by the open question: Proceed answers the worker only while the question is open, and
+  Convert and Cancel close it in one write that, for Convert, also adds the coordinator handoff. So
+  each tick finishes a recorded answer a crash left part-way exactly once (`quickScopeNextStep`
+  decides the missing step). A tick never retries a cancel that already failed to prove the worker
+  stopped; answering again does. Once one answer is recorded, a different answer is refused.
 - **Nothing else reopens the work.** While the scope question is unanswered (`quick.scopeQuestionId`
   set, no `scopeExtendedAt`, task not cancelled; `quickScopeAwaitingAnswer`), the `resume`
   transition refuses with `approval-required` and a message naming the three answers, so

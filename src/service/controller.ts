@@ -50,7 +50,7 @@ import type {
   IdFactory,
   IsoTimestamp,
   PullRequestMetadata,
-  QuickScopeReport,
+  QuickScopeAnswer,
   QuickTaskApproval,
   RepoPolicy,
   RequestBriefRecord,
@@ -191,9 +191,12 @@ import {
   checkQuickText,
   parseQuickScopeAnswer,
   QUICK_SCOPE_ANSWER_REFUSAL,
+  QUICK_SCOPE_LABELS,
   QUICK_SCOPE_PROCEED_TEXT,
+  type QuickScopeChoice,
   quickApproval,
   quickConvertedText,
+  quickScopeNextStep,
   quickTaskTitle,
 } from "../tasks/quick.ts";
 import {
@@ -1877,7 +1880,7 @@ class TandemController {
     }
     const asked = (await this.get(taskId)).communication?.question;
     if (asked?.id === questionId && asked.scope !== undefined) {
-      await this.answerQuickScope(taskId, questionId, asked.scope, answer);
+      await this.answerQuickScope(taskId, questionId, answer);
       return;
     }
     await this.answerWorker(taskId, questionId, answer);
@@ -1894,83 +1897,152 @@ class TandemController {
   }
 
   /**
-   * Answers a quick task's scope question. Proceed records the stretched scope on the approval, so
-   * review sees it, and resumes the worker, which may not ask again. Convert to request hands the
-   * user's words and the worker's findings to the coordinator for the normal interview and cancels
-   * the quick task. Cancel cancels it. Both cancel first and refuse, leaving the question open, when
-   * the task could not be proven stopped. Anything else leaves the question open.
+   * Answers a quick task's scope question. The choice is recorded on the quick approval first, in
+   * one write, and then its effects run; each effect is guarded so `finishQuickScopeAnswer`, here or
+   * on the next tick after a crash, applies it once. Proceed's record also stretches the approved
+   * scope, so review sees it, then the worker is told; it may not ask again. Convert to request and
+   * Cancel cancel the task first and refuse, leaving the question open, when it could not be proven
+   * stopped; answering again retries that cancel. Convert then hands the user's words and the
+   * worker's findings to the coordinator in the same write that closes the question. An answer
+   * that is not one of the three leaves the question open; a different choice than the one already
+   * recorded is refused once the recorded one is finished.
    */
   private async answerQuickScope(
     taskId: string,
     questionId: string,
-    scope: QuickScopeReport,
     answer: string,
   ): Promise<void> {
     const choice = parseQuickScopeAnswer(answer);
     if (choice === undefined) throw new Error(QUICK_SCOPE_ANSWER_REFUSAL);
-    if (choice === "proceed") {
-      await this.updateQuickScopeQuestion(taskId, questionId, (task) => ({
-        ...(task.quick === undefined
-          ? {}
-          : { quick: { ...task.quick, scopeExtendedAt: this.#deps.clock() } }),
+    const recorded = await this.recordQuickScopeAnswer(taskId, questionId, choice);
+    await this.finishQuickScopeAnswer(taskId, true);
+    if (recorded.choice !== choice)
+      throw new Error(
+        `Task ${taskId}'s scope question was already answered "${QUICK_SCOPE_LABELS[recorded.choice]}"; that answer stands.`,
+      );
+  }
+
+  /** Records the user's scope answer before any effect, or returns the one already recorded. */
+  private async recordQuickScopeAnswer(
+    taskId: string,
+    questionId: string,
+    choice: QuickScopeChoice,
+  ): Promise<QuickScopeAnswer> {
+    return this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      const quick = current?.quick;
+      if (
+        current === undefined ||
+        quick === undefined ||
+        quick.scopeQuestionId !== questionId ||
+        current.communication?.question?.id !== questionId
+      )
+        throw new Error(`Task ${taskId} is no longer asking question ${questionId}`);
+      if (quick.scopeAnswer !== undefined) return quick.scopeAnswer;
+      const scopeAnswer = { choice, at: this.#deps.clock() };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        quick: {
+          ...quick,
+          scopeAnswer,
+          ...(choice === "proceed" ? { scopeExtendedAt: scopeAnswer.at } : {}),
+        },
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
       }));
+      return scopeAnswer;
+    });
+  }
+
+  /**
+   * Applies what is left of a recorded scope answer (`quickScopeNextStep`). The user's own answer
+   * retries a cancel that could not prove the worker stopped; a tick never does.
+   */
+  private async finishQuickScopeAnswer(taskId: string, retryCancel: boolean): Promise<void> {
+    const task = await this.get(taskId);
+    const answer = task.quick?.scopeAnswer;
+    const questionId = task.quick?.scopeQuestionId;
+    if (answer === undefined || questionId === undefined) return;
+    const cancelTried =
+      !retryCancel && (await this.runtimeFor(taskId))?.stopRequest?.action === "cancel";
+    const step = quickScopeNextStep(task, cancelTried);
+    if (step === undefined || step === "wait") return;
+    if (step === "answer-worker") {
       await this.answerWorker(taskId, questionId, QUICK_SCOPE_PROCEED_TEXT);
       return;
     }
-    // Stop the worker first: the answer is final only once the task is provably cancelled. A pane
-    // that cannot be proven stopped leaves the task blocked, so the question stays open and
-    // nothing is handed to the coordinator.
-    const stopped = await this.cancel(
-      taskId,
-      choice === "convert"
-        ? "The user turned this quick task into a request."
-        : "The user cancelled this quick task at its scope question.",
-    );
-    if (stopped.stage !== "cancelled")
-      throw new Error(
-        `Task ${taskId} could not be stopped yet: Tandem couldn't confirm its worker stopped, so it was not ${choice === "convert" ? "converted" : "cancelled"}. The question is still open; answer it again once the worker has stopped.`,
+    if (step === "cancel") {
+      const stopped = await this.cancel(
+        taskId,
+        answer.choice === "convert"
+          ? "The user turned this quick task into a request."
+          : "The user cancelled this quick task at its scope question.",
       );
-    await this.updateQuickScopeQuestion(taskId, questionId, (task) => {
-      const { question: _question, ...communication } = task.communication ?? {
+      if (stopped.stage !== "cancelled")
+        throw new Error(
+          `Task ${taskId} could not be stopped yet: Tandem couldn't confirm its worker stopped, so it was not ${answer.choice === "convert" ? "converted" : "cancelled"}. The question is still open; answer it again once the worker has stopped.`,
+        );
+    }
+    await this.closeQuickScopeQuestion(taskId, questionId, answer.choice === "convert");
+  }
+
+  /**
+   * Closes a cancelled quick task's scope question and, for Convert, hands the request to the
+   * coordinator, in one write. A question already closed means this already happened.
+   */
+  private async closeQuickScopeQuestion(
+    taskId: string,
+    questionId: string,
+    convert: boolean,
+  ): Promise<void> {
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      const question = current?.communication?.question;
+      if (current === undefined || question?.id !== questionId) return;
+      const { question: _question, ...communication } = current.communication ?? {
         revision: 0,
         messages: [],
       };
-      return {
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
         communication,
-        ...(choice === "convert"
+        ...(convert
           ? {
               notifications: [
-                ...task.notifications,
+                ...entry.notifications,
                 {
                   id: singleLine(this.#deps.idFactory(), "notification id"),
-                  message: quickConvertedText(task, scope),
+                  message: quickConvertedText(entry, question.scope),
                   acknowledged: false,
                   kind: "coordinator" as const,
                 },
               ],
             }
           : {}),
-      };
-    });
-  }
-
-  /** One write to a quick task while its scope question is still the one asked. */
-  private async updateQuickScopeQuestion(
-    taskId: string,
-    questionId: string,
-    change: (task: TaskRecord) => Partial<TaskRecord>,
-  ): Promise<void> {
-    await this.#deps.store.exclusive(async (store) => {
-      const current = await store.read(taskId);
-      if (current?.communication?.question?.id !== questionId)
-        throw new Error(`Task ${taskId} is no longer asking question ${questionId}`);
-      await store.update(current.id, current.revision, (entry) => ({
-        ...entry,
-        ...change(entry),
         revision: entry.revision + 1,
         updatedAt: this.#deps.clock(),
       }));
     });
+  }
+
+  /** Each tick finishes scope answers a crash left part-way; a failure waits for the next tick. */
+  private async finishQuickScopeAnswers(tasks: readonly TaskRecord[]): Promise<void> {
+    for (const task of tasks) {
+      if (quickScopeNextStep(task, false) === undefined) continue;
+      try {
+        await this.finishQuickScopeAnswer(task.id, false);
+      } catch (error) {
+        await appendDiagnosticEvent(
+          this.#deps.home,
+          {
+            event: "quick-scope-answer-unfinished",
+            taskId: task.id,
+            details: { errorClass: errorClassName(error) },
+          },
+          this.#deps.clock,
+        );
+      }
+    }
   }
 
   /**
@@ -2350,6 +2422,7 @@ class TandemController {
 
   private async advance(): Promise<readonly TaskRecord[]> {
     await this.backfillRequiredStages(await this.#source.scopedTasks());
+    await this.finishQuickScopeAnswers(await this.#source.scopedTasks());
     const tasks = await this.#source.scopedTasks();
     for (const task of tasks) await this.reconcileOrBlock(task);
     await this.reconcilePresentations(new Set(tasks.map((task) => task.id)));

@@ -242,6 +242,9 @@ another. Root inputs come from `viewIndexPath` and detail inputs from `viewDetai
 
 ## Click transport
 
+These checks stop accidental misuse, not a worker forging clicks on purpose; see the
+[threat model](operating-model.md#threat-model).
+
 Every click, key and window command reaches Tandem through one transport, `rt.act` in
 `tern-plugin/rt.luau`. It writes one `ActionEnvelope` to the stdin of
 `/bin/sh tandem.sh native act` and reads one `Outcome` from stdout:

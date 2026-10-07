@@ -31,6 +31,7 @@ import {
   type ModelSpec,
   type Notification,
   type PullRequestMetadata,
+  type QuickScopeAnswer,
   type QuickTaskApproval,
   type RepoPolicy,
   type RequiredStages,
@@ -1257,7 +1258,15 @@ function parseQuickApproval(value: unknown, kind: string, source: string): Quick
   if (!isRecord(value)) failState(source, "quick must be an object");
   assertExactKeys(
     value,
-    ["kind", "text", "textDigest", "approvedAt", "scopeQuestionId", "scopeExtendedAt"],
+    [
+      "kind",
+      "text",
+      "textDigest",
+      "approvedAt",
+      "scopeQuestionId",
+      "scopeExtendedAt",
+      "scopeAnswer",
+    ],
     source,
   );
   if (value.kind !== "quick-task") failState(source, "quick.kind must be quick-task");
@@ -1270,6 +1279,14 @@ function parseQuickApproval(value: unknown, kind: string, source: string): Quick
   const scopeExtendedAt = optionalText(value, "scopeExtendedAt", source);
   if (scopeExtendedAt !== undefined && scopeQuestionId === undefined)
     failState(source, "quick scope can only be extended by answering its scope question");
+  const scopeAnswer =
+    value.scopeAnswer === undefined
+      ? undefined
+      : parseQuickScopeAnswer(value.scopeAnswer, `${source}.scopeAnswer`);
+  if (scopeAnswer !== undefined && scopeQuestionId === undefined)
+    failState(source, "quick scopeAnswer needs the scope question it answers");
+  if (scopeAnswer?.choice === "proceed" && scopeExtendedAt === undefined)
+    failState(source, "a recorded Proceed must extend the quick scope");
   return {
     kind: "quick-task",
     text,
@@ -1277,7 +1294,17 @@ function parseQuickApproval(value: unknown, kind: string, source: string): Quick
     approvedAt,
     ...(scopeQuestionId === undefined ? {} : { scopeQuestionId }),
     ...(scopeExtendedAt === undefined ? {} : { scopeExtendedAt }),
+    ...(scopeAnswer === undefined ? {} : { scopeAnswer }),
   };
+}
+
+function parseQuickScopeAnswer(value: unknown, source: string): QuickScopeAnswer {
+  if (!isRecord(value)) failState(source, "scopeAnswer must be an object");
+  assertExactKeys(value, ["choice", "at"], source);
+  const choice = value.choice;
+  if (choice !== "proceed" && choice !== "convert" && choice !== "cancel")
+    failState(source, "scopeAnswer.choice must be proceed, convert or cancel");
+  return { choice, at: requiredText(value, "at", source) };
 }
 
 function parseWorkstream(value: UnknownRecord, source: string): string {

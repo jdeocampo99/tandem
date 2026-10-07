@@ -90,6 +90,17 @@ export type QuickTaskApproval = Readonly<{
   readonly scopeQuestionId?: string;
   /** When the user answered Proceed to that question, stretching the approved scope. */
   readonly scopeExtendedAt?: IsoTimestamp;
+  /**
+   * The user's answer to that question, recorded before any of its effects so a crash part-way
+   * through is finished by the next tick instead of leaving the task half answered.
+   */
+  readonly scopeAnswer?: QuickScopeAnswer;
+}>;
+
+/** A recorded answer to a quick task's scope question; `at` is when the user chose it. */
+export type QuickScopeAnswer = Readonly<{
+  readonly choice: "proceed" | "convert" | "cancel";
+  readonly at: IsoTimestamp;
 }>;
 
 export type TaskCommunication = Readonly<{

@@ -16,6 +16,7 @@ import {
   quickConvertedText,
   quickScopeAwaitingAnswer,
   quickScopeLines,
+  quickScopeNextStep,
   quickScopeQuestionAllowed,
   quickScopeQuestionText,
   quickStartedText,
@@ -331,4 +332,32 @@ test("a converted quick task hands the coordinator the user's words and the work
   expect(text.split("\n")[0]).toBe("task-q1 · Converted to a request");
   expect(text).toContain(JSON.stringify(TEXT));
   expect(text).toContain("Affects 14 files across billing, the settings page and the CLI.");
+});
+
+test("a recorded scope answer names only the effects still missing, and a tried cancel waits", () => {
+  const quick = { ...quickApproval({ text: TEXT, at: SCENARIO_NOW }), scopeQuestionId: "j" };
+  const open = { revision: 1, messages: [], question: { id: "j", text: "q", scope: SCOPE } };
+  const asked = quickTask({ stage: "blocked", previousStage: "implementing", quick });
+  const answered = (choice: "proceed" | "convert" | "cancel", rest: Partial<TaskRecord> = {}) =>
+    ({
+      ...asked,
+      communication: open,
+      quick: { ...quick, scopeAnswer: { choice, at: SCENARIO_NOW } },
+      ...rest,
+    }) as TaskRecord;
+  expect(quickScopeNextStep({ ...asked, communication: open }, false)).toBeUndefined();
+  expect(quickScopeNextStep(answered("proceed"), false)).toBe("answer-worker");
+  expect(quickScopeNextStep(answered("cancel"), false)).toBe("cancel");
+  expect(quickScopeNextStep(answered("convert"), true)).toBe("wait");
+  expect(quickScopeNextStep(answered("convert", { stage: "cancelled" }), true)).toBe(
+    "close-question",
+  );
+  const closed = { revision: 2, messages: [] };
+  for (const choice of ["proceed", "convert", "cancel"] as const)
+    expect(quickScopeNextStep(answered(choice, { communication: closed }), false)).toBeUndefined();
+
+  const stored = (choice: "proceed" | "cancel") =>
+    ({ ...asked, quick: { ...quick, scopeAnswer: { choice, at: SCENARIO_NOW } } }) as TaskRecord;
+  expect(parseTaskRecord(JSON.parse(JSON.stringify(stored("cancel"))))).toEqual(stored("cancel"));
+  expect(() => parseTaskRecord(stored("proceed"))).toThrow("must extend the quick scope");
 });

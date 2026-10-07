@@ -100,8 +100,9 @@ Paths are relative to `src/`; tests mirror domain folders under `tests/`.
   Luau tests need `luau` and fail without it ([tests/luau.ts](tests/luau.ts)). Real-Tern probes
   ([probes-native.test.ts](tests/terminal-backend/tern/probes-native.test.ts)) run only with
   `TANDEM_TERN_NATIVE=1`.
-- Only the parent runs project-wide gates after integration; child workers run no tests, builds,
-  formatters, or linters. From the repository root:
+- Implementers may run any check, including the pinned validation commands, to catch failures
+  early, but their runs are not evidence; only the parent's project-wide gates after integration and
+  the validation runner's results count. From the repository root:
 
 ```sh
 bun run check   # TypeScript

@@ -229,6 +229,27 @@ export function quickScopeAwaitingAnswer(task: Pick<TaskRecord, "quick" | "stage
   );
 }
 
+/**
+ * What is left of a recorded scope answer, or undefined when nothing is: the answer is recorded
+ * first, so each step here is one of its effects that has not happened yet. Proceed answers the
+ * worker while the question is still open. Cancel and Convert cancel the task, then close the
+ * question in one write that, for Convert, also hands the request to the coordinator. A cancel that
+ * was already tried and could not prove the worker stopped `waits`: it is never retried on its own,
+ * only when the user answers again.
+ */
+export function quickScopeNextStep(
+  task: Pick<TaskRecord, "quick" | "stage" | "communication">,
+  cancelTried: boolean,
+): "answer-worker" | "cancel" | "close-question" | "wait" | undefined {
+  const answer = task.quick?.scopeAnswer;
+  const questionId = task.quick?.scopeQuestionId;
+  if (answer === undefined || questionId === undefined) return undefined;
+  if (task.communication?.question?.id !== questionId) return undefined;
+  if (answer.choice === "proceed") return task.stage === "cancelled" ? undefined : "answer-worker";
+  if (task.stage === "cancelled") return "close-question";
+  return cancelTried ? "wait" : "cancel";
+}
+
 /** Why a quick task waiting on its scope question cannot resume, and how to move it on. */
 export function quickScopeResumeRefusal(taskId: string): string {
   return `Task ${taskId} is waiting on its scope question. Answer it with ${QUICK_SCOPE_CHOICES.map((choice) => `"${QUICK_SCOPE_LABELS[choice]}"`).join(", ")}; it can't resume until then.`;

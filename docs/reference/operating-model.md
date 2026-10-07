@@ -94,6 +94,15 @@ assigned to new work.
 - Tandem has no login flow and copies no credentials. OMP, the selected terminal, Treehouse, `gh`, and Git use
   their existing local configuration and authentication.
 
+## Threat model
+
+Workers run as the user's own OS account with a shell, so Tandem cannot stop a worker that
+deliberately forges approvals: it can pipe a crafted envelope into `tandem native act`, draw a
+look-alike view, call the service directly, or pass `--yes` to the CLI. The native click checks
+(proven block origins, reply links only from the coordinator pane) guard against accidental misuse
+only. Real isolation would need a sandbox or a separate OS user, which is out of scope. Reviews
+should not treat deliberate worker forgery as a defect.
+
 ## Local limits and source of truth
 
 - Everything runs on the local machine: orchestration, durable state, workers, terminal workspaces,
