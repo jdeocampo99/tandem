@@ -14,6 +14,7 @@ import {
   deliverPrWatchNotices,
 } from "../../src/session/notifications.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
+import { quickScopeQuestionText } from "../../src/tasks/quick.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";
@@ -153,6 +154,48 @@ test("ready and bounded-loop-exhausted outcomes wake the coordinator as distinct
   expect(content).toContain("the task is not ready or accepted");
   expect(sent[0]).toMatchObject({ timing: "followUp", triggerTurn: true });
   expect(acknowledged.sort()).toEqual(["task-exhausted:exhausted-1", "task-ready:ready-1"]);
+});
+
+test("a quick task's scope question reaches the chat in its fixed copy with the three answers", async () => {
+  const { host, effects } = recordingSessionHost();
+  const scope = { files: 14, areas: ["billing", "the CLI"], plan: "turn it into a request" };
+  const asked = task({
+    id: "task-q1",
+    stage: "blocked",
+    communication: {
+      revision: 0,
+      messages: [],
+      question: { id: "job-1", text: quickScopeQuestionText(scope), scope },
+    },
+    notifications: [
+      {
+        id: "blocked-1",
+        message: "Task task-q1 blocked",
+        acknowledged: false,
+        kind: "coordinator",
+      },
+    ],
+  });
+  await deliverPendingNotifications({
+    host,
+    service: recordingAcknowledgements([]),
+    tasks: [asked],
+    delivered: new Set<string>(),
+    unacknowledged: new Set<string>(),
+    readReport: async () => undefined,
+  });
+  const sent = deliveries(effects)[0];
+  expect(sent?.text).toBe(
+    [
+      "task-q1 · Scope exceeds quick task",
+      "Affects 14 files across billing and the CLI.",
+      "No changes made.",
+      "Proposed: turn it into a request.",
+      "Proceed · Convert to request · Cancel",
+    ].join("\n"),
+  );
+  expect(sent?.hidden?.text).toContain("question job-1: the quick task's scope question");
+  expect(sent?.hidden?.text).toContain("Never choose for them");
 });
 
 test("a failed acknowledgement retries on the next tick without waking the coordinator again", async () => {

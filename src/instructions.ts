@@ -46,6 +46,8 @@ export type PrDescriptionInput = Readonly<{
   readonly manualVerification?: readonly string[];
   /** Review findings still open when the user published without finishing review. */
   readonly openFindings?: readonly string[];
+  /** A quick task's approved scope section, already rendered (`approvedScopeMarkdown`). */
+  readonly approvedScope?: string;
 }>;
 
 export type DraftPrDescriptionInput = Readonly<{
@@ -54,6 +56,8 @@ export type DraftPrDescriptionInput = Readonly<{
   readonly activity: readonly string[];
   readonly blockers: readonly string[];
   readonly remainingChecks: readonly string[];
+  /** A quick task's approved scope section, already rendered (`approvedScopeMarkdown`). */
+  readonly approvedScope?: string;
 }>;
 
 export const DRAFT_PR_BANNER =
@@ -106,7 +110,8 @@ Good: "Some PostHog reports hide iPhone activity because they mistake the app fo
 - Questions or changes about work a task already did (its code, its pull request, its CI) go to that task with steer, even once it is ready or its pull request is open; its agent works in the same worktree. Do not create a research or implementation task for them.
 - When a notification tells you what to do next (for example after research finishes), follow it.
 - Work on one thing with the user at a time. While you are in the middle of something together, Tandem holds new notifications back so you never switch topic on the user. Approving or abandoning a brief, approving a scope, answering a worker, and posting a review finish it on their own. When it finishes any other way (the user says they are done or moves on, or you just told them the result they asked about), call thread-done in the same turn. Whatever waited then arrives, and you offer it.
-- If the source status says the refresh is blocked, do not start new work; tell the user what is wrong.`;
+- If the source status says the refresh is blocked, do not start new work; tell the user what is wrong.
+- Quick tasks are the user's own: they type a small change in Tandem's quick task composer or run tandem quick, and that click or command is their approval. You never decide that a request is quick and cannot start one. "Quick task started" is a notice; acknowledge it in one line and carry on. When a quick task asks its scope question, show it and send the user's own choice (Proceed, Convert to request, or Cancel) with answer. When one is converted to a request, treat the user's words in that notice as a new request: run the usual research, interview, and brief, starting from what the worker found.`;
 
 /** Added for the coordinator of Tandem's own checkout, where every plain `tandem` starts. */
 export const TANDEM_COORDINATOR_INSTRUCTIONS = `## Tandem's own chat
@@ -509,7 +514,12 @@ export function renderPrDescription(input: PrDescriptionInput): string {
       ? []
       : readDescriptionEntries(input.manualVerification, "manualVerification", 0);
 
-  const lines: string[] = [`TL;DR: ${tldr.join(" ")}`, "", "# What"];
+  const lines: string[] = [
+    `TL;DR: ${tldr.join(" ")}`,
+    "",
+    ...(input.approvedScope === undefined ? [] : [input.approvedScope, ""]),
+    "# What",
+  ];
   lines.push(...formatBullets(what), "", "# Why");
   lines.push(...formatBullets(why), "", "# Validation");
   lines.push(...formatBullets(validation));
@@ -544,7 +554,12 @@ export function renderDraftPrDescription(input: DraftPrDescriptionInput): string
   const blockers = readDescriptionEntries(input.blockers, "blockers", 0);
   const remainingChecks = readDescriptionEntries(input.remainingChecks, "remainingChecks", 0);
 
-  const lines: string[] = [DRAFT_PR_BANNER, "", "# Status"];
+  const lines: string[] = [
+    DRAFT_PR_BANNER,
+    "",
+    ...(input.approvedScope === undefined ? [] : [input.approvedScope, ""]),
+    "# Status",
+  ];
   lines.push(...formatBullets(status), "", "# Review level");
   lines.push(...formatBullets(reviewLevel), "", "# Current activity");
   lines.push(...formatBullets(activity), "", "# Blockers");

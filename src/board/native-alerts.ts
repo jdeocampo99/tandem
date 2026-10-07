@@ -8,6 +8,7 @@ import {
 } from "../native/store.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import { defaultIdFactory } from "../runtime/persistence.ts";
+import { QUICK_SCOPE_TITLE } from "../tasks/quick.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import type { StoredTimelineEvent } from "../tasks/timeline.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";
@@ -15,13 +16,18 @@ import type { NativeReadDependencies } from "./native-read.ts";
 import type { BoardSnapshot } from "./snapshot.ts";
 import { notifiesUser } from "./view.ts";
 
-export type NativeAlert = { kind: "needs-you" | "done" | "stuck"; body: string };
+/** `title` replaces the kind's title for a question that names its own, like a quick task's. */
+export type NativeAlert = { kind: "needs-you" | "done" | "stuck"; body: string; title?: string };
 export function nativeTaskAlert(
   task: TaskRecord,
   event: StoredTimelineEvent,
 ): NativeAlert | undefined {
   const body = task.title ?? task.objective;
-  if (event.type === "blocked") return { kind: "stuck", body };
+  // A quick task's scope question is a question, not a stuck task: it alerts once, as input needed.
+  const scopeQuestion = task.communication?.question?.scope !== undefined;
+  if (event.type === "blocked") return scopeQuestion ? undefined : { kind: "stuck", body };
+  if (event.type === "question-asked" && scopeQuestion)
+    return { kind: "needs-you", title: "Input needed", body: `${task.id} · ${QUICK_SCOPE_TITLE}` };
   if (
     event.type === "question-asked" ||
     (event.type === "stage-changed" && event.to === "awaiting-approval")
@@ -111,7 +117,7 @@ export class NativeAlerts {
         await deps.terminal.notify({
           sessionId,
           cwd: project,
-          title: titles[alert.kind],
+          title: alert.title ?? titles[alert.kind],
           body: alert.body,
         });
         next.delivered++;

@@ -6,6 +6,7 @@ import type {
   FindingSeverity,
   FindingStatus,
   IsoTimestamp,
+  QuickTaskApproval,
   StoredReviewLens,
   TaskRecord,
   TaskStage,
@@ -29,6 +30,8 @@ export const TIMELINE_EVENT_TYPES = [
   "question-answered",
   "steered",
   "admission-waiting",
+  "quick-approved",
+  "quick-scope-extended",
 ] as const;
 
 export type TimelineEventType = (typeof TIMELINE_EVENT_TYPES)[number];
@@ -100,7 +103,15 @@ type TimelineFacts =
       readonly messageId?: string;
     }>
   | Readonly<{ readonly type: "steered"; readonly messageId: string }>
-  | Readonly<{ readonly type: "admission-waiting"; readonly reason: AdmissionWaitReason }>;
+  | Readonly<{ readonly type: "admission-waiting"; readonly reason: AdmissionWaitReason }>
+  /** The user approved a quick task's typed text as its scope; `textDigest` names those bytes. */
+  | Readonly<{
+      readonly type: "quick-approved";
+      readonly via: QuickTaskApproval["via"];
+      readonly textDigest: string;
+    }>
+  /** The user answered Proceed to the quick task's scope question. */
+  | Readonly<{ readonly type: "quick-scope-extended"; readonly questionId: string }>;
 
 /** A finding's identity and tags, without its description. */
 export type TimelineFinding = Readonly<{
@@ -138,13 +149,14 @@ export function timelineEventsForChange(
 ): readonly TimelineEvent[] {
   const facts =
     before === undefined
-      ? [{ fact: { type: "created", stage: after.stage } as const }]
+      ? [{ fact: { type: "created", stage: after.stage } as const }, ...quickFacts(before, after)]
       : [
           ...stageFacts(before, after),
           ...fixRoundFacts(before, after),
           ...findingFacts(before.findingLedger ?? [], after.findingLedger ?? []),
           ...communicationFacts(before, after),
           ...admissionFacts(after, note.admissionWait),
+          ...quickFacts(before, after),
         ];
   return facts.map(({ fact, cause }) => {
     const chosenCause = note.cause ?? cause;
@@ -267,6 +279,21 @@ function admissionFacts(
 ): readonly DerivedFact[] {
   if (reason === undefined || after.stage !== "queued") return [];
   return [{ fact: { type: "admission-waiting", reason } }];
+}
+
+/** The user's quick-task approval when the task is created, and their Proceed when it is given. */
+function quickFacts(before: TaskRecord | undefined, after: TaskRecord): readonly DerivedFact[] {
+  const quick = after.quick;
+  if (quick === undefined) return [];
+  if (before?.quick === undefined)
+    return [{ fact: { type: "quick-approved", via: quick.via, textDigest: quick.textDigest } }];
+  if (
+    before.quick.scopeExtendedAt === undefined &&
+    quick.scopeExtendedAt !== undefined &&
+    quick.scopeQuestionId !== undefined
+  )
+    return [{ fact: { type: "quick-scope-extended", questionId: quick.scopeQuestionId } }];
+  return [];
 }
 
 function boundedCause(cause: string): string {

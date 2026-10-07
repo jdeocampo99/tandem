@@ -197,6 +197,7 @@ export function createTaskStore(options: TaskStoreOptions): TaskStore {
       ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
       ...(input.target === undefined ? {} : { target: input.target }),
       ...(input.workstream === undefined ? {} : { workstream: input.workstream }),
+      ...(input.quick === undefined ? {} : { quick: input.quick }),
     };
     const task = createTask(taskInput, options.clock());
     writeTaskPayload(db, task.id, task.revision, task);

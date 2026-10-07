@@ -40,6 +40,7 @@ import {
 import { taskSourcePath } from "../service/source.ts";
 import { policyIdentity } from "../tasks/acceptance.ts";
 import { taskInboxPath, workerReceiptPath } from "../tasks/communication-persistence.ts";
+import { quickScopeQuestionAllowed } from "../tasks/quick.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { resolvedExecutionModel } from "./execution-routing.ts";
@@ -123,6 +124,9 @@ function workerJobSpec(
     ...(input.playbook === undefined ? {} : { playbookSteps: PLAYBOOKS[input.playbook].steps }),
     ...(role === "implementer" && task.policy.config.validationCommands.length > 0
       ? { validationCommands: task.policy.config.validationCommands.map(validationCommandLine) }
+      : {}),
+    ...(role === "implementer" && task.quick !== undefined
+      ? { quickScope: quickScopeQuestionAllowed(task) ? ("may-ask" as const) : ("spent" as const) }
       : {}),
     ...(prReview === undefined
       ? {}

@@ -1,5 +1,6 @@
 import type {
   IsoTimestamp,
+  QuickScopeReport,
   TaskCommunication,
   TaskInbox,
   TaskMessage,
@@ -141,19 +142,61 @@ function readReferences(value: unknown, field: string): readonly string[] {
   return references;
 }
 
+/** Bounds that keep a rendered scope question inside one task message. */
+export const QUICK_SCOPE_LIMITS = {
+  maxFiles: 10_000,
+  maxAreas: 6,
+  maxAreaChars: 40,
+  maxDecisionChars: 200,
+  maxPlanChars: 300,
+} as const;
+
+/** A quick task's scope report, as the worker submits it and as the task stores it. */
+export function parseQuickScopeReport(value: unknown, field = "scope"): QuickScopeReport {
+  if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
+  assertExactKeys(value, ["files", "areas", "decision", "plan"], field);
+  const files = readPositiveInteger(value.files, `${field}.files`);
+  if (files > QUICK_SCOPE_LIMITS.maxFiles)
+    throw new TypeError(`${field}.files must be at most ${QUICK_SCOPE_LIMITS.maxFiles}`);
+  if (
+    !Array.isArray(value.areas) ||
+    value.areas.length === 0 ||
+    value.areas.length > QUICK_SCOPE_LIMITS.maxAreas
+  )
+    throw new TypeError(
+      `${field}.areas must list one to ${QUICK_SCOPE_LIMITS.maxAreas} areas of the code`,
+    );
+  const areas = value.areas.map((area, index) =>
+    readSingleLine(area, `${field}.areas[${index}]`, QUICK_SCOPE_LIMITS.maxAreaChars).trim(),
+  );
+  const decision =
+    value.decision === undefined
+      ? undefined
+      : readSingleLine(
+          value.decision,
+          `${field}.decision`,
+          QUICK_SCOPE_LIMITS.maxDecisionChars,
+        ).trim();
+  const plan = readSingleLine(value.plan, `${field}.plan`, QUICK_SCOPE_LIMITS.maxPlanChars).trim();
+  return { files, areas, ...(decision === undefined ? {} : { decision }), plan };
+}
+
 function readQuestion(value: unknown, field = "question"): TaskQuestion {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
-  assertExactKeys(value, ["id", "text", "recommendation"], field);
+  assertExactKeys(value, ["id", "text", "recommendation", "scope"], field);
   const id = readIdentifier(value.id, `${field}.id`);
   const text = readMessageText(value.text, `${field}.text`);
   const recommendation =
     value.recommendation === undefined
       ? undefined
       : readMessageText(value.recommendation, `${field}.recommendation`);
+  const scope =
+    value.scope === undefined ? undefined : parseQuickScopeReport(value.scope, `${field}.scope`);
   return {
     id,
     text,
     ...(recommendation === undefined ? {} : { recommendation }),
+    ...(scope === undefined ? {} : { scope }),
   };
 }
 

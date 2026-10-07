@@ -756,6 +756,14 @@ export class WorkerSession {
           );
         }
       }
+      // The scope question tells the user no changes were made, so it must be true.
+      if (job.role === "implementer" && submission.scopeExceeded !== undefined) {
+        const status = await this.deps.gitStatus(job.cwd);
+        if (status !== undefined && status.trim().length > 0)
+          return new ReportRejection(
+            "a scope question says no changes were made, but the worktree has changes; undo them before asking",
+          );
+      }
       const report = resolveSubmittedReport(job, submission, await this.reviewAnchors());
       const revision = await this.instructionRevision(report.status !== "failed");
       return this.result(report.status, report.text, {

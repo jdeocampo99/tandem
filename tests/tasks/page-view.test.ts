@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { TaskRecord } from "../../src/contracts.ts";
 import type { TaskInspection } from "../../src/tasks/inspection.ts";
 import { taskPageView } from "../../src/tasks/page-view.ts";
+import { approvedScopeLabel, quickApproval } from "../../src/tasks/quick.ts";
 import type { StoredTimelineEvent } from "../../src/tasks/timeline.ts";
 import { task } from "../session/fixtures.ts";
 
@@ -111,6 +112,44 @@ test("task page puts to-dos only in Overview and shows the real fix round, live 
   expect(view.overview.recent[0]?.type).toBe("steered");
   expect(view.progress.unreadableEvents).toBe(2);
   expect(JSON.stringify(view.header)).not.toContain("Fix close guard");
+});
+
+test("a quick task's page heads its approved scope with the user's words, verbatim", () => {
+  const text = "Rename the Save button to Save draft\non the settings page";
+  const approval = quickApproval({ text, at: "2030-01-02T03:04:05.000Z", via: "native" });
+  const record = task({ stage: "implementing", quick: approval });
+  const view = taskPageView({
+    task: record,
+    inspection: inspection(record),
+    timeline: events,
+    unreadableEvents: 0,
+    now,
+  });
+  expect(view.scope).toEqual({ label: approvedScopeLabel(approval), text });
+  expect(view.scope?.label).toMatch(/^Approved scope \(quick task, \d\d:\d\d\)$/u);
+  const stretched = task({
+    stage: "implementing",
+    quick: { ...approval, scopeQuestionId: "job-1", scopeExtendedAt: "2030-01-02T03:10:05.000Z" },
+  });
+  expect(
+    taskPageView({
+      task: stretched,
+      inspection: inspection(stretched),
+      timeline: events,
+      unreadableEvents: 0,
+      now,
+    }).scope?.note,
+  ).toContain("You chose to proceed beyond a quick task");
+  const plain = task({ stage: "implementing" });
+  expect(
+    taskPageView({
+      task: plain,
+      inspection: inspection(plain),
+      timeline: events,
+      unreadableEvents: 0,
+      now,
+    }),
+  ).not.toHaveProperty("scope");
 });
 
 test("a blocked task exposes a plain reason and recovery actions while refusing mismatched inspection", () => {

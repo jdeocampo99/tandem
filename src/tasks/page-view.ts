@@ -6,6 +6,7 @@ import { elapsed } from "../pr-watch/view.ts";
 import type { TaskCostView } from "../runtime/usage-view.ts";
 import type { WorkerActivity } from "../workers/worker-activity.ts";
 import type { TaskInspection } from "./inspection.ts";
+import { approvedScopeLabel, clockTime } from "./quick.ts";
 import type { StoredTimelineEvent } from "./timeline.ts";
 
 export type TaskPageInput = Readonly<{
@@ -56,6 +57,8 @@ export type TaskPageView = Readonly<{
   stuck?: Readonly<{ reason: string; actions: readonly ["restart", "steer"] }>;
   requestId?: string;
   pullRequest?: TaskRecord["pullRequest"];
+  /** A quick task's approved scope: the user's words, verbatim, under its heading. */
+  scope?: Readonly<{ label: string; text: string; note?: string }>;
   message: Readonly<{ placeholder: string; model?: string }>;
 }>;
 const TRACK = [
@@ -165,6 +168,19 @@ export function taskPageView(input: TaskPageInput): TaskPageView {
         }),
     ...(task.requestId === undefined ? {} : { requestId: task.requestId }),
     ...(task.pullRequest === undefined ? {} : { pullRequest: task.pullRequest }),
+    ...(task.quick === undefined
+      ? {}
+      : {
+          scope: {
+            label: approvedScopeLabel(task.quick),
+            text: task.quick.text,
+            ...(task.quick.scopeExtendedAt === undefined
+              ? {}
+              : {
+                  note: `You chose to proceed beyond a quick task at ${clockTime(task.quick.scopeExtendedAt)}.`,
+                }),
+          },
+        }),
     message: { placeholder: "Message the worker…", ...(model === undefined ? {} : { model }) },
   };
 }

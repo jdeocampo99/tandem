@@ -54,6 +54,7 @@ export type TaskCreationRequest = Readonly<{
   readonly workstream?: TaskRecord["workstream"];
   readonly target?: TaskRecord["target"];
   readonly requiredStages?: TaskRecord["requiredStages"];
+  readonly quick?: TaskRecord["quick"];
 }>;
 
 export function isTerminalTask(task: TaskRecord): boolean {
@@ -473,6 +474,10 @@ export function taskWithQuestion(task: TaskRecord, question: TaskQuestion): Task
       question,
     },
     notifications,
+    // A quick task's one scope question is spent once asked; it is never asked again.
+    ...(question.scope !== undefined && task.quick !== undefined
+      ? { quick: { ...task.quick, scopeQuestionId: question.id } }
+      : {}),
   };
 }
 export function instructionOptions(
@@ -584,5 +589,6 @@ export function taskInputFor(
     ...(request.target === undefined ? {} : { target: request.target }),
     ...(request.workstream === undefined ? {} : { workstream: workstreamName(request.workstream) }),
     ...(request.requiredStages === undefined ? {} : { requiredStages: request.requiredStages }),
+    ...(request.quick === undefined ? {} : { quick: request.quick }),
   };
 }

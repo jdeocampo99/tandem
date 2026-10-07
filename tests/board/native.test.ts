@@ -243,6 +243,24 @@ test("native panel keeps an active task with a draft PR running and shows model 
   });
 });
 
+test("a quick task carries the QUICK badge on its panel row and board card, and no other task does", () => {
+  const quick = summaries.map((summary) =>
+    summary.taskId === running.id ? { ...summary, quick: true as const } : summary,
+  );
+  const rows = nativePanelView({
+    snapshot,
+    project: PROJECT,
+    now: NOW,
+    tasks: quick,
+    bellCount: 0,
+  }).sections.flatMap((section) => section.rows);
+  expect(rows.find((row) => row.key === `task:${running.id}`)?.badge).toBe("QUICK");
+  expect(rows.filter((row) => row.badge !== undefined)).toHaveLength(1);
+  const cards = nativeBoardView(snapshot, PROJECT, quick, NOW).lanes.flatMap((lane) => lane.cards);
+  expect(cards.find((card) => card.key === `task:${running.id}`)?.badge).toBe("QUICK");
+  expect(cards.filter((card) => card.badge !== undefined)).toHaveLength(1);
+});
+
 test("switcher distinguishes projects by path and reports offline, needs-you, current and shortcuts", () => {
   const rows = nativeProjectSwitcher(snapshot, PROJECT, new Map([[PROJECT, "session-2"]]));
   const current = rows.find((row) => row.current);
