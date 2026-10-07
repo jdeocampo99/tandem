@@ -167,6 +167,7 @@ type FakeRunnerOptions = Readonly<{
   readonly workspaceLabel?: string;
   readonly holdProof?: boolean;
   readonly presentationResponses?: readonly CommandResult[];
+  readonly presentationOpenResponse?: CommandResult;
   /** Opt-in response for the coordinator launch used when opening another project. */
   readonly projectLaunchResponse?: CommandResult;
   readonly ompModels?: readonly unknown[];
@@ -184,6 +185,7 @@ type FakeRunnerState = {
   readonly releaseHead: () => void;
   readonly presentationStarted: Promise<void>;
   readonly releasePresentation: () => void;
+  readonly queuePresentationResponse: (response: CommandResult) => void;
 };
 
 function commandResult(stdout = "", code = 0, stderr = ""): CommandResult {
@@ -222,6 +224,9 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
   const presentationGate = Promise.withResolvers<void>();
   const startPresentation = (): void => presentationStarted.resolve();
   const releasePresentation = (): void => presentationGate.resolve();
+  const queuePresentationResponse = (response: CommandResult): void => {
+    presentationResponses.push(response);
+  };
 
   const draftRemote = options.draftRemote;
   const draftRemoteState: DraftRemoteState = { created: 0, editBodies: [], failEdit: false };
@@ -262,6 +267,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
     get releasePresentation() {
       return releasePresentation;
     },
+    queuePresentationResponse,
   };
 
   const run = async (request: CommandRequest): Promise<CommandResult> => {
@@ -349,7 +355,7 @@ function fakeRunner(options: FakeRunnerOptions = {}): {
             }
           : response;
       }
-      return commandResult();
+      return options.presentationOpenResponse ?? commandResult();
     }
     if (argv[0] === "treehouse") {
       if (argv.includes("status")) return commandResult(JSON.stringify([]));
