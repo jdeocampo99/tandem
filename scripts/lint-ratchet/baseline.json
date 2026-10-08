@@ -832,12 +832,7 @@
       "tandem/type-assertion": 2
     },
     "src/terminal/panel.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 3,
-      "complexity/noExcessiveLinesPerFunction": 3,
-      "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 2,
-      "suspicious/noShadow": 1,
-      "tandem/type-assertion": 1
+      "style/noExcessiveLinesPerFile": 1
     },
     "src/terminal/preparation.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
