@@ -14,6 +14,7 @@ import { readCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import {
   type CoordinatorCheckoutObservation,
   decideCoordinatorReplacement,
+  readCoordinatorCheckoutState,
 } from "../../src/coordinator/resources.ts";
 import { restartCoordinator } from "../../src/coordinator/restart.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
@@ -28,6 +29,35 @@ import {
 } from "./fake-pool.ts";
 
 const SESSION_ID = "resources-session";
+
+test("coordinator checkout reads accept detached clean worktrees and trim their HEAD", async () => {
+  const checkout = await readCoordinatorCheckoutState(
+    async (request) => ({
+      code: 0,
+      stdout: request.argv.includes("rev-parse") ? " head-1\n" : " \n",
+      stderr: "",
+    }),
+    "/tmp/checkout",
+  );
+  expect(checkout).toEqual({ head: "head-1", branch: "", dirty: false, unmerged: false });
+});
+
+test("coordinator checkout failures preserve their plain error and missing HEAD text", async () => {
+  const error = await readCoordinatorCheckoutState(
+    async () => ({ code: 7, stdout: " unavailable\n", stderr: "" }),
+    "/tmp/checkout",
+  ).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(Error);
+  if (!(error instanceof Error)) throw new Error("expected checkout failure");
+  expect(error.constructor).toBe(Error);
+  expect(error.message).toBe("git worktree HEAD failed with exit code 7: unavailable");
+  await expect(
+    readCoordinatorCheckoutState(
+      async () => ({ code: 0, stdout: " \n", stderr: "" }),
+      "/tmp/checkout",
+    ),
+  ).rejects.toThrow("git reported no HEAD commit");
+});
 
 type Fixture = Readonly<{
   readonly root: string;

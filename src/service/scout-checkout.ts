@@ -1,4 +1,5 @@
 import { lstat } from "node:fs/promises";
+import { readGitText } from "../adapters/primitives.ts";
 import type { CommandRunner } from "../contracts.ts";
 import { describeError, isMissing } from "./records.ts";
 
@@ -29,24 +30,35 @@ export async function observeScoutCheckout(
     return { status: "unreadable", detail: describeError(error) };
   }
   try {
-    const head = await gitText(run, worktreePath, ["rev-parse", "HEAD"], "git scout HEAD");
-    const branch = await gitText(
-      run,
-      worktreePath,
-      ["branch", "--show-current"],
-      "git scout branch",
-    );
-    const status = await gitText(
+    const head = await readGitText(run, worktreePath, ["rev-parse", "HEAD"], {
+      operation: "git scout HEAD",
+      allowEmpty: true,
+      failure: "plain",
+    });
+    const branch = await readGitText(run, worktreePath, ["branch", "--show-current"], {
+      operation: "git scout branch",
+      allowEmpty: true,
+      failure: "plain",
+    });
+    const status = await readGitText(
       run,
       worktreePath,
       ["status", "--porcelain=v1", "--untracked-files=all"],
-      "git scout status",
+      {
+        operation: "git scout status",
+        allowEmpty: true,
+        failure: "plain",
+      },
     );
-    const unmerged = await gitText(
+    const unmerged = await readGitText(
       run,
       worktreePath,
       ["diff", "--name-only", "--diff-filter=U"],
-      "git scout unmerged check",
+      {
+        operation: "git scout unmerged check",
+        allowEmpty: true,
+        failure: "plain",
+      },
     );
     if (head.length === 0) {
       return { status: "unreadable", detail: "git reported no HEAD commit" };
@@ -61,20 +73,4 @@ export async function observeScoutCheckout(
   } catch (error) {
     return { status: "unreadable", detail: describeError(error) };
   }
-}
-
-async function gitText(
-  run: CommandRunner,
-  worktreePath: string,
-  args: readonly string[],
-  operation: string,
-): Promise<string> {
-  const result = await run({ argv: ["git", "-C", worktreePath, ...args], cwd: worktreePath });
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim();
-    throw new Error(
-      `${operation} failed with exit code ${result.code}${detail.length === 0 ? "" : `: ${detail}`}`,
-    );
-  }
-  return result.stdout.trim();
 }

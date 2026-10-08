@@ -13,6 +13,7 @@ export type WorktreeAdapterOptions = Readonly<{
 
 export type JsonRecord = Record<string, unknown>;
 type GitCommand = readonly [string, ...string[]];
+type CommandFailure = "adapter" | "plain";
 export class AdapterError extends Error {
   readonly operation: string;
   override readonly cause: unknown;
@@ -203,8 +204,28 @@ export async function runChecked(
   run: CommandRunner,
   request: CommandRequest,
   operation: string,
+  failure: CommandFailure = "adapter",
 ): Promise<CommandResult> {
   const result = await run(request);
+  if (
+    !isRecord(result) ||
+    typeof result.code !== "number" ||
+    !Number.isSafeInteger(result.code) ||
+    typeof result.stdout !== "string" ||
+    typeof result.stderr !== "string"
+  ) {
+    throw new AdapterProtocolError(
+      operation,
+      "command runner returned malformed result",
+      String(result),
+    );
+  }
+  if (result.code !== 0 && failure === "plain") {
+    const detail = result.stderr.trim() || result.stdout.trim();
+    throw new Error(
+      `${operation} failed with exit code ${result.code}${detail.length === 0 ? "" : `: ${detail}`}`,
+    );
+  }
   return requireSuccess(result, request, operation);
 }
 
@@ -212,17 +233,21 @@ export async function readGitText(
   run: CommandRunner,
   cwd: string,
   args: GitCommand,
-  operation: string,
+  input: string | Readonly<{ operation: string; allowEmpty?: boolean; failure?: CommandFailure }>,
 ): Promise<string> {
+  const options = typeof input === "string" ? { operation: input } : input;
+  const { operation } = options;
   const checkedCwd = checkedPath(cwd, "cwd");
   const request: CommandRequest = {
     argv: ["git", "-C", checkedCwd, ...args],
     cwd: checkedCwd,
   };
-  const result = await runChecked(run, request, operation);
+  const result = await runChecked(run, request, operation, options.failure);
   const text = result.stdout.trim();
-  if (text.length === 0)
+  if (text.length === 0 && options.allowEmpty !== true) {
+    if (options.failure === "plain") throw new Error(`${operation} returned no value`);
     throw new AdapterProtocolError(operation, "git returned empty stdout", result.stdout);
+  }
   return text;
 }
 
