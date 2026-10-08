@@ -622,13 +622,6 @@
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1
     },
-    "src/session/prompt-routing.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 2,
-      "complexity/noExcessiveLinesPerFunction": 2,
-      "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "tandem/type-assertion": 1
-    },
     "src/session/pull-up-route.ts": {
       "complexity/useMaxParams": 1
     },
