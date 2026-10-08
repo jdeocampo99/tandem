@@ -560,7 +560,7 @@
     },
     "src/service/controller.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
-      "complexity/noExcessiveLinesPerFunction": 6,
+      "complexity/noExcessiveLinesPerFunction": 5,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
       "suspicious/noShadow": 3,

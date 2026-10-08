@@ -214,14 +214,9 @@ import { readWorkerTerminal, requestWorkerMockup } from "../workers/terminal.ts"
 import { prepareWorkerTerminal, workerJobForEndpoint } from "../workers/terminal-control.ts";
 import { WorkerWorkflow } from "../workers/workflow.ts";
 import { DraftRefreshWorkflow } from "./draft-refresh.ts";
+import { LiveTaskWorkflow } from "./live-task.ts";
 import { runtimeWithPoolAdmission, taskWithPoolAdmission } from "./pool-admission.ts";
-import {
-  alreadyStopped,
-  type HeldTaskStep,
-  heldTaskStep,
-  type LiveTaskStep,
-  liveTaskStep,
-} from "./reconcile-step.ts";
+import { alreadyStopped, type HeldTaskStep, heldTaskStep, liveTaskStep } from "./reconcile-step.ts";
 import {
   absoluteDirectory,
   currentWriter,
@@ -239,7 +234,6 @@ import {
   taskNameFor,
   text,
   validateModelAssignments,
-  workerRoleForTask,
 } from "./records.ts";
 import { RequestAccountingWorkflow } from "./request-accounting.ts";
 import { askResearchAgent } from "./research-follow-up.ts";
@@ -670,6 +664,7 @@ class TandemController {
   readonly #setup: SetupWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
+  readonly #liveTasks: LiveTaskWorkflow;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
   #sourceRefreshError: string | undefined;
   #sourceReadyHead: string | undefined;
@@ -965,6 +960,16 @@ class TandemController {
         this.blockTask(taskId, reason, cause).then(() => undefined),
       removeEndpoint: (taskId, paneId) => this.removeEndpoint(taskId, paneId),
       relaunchReviewer: (task) => this.#worker.advanceReview(task),
+    });
+    this.#liveTasks = new LiveTaskWorkflow({
+      worker: this.#worker,
+      recovery: this.#recoveryCentral,
+      cleanupSettledTask: (taskId) => this.cleanupSettledTask(taskId),
+      quarantineLegacyReservation: (task, reservation, cause) =>
+        this.quarantineLegacyReservation(task, reservation, cause),
+      blockTaskIfReconcileClaim: (task, runtime, reason, options) =>
+        this.blockTaskIfReconcileClaim(task, runtime, reason, options),
+      blockTask: (taskId, reason, cause) => this.blockTask(taskId, reason, cause),
     });
   }
 
@@ -2549,7 +2554,7 @@ class TandemController {
     }
     const runtime = await this.settleOwnership(task, loadedRuntime);
     if (runtime === undefined) return;
-    await this.runLiveTaskStep(task, runtime, liveTaskStep(task, runtime));
+    await this.#liveTasks.run(task, runtime, liveTaskStep(task, runtime));
   }
 
   private async runHeldTaskStep(
@@ -2595,98 +2600,6 @@ class TandemController {
       return this.#control.reconcileEndpointLaunch(task, runtime);
     }
     return runtime;
-  }
-
-  private async runLiveTaskStep(
-    task: TaskRecord,
-    runtime: RuntimeTaskState,
-    step: LiveTaskStep,
-  ): Promise<void> {
-    switch (step.kind) {
-      case "reconcile-job":
-        await this.#worker.reconcileJob(task, runtime, step.job);
-        await this.cleanupSettledTask(task.id);
-        return;
-      case "quarantine-legacy-reservation":
-        await this.quarantineLegacyReservation(task, step.reservation, step.cause);
-        return;
-      case "block-claimed":
-        await this.blockTaskIfReconcileClaim(task, runtime, step.cause.detail, {
-          runtimeError: true,
-          reservation: step.reservation,
-          cause: step.cause,
-        });
-        return;
-      case "reconcile-operation":
-        await this.#worker.reconcileOperation(task, runtime);
-        return;
-      case "start-queued":
-        await this.#worker.startQueuedTask(task);
-        return;
-      case "begin-fixes":
-        // beginFixes admits the fix round and transitions the task to `implementing` before it ever
-        // touches a pane; if the carried-forward pane turns out to be gone, it leaves the task there
-        // unblocked rather than blocking, so the `implementing` step's central recovery picks it up
-        // on the next tick (see src/recovery/central.ts).
-        await this.#worker.beginFixes(task);
-        return;
-      case "validate": {
-        // A validation job that died for an infrastructure reason settles without blocking (see
-        // WorkerWorkflow.reconcileJob's validation branches), leaving the task at `validating` with
-        // no active job/reservation and a terminal failed job behind it. Central recovery owns the
-        // stop/save/re-entry decision for that shape; it reports `skipped` for a fresh entry (no
-        // dead job) so the normal startValidation path runs unchanged.
-        const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
-        if (recovered.action === "skipped") await this.#worker.startValidation(task);
-        return;
-      }
-      case "advance-review": {
-        // A resumed reviewing task can carry a quarantined (proven-unowned) reviewer/verifier job
-        // left over from before it was blocked. Central recovery owns the stop/save/re-entry
-        // decision for that case, exactly as it does for implementing/scouting; "skipped" means
-        // nothing needs recovery, so review advances normally.
-        const recovered = await this.#recoveryCentral.recoverStuckWorker(task);
-        if (recovered.action === "skipped") await this.#worker.advanceReview(task);
-        return;
-      }
-      case "block":
-        await reportBlock(
-          (id, reason, cause) => this.blockTask(id, reason, cause),
-          task.id,
-          step.cause,
-        );
-        return;
-      case "recover-stuck-writer":
-        await this.#recoveryCentral.recoverStuckWorker(task);
-        return;
-      case "launch-writer":
-        await this.launchWriter(task);
-        return;
-      case "wait":
-        return;
-    }
-  }
-
-  private async launchWriter(task: TaskRecord): Promise<void> {
-    const admission = await this.#worker.reserveTask(task.id, workerRoleForTask(task));
-    if ("refusal" in admission) return;
-    const admittedWriter = currentWriter(admission.runtime);
-    if (admission.runtime.worktree === undefined || admittedWriter === undefined) {
-      await this.#worker.releaseUnlaunchedTaskReservation(task.id, admission.reservation.id);
-      await reportBlock((id, reason, cause) => this.blockTask(id, reason, cause), task.id, {
-        group: "lost-resource",
-        kind: "resource-lost",
-        summary: "The worker's terminal and files are gone.",
-        detail: `task is ${task.stage} but its worker resources are missing`,
-      });
-      return;
-    }
-    await this.#worker.launchAgent(
-      admission.task,
-      admission.runtime,
-      admittedWriter,
-      workerRoleForTask(admission.task),
-    );
   }
 
   private async recordPoolResult(taskId: string, result: PoolMaintenanceResult): Promise<void> {
