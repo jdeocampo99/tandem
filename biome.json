@@ -316,7 +316,7 @@
         "src/terminal-backend/herdr/setup.ts",
         "src/terminal-backend/herdr/status.ts",
         "src/terminal-backend/tern/cli.ts",
-        "src/terminal-backend/tern/plugin.ts",
+        "src/terminal-backend/tern/preferences.ts",
         "src/terminal/cli-application.ts",
         "src/terminal/cli-process.ts",
         "src/terminal/environment.ts"
