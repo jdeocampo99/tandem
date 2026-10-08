@@ -1,18 +1,10 @@
-import {
-  choiceConfidence,
-  evaluateJev,
-  JEV_MODEL,
-  type JevAttemptOutcome,
-  JevEvaluationError,
-  type JevEvaluationInput,
-  type JevEvaluationOptions,
-  type JevEvaluationResponse,
-  type JevFetch,
-  type JevGateway,
-  type JevQuestions,
-  jevUsageRecord,
-} from "../adapters/typesafe.ts";
+import type { JevQuestions } from "../adapters/typesafe.ts";
 import type { UsageRecord } from "../runtime/usage.ts";
+import {
+  JevChoiceAttempt,
+  type JevChoiceConfig,
+  type JevChoiceEvaluator,
+} from "./jev-choice-attempt.ts";
 
 /** Bumped whenever the questions below change shape or meaning. */
 export const PULL_UP_ROUTE_QUESTION_VERSION = "pull-up-route/1";
@@ -31,17 +23,8 @@ export type PullUpCandidate = Readonly<{
   readonly about: string;
 }>;
 
-export type PullUpRouteConfig = Readonly<{
-  apiKey?: string;
-  gateway?: JevGateway;
-  timeoutMs: number;
-  fetch?: JevFetch;
-}>;
-
-export type PullUpEvaluator = (
-  input: JevEvaluationInput,
-  options: JevEvaluationOptions,
-) => Promise<JevEvaluationResponse>;
+export type PullUpRouteConfig = JevChoiceConfig;
+export type PullUpEvaluator = JevChoiceEvaluator;
 
 export type PullUpRouteEvaluation = Readonly<{
   reason: string;
@@ -95,59 +78,24 @@ export async function classifyPullUpPrompt(
   prompt: string,
   candidates: readonly PullUpCandidate[],
   config: PullUpRouteConfig,
-  evaluate: PullUpEvaluator = evaluateJev,
-  now: () => number = () => performance.now(),
+  evaluate?: PullUpEvaluator,
+  now?: () => number,
 ): Promise<PullUpRouteEvaluation> {
-  const startedAt = now();
-  const done = (
-    reason: string,
-    outcome?: JevAttemptOutcome,
-    target?: PullUpCandidate,
-  ): PullUpRouteEvaluation => {
-    const durationMs = Math.max(0, Math.round(now() - startedAt));
-    return {
-      reason,
-      durationMs,
-      ...(target === undefined ? {} : { target }),
-      ...(outcome === undefined ? {} : { usage: jevUsageRecord({ outcome, durationMs, reason }) }),
-    };
-  };
+  const attempt = new JevChoiceAttempt(config, evaluate, now);
   const listed = candidates.slice(0, MAX_PULL_UP_CANDIDATES);
-  if (listed.length === 0) return done("no-candidates");
-  if (config.apiKey === undefined) return done("jev-not-configured");
-  let response: JevEvaluationResponse;
-  try {
-    response = await evaluate(
-      {
-        model: JEV_MODEL,
-        state: { message: prompt.slice(0, 2_000) },
-        questions: questions(listed),
-      },
-      {
-        apiKey: config.apiKey,
-        timeoutMs: config.timeoutMs,
-        ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
-        ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
-      },
-    );
-  } catch (error) {
-    const code = error instanceof JevEvaluationError ? error.code : "unavailable";
-    return done(`jev-${code}`, { kind: "failed", code });
+  if (listed.length === 0) return attempt.finish("no-candidates");
+  if (config.apiKey === undefined) return attempt.finish("jev-not-configured");
+  const failure = await attempt.run(prompt.slice(0, 2_000), () => questions(listed));
+  if (failure !== undefined) return attempt.finish(failure);
+  const request = attempt.read("request", PULL_UP_ROUTE_CONFIDENCE_THRESHOLD);
+  if (request.kind !== "confident" || request.choice !== "open") {
+    return attempt.finish("not-a-pull-up");
   }
-  const outcome: JevAttemptOutcome = { kind: "answered", usage: response.usage };
-  if (confident(response.answers.request) !== "open") return done("not-a-pull-up", outcome);
-  const choice = confident(response.answers.target);
-  const target = choice?.startsWith("c") ? listed[Number(choice.slice(1)) - 1] : undefined;
-  if (target === undefined) return done("no-confident-match", outcome);
-  return done("jev-matched", outcome, target);
-}
-
-function confident(
-  answer: JevEvaluationResponse["answers"][string] | undefined,
-): string | undefined {
-  if (answer === undefined || answer.type !== "choice") return undefined;
-  const confidence = choiceConfidence(answer);
-  return confidence !== undefined && confidence >= PULL_UP_ROUTE_CONFIDENCE_THRESHOLD
-    ? answer.choice
-    : undefined;
+  const match = attempt.read("target", PULL_UP_ROUTE_CONFIDENCE_THRESHOLD);
+  const target =
+    match.kind === "confident" && match.choice.startsWith("c")
+      ? listed[Number(match.choice.slice(1)) - 1]
+      : undefined;
+  if (target === undefined) return attempt.finish("no-confident-match");
+  return attempt.finish("jev-matched", { target });
 }

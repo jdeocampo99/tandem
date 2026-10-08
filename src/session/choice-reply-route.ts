@@ -1,17 +1,4 @@
-import {
-  choiceConfidence,
-  evaluateJev,
-  JEV_MODEL,
-  type JevAttemptOutcome,
-  JevEvaluationError,
-  type JevEvaluationInput,
-  type JevEvaluationOptions,
-  type JevEvaluationResponse,
-  type JevFetch,
-  type JevGateway,
-  type JevQuestions,
-  jevUsageRecord,
-} from "../adapters/typesafe.ts";
+import type { JevQuestions } from "../adapters/typesafe.ts";
 import type { TaskRecord } from "../contracts.ts";
 import {
   RESTART_QUESTION_ID_PREFIX,
@@ -23,6 +10,11 @@ import { isTerminalTask } from "../service/records.ts";
 import { KEEP_FIXING_QUESTION_ID_PREFIX } from "../tasks/findings.ts";
 import { taskName } from "../tasks/question.ts";
 import type { TandemAction } from "./actions.ts";
+import {
+  JevChoiceAttempt,
+  type JevChoiceConfig,
+  type JevChoiceEvaluator,
+} from "./jev-choice-attempt.ts";
 
 /** Bumped whenever the questions below change shape or meaning. */
 export const CHOICE_REPLY_ROUTE_QUESTION_VERSION = "choice-reply-route/1";
@@ -43,10 +35,7 @@ export type OpenChoice = Readonly<{
   readonly confirm?: string;
 }>;
 
-export type ChoiceReplyEvaluator = (
-  input: JevEvaluationInput,
-  options: JevEvaluationOptions,
-) => Promise<JevEvaluationResponse>;
+export type ChoiceReplyEvaluator = JevChoiceEvaluator;
 
 export type ChoiceReplyEvaluation = Readonly<{
   reason: string;
@@ -154,56 +143,25 @@ function questions(choices: readonly OpenChoice[]): JevQuestions {
 export async function classifyChoiceReply(
   prompt: string,
   choices: readonly OpenChoice[],
-  config: Readonly<{ apiKey?: string; gateway?: JevGateway; timeoutMs: number; fetch?: JevFetch }>,
-  evaluate: ChoiceReplyEvaluator = evaluateJev,
-  now: () => number = () => performance.now(),
+  config: JevChoiceConfig,
+  evaluate?: ChoiceReplyEvaluator,
+  now?: () => number,
 ): Promise<ChoiceReplyEvaluation> {
-  const startedAt = now();
-  const done = (
-    reason: string,
-    outcome?: JevAttemptOutcome,
-    choice?: OpenChoice,
-  ): ChoiceReplyEvaluation => {
-    const durationMs = Math.max(0, Math.round(now() - startedAt));
-    return {
-      reason,
-      durationMs,
-      ...(choice === undefined ? {} : { choice }),
-      ...(outcome === undefined ? {} : { usage: jevUsageRecord({ outcome, durationMs, reason }) }),
-    };
-  };
-  if (choices.length === 0) return done("no-open-choices");
-  if (prompt.length > MAX_CHOICE_REPLY_CHARS) return done("reply-too-long");
-  if (config.apiKey === undefined) return done("jev-not-configured");
-  let response: JevEvaluationResponse;
-  try {
-    response = await evaluate(
-      { model: JEV_MODEL, state: { message: prompt }, questions: questions(choices) },
-      {
-        apiKey: config.apiKey,
-        timeoutMs: config.timeoutMs,
-        ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
-        ...(config.gateway === undefined ? {} : { gateway: config.gateway }),
-      },
-    );
-  } catch (error) {
-    const code = error instanceof JevEvaluationError ? error.code : "unavailable";
-    return done(`jev-${code}`, { kind: "failed", code });
-  }
-  const outcome: JevAttemptOutcome = { kind: "answered", usage: response.usage };
-  const answer = response.answers.reply;
-  if (answer === undefined || answer.type !== "choice") return done("no-confident-match", outcome);
-  const confidence = choiceConfidence(answer);
-  if (confidence === undefined || confidence < CHOICE_REPLY_ROUTE_CONFIDENCE_THRESHOLD) {
-    return done("low-confidence", outcome);
-  }
+  const attempt = new JevChoiceAttempt(config, evaluate, now);
+  if (choices.length === 0) return attempt.finish("no-open-choices");
+  if (prompt.length > MAX_CHOICE_REPLY_CHARS) return attempt.finish("reply-too-long");
+  if (config.apiKey === undefined) return attempt.finish("jev-not-configured");
+  const failure = await attempt.run(prompt, () => questions(choices));
+  if (failure !== undefined) return attempt.finish(failure);
+  const answer = attempt.read("reply", CHOICE_REPLY_ROUTE_CONFIDENCE_THRESHOLD);
+  if (answer.kind === "missing") return attempt.finish("no-confident-match");
+  if (answer.kind === "uncertain") return attempt.finish("low-confidence");
   const choice = answer.choice.startsWith("c")
     ? choices[Number(answer.choice.slice(1)) - 1]
     : undefined;
-  if (choice === undefined) return done("not-a-choice", outcome);
-  return done(
+  if (choice === undefined) return attempt.finish("not-a-choice");
+  return attempt.finish(
     choice.confirm === undefined ? "jev-matched" : "jev-matched-needs-confirm",
-    outcome,
-    choice,
+    { choice },
   );
 }
