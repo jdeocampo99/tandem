@@ -69,9 +69,18 @@ export class LiveTaskWorkflow {
         // beginFixes enters implementing before touching a pane. A missing pane stays there
         // unblocked so central recovery can pick it up on the next tick.
         return deps.worker.beginFixes(task);
-      case "validate":
-      case "advance-review":
-        return this.advanceAfterRecovery(task, step.kind);
+      case "validate": {
+        // Central recovery owns validation infrastructure failures; skipped means a fresh entry.
+        const recovered = await deps.recovery.recoverStuckWorker(task);
+        if (recovered.action === "skipped") await deps.worker.startValidation(task);
+        return;
+      }
+      case "advance-review": {
+        // Central recovery settles retained quarantined reviewers before review advances.
+        const recovered = await deps.recovery.recoverStuckWorker(task);
+        if (recovered.action === "skipped") await deps.worker.advanceReview(task);
+        return;
+      }
       case "block":
         return reportBlock(deps.blockTask, task.id, step.cause);
       case "recover-stuck-writer":
@@ -82,19 +91,6 @@ export class LiveTaskWorkflow {
       case "wait":
         return;
     }
-  }
-
-  private async advanceAfterRecovery(
-    task: TaskRecord,
-    step: "validate" | "advance-review",
-  ): Promise<void> {
-    // Infrastructure failures can leave validation without an active job, or a resumed review
-    // can retain a quarantined reviewer. Central recovery owns stop/save/re-entry in both cases;
-    // skipped means this is a fresh entry and the normal stage action runs.
-    const recovered = await this.#deps.recovery.recoverStuckWorker(task);
-    if (recovered.action !== "skipped") return;
-    if (step === "validate") await this.#deps.worker.startValidation(task);
-    else await this.#deps.worker.advanceReview(task);
   }
 
   private async launchWriter(task: TaskRecord): Promise<void> {
