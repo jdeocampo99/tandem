@@ -1,6 +1,8 @@
+import type { Clock } from "../contracts.ts";
 import type { PrThread } from "./native-view.ts";
+import type { PostReceiptOutcome, ReviewVerdict } from "./post.ts";
 import type { PrReview, ReviewReply } from "./review.ts";
-import type { PrReviewRound } from "./state.ts";
+import type { PrReviewRound, ReplyPost } from "./state.ts";
 
 /** One reply a posted round sends; `thread` is set for the user's selected thread replies. */
 export type RoundReply = Readonly<{ replyTo: number; body: string; thread?: ReviewReply }>;
@@ -47,4 +49,55 @@ export function validateThreadReplies(
     if (matches.length !== 1 || root?.id !== reply.commentId || root.databaseId !== reply.replyTo)
       throw new Error("The selected PR thread changed or is unavailable; reopen before replying.");
   }
+}
+
+export function validateReplyRecovery(round: PrReviewRound, verdict: ReviewVerdict, index: number) {
+  const reply = roundReplies(round.review)[index];
+  if (
+    round.posted === undefined ||
+    !Number.isSafeInteger(index) ||
+    index < 0 ||
+    reply === undefined
+  )
+    throw new Error("Recovery must name a saved reply on a posted review.");
+  if (verdict !== round.posted.verdict)
+    throw new Error("Recovery must keep the saved review verdict.");
+  if (round.replyPosts?.find((post) => post.index === index)?.kind === "posted")
+    throw new Error("This reply already has a posted receipt.");
+  if (sentWithoutClaim(round, reply))
+    throw new Error(
+      "An earlier Tandem version already sent this reply without saving a receipt; there is nothing to recover.",
+    );
+}
+
+export function replyReceipt(
+  attempt: Readonly<{ index: number; send: boolean; pending: ReplyPost | undefined }>,
+  outcome: PostReceiptOutcome,
+  clock: Clock,
+): ReplyPost | undefined {
+  const { index, send, pending } = attempt;
+  if (outcome.kind === "posted")
+    return { index, kind: "posted", url: outcome.url, postedAt: clock() };
+  // An absent marker never authorizes another POST or clears the durable warning.
+  if (!send) return;
+  let message: string;
+  if (outcome.kind === "moved") message = `The PR moved to ${outcome.head}.`;
+  else if (outcome.kind === "absent") message = "No reply marker found.";
+  else message = outcome.message;
+  if (pending?.kind === "pending" || pending?.kind === "uncertain")
+    return {
+      index,
+      kind: "uncertain",
+      attemptedAt: pending.attemptedAt,
+      attemptRevision: pending.attemptRevision,
+      message,
+    };
+  return { index, kind: "failed", message };
+}
+
+export function withReplyReceipt(round: PrReviewRound, post: ReplyPost): PrReviewRound {
+  return {
+    ...round,
+    replyPosts: [...(round.replyPosts ?? []).filter((saved) => saved.index !== post.index), post],
+  };
 }
