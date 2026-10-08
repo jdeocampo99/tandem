@@ -13,8 +13,9 @@ import type { DiagnosticEvent } from "../runtime/diagnostics.ts";
 import type { UsageRecord } from "../runtime/usage.ts";
 import type { TandemService } from "../service/controller.ts";
 import type { ApprovalDialog, TandemAction } from "./actions.ts";
-import type { OpenChoice } from "./choice-reply-route.ts";
+import { MAX_CHOICE_REPLY_CHARS, type OpenChoice } from "./choice-reply-route.ts";
 import type { SessionEvent, SessionHost } from "./events.ts";
+import { mentionsInvestigation } from "./investigate-route.ts";
 import { evaluationResult, lookupDecision, lookupInput } from "./prompt-lookup.ts";
 import {
   dispatchRoutedAction,
@@ -23,7 +24,8 @@ import {
   recordFallback,
   routeConfirmation,
 } from "./prompt-replies.ts";
-import { routeCandidatePrompt, routePrReview } from "./prompt-routes.ts";
+import { routeChoiceReply, routeInvestigate, routePrReview, routePullUp } from "./prompt-routes.ts";
+import { mentionsPullUp } from "./pull-up-route.ts";
 
 export const DEFAULT_PROMPT_ROUTING_TIMEOUT_MS = 1_500;
 export const PROMPT_ROUTING_CONFIDENCE_THRESHOLD = 0.8;
@@ -222,7 +224,27 @@ export async function routeUserPrompt(
   if (findPullRequestRef(prompt) !== undefined) {
     return { handled: await routePrReview(prompt, deps) };
   }
-  if (await routeCandidatePrompt(prompt, deps)) return { handled: true };
+  if (
+    deps.config.apiKey !== undefined &&
+    prompt.length <= MAX_CHOICE_REPLY_CHARS &&
+    (await routeChoiceReply(prompt, deps))
+  ) {
+    return { handled: true };
+  }
+  if (
+    deps.config.apiKey !== undefined &&
+    mentionsPullUp(prompt) &&
+    (await routePullUp(prompt, deps))
+  ) {
+    return { handled: true };
+  }
+  if (
+    deps.config.apiKey !== undefined &&
+    mentionsInvestigation(prompt) &&
+    (await routeInvestigate(prompt, deps))
+  ) {
+    return { handled: true };
+  }
   return { handled: await routeLookup(prompt, deps) };
 }
 

@@ -5,7 +5,6 @@ import type { TandemAction } from "./actions.ts";
 import {
   CHOICE_REPLY_ROUTE_QUESTION_VERSION,
   classifyChoiceReply,
-  MAX_CHOICE_REPLY_CHARS,
   type OpenChoice,
   openChoices,
 } from "./choice-reply-route.ts";
@@ -13,7 +12,6 @@ import {
   classifyInvestigatePrompt,
   INVESTIGATE_ROUTE_QUESTION_VERSION,
   investigateCandidates,
-  mentionsInvestigation,
 } from "./investigate-route.ts";
 import {
   deliverReply,
@@ -27,7 +25,6 @@ import type { PromptRoutingDependencies } from "./prompt-routing.ts";
 import {
   classifyPullUpPrompt,
   MAX_PULL_UP_CANDIDATES,
-  mentionsPullUp,
   PULL_UP_ROUTE_QUESTION_VERSION,
   type PullUpCandidate,
 } from "./pull-up-route.ts";
@@ -89,7 +86,10 @@ async function pullUpCandidates(service: TandemService): Promise<readonly PullUp
  * Opens the brief or presentation a prompt asks to see, when Jev names exactly one with
  * confidence. Returns false, with nothing opened, when the prompt should route on.
  */
-async function routePullUp(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
+export async function routePullUp(
+  prompt: string,
+  deps: PromptRoutingDependencies,
+): Promise<boolean> {
   let candidates: readonly PullUpCandidate[];
   try {
     candidates = await pullUpCandidates(deps.service());
@@ -122,7 +122,10 @@ async function routePullUp(prompt: string, deps: PromptRoutingDependencies): Pro
  * confidence. A low-risk choice runs now; a risky one is only asked back as a y/n question.
  * Returns false, with nothing done, when the prompt should route on.
  */
-async function routeChoiceReply(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
+export async function routeChoiceReply(
+  prompt: string,
+  deps: PromptRoutingDependencies,
+): Promise<boolean> {
   let choices: readonly OpenChoice[];
   try {
     choices = await openChoices(deps.service());
@@ -168,7 +171,10 @@ async function routeChoiceReply(prompt: string, deps: PromptRoutingDependencies)
  * take so long?" prompt asks about. Returns false, with nothing started, when the prompt should
  * route on.
  */
-async function routeInvestigate(prompt: string, deps: PromptRoutingDependencies): Promise<boolean> {
+export async function routeInvestigate(
+  prompt: string,
+  deps: PromptRoutingDependencies,
+): Promise<boolean> {
   let candidates: readonly TaskRecord[];
   try {
     const service = deps.service();
@@ -196,32 +202,4 @@ async function routeInvestigate(prompt: string, deps: PromptRoutingDependencies)
     { details: { taskId: evaluation.taskId } },
   );
   return true;
-}
-
-export async function routeCandidatePrompt(
-  prompt: string,
-  deps: PromptRoutingDependencies,
-): Promise<boolean> {
-  if (
-    deps.config.apiKey !== undefined &&
-    prompt.length <= MAX_CHOICE_REPLY_CHARS &&
-    (await routeChoiceReply(prompt, deps))
-  ) {
-    return true;
-  }
-  if (
-    deps.config.apiKey !== undefined &&
-    mentionsPullUp(prompt) &&
-    (await routePullUp(prompt, deps))
-  ) {
-    return true;
-  }
-  if (
-    deps.config.apiKey !== undefined &&
-    mentionsInvestigation(prompt) &&
-    (await routeInvestigate(prompt, deps))
-  ) {
-    return true;
-  }
-  return false;
 }
