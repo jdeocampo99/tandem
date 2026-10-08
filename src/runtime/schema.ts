@@ -23,8 +23,8 @@ import type { LegacyWorkerRole } from "../workers/jobs.ts";
 const RUNTIME_SCHEMA_VERSION = 1;
 
 export type RuntimeJobPhase = "reserved" | "launching" | "running" | "consumed" | "failed";
-export type RuntimeReservationPhase = "reserved" | "worktree" | "endpoint" | "released";
-export type RuntimeJobKind = "worker" | "validation";
+type RuntimeReservationPhase = "reserved" | "worktree" | "endpoint" | "released";
+type RuntimeJobKind = "worker" | "validation";
 export type DurableOperationKind =
   | "scout"
   | "implementation"
@@ -62,22 +62,19 @@ export type DurableOperationEffect = Readonly<{
  * safe failure and only on proven same-or-lower tier evidence. A premium move is never one of
  * these: it is a question, not a basis.
  */
-export const EXECUTION_ROUTING_BASES = ["pinned-policy", "comparable-reassignment"] as const;
+const EXECUTION_ROUTING_BASES = ["pinned-policy", "comparable-reassignment"] as const;
 
-export type ExecutionRoutingBasis = (typeof EXECUTION_ROUTING_BASES)[number];
+type ExecutionRoutingBasis = (typeof EXECUTION_ROUTING_BASES)[number];
 
 /** Whether the tier evidence behind a routing choice was actually read at the boundary. */
-export const EXECUTION_ROUTING_EVIDENCE_SOURCES = [
-  "catalogue-read",
-  "catalogue-unavailable",
-] as const;
+const EXECUTION_ROUTING_EVIDENCE_SOURCES = ["catalogue-read", "catalogue-unavailable"] as const;
 
-export type ExecutionRoutingEvidenceSource = (typeof EXECUTION_ROUTING_EVIDENCE_SOURCES)[number];
+type ExecutionRoutingEvidenceSource = (typeof EXECUTION_ROUTING_EVIDENCE_SOURCES)[number];
 
 /** Where the usage evidence behind a routing choice came from, or that there was none to read. */
-export const EXECUTION_ROUTING_USAGE_SOURCES = ["request-ledger", "no-governing-request"] as const;
+const EXECUTION_ROUTING_USAGE_SOURCES = ["request-ledger", "no-governing-request"] as const;
 
-export type ExecutionRoutingUsageSource = (typeof EXECUTION_ROUTING_USAGE_SOURCES)[number];
+type ExecutionRoutingUsageSource = (typeof EXECUTION_ROUTING_USAGE_SOURCES)[number];
 
 /**
  * What the boundary knew about the two models it placed against each other, and how much of the
@@ -143,7 +140,7 @@ export type ExecutionRoutingPauseReason = (typeof EXECUTION_ROUTING_PAUSE_REASON
  * the pinned model", so routing now does that. Still decoded so saved state loads; a saved pause
  * with one of these never stands (see `executionRoutingPauseStands`).
  */
-export const RETIRED_ROUTING_PAUSE_REASONS = [
+const RETIRED_ROUTING_PAUSE_REASONS = [
   "premium-tier-requires-approval",
   "tier-evidence-indeterminate",
   "usage-evidence-unmeasured",
@@ -322,7 +319,7 @@ export type RuntimeTaskState = Readonly<{
   readonly legacyQuarantine?: RuntimeLegacyQuarantine;
 }>;
 
-export type RuntimeLegacyQuarantine = Readonly<{
+type RuntimeLegacyQuarantine = Readonly<{
   readonly schemaVersion: 1;
   readonly reservationId: string;
   readonly reason: string;
@@ -350,59 +347,83 @@ export type RuntimeState = Readonly<{
   readonly presentations: readonly RuntimePresentation[];
 }>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function text(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0 || value.includes("\0")) {
-    throw new TypeError(`${field} must be a non-empty string without NUL characters`);
+type TextOptions = Readonly<{
+  trim?: boolean;
+  allowWhitespace?: boolean;
+  message?: string;
+}>;
+
+type SingleLineOptions = TextOptions & Readonly<{ lineMessage?: string }>;
+
+export function text(value: unknown, field: string, options: TextOptions = {}): string {
+  if (
+    typeof value !== "string" ||
+    (options.allowWhitespace ? value.length === 0 : value.trim().length === 0) ||
+    value.includes("\0")
+  ) {
+    throw new TypeError(
+      options.message ?? `${field} must be a non-empty string without NUL characters`,
+    );
   }
-  return value;
+  return options.trim ? value.trim() : value;
 }
 
-function singleLine(value: unknown, field: string): string {
-  const result = text(value, field);
+export function singleLine(value: unknown, field: string, options: SingleLineOptions = {}): string {
+  const result = text(value, field, options);
   if (/[\r\n\u2028\u2029]/u.test(result)) {
-    throw new TypeError(`${field} must be a single-line value`);
+    throw new TypeError(options.lineMessage ?? `${field} must be a single-line value`);
   }
   return result;
 }
 
-export function absolutePath(value: unknown, field: string): string {
-  const result = singleLine(value, field);
+export function absolutePath(
+  value: unknown,
+  field: string,
+  options: SingleLineOptions = {},
+): string {
+  const result = singleLine(value, field, options);
   if (!isAbsolute(result)) throw new TypeError(`${field} must be absolute`);
   return resolve(result);
 }
 
-function nonNegativeInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new TypeError(`${field} must be a non-negative integer`);
+export function nonNegativeInteger(
+  value: unknown,
+  field: string,
+  message = `${field} must be a non-negative integer`,
+): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(message);
   }
-  return value as number;
+  return value;
 }
 
-function positiveInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+export function positiveInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new TypeError(`${field} must be a positive integer`);
   }
-  return value as number;
+  return value;
 }
 
-function boolean(value: unknown, field: string): boolean {
+export function boolean(value: unknown, field: string): boolean {
   if (typeof value !== "boolean") throw new TypeError(`${field} must be boolean`);
   return value;
 }
 
-function enumValue<Value extends string>(
+export function enumValue<Value extends string>(
   value: unknown,
   values: readonly Value[],
   field: string,
+  message = `${field} has an unsupported value`,
 ): Value {
-  if (typeof value !== "string" || !values.includes(value as Value)) {
-    throw new TypeError(`${field} has an unsupported value`);
+  const matched = values.find((entry) => entry === value);
+  if (matched === undefined) {
+    throw new TypeError(message);
   }
-  return value as Value;
+  return matched;
 }
 // ponytail: keeps "verifier" decodable on routing decisions pinned to a job admitted before the
 // role was removed; see workers/jobs.ts's LegacyWorkerRole.

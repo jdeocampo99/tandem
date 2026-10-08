@@ -9,17 +9,17 @@ import {
   type KnownHarness,
   parseHarnessName,
 } from "../harness/contract.ts";
+import { isRecord, nonNegativeInteger, text as parseText } from "../runtime/schema.ts";
 import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 
 export const REGISTRY_DIRECTORY = "coordinator-registry";
 /** Prefix of every Treehouse lease holder Tandem uses for a coordinator, and for nothing else. */
 export const COORDINATOR_LEASE_HOLDER_PREFIX = "coordinator:";
 export const RECORD_SUFFIX = ".json";
-export const SCHEMA_VERSION = 1 as const;
+const SCHEMA_VERSION = 1 as const;
 
 type JsonRecord = Record<string, unknown>;
-type ErrorWithCode = Error & { readonly code?: string };
-export type PendingSourceRefresh = Readonly<{
+type PendingSourceRefresh = Readonly<{
   readonly leaseId: string;
   readonly leaseHolder: string;
   readonly fromHead: string;
@@ -35,15 +35,9 @@ export type CoordinatorRecord = Readonly<{
   readonly command: readonly string[];
   readonly pendingSourceRefresh?: PendingSourceRefresh;
 }>;
-export function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 export function errorCode(error: unknown): string | undefined {
-  return error instanceof Error &&
-    "code" in error &&
-    typeof (error as ErrorWithCode).code === "string"
-    ? (error as ErrorWithCode).code
+  return error instanceof Error && "code" in error && typeof error.code === "string"
+    ? error.code
     : undefined;
 }
 
@@ -56,10 +50,10 @@ export function ownershipFailure(message: string): Error {
 }
 
 export function text(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
-    throw new TypeError(`${field} must be a non-empty string without NUL bytes`);
-  }
-  return value;
+  return parseText(value, field, {
+    allowWhitespace: true,
+    message: `${field} must be a non-empty string without NUL bytes`,
+  });
 }
 
 export function sessionText(value: unknown): string {
@@ -122,13 +116,6 @@ function ensureCoordinatorRecordKeys(value: JsonRecord, field: string): void {
   }
 }
 
-function positiveInteger(value: unknown, field: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new TypeError(`${field} must be a non-negative safe integer`);
-  }
-  return value as number;
-}
-
 function parseNotificationPane(value: unknown, field: string): TerminalPaneLocation {
   if (!isRecord(value)) throw new TypeError(`${field} must be an object`);
   ensureExactKeys(value, ["workspaceId", "tabId", "paneId"], field);
@@ -161,7 +148,11 @@ export function parseEndpoint(value: unknown, field: string): Endpoint {
   const tabId = text(value.tabId, `${field}.tabId`);
   const paneId = text(value.paneId, `${field}.paneId`);
   if (value.role !== "coordinator") throw new TypeError(`${field}.role must be "coordinator"`);
-  const generation = positiveInteger(value.generation, `${field}.generation`);
+  const generation = nonNegativeInteger(
+    value.generation,
+    `${field}.generation`,
+    `${field}.generation must be a non-negative safe integer`,
+  );
   if (generation !== 0) throw new TypeError(`${field}.generation must be 0 for a coordinator`);
   return {
     terminal: storedEndpointTerminal(value.terminal, field),
