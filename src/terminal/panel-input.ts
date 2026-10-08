@@ -67,35 +67,26 @@ export function clickStep(
 export function keyboardStep(state: PanelState, input: PanelInput, frame: PanelFrame): Step {
   const key = input.kind === "char" ? input.char : input.kind;
   if (state.query !== undefined) {
-    const search = searchStep(state, input, key, state.query);
-    if (search !== undefined) return search;
+    if (input.kind === "char") return { state: { ...state, query: state.query + input.char } };
+    if (key === "backspace") {
+      return { state: { ...state, query: [...state.query].slice(0, -1).join("") } };
+    }
+    if (key === "escape") return { state: { ...state, query: undefined } };
   }
   const rows = frame.view.sections.flatMap((section) => section.rows);
   const found = rows.findIndex((row) => row.key === state.selected);
   const index = Math.max(0, found);
-  const by = MOVE_KEYS.get(key);
-  if (by !== undefined) {
+  if (key === "down" || key === "j") {
     return {
-      state: { ...state, selected: rows[Math.min(rows.length - 1, Math.max(0, index + by))]?.key },
+      state: { ...state, selected: rows[Math.min(rows.length - 1, index + 1)]?.key },
     };
+  }
+  if (key === "up" || key === "k") {
+    return { state: { ...state, selected: rows[Math.max(0, index - 1)]?.key } };
   }
   if (key === "enter") return go(state, rows[index]);
   if (state.query !== undefined) return { state };
   return shortcutStep(state, key, frame, rows[index]);
-}
-
-const MOVE_KEYS = new Map<string, number>(Object.entries({ down: 1, j: 1, up: -1, k: -1 }));
-
-function searchStep(
-  state: PanelState,
-  input: PanelInput,
-  key: string,
-  query: string,
-): Step | undefined {
-  if (input.kind === "char") return { state: { ...state, query: query + input.char } };
-  if (key === "backspace") return { state: { ...state, query: [...query].slice(0, -1).join("") } };
-  if (key === "escape") return { state: { ...state, query: undefined } };
-  return undefined;
 }
 
 function shortcutStep(
