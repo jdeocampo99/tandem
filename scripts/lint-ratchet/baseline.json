@@ -152,13 +152,6 @@
       "complexity/noExcessiveCognitiveComplexity": 1,
       "suspicious/noUnnecessaryConditions": 1
     },
-    "src/coordinator/ownership.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 2,
-      "complexity/noExcessiveLinesPerFunction": 1,
-      "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 1
-    },
     "src/coordinator/reconcile.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1,
