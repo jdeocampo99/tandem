@@ -1,8 +1,9 @@
 import { expect, test } from "bun:test";
-import type {
-  JevChoiceAnswer,
-  JevEvaluationInput,
-  JevEvaluationResponse,
+import {
+  type JevChoiceAnswer,
+  JevEvaluationError,
+  type JevEvaluationInput,
+  type JevEvaluationResponse,
 } from "../../src/adapters/typesafe.ts";
 import { RESTART_QUESTION_ID_PREFIX } from "../../src/recovery/central.ts";
 import type { TandemService } from "../../src/service/controller.ts";
@@ -190,4 +191,62 @@ test("no brief is offered when none or several are awaiting approval", async () 
     },
   } as unknown as TandemService;
   expect(await openChoices(service)).toEqual([]);
+});
+
+test.each([
+  { error: new JevEvaluationError("timeout", "slow"), reason: "jev-timeout", timedOut: true },
+  {
+    error: new JevEvaluationError("invalid-request", "bad request"),
+    reason: "jev-invalid-request",
+    timedOut: false,
+  },
+  {
+    error: new JevEvaluationError("invalid-response", "bad response"),
+    reason: "jev-invalid-response",
+    timedOut: false,
+  },
+  { error: new Error("offline"), reason: "jev-unavailable", timedOut: false },
+])("a failed choice attempt keeps its receipt: $reason", async ({ error, reason, timedOut }) => {
+  let time = 100;
+  const result = await classifyChoiceReply(
+    "restart it",
+    CHOICES,
+    config,
+    async () => {
+      time = 105.6;
+      throw error;
+    },
+    () => time,
+  );
+  expect(result.choice).toBeUndefined();
+  expect(result).toMatchObject({
+    reason,
+    durationMs: 6,
+    usage: {
+      reason,
+      durationMs: 6,
+      inputTokens: "unavailable",
+      outputTokens: "unavailable",
+      timedOut,
+    },
+  });
+});
+
+test("missing answers, low confidence, and approval retain distinct choice reasons", async () => {
+  const missing = await classifyChoiceReply("yes", CHOICES, config, async () => ({
+    model: "jev",
+    answers: { reply: { type: "noul", noul: 1 } },
+    usage: { input_tokens: 9, output_tokens: 1 },
+  }));
+  expect(missing.reason).toBe("no-confident-match");
+  expect(missing.usage?.inputTokens).toBe(9);
+  const approval: OpenChoice = {
+    ...CHOICES[0],
+    meaning: "Approve",
+    action: { action: "list" },
+    confirm: "Approve? (y/n)",
+  };
+  const confirmed = await classifyChoiceReply("yes", [approval], config, reply("c1", 0.8));
+  expect(confirmed.reason).toBe("jev-matched-needs-confirm");
+  expect(confirmed.choice).toBe(approval);
 });

@@ -560,7 +560,7 @@
     },
     "src/service/controller.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
-      "complexity/noExcessiveLinesPerFunction": 6,
+      "complexity/noExcessiveLinesPerFunction": 5,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
       "suspicious/noShadow": 3,
@@ -602,9 +602,7 @@
       "tandem/type-assertion": 3
     },
     "src/session/choice-reply-route.ts": {
-      "complexity/useMaxParams": 1,
-      "suspicious/noShadow": 2,
-      "suspicious/noUnnecessaryConditions": 1
+      "complexity/useMaxParams": 1
     },
     "src/session/coordinator-reply.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
@@ -615,8 +613,7 @@
       "suspicious/noUnnecessaryConditions": 5
     },
     "src/session/investigate-route.ts": {
-      "complexity/useMaxParams": 1,
-      "suspicious/noShadow": 1
+      "complexity/useMaxParams": 1
     },
     "src/session/native-links.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
@@ -625,16 +622,8 @@
       "complexity/noExcessiveCognitiveComplexity": 1,
       "style/noExcessiveLinesPerFile": 1
     },
-    "src/session/prompt-routing.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 2,
-      "complexity/noExcessiveLinesPerFunction": 2,
-      "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "tandem/type-assertion": 1
-    },
     "src/session/pull-up-route.ts": {
-      "complexity/useMaxParams": 1,
-      "suspicious/noShadow": 2
+      "complexity/useMaxParams": 1
     },
     "src/session/review-page.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
@@ -951,11 +940,7 @@
       "complexity/noExcessiveCognitiveComplexity": 1
     },
     "src/workers/terminal.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1,
-      "tandem/hidden-clock": 7,
-      "tandem/type-assertion": 10
+      "complexity/noExcessiveCognitiveComplexity": 1
     },
     "src/workers/validation-stage.ts": {
       "complexity/noExcessiveLinesPerFunction": 3,

@@ -128,3 +128,26 @@ test("the configured fetch carries the Jev request", async () => {
   expect(seen).toHaveLength(1);
   expect(result.target).toEqual(CANDIDATES[1]);
 });
+
+test("pull-up confidence uses the chosen probability and includes the threshold", async () => {
+  const open = choice("open", ["open", "other"]);
+  const below = { ...choice("c1", TARGETS), probabilities: { c1: 0.79, c2: 0.11, none: 0.1 } };
+  const uncertain = await classifyPullUpPrompt("open it", CANDIDATES, config, answers(open, below));
+  expect(uncertain.reason).toBe("no-confident-match");
+  expect(uncertain.target).toBeUndefined();
+  expect(uncertain.usage?.reason).toBe("no-confident-match");
+  let time = 50;
+  const confident = await classifyPullUpPrompt(
+    "open it",
+    CANDIDATES,
+    config,
+    async (input, options) => {
+      time = 49;
+      return answers(open, choice("c1", TARGETS, 0.8))(input, options);
+    },
+    () => time,
+  );
+  expect(confident.target).toBe(CANDIDATES[0]);
+  expect(confident.durationMs).toBe(0);
+  expect(confident.usage?.durationMs).toBe(0);
+});

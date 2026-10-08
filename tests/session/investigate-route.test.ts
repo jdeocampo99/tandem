@@ -161,3 +161,54 @@ test("with self-improvement off, or when Jev fails, the prompt goes to the coord
     await rm(home, { recursive: true, force: true });
   }
 });
+
+test("the investigate attempt forwards its adapter configuration and bounds the message", async () => {
+  const gateway = {
+    url: "https://example.test/jev",
+    model: "gateway-jev",
+    headers: { token: "test" },
+  };
+  const fetch = async () => new Response();
+  let time = 20;
+  const result = await classifyInvestigatePrompt(
+    "x".repeat(2_100),
+    [LOGIN],
+    { ...config, gateway, fetch },
+    async (input, options) => {
+      expect(input.model).toBe(JEV_MODEL);
+      expect(input.state).toEqual({ message: "x".repeat(2_000) });
+      expect(options).toEqual({ ...config, gateway, fetch });
+      time = 22.5;
+      return jev("investigate", "c1")(input);
+    },
+    () => time,
+  );
+  expect(result).toMatchObject({
+    reason: "jev-matched",
+    taskId: LOGIN.id,
+    durationMs: 3,
+    usage: {
+      reason: "jev-matched",
+      durationMs: 3,
+      inputTokens: 10,
+      outputTokens: 2,
+      timedOut: false,
+    },
+  });
+});
+
+test("investigate screening skips the adapter and produces no usage receipt", async () => {
+  const seen: JevEvaluationInput[] = [];
+  const evaluate = jev("investigate", "c1", seen);
+  expect(await classifyInvestigatePrompt("why slow?", [], config, evaluate, () => 10)).toEqual({
+    reason: "no-candidates",
+    durationMs: 0,
+  });
+  expect(
+    await classifyInvestigatePrompt("why slow?", [LOGIN], { timeoutMs: 100 }, evaluate, () => 10),
+  ).toEqual({
+    reason: "jev-not-configured",
+    durationMs: 0,
+  });
+  expect(seen).toHaveLength(0);
+});
