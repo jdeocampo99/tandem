@@ -216,6 +216,7 @@ import { WorkerWorkflow } from "../workers/workflow.ts";
 import { DraftRefreshWorkflow } from "./draft-refresh.ts";
 import { LiveTaskWorkflow } from "./live-task.ts";
 import { runtimeWithPoolAdmission, taskWithPoolAdmission } from "./pool-admission.ts";
+import { prWatchTaskCallbacks } from "./pr-watch-tasks.ts";
 import { alreadyStopped, type HeldTaskStep, heldTaskStep, liveTaskStep } from "./reconcile-step.ts";
 import {
   absoluteDirectory,
@@ -735,8 +736,13 @@ class TandemController {
       run: deps.run,
       clock: deps.clock,
       listTasks: () => deps.store.list(),
-      steerTask: (taskId, text) => this.steerForPrWatch(taskId, text),
-      recordMerged: (taskId, head) => this.recordMergedOnGitHub(taskId, head),
+      ...prWatchTaskCallbacks({
+        sourceRepoPath: deps.sourceWorkspace?.repoPath,
+        store: deps.store,
+        taskInScope: (task) => this.#source.taskInScope(task),
+        steer: (input) => this.steer(input),
+        transition: (taskId, event) => this.transition(taskId, event),
+      }),
     });
     this.#memory = new ProjectMemory({
       home: deps.home,
@@ -2231,29 +2237,6 @@ class TandemController {
       { event: "pr-watch-failed", details: { errorClass: errorClassName(error) } },
       this.#deps.clock,
     );
-  }
-
-  /**
-   * PR watch steers a task only from the coordinator whose project the task belongs to, which
-   * also runs its workers; anywhere else it answers false and a later check tries again.
-   */
-  private async steerForPrWatch(taskId: string, text: string): Promise<boolean> {
-    if (this.#deps.sourceWorkspace === undefined) return false;
-    const task = await this.#deps.store.read(taskId);
-    if (task === undefined || !(await this.#source.taskInScope(task))) return false;
-    await this.steer({ taskId, text });
-    return true;
-  }
-
-  /** A ready task in this project whose pull request PR watch saw merge becomes merged. */
-  private async recordMergedOnGitHub(taskId: string, head: string | undefined): Promise<void> {
-    const task = await this.#deps.store.read(taskId);
-    if (task === undefined || !(await this.#source.taskInScope(task))) return;
-    if (task.stage !== "ready" || task.pullRequest === undefined) return;
-    await this.transition(task.id, {
-      type: "merged-on-github",
-      pullRequest: { ...task.pullRequest, state: "merged", head: head ?? task.pullRequest.head },
-    });
   }
 
   /**
