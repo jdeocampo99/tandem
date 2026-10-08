@@ -201,40 +201,82 @@ for (const status of [
   });
 }
 
-test("a missing tab proven by the backend counts as stopped without signalling", async () => {
-  const error = new AdapterCommandError(
-    "inspect",
-    { argv: ["herdr"], cwd: "/tmp" },
-    {
-      code: 1,
-      stdout: "",
-      stderr: JSON.stringify({ error: { code: "tab_not_found" } }),
-    },
-  );
-  const backend = terminalBackend(async () => ok(), { terminal: "herdr" });
-  const terminal = {
-    ...backend,
-    inspect: async () => {
-      throw error;
-    },
-    close: async () => {
-      throw error;
-    },
-    interrupt: async () => {
-      throw new Error("must not interrupt");
-    },
-  };
-  expect(
-    (
-      await stopWorkerPane(terminal, {
-        endpoint: ENDPOINT,
-        cwd: "/tmp",
-        goal: "close",
-        clock: () => 0,
-        run: async () => {
-          throw new Error("must not signal");
-        },
-      })
-    ).status,
-  ).toBe("stopped");
+for (const code of ["tab_not_found", "server_not_running"]) {
+  test(`the stop ladder treats ${code} as unknown without signalling`, async () => {
+    const error = new AdapterCommandError(
+      "inspect",
+      { argv: ["herdr"], cwd: "/tmp" },
+      {
+        code: 1,
+        stdout: "",
+        stderr: JSON.stringify({ error: { code } }),
+      },
+    );
+    const backend = terminalBackend(async () => ok(), { terminal: "herdr" });
+    const terminal = {
+      ...backend,
+      inspect: async () => {
+        throw error;
+      },
+      close: async () => {
+        throw error;
+      },
+      interrupt: async () => {
+        throw new Error("must not interrupt");
+      },
+    };
+    expect(
+      (
+        await stopWorkerPane(terminal, {
+          endpoint: ENDPOINT,
+          cwd: "/tmp",
+          goal: "close",
+          clock: () => 0,
+          run: async () => {
+            throw new Error("must not signal");
+          },
+        })
+      ).status,
+    ).toBe("unknown");
+  });
+}
+
+test("the kill step leaves a pane missing during foreground inspection unproven", async () => {
+  const home = await mkdtemp(join(tmpdir(), "stop-ladder-"));
+  const f = await stopFixture(home);
+  try {
+    let interrupted = false;
+    const terminal = {
+      ...f.terminal,
+      inspect: async (target: Parameters<typeof f.terminal.inspect>[0]) => {
+        if (interrupted) throw new EndpointOwnershipError(ENDPOINT, "missing", "missing");
+        return f.terminal.inspect(target);
+      },
+      interrupt: async () => {
+        interrupted = true;
+        f.events.push("interrupt");
+        throw new Error("interrupt timed out");
+      },
+    };
+    expect((await stopWorkerPane(terminal, f.input)).status).toBe("unknown");
+    expect(f.events).toEqual(["interrupt"]);
+  } finally {
+    await f.stopAck();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the kill poll retains a running pane after 50 attempts with a frozen clock", async () => {
+  const home = await mkdtemp(join(tmpdir(), "stop-ladder-"));
+  const f = await stopFixture(home);
+  try {
+    expect((await stopWorkerPane(f.terminal, { ...f.input, clock: () => 0 })).status).toBe(
+      "still-running",
+    );
+    expect(f.events.filter((event) => event === "poll")).toHaveLength(50);
+    expect(f.events).not.toContain("close");
+  } finally {
+    await f.stopAck();
+    await rm(home, { recursive: true, force: true });
+  }
 });

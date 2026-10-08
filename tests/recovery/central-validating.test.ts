@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -514,6 +514,50 @@ test("a stage other than implementing, scouting, or validating is reported as sk
     expect(outcome.action).toBe("skipped");
     expect(f.revalidateCalls).toHaveLength(0);
   } finally {
+    await f.cleanup();
+  }
+});
+
+test("a validation retry approval racing to implementing does nothing and spends no budget", async () => {
+  const f = await fixture({
+    job: deadValidationJob(),
+    recovery: { schemaVersion: 1, validationRetries: MAX_VALIDATION_RETRIES },
+  });
+  let restore = () => {};
+  try {
+    const task = await f.store.read("task-1");
+    if (task === undefined) throw new Error("fixture task missing");
+    await f.workflow.recoverStuckWorker(task);
+    const asked = await f.store.read("task-1");
+    const questionId = asked?.communication?.question?.id;
+    if (questionId === undefined) throw new Error("expected a validation-retry question");
+    const before = await readRuntimeState(f.runtimePath);
+    const exclusive = f.store.exclusive;
+    let calls = 0;
+    const race = spyOn(f.store, "exclusive").mockImplementation(async (operation) => {
+      if (++calls === 2) {
+        const current = await f.store.read("task-1");
+        if (current === undefined) throw new Error("fixture task missing");
+        await f.store.update(current.id, current.revision, (entry) => ({
+          ...entry,
+          revision: entry.revision + 1,
+          stage: "implementing",
+        }));
+      }
+      return exclusive(operation);
+    });
+    restore = () => race.mockRestore();
+
+    expect(await f.workflow.answerValidationRetryQuestion("task-1", questionId, "retry")).toEqual({
+      handled: true,
+    });
+
+    expect((await f.store.read("task-1"))?.stage).toBe("implementing");
+    expect(await readRuntimeState(f.runtimePath)).toEqual(before);
+    expect(f.revalidateCalls).toHaveLength(0);
+    expect(f.blockedReasons).toHaveLength(0);
+  } finally {
+    restore();
     await f.cleanup();
   }
 });

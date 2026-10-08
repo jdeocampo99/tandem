@@ -8,6 +8,7 @@ import {
 import type { CommandRunner, Endpoint } from "../contracts.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import type { DurableJob } from "../runtime/schema.ts";
+import { isMissingEndpoint } from "../service/records.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { parseWorkerJob } from "./jobs.ts";
 import {
@@ -161,8 +162,8 @@ type StopWorkerPaneInput = WorkerTerminalInput &
       }>
   );
 
-function paneFailure(terminal: TerminalBackend, error: unknown): WorkerPaneStop {
-  if (terminal.isEndpointGone(error)) return { status: "stopped" };
+function paneFailure(error: unknown): WorkerPaneStop {
+  if (isMissingEndpoint(error)) return { status: "stopped" };
   return { status: error instanceof EndpointOwnershipError ? "foreign" : "unknown", error };
 }
 
@@ -191,7 +192,7 @@ async function workerPaneState(
         : !inspection.activeWorker;
     return { status: stopped ? "stopped" : "still-running" };
   } catch (error) {
-    return paneFailure(terminal, error);
+    return paneFailure(error);
   }
 }
 
@@ -229,9 +230,9 @@ async function signalForegroundWorker(
   const worker = await readWorkerTerminal(input.job).catch(() => undefined);
   if (worker === undefined)
     return { status: "unknown", error: new Error("worker terminal record is unavailable") };
-  const inspection = await terminal.inspect(input).catch((error) => paneFailure(terminal, error));
-  if ("status" in inspection) return inspection;
-  if (!inspection.processInfo.foregroundProcesses.some((process) => process.pid === worker.pid)) {
+  const inspection = await terminal.inspect(input).catch(() => undefined);
+  const foreground = inspection?.processInfo.foregroundProcesses;
+  if (!foreground?.some((process) => process.pid === worker.pid)) {
     return {
       status: "unknown",
       error: new Error("worker PID is not in the owned pane's foreground process group"),
@@ -244,7 +245,7 @@ async function signalForegroundWorker(
   }
   const deadline = input.clock() + 5_000;
   const sleep = input.sleep ?? Bun.sleep;
-  while (input.clock() < deadline) {
+  for (let attempt = 0; attempt < 50 && input.clock() < deadline; attempt++) {
     const state = await workerPaneState(terminal, input);
     if (state.status === "stopped") return workerPaneState(terminal, input, "close");
     if (state.status === "foreign" || state.status === "unknown") return state;
@@ -270,10 +271,7 @@ export async function openReviewerEndpoint(
       "reviewer session does not match writer session",
     );
   }
-  const writerInspection = await terminal.inspect({
-    endpoint: input.writer,
-    cwd: input.cwd,
-  });
+  const writerInspection = await terminal.inspect({ endpoint: input.writer, cwd: input.cwd });
   if (!(await workerDelegationStopped(writerInspection, input.writerJob)))
     throw new EndpointBusyError(input.writer);
   const writerPane = writerInspection.pane;

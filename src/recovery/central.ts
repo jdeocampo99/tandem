@@ -1057,7 +1057,8 @@ export class CentralRecoveryWorkflow {
     };
     if (task.stage !== "blocked") return accepts(task.stage) ? task : undefined;
     if (!accepts(task.previousStage)) return undefined;
-    return this.resumeBlocked(task.id, "The user approved a restart.");
+    const resumed = await this.resumeBlocked(task.id, "The user approved a restart.");
+    return resumed !== undefined && accepts(resumed.stage) ? resumed : undefined;
   }
 
   private async resumeBlocked(taskId: string, cause: string): Promise<TaskRecord | undefined> {

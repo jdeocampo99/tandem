@@ -1,5 +1,4 @@
 import { readCheckpoint } from "../adapters/git.ts";
-import { EndpointBusyError } from "../adapters/primitives.ts";
 import type {
   BlockCause,
   Clock,
@@ -23,6 +22,7 @@ import {
   DEFAULT_STARTUP_GRACE_MS,
   describeError,
   isMissing,
+  isMissingEndpoint,
   isOlderThan,
   replaceRuntimeTask,
   singleLine,
@@ -673,7 +673,7 @@ export class TaskControlWorkflow {
         ? { status: "stopped", detail: undefined }
         : { status: "active", detail: `pane ${endpoint.paneId} still has an active worker` };
     } catch (error) {
-      if (this.#deps.terminal.isEndpointGone(error)) {
+      if (isMissingEndpoint(error)) {
         return { status: "missing", detail: `pane ${endpoint.paneId} is no longer present` };
       }
       return { status: "rejected", detail: describeError(error) };
@@ -1033,18 +1033,9 @@ export class TaskControlWorkflow {
           cwd,
           ...(job === undefined ? {} : { job }),
         });
-        const stopped = await stopWorkerPane(this.#deps.terminal, {
-          endpoint,
-          cwd,
-          ...(job === undefined ? {} : { job }),
-          goal: "close",
-          run: this.#deps.run,
-          clock: () => Date.parse(this.#deps.clock()),
-        });
-        if (stopped.status === "foreign" || stopped.status === "unknown") throw stopped.error;
-        if (stopped.status !== "stopped") throw new EndpointBusyError(endpoint);
+        await this.#deps.terminal.close({ endpoint, cwd });
       } catch (error) {
-        if (this.#deps.terminal.isEndpointGone(error)) continue;
+        if (isMissingEndpoint(error)) continue;
         const reason = `reviewer pane ${endpoint.paneId} could not close: ${describeError(error)}`;
         return {
           group: "lost-resource",
