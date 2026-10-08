@@ -216,7 +216,6 @@ import { WorkerWorkflow } from "../workers/workflow.ts";
 import { DraftRefreshWorkflow } from "./draft-refresh.ts";
 import { LiveTaskWorkflow } from "./live-task.ts";
 import { runtimeWithPoolAdmission, taskWithPoolAdmission } from "./pool-admission.ts";
-import { prWatchTaskCallbacks } from "./pr-watch-tasks.ts";
 import { alreadyStopped, type HeldTaskStep, heldTaskStep, liveTaskStep } from "./reconcile-step.ts";
 import {
   absoluteDirectory,
@@ -246,6 +245,7 @@ import {
 } from "./scout-cleanup.ts";
 import { mapTaskSource, SourceInboxWorkflow, taskCheckoutPath, taskSourcePath } from "./source.ts";
 import { pruneTranscripts, transcriptsToPrune } from "./transcript-pruning.ts";
+import { prWatchTaskCallbacks } from "./watch-tasks.ts";
 
 // ponytail: a fixed count of ready idle worktree copies per repository, removed first under disk
 // pressure. Size it from recent task starts if copies are too often missing or left unused.

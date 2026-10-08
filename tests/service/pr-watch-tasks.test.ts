@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { PullRequestMetadata, SteerTaskInput, TaskStage } from "../../src/contracts.ts";
-import { prWatchTaskCallbacks } from "../../src/service/pr-watch-tasks.ts";
+import { prWatchTaskCallbacks } from "../../src/service/watch-tasks.ts";
 import { type TaskEvent, transitionTask } from "../../src/tasks/lifecycle.ts";
 import { type ScenarioWorld, seedScenarioTask, withScenario } from "../evals/scenario.ts";
 
