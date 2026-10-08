@@ -6,6 +6,7 @@ import {
   TernOutcomeUnknownError,
   TernQuarantinedError,
 } from "../../../src/terminal-backend/tern/protocol.ts";
+import { listTernQuarantine } from "../../../src/terminal-backend/tern/quarantine.ts";
 import { withScenario } from "../../evals/scenario.ts";
 
 test("a coordinator quarantine note refuses every effect on that coordinator before Tern runs", async () => {
@@ -59,5 +60,26 @@ test("an uncertain focus is not quarantined because repeating it converges", asy
       input: { keys: ["ctrl+c"] },
     });
     expect(world.trace().filter((event) => event.action === "tern send")).toHaveLength(1);
+  });
+});
+
+test("scoping a Tern CLI binds its pane quarantine to that home and keeps its clock", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const endpoint = ternEndpoint(world.openPane({ paneId: "44", cwd: world.repoPath }));
+    const cli = ternCli(world.run, { ...world.tern, clock: () => 1_700_000_000_000 });
+    const scoped = cli.scope({ home: world.home });
+    const op = {
+      verb: "send",
+      endpoint,
+      cwd: world.repoPath,
+      input: { keys: ["ctrl+c"] },
+    } as const;
+    world.failAt({ boundary: "tern", action: "tern send" });
+    await expect(scoped.mutate(op)).rejects.toBeInstanceOf(TernOutcomeUnknownError);
+    expect(await listTernQuarantine(world.home)).toEqual([
+      expect.objectContaining({ at: "2023-11-14T22:13:20.000Z", endpoint }),
+    ]);
+    await cli.mutate(op);
+    await expect(scoped.unscoped().mutate(op)).rejects.toBeInstanceOf(TernQuarantinedError);
   });
 });

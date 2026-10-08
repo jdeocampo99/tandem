@@ -56,14 +56,6 @@ export class TernQuarantinedError extends TernOutcomeUnknownError {
   }
 }
 
-/** Native views arrive in wave 2. Callers can display this warning without claiming success. */
-export class TernUnsupportedOperationError extends AdapterError {
-  constructor(operation: string) {
-    super(`Tern ${operation} is unavailable until Tandem's native views are installed`, operation);
-    this.name = "TernUnsupportedOperationError";
-  }
-}
-
 /** Quote numeric identity tokens before JSON.parse can round Tern's u64 ids. */
 export function decode<S extends z.ZodType>(raw: string, schema: S, operation: string): z.infer<S> {
   try {

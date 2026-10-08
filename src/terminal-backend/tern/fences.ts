@@ -8,7 +8,7 @@ import type {
   ReadableFence,
   TerminalBackend,
 } from "../contract.ts";
-import { clearTernQuarantine, listTernQuarantine } from "./cli.ts";
+import { clearTernQuarantine, listTernQuarantine } from "./quarantine.ts";
 
 /** How Tern proves a fence's pane: the backend's own exact inspection and gone test. */
 export type FenceProver = Pick<TerminalBackend, "inspect" | "isEndpointGone">;
@@ -19,9 +19,26 @@ type Ledger = Readonly<{
   /** What could not be listed, and the reason's lead, when the whole ledger is unreadable. */
   subject: string;
   unlisted: string;
-  list(home: string): Promise<readonly Fence[]>;
-  settle(fence: ReadableFence): Promise<FenceSettlement>;
+  unreadable: string;
+  changed: string;
+  unproven: string;
+  read(home: string): Promise<readonly FenceRecord[]>;
+  proof(state: PaneState): FenceProof;
+  clear(
+    record: Readonly<{ path: string; record: string }>,
+    conclusive: () => Promise<boolean>,
+  ): Promise<"abandoned" | "cleared" | "settled" | "changed" | "unproven">;
 }>;
+
+type FenceRecord =
+  | Readonly<{ status: "unreadable"; path: string; reason: string }>
+  | Readonly<{
+      status: "readable";
+      path: string;
+      record: string;
+      protects: ReadableFence["protects"];
+      description: string;
+    }>;
 
 /** A pane read exactly: present (busy or idle), gone, or something the terminal cannot answer. */
 type PaneState =
@@ -77,113 +94,98 @@ function paneProof(state: PaneState): FenceProof {
   return { settleable: false, why: `kept because the pane cannot be proved: ${state.detail}` };
 }
 
-/** Staged native view opens, under `<home>/tern/<projectKey>/open/`. */
-function nativeOpens(prover: FenceProver): Ledger {
-  // Loaded on use, as native hosting is, to keep it out of every backend load.
-  const host = () => import("./host.ts");
-  return {
+const ledgers: readonly Ledger[] = [
+  {
     kind: "native-open",
     subject: "native view opens",
     unlisted: "paused views could not be listed",
-    list: async (home) => {
-      const fences: Fence[] = [];
-      for (const open of await (await host()).listRetainedNativeOpens(home)) {
-        if (open.status === "unreadable") {
-          fences.push({
-            status: "unreadable",
-            kind: "native-open",
-            path: open.path,
-            reason: `the paused Tern view record could not be read and is left in place: ${open.reason}`,
-          });
-          continue;
-        }
-        const protects = { endpoint: open.coordinator, cwd: open.cwd };
-        fences.push({
-          status: "readable",
-          kind: "native-open",
-          path: open.path,
-          token: open.record,
-          protects,
-          description: `${open.view} view: ${open.reason}`,
-          proof: openProof(await paneState(prover, protects)),
-        });
-      }
-      return fences;
-    },
-    settle: async (fence) => {
-      let doubt = "";
-      const outcome = await (await host()).abandonRetainedNativeOpen(
-        { path: fence.path, record: fence.token },
-        async () => {
-          const state = await paneState(prover, fence.protects);
-          if (state.status === "ambiguous") doubt = state.detail;
-          return state.status !== "ambiguous";
-        },
+    unreadable: "the paused Tern view record could not be read and is left in place",
+    changed: "the paused view record changed while fix ran, so it was kept",
+    unproven: "kept because its coordinator cannot be proved",
+    proof: openProof,
+    read: async (home) => {
+      // Loaded on use to keep native hosting out of every backend load.
+      const { listRetainedNativeOpens } = await import("./host.ts");
+      return (await listRetainedNativeOpens(home)).map(
+        (open): FenceRecord =>
+          open.status === "unreadable"
+            ? open
+            : {
+                status: "readable",
+                path: open.path,
+                record: open.record,
+                protects: { endpoint: open.coordinator, cwd: open.cwd },
+                description: `${open.view} view: ${open.reason}`,
+              },
       );
-      if (outcome === "abandoned" || outcome === "settled") return { status: "removed" };
-      return {
-        status: "kept",
-        reason:
-          outcome === "changed"
-            ? "the paused view record changed while fix ran, so it was kept"
-            : `kept because its coordinator cannot be proved: ${doubt}`,
-      };
     },
-  };
-}
-
-/** Pane quarantine records, under `<home>/tern-quarantine/`. */
-function quarantinedPanes(prover: FenceProver): Ledger {
-  return {
+    clear: async (record, conclusive) =>
+      (await import("./host.ts")).abandonRetainedNativeOpen(record, conclusive),
+  },
+  {
     kind: "tern-quarantine",
     subject: "quarantined panes",
     unlisted: "quarantined panes could not be listed",
-    list: async (home) => {
-      const fences: Fence[] = [];
-      for (const pane of await listTernQuarantine(home)) {
-        if (pane.status === "unreadable") {
-          fences.push({
-            status: "unreadable",
-            kind: "tern-quarantine",
-            path: pane.path,
-            reason: `the Tern pane quarantine record could not be read and is left in place: ${pane.reason}`,
-          });
-          continue;
-        }
-        const protects = { endpoint: pane.endpoint, cwd: pane.cwd };
-        fences.push({
-          status: "readable",
-          kind: "tern-quarantine",
-          path: pane.path,
-          token: pane.record,
-          protects,
-          description: `${pane.operation} on ${pane.key} at ${pane.at} has an unknown outcome (${pane.reason})`,
-          proof: paneProof(await paneState(prover, protects)),
-        });
-      }
-      return fences;
-    },
-    settle: async (fence) => {
-      let doubt = "";
-      const outcome = await clearTernQuarantine(
-        { path: fence.path, record: fence.token },
-        async () => {
-          const state = await paneState(prover, fence.protects);
-          if (state.status === "ambiguous") doubt = state.detail;
-          if (state.status === "present" && state.busy) doubt = "the pane is running something";
-          return state.status === "gone" || (state.status === "present" && !state.busy);
-        },
-      );
-      if (outcome === "cleared" || outcome === "settled") return { status: "removed" };
-      return {
-        status: "kept",
-        reason:
-          outcome === "changed"
-            ? "the pane quarantine record changed while fix ran, so it was kept"
-            : `kept because the pane is not proven gone or idle: ${doubt}`,
-      };
-    },
-  };
+    unreadable: "the Tern pane quarantine record could not be read and is left in place",
+    changed: "the pane quarantine record changed while fix ran, so it was kept",
+    unproven: "kept because the pane is not proven gone or idle",
+    proof: paneProof,
+    read: async (home) =>
+      (await listTernQuarantine(home)).map(
+        (pane): FenceRecord =>
+          pane.status === "unreadable"
+            ? pane
+            : {
+                status: "readable",
+                path: pane.path,
+                record: pane.record,
+                protects: { endpoint: pane.endpoint, cwd: pane.cwd },
+                description: `${pane.operation} on ${pane.key} at ${pane.at} has an unknown outcome (${pane.reason})`,
+              },
+      ),
+    clear: clearTernQuarantine,
+  },
+];
+
+async function listFences(ledger: Ledger, prover: FenceProver, home: string): Promise<Fence[]> {
+  const fences: Fence[] = [];
+  for (const record of await ledger.read(home)) {
+    if (record.status === "unreadable") {
+      fences.push({
+        ...record,
+        kind: ledger.kind,
+        reason: `${ledger.unreadable}: ${record.reason}`,
+      });
+    } else {
+      fences.push({
+        status: "readable",
+        kind: ledger.kind,
+        path: record.path,
+        token: record.record,
+        protects: record.protects,
+        description: record.description,
+        proof: ledger.proof(await paneState(prover, record.protects)),
+      });
+    }
+  }
+  return fences;
+}
+
+async function settleFence(
+  ledger: Ledger,
+  prover: FenceProver,
+  fence: ReadableFence,
+): Promise<FenceSettlement> {
+  let doubt = "";
+  const outcome = await ledger.clear({ path: fence.path, record: fence.token }, async () => {
+    const state = await paneState(prover, fence.protects);
+    if (state.status === "ambiguous") doubt = state.detail;
+    if (state.status === "present" && state.busy) doubt = "the pane is running something";
+    return ledger.proof(state).settleable;
+  });
+  if (outcome === "changed") return { status: "kept", reason: ledger.changed };
+  if (outcome === "unproven") return { status: "kept", reason: `${ledger.unproven}: ${doubt}` };
+  return { status: "removed" };
 }
 
 /**
@@ -191,14 +193,13 @@ function quarantinedPanes(prover: FenceProver): Ledger {
  * listed is reported as a failure of its kind, and the other is still listed.
  */
 export function ternFences(prover: FenceProver): FencesCapability {
-  const ledgers = [nativeOpens(prover), quarantinedPanes(prover)];
   return {
     list: async (home) => {
       const fences: Fence[] = [];
       const failures: FenceListingFailure[] = [];
       for (const ledger of ledgers) {
         try {
-          fences.push(...(await ledger.list(home)));
+          fences.push(...(await listFences(ledger, prover, home)));
         } catch (error) {
           failures.push({
             kind: ledger.kind,
@@ -213,7 +214,7 @@ export function ternFences(prover: FenceProver): FencesCapability {
       const ledger = ledgers.find((each) => each.kind === fence.kind);
       if (ledger === undefined)
         return { status: "kept", reason: `Tern keeps no ${fence.kind} records to settle` };
-      return ledger.settle(fence);
+      return settleFence(ledger, prover, fence);
     },
   };
 }

@@ -791,13 +791,12 @@
       "suspicious/noShadow": 1
     },
     "src/terminal-backend/tern/cli.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 3,
+      "complexity/noExcessiveCognitiveComplexity": 2,
       "complexity/noExcessiveLinesPerFunction": 1,
       "complexity/useMaxParams": 2,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
       "suspicious/noShadow": 1,
-      "tandem/hidden-clock": 2,
       "tandem/type-assertion": 1
     },
     "src/terminal-backend/tern/host.ts": {
@@ -814,6 +813,10 @@
       "style/noNestedTernary": 1,
       "tandem/hidden-clock": 1,
       "tandem/type-assertion": 1
+    },
+    "src/terminal-backend/tern/quarantine.ts": {
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "tandem/hidden-clock": 1
     },
     "src/terminal-backend/tern/retire-views.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
