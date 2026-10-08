@@ -179,8 +179,8 @@ Inspect saved state and use [central recovery](recovery.md), rather than clearin
 
 Failed mutation responses, malformed acknowledgements and unconfirmed verification can follow a
 completed effect. They raise `TernOutcomeUnknownError`. For `run`, `send`, `rename`, `split`,
-`close`, `killSession` and `notify`, `mutate` then writes a record to
-`<home>/tern-quarantine/<sha256(key)>.json`. The record holds the pane key, operation, reason,
+`close`, `killSession` and `notify`, `mutate` uses `tern/quarantine.ts` to refuse quarantined panes
+and write a record to `<home>/tern-quarantine/<sha256(key)>.json`. The record holds the pane key, operation, reason,
 time, exact endpoint and cwd. A brief close, panel close or view-retirement close records against
 the view pane it targeted. While a record exists, every later op on that pane, in any process,
 refuses with `TernQuarantinedError` before spawning. Ops also refuse when the pane or its owning
