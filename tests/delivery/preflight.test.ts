@@ -40,6 +40,7 @@ type FixtureOptions = Readonly<{
   readonly dirty?: boolean;
   readonly origin?: string;
   readonly openPullRequests?: readonly unknown[];
+  readonly gitFailure?: "exit" | "throw" | "empty";
 }>;
 
 function result(stdout = "", code = 0, stderr = ""): CommandResult {
@@ -109,6 +110,11 @@ async function fixture(options: FixtureOptions = {}) {
   const run = async (request: CommandRequest): Promise<CommandResult> => {
     commands.push(request.argv.join(" "));
     if (request.argv[0] === "git") {
+      if (request.argv.includes("symbolic-ref") || request.argv.includes("remote")) {
+        if (options.gitFailure === "exit") return result("", 7, "offline");
+        if (options.gitFailure === "throw") throw new Error("spawn failed");
+        if (options.gitFailure === "empty") return result(" \n");
+      }
       if (request.argv.includes("symbolic-ref")) return result("task/task-1\n");
       if (request.argv.includes("remote")) {
         return result(
@@ -156,6 +162,24 @@ test("delivery preflight refuses a dirty worktree in one plain line", async () =
     await f.cleanup();
   }
 });
+
+for (const gitFailure of ["exit", "throw", "empty"] as const) {
+  test(`delivery preflight keeps unavailable branch and origin optional on ${gitFailure}`, async () => {
+    const f = await fixture({ gitFailure });
+    try {
+      const value = await f.preflight("main");
+      expect(value.ready).toBe(false);
+      expect(value.branch).toBeUndefined();
+      expect(value.repository).toBeUndefined();
+      expect(value.refusals).toEqual([
+        "the worktree is on no branch, not task/task-1",
+        "the worktree has no origin remote",
+      ]);
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
 
 test("delivery preflight refuses a HEAD other than the reviewed one", async () => {
   const f = await fixture({ currentHead: "different-head" });

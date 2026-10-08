@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { readCheckpoint } from "../adapters/git.ts";
+import { readGitText } from "../adapters/primitives.ts";
 import type { CommandRunner } from "../contracts.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { withCoordinatorLaunchLock } from "./lock.ts";
@@ -27,24 +28,6 @@ export type CoordinatorSourceRefreshInput = Readonly<{
   readonly terminal: TerminalBackend;
 }>;
 
-async function gitText(
-  run: CommandRunner,
-  repo: string,
-  args: readonly string[],
-  operation: string,
-): Promise<string> {
-  const result = await run({ argv: ["git", "-C", repo, ...args], cwd: repo });
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim();
-    throw new Error(
-      `${operation} failed with exit code ${result.code}${detail ? `: ${detail}` : ""}`,
-    );
-  }
-  const value = result.stdout.trim();
-  if (value.length === 0) throw new Error(`${operation} returned no value`);
-  return value;
-}
-
 /** Resolve the revision a new coordinator should use, fetching origin/main when configured. */
 export async function resolveCoordinatorSourceHead(
   run: CommandRunner,
@@ -61,7 +44,10 @@ export async function resolveCoordinatorSourceHead(
   const hasOrigin = remoteResult.stdout.split(/\s+/u).some((remote) => remote === "origin");
   if (!hasOrigin) {
     return {
-      head: await gitText(run, repo, ["rev-parse", "HEAD"], "git local source HEAD"),
+      head: await readGitText(run, repo, ["rev-parse", "HEAD"], {
+        operation: "git local source HEAD",
+        failure: "plain",
+      }),
       localOnly: true,
     };
   }
@@ -76,11 +62,14 @@ export async function resolveCoordinatorSourceHead(
     );
   }
   return {
-    head: await gitText(
+    head: await readGitText(
       run,
       repo,
       ["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
-      "git origin/main resolution",
+      {
+        operation: "git origin/main resolution",
+        failure: "plain",
+      },
     ),
     localOnly: false,
   };
@@ -130,12 +119,10 @@ async function refreshOwnedCheckout(
       `coordinator source ${JSON.stringify(worktreePath)} is dirty or has unmerged paths`,
     );
   }
-  const branch = await gitText(
-    input.run,
-    worktreePath,
-    ["branch", "--show-current"],
-    "git coordinator branch",
-  );
+  const branch = await readGitText(input.run, worktreePath, ["branch", "--show-current"], {
+    operation: "git coordinator branch",
+    failure: "plain",
+  });
   if (branch !== running.worktree.branch) {
     throw new Error(
       `coordinator source branch ${JSON.stringify(branch)} does not match recorded lease branch ${JSON.stringify(running.worktree.branch)}`,

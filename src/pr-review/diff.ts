@@ -43,7 +43,13 @@ export async function readReviewDiff(
   from: string,
   to: string,
 ): Promise<ReviewDiff> {
-  const names = await gitText(run, worktree, ["diff", "--name-only", "-z", from, to]);
+  const names = (
+    await runChecked(
+      run,
+      { argv: ["git", "-C", worktree, "diff", "--name-only", "-z", from, to], cwd: worktree },
+      "git diff",
+    )
+  ).stdout;
   const changed = names.split("\0").filter((name) => name.length > 0);
   const generated = await generatedFiles(run, worktree, changed);
   const files = changed.filter((file) => !LOCKFILES.has(basename(file)) && !generated.has(file));
@@ -51,15 +57,27 @@ export async function readReviewDiff(
   const patch =
     files.length === 0
       ? ""
-      : await gitText(run, worktree, [
-          "diff",
-          "--no-ext-diff",
-          "--no-color",
-          from,
-          to,
-          "--",
-          ...files,
-        ]);
+      : (
+          await runChecked(
+            run,
+            {
+              argv: [
+                "git",
+                "-C",
+                worktree,
+                "diff",
+                "--no-ext-diff",
+                "--no-color",
+                from,
+                to,
+                "--",
+                ...files,
+              ],
+              cwd: worktree,
+            },
+            "git diff",
+          )
+        ).stdout;
   return { from, to, files, skipped, patch, commentable: commentableLines(patch) };
 }
 
@@ -70,13 +88,16 @@ async function generatedFiles(
   files: readonly string[],
 ): Promise<ReadonlySet<string>> {
   if (files.length === 0) return new Set();
-  const output = await gitText(run, worktree, [
-    "check-attr",
-    "-z",
-    "linguist-generated",
-    "--",
-    ...files,
-  ]);
+  const output = (
+    await runChecked(
+      run,
+      {
+        argv: ["git", "-C", worktree, "check-attr", "-z", "linguist-generated", "--", ...files],
+        cwd: worktree,
+      },
+      "git check-attr",
+    )
+  ).stdout;
   const fields = output.split("\0");
   const generated = new Set<string>();
   for (let index = 0; index + 2 < fields.length; index += 3) {
@@ -156,13 +177,4 @@ export function lineRanges(lines: ReadonlySet<number>): string {
     ranges.push(start === end ? String(start) : `${start}-${end}`);
   }
   return ranges.join(", ");
-}
-
-async function gitText(run: CommandRunner, cwd: string, args: readonly string[]): Promise<string> {
-  const result = await runChecked(
-    run,
-    { argv: ["git", "-C", cwd, ...args], cwd },
-    `git ${args[0] ?? ""}`,
-  );
-  return result.stdout;
 }
