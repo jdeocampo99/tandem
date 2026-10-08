@@ -20,7 +20,6 @@ import {
   choiceConfidence,
   evaluateJev,
   JEV_MODEL,
-  JevEvaluationError,
   type JevEvaluationResponse,
 } from "../src/adapters/typesafe.ts";
 import { appendDiagnosticEvent, readPromptRoutingLog } from "../src/runtime/diagnostics.ts";
@@ -36,6 +35,7 @@ import {
   routeUserPrompt,
 } from "../src/session/prompt-routing.ts";
 import {
+  fakeEvaluatorFor,
   loadPromptRoutingFixtures,
   type PromptRoutingExpectedDecision,
   type PromptRoutingFixture,
@@ -48,6 +48,7 @@ import {
   LiveJevBudgetExceededError,
   type LiveJevCaller,
   type LiveJevRunOptions,
+  readLiveJevRunOptions,
 } from "./live-jev-budget.ts";
 import { summarizePromptRoutingRun } from "./summarize.ts";
 import type {
@@ -108,23 +109,6 @@ export const FAKE_FIXTURE_CONFIG: PromptRoutingConfig = {
 export async function createEphemeralHome(): Promise<EphemeralHome> {
   const home = await mkdtemp(join(tmpdir(), "tandem-jev-eval-"));
   return { home, cleanup: async () => rm(home, { recursive: true, force: true }) };
-}
-
-function fakeEvaluatorFor(
-  fixture: PromptRoutingFixture,
-): NonNullable<PromptRoutingDependencies["evaluate"]> {
-  return async () => {
-    if (fixture.jevFailureCode !== undefined) {
-      throw new JevEvaluationError(
-        fixture.jevFailureCode,
-        `fixture ${fixture.id} simulated failure`,
-      );
-    }
-    if (fixture.jevResponse === undefined) {
-      throw new Error(`fixture ${fixture.id} has no recorded jevResponse or jevFailureCode`);
-    }
-    return fixture.jevResponse;
-  };
 }
 
 function recordingEvaluate(evaluate: NonNullable<PromptRoutingDependencies["evaluate"]>): Readonly<{
@@ -400,11 +384,6 @@ export async function writePromptRoutingResults(
 const FIXTURE_PATH = fileURLToPath(new URL("./fixtures/prompt-routing.jsonl", import.meta.url));
 const DEFAULT_OUTPUT_DIR = fileURLToPath(new URL("./results", import.meta.url));
 
-function readFlag(args: readonly string[], name: string): string | undefined {
-  const index = args.indexOf(name);
-  return index === -1 ? undefined : args[index + 1];
-}
-
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const fixtures = await loadPromptRoutingFixtures(FIXTURE_PATH);
@@ -419,26 +398,10 @@ async function main(): Promise<void> {
     console.log(`fake mode: wrote ${resultsPath} and ${summaryPath}`);
     return;
   }
-  const apiKey = process.env.TYPESAFE_API_KEY?.trim();
-  if (apiKey === undefined || apiKey.length === 0) {
-    throw new Error("--live requires TYPESAFE_API_KEY to be set");
-  }
-  const repeatCount = Number(readFlag(args, "--repeat") ?? "");
-  const timeoutMs = Number(readFlag(args, "--timeout") ?? "");
-  const maxTotalCostUsd = Number(readFlag(args, "--budget") ?? "");
-  if (
-    !Number.isFinite(repeatCount) ||
-    !Number.isFinite(timeoutMs) ||
-    !Number.isFinite(maxTotalCostUsd)
-  ) {
-    throw new Error("--live requires --repeat, --timeout, and --budget to all be numbers");
-  }
-  const outcomes = await runLivePromptRoutingFixtures(fixtures, {
-    apiKey,
-    timeoutMs,
-    repeatCount,
-    budget: { maxTotalCostUsd },
-  });
+  const outcomes = await runLivePromptRoutingFixtures(
+    fixtures,
+    readLiveJevRunOptions(args, process.env.TYPESAFE_API_KEY),
+  );
   const { resultsPath, summaryPath } = await writePromptRoutingResults(
     outcomes,
     DEFAULT_OUTPUT_DIR,

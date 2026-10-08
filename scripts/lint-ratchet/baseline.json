@@ -31,11 +31,6 @@
       "style/noExcessiveLinesPerFile": 1,
       "tandem/json-parse-cast": 1
     },
-    "evals/run-research-continuation.ts": {
-      "complexity/noExcessiveLinesPerFunction": 1,
-      "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1
-    },
     "evals/summarize.ts": {
       "style/noExcessiveLinesPerFile": 1,
       "tandem/type-assertion": 1
