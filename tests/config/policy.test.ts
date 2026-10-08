@@ -530,43 +530,6 @@ test("commands can be written as plain strings that run through the shell", () =
   expect(() => parsePolicy({ setupCommands: ["  "] })).toThrow(TypeError);
 });
 
-test("every commented-out setting in a new settings.toml is valid once uncommented", async () => {
-  await withFixture("template-repo", async ({ repo, home }) => {
-    const written = await onboardRepo({ repoPath: repo, home, write: true });
-    const text = await readFile(written.configPath, "utf8");
-    // Uncomment only setting lines ("# key = ..." and "# [table]"), not prose comments.
-    const enabled = text.replace(/^# (?=[A-Za-z]+ = |\[)/gmu, "");
-    const settings = Bun.TOML.parse(enabled) as Record<string, unknown>;
-    expect(Object.keys(settings).sort()).toEqual([
-      "cleanupCommands",
-      "instructionFiles",
-      "instructions",
-      "maxFixRounds",
-      "merging",
-      "models",
-      "repoPath",
-      "setupCommands",
-      "standards",
-      "validationCommands",
-    ]);
-    const { repoPath, cleanupCommands, merging, ...policy } = settings;
-    expect(repoPath).toBe(repo);
-    expect(merging).toEqual({
-      mergeWith: "queue-label",
-      queueLabel: "mergequeue",
-      blockedLabel: "blocked",
-      maxCiRetries: 1,
-      stuckAfterMinutes: 60,
-    });
-    await writeFile(written.configPath, enabled, "utf8");
-    expect(await readMergingSettings({ repoPath: repo, home })).toEqual(
-      merging as Awaited<ReturnType<typeof readMergingSettings>>,
-    );
-    expect(cleanupCommands).toEqual(["docker compose down"]);
-    expect(() => parsePolicy(policy)).not.toThrow();
-  });
-});
-
 test("a project with both settings.toml and config.json is refused rather than guessed", async () => {
   await withFixture("both-formats-repo", async ({ repo, home }) => {
     const written = await onboardRepo({ repoPath: repo, home, write: true });

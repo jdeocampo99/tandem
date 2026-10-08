@@ -1,5 +1,5 @@
 import { isRecord } from "../adapters/primitives.ts";
-import type { MergingChoice } from "../config/repositories.ts";
+import type { MergingChoice } from "../config/repository-settings.ts";
 import type { IsoTimestamp } from "../contracts.ts";
 import type { PullRequestRef } from "../pr-review/pull-request.ts";
 import {

@@ -125,10 +125,13 @@
       "tandem/type-assertion": 3
     },
     "src/config/repositories.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 3,
-      "complexity/noExcessiveLinesPerFunction": 2,
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "complexity/noExcessiveLinesPerFunction": 1,
       "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1,
+      "style/noExcessiveLinesPerFile": 1
+    },
+    "src/config/repository-settings.ts": {
+      "complexity/noExcessiveCognitiveComplexity": 1,
       "suspicious/noUnnecessaryConditions": 2
     },
     "src/config/storage.ts": {
