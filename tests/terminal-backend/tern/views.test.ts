@@ -9,8 +9,9 @@ import {
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { blockArgs, QUICK_TASK_FILE } from "../../../src/native/contract.ts";
+import { blockArgs } from "../../../src/native/block.ts";
 import { viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
+import { QUICK_TASK_FILE } from "../../../src/native/view-file.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";

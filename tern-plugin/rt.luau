@@ -1,5 +1,5 @@
 --!strict
--- The one way a click reaches Tandem: an `ActionEnvelope` (src/native/contract.ts) on the stdin of
+-- The one way a click reaches Tandem: an `ActionEnvelope` (src/native/envelope.ts) on the stdin of
 -- `tandem native act`, answered by one `Outcome`. No durable state, no retries. `watch` and `draw`
 -- are the one way a block reads and shows a view file.
 local M = {}
@@ -34,7 +34,7 @@ local NOTICES: {[string]: {level: string, title: string}} = {
  ["origin-unproven"] = {level = "error", title = "Tandem refused that click"},
 }
 
--- One view file a block draws (src/native/contract.ts `ViewFile`). `model` is the newest file
+-- One view file a block draws (src/native/view-file.ts `ViewFile`). `model` is the newest file
 -- accepted, `status` whether the file on disk is still that one. A file is accepted only when its
 -- `seq` is higher than the shown one; a new `epoch` is a new store, so its first file is accepted.
 export type Watch = {

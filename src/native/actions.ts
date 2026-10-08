@@ -4,7 +4,7 @@ import {
   type TandemBoundaryEnvironment,
   type TandemEnvironmentSource,
 } from "../config/environment.ts";
-import type { CommandRunner, TaskRecord } from "../contracts.ts";
+import type { CommandRunner } from "../contracts.ts";
 import { findRunningCoordinator } from "../coordinator/ownership.ts";
 import { type CoordinatorRecord, canonicalPath, pathIsWithin } from "../coordinator/record.ts";
 import { decideRecordedOwner } from "../coordinator/recorded-owner.ts";
@@ -14,11 +14,17 @@ import { tryShowCatchUp } from "../memory/native-visits.ts";
 import { remainingOnboardingSteps } from "../onboarding/checklist.ts";
 import { parseSetupAnswer } from "../onboarding/setup-answer.ts";
 import { SETUP_MODES, type SetupMode, type SetupSection } from "../onboarding/setup-view.ts";
+import { setupSavedMessage } from "../onboarding/setup-workflow.ts";
 import { parseReviewSubmission } from "../pr-review/page.ts";
-import { validateThreadReplies } from "../pr-review/replies.ts";
-import { parseReviewReplies } from "../pr-review/review.ts";
 import { readNativeThreads } from "../pr-watch/native-cache.ts";
-import { type BriefFeedback, briefFeedbackPrompt, type ViewedBrief } from "../requests/feedback.ts";
+import {
+  assertFeedbackSize,
+  type BriefFeedback,
+  briefApprovedPrompt,
+  briefFeedbackPrompt,
+  type ViewedBrief,
+} from "../requests/feedback.ts";
+import { briefOriginAfterAction } from "../requests/native-pane.ts";
 import {
   createTandemService,
   type TandemService,
@@ -26,7 +32,9 @@ import {
 } from "../service/controller.ts";
 import { defaultBranch } from "../service/draft-refresh.ts";
 import { startQuickTask } from "../service/quick-start.ts";
-import { checkQuickText, QUICK_SCOPE_LABELS, quickTaskView } from "../tasks/quick.ts";
+import { fixRequestStalled, prFixRequest, taskForPrNumber } from "../tasks/pull-request.ts";
+import { checkQuickText, quickTaskView } from "../tasks/quick.ts";
+import { quickScopeAnswer } from "../tasks/quick-scope.ts";
 import {
   DEFAULT_COORDINATOR_SESSION,
   environmentSource,
@@ -40,15 +48,14 @@ import type {
   TerminalBackend,
   TerminalView,
 } from "../terminal-backend/contract.ts";
+import { type BlockContext, parseBlockContext } from "./block.ts";
 import {
   type Action,
   ActionEnvelope,
-  type BlockContext,
   type NoticeCode,
   type Outcome,
-  parseBlockContext,
   type ViewRef,
-} from "./contract.ts";
+} from "./envelope.ts";
 import {
   markNativeAlertsRead,
   nativeAlertCounts,
@@ -597,26 +604,6 @@ function requireBriefProject(act: Act, briefRepoPath: string): Promise<void> {
   return requireSelectedProject(act, briefRepoPath, "brief");
 }
 
-async function taskForPrNumber(act: Act, number: number): Promise<TaskRecord | undefined> {
-  const repo = await canonicalPath(act.environment.repo, "repoPath");
-  const scoped = await Promise.all(
-    (await act.service().list()).map(async (task) => ({
-      task,
-      repo: await canonicalPath(task.repoPath, "task repoPath"),
-    })),
-  );
-  const matches = scoped
-    .filter(
-      (entry) =>
-        entry.repo === repo &&
-        (entry.task.pullRequest?.number === number || entry.task.prReview?.ref.number === number),
-    )
-    .map((entry) => entry.task);
-  if (matches.length > 1)
-    throw new Error(`More than one task has pull request #${number}; open it by task id`);
-  return matches[0];
-}
-
 async function openDetail(
   act: Act,
   ref: Extract<ViewRef, { kind: "task" | "brief" | "pr" }>,
@@ -633,7 +620,10 @@ async function openDetail(
     repoPath = task.repoPath;
     view = { kind: "task", taskId: task.id };
   } else {
-    const task = ref.repo === undefined ? await taskForPrNumber(act, ref.number) : undefined;
+    const task =
+      ref.repo === undefined
+        ? await taskForPrNumber(await service.list(), act.environment.repo, ref.number)
+        : undefined;
     if (task !== undefined) {
       repoPath = task.repoPath;
       view = { kind: "pr", taskId: task.id };
@@ -735,7 +725,9 @@ async function switchProject(act: Act, action: Extract<Action, { verb: "project"
       kind: "away",
       now: new Date().toISOString(),
       signature: model.changeSignature,
-    }).catch(() => {});
+    }).catch(() => {
+      // Best effort: the focus already happened; a lost visit only changes the next catch-up.
+    });
   const { warning } = await tryShowCatchUp(act.terminal, {
     home: act.environment.home,
     record: destination,
@@ -871,26 +863,21 @@ async function closeNativeBrief(
   if (views === undefined) return undefined;
   try {
     const latest = await act.service().requestBrief(seen.requestId);
-    if (
-      latest.record.draft.revision !== seen.briefRevision ||
-      latest.record.draft.contentDigest !== seen.contentDigest ||
-      latest.record.draft.agreementDigest !== seen.agreementDigest
-    )
+    const after = briefOriginAfterAction(latest.record, seen, {
+      terminal: act.terminal.name,
+      paneId: act.origin.paneId,
+    });
+    if (after.kind === "revised")
       return {
         code: "brief-left-open",
         text: "The brief changed after this action; the current brief was left open. Do not resubmit this action.",
       };
-    const projected = latest.record.reviewPane;
-    if (
-      projected?.endpoint.terminal === act.terminal.name &&
-      projected.endpoint.paneId === act.origin.paneId &&
-      projected.status !== "open"
-    )
-      return projected.status === "closed"
+    if (after.kind === "retired")
+      return after.pane.status === "closed"
         ? undefined
         : {
             code: "brief-warning",
-            text: `The action completed, but the native brief remains ${projected.status}: ${projected.reason ?? "retirement was not confirmed"}. Do not resubmit this action.`,
+            text: `The action completed, but the native brief remains ${after.pane.status}: ${after.pane.reason ?? "retirement was not confirmed"}. Do not resubmit this action.`,
           };
     const result = await views.close({
       coordinator: owned.endpoint,
@@ -923,8 +910,7 @@ async function requestChanges(
   { verb: _, text, ...seen }: Extract<Action, { verb: "brief-request-changes" }>,
 ): Promise<Outcome> {
   const feedback: BriefFeedback = { ...seen, ...(text === undefined ? {} : { text }) };
-  if (Buffer.byteLength(JSON.stringify(feedback), "utf8") > 64_000)
-    throw new Error("Brief feedback may not exceed 64000 bytes");
+  assertFeedbackSize(feedback);
   const service = act.service();
   const brief = await service.requestBrief(feedback.requestId);
   await requireBriefProject(act, brief.record.repoPath);
@@ -948,11 +934,7 @@ async function approveBrief(
   await service.approveRequestBrief(intent);
   const warnings: string[] = [];
   try {
-    await promptCoordinator(
-      act,
-      owned,
-      `From the open review page:\nThe user approved brief ${intent.requestId}, revision ${intent.briefRevision}. Approval is already recorded for the displayed content and agreement. Continue the conversation under that approval.`,
-    );
+    await promptCoordinator(act, owned, briefApprovedPrompt(intent));
   } catch (error) {
     warnings.push(
       `Approval was recorded, but the coordinator could not be notified: ${message(error)}`,
@@ -963,63 +945,19 @@ async function approveBrief(
   return warnings.length === 0 ? DONE : notice("done", "brief-warning", warnings.join("\n"));
 }
 
-function requireOwnPr(task: TaskRecord): asserts task is TaskRecord & {
-  pullRequest: NonNullable<TaskRecord["pullRequest"]>;
-} {
-  if (
-    task.kind !== "implementation" ||
-    task.pullRequest === undefined ||
-    !["draft", "open"].includes(task.pullRequest.state)
-  )
-    throw new Error("This action requires an implementation task with an open Tandem pull request");
-}
-
 async function commentOnPr(
   act: Act,
-  action: Extract<Action, { verb: "pr-comment" }>,
+  { verb: _, taskId, ...feedback }: Extract<Action, { verb: "pr-comment" }>,
 ): Promise<Outcome> {
   const service = act.service();
-  const before = await service.get(action.taskId);
-  requireOwnPr(before);
-  const notes = (action.comments ?? []).map(
-    (comment) => `${comment.file}:${comment.line}: ${comment.text}`,
+  const before = await service.get(taskId);
+  const text = await prFixRequest(before, feedback, (pr, head) =>
+    readNativeThreads(act.run, { repo: pr.repository, number: pr.number }, before.repoPath, head),
   );
-  if (action.replies !== undefined) {
-    const replies = parseReviewReplies(action.replies);
-    if (action.reviewHead !== before.pullRequest.head)
-      throw new Error("The PR changed; reopen before replying");
-    const pr = before.pullRequest;
-    const threads = await readNativeThreads(
-      act.run,
-      { repo: pr.repository, number: pr.number },
-      before.repoPath,
-      action.reviewHead,
-    );
-    validateThreadReplies(replies, threads);
-    for (const reply of replies) {
-      const thread = threads.find((entry) => entry.id === reply.threadId);
-      notes.push(
-        `Reply to ${pr.repository}#${pr.number} thread ${reply.threadId}, root comment ${reply.commentId} (GitHub ${reply.replyTo}), ${thread?.file}${thread?.line === undefined ? " (outside current diff)" : `:${thread.line}`}: ${reply.body}`,
-      );
-    }
-  }
-  if (action.text !== undefined) notes.push(action.text);
-  const feedback = notes.join(" ").replace(/\s+/gu, " ").trim();
-  if (feedback.length === 0) throw new Error("PR feedback must be non-empty text");
-  if (before.stage === "completed")
-    throw new Error(
-      "This task's worker has finished. Open the coordinator to arrange follow-up work; the PR comment was not sent.",
-    );
-  const direction = await service.steer({
-    taskId: action.taskId,
-    text: `PR fix request: ${feedback}`,
-  });
-  if (
-    direction.stage === "blocked" ||
-    (before.stage === "ready" && direction.stage !== "implementing")
-  ) {
+  const direction = await service.steer({ taskId, text });
+  if (fixRequestStalled(before.stage, direction.stage)) {
     // The direction is saved, so this is not a refusal: resending would duplicate it.
-    const current = await service.get(action.taskId);
+    const current = await service.get(taskId);
     return notice(
       "kept",
       "feedback-saved",
@@ -1120,19 +1058,11 @@ async function answerQuickScope(
   const service = act.service();
   const task = await service.get(action.taskId);
   await requireSelectedProject(act, task.repoPath, "task");
-  const question = task.communication?.question;
-  if (question?.id !== action.questionId || question.scope === undefined)
-    throw new Error("That scope question is no longer open; nothing was answered");
   await service.answer({
     taskId: task.id,
-    questionId: question.id,
-    text: QUICK_SCOPE_LABELS[action.choice],
+    ...quickScopeAnswer(task, action.questionId, action.choice),
   });
   return DONE;
-}
-
-function listNames(names: readonly string[]): string {
-  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /**
@@ -1156,14 +1086,8 @@ async function saveSetup(
   } catch (error) {
     warnings.push(`The saved settings could not be shown again: ${message(error)}`);
   }
-  const opened = listNames(result.opened);
-  const told = !result.complete
-    ? `Setup was saved with problems:\n${result.message}`
-    : mode === "settings"
-      ? "Settings saved. New tasks will use them."
-      : `Setup saved. ${opened === "" ? "" : `Chats for ${opened} are open in the sidebar.`}`.trim();
   try {
-    await promptCoordinator(act, owner, told);
+    await promptCoordinator(act, owner, setupSavedMessage(mode, result));
   } catch (error) {
     warnings.push(`The coordinator could not be told: ${message(error)}`);
   }

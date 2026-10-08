@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { Endpoint, TerminalPaneLocation, WorktreeLease } from "../contracts.ts";
-import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
-import { harnessFor } from "../harness/resolve.ts";
+import {
+  DEFAULT_HARNESS,
+  HARNESS_EXECUTABLES,
+  type HarnessName,
+  type KnownHarness,
+  parseHarnessName,
+} from "../harness/contract.ts";
 import { storedEndpointTerminal } from "../terminal-backend/identity.ts";
 
 export const REGISTRY_DIRECTORY = "coordinator-registry";
@@ -219,7 +224,8 @@ function parseCommand(value: unknown, field: string, harness: HarnessName): read
     throw new TypeError(`${field} must be a non-empty array`);
   }
   const command = value.map((entry, index) => text(entry, `${field}[${index}]`));
-  const { executable } = harnessFor(harness);
+  const known: KnownHarness = harness;
+  const executable = HARNESS_EXECUTABLES[known];
   if (command[0] !== executable) {
     throw new TypeError(`${field}[0] must be ${JSON.stringify(executable)}`);
   }

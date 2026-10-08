@@ -3,7 +3,7 @@ import { basename } from "node:path";
 import { EndpointOwnershipError } from "../../adapters/primitives.ts";
 import { findRecordedOwner } from "../../coordinator/recorded-owner.ts";
 import { quarantineCoordinatorLease } from "../../coordinator/resources.ts";
-import { isWindowView, parseBlockArgs, ViewKind } from "../../native/contract.ts";
+import { isWindowView, parseBlockArgs, ViewKind } from "../../native/block.ts";
 import { viewDetailPath, viewIndexPath } from "../../native/store.ts";
 import type { EndpointTarget } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
@@ -49,7 +49,10 @@ export async function planCoordinatorViews(
   home: string | undefined,
   target: EndpointTarget,
 ): Promise<() => Promise<void>> {
-  if (target.endpoint.role !== "coordinator") return async () => {};
+  if (target.endpoint.role !== "coordinator")
+    return async () => {
+      // Only a coordinator owns views to retire.
+    };
   const listing = await commands.ls(target.cwd);
   if (listing.detached.length > 0)
     throw new EndpointOwnershipError(
@@ -61,7 +64,10 @@ export async function planCoordinatorViews(
       entry.block.program?.startsWith("tandem.") &&
       parseBlockArgs(entry.block.args)?.ctx.coordinator === target.endpoint.paneId,
   );
-  if (claims.length === 0) return async () => {};
+  if (claims.length === 0)
+    return async () => {
+      // No view claims this coordinator.
+    };
   if (home === undefined)
     throw new EndpointOwnershipError(target.endpoint, "view retirement requires its recorded home");
   const owner = await recordedCoordinator(home, target);

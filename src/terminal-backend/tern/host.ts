@@ -11,16 +11,16 @@ import {
   type Placement,
   parseBlockArgs,
   Receipt,
-  setupFile,
   Ticket,
   ViewKind,
-} from "../../native/contract.ts";
+} from "../../native/block.ts";
 import {
   openDirectories,
   openDirectory,
   viewDetailPath,
   viewIndexPath,
 } from "../../native/store.ts";
+import { setupFile } from "../../native/view-file.ts";
 import { StoreLockTimeoutError } from "../../tasks/store-errors.ts";
 import { acquireDarwinFileLock } from "../../tasks/store-lock.ts";
 import type { ViewOrigin } from "../contract.ts";

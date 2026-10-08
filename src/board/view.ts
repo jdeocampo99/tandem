@@ -16,7 +16,7 @@ import { awaitsApproval, requestApprovalState } from "../requests/brief.ts";
 import type { DurableExecutionRoutingPause } from "../runtime/schema.ts";
 import { isTerminalTask } from "../service/records.ts";
 import { ledgerBlockers } from "../tasks/findings.ts";
-import { QUICK_SCOPE_TITLE } from "../tasks/quick.ts";
+import { QUICK_SCOPE_TITLE } from "../tasks/quick-scope.ts";
 import { recordedReviewLevel } from "../tasks/review-levels.ts";
 import type { TimelineEvent } from "../tasks/timeline.ts";
 import { dollars, summarizeRollups, type TaskRollup, type TraceSummary } from "../tasks/trace.ts";

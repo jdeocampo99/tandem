@@ -401,11 +401,6 @@ export type TerminalBackend = Readonly<{
   notify(target: SessionTarget & Readonly<{ title: string; body: string }>): Promise<void>;
   /** Opens Tandem's welcome view; accepting it prompts the agent in `paneId`. */
   openWelcome(target: SessionTarget & Readonly<{ paneId: string }>): Promise<void>;
-  /**
-   * Opens Tandem's setup block beside the coordinator in `paneId`, which must already have its
-   * published view; false when this terminal has no native blocks and setup runs in the chat.
-   */
-  openSetup(target: SessionTarget & Readonly<{ paneId: string }>): Promise<boolean>;
   /** Submits a prompt to the agent in a pane, or types it and presses Enter when none is known. */
   promptAgent(target: SessionTarget & Readonly<{ paneId: string; text: string }>): Promise<void>;
   /** Opens Tandem's panel beside the coordinator, without focus; its pane id. */

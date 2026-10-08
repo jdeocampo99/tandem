@@ -3,7 +3,7 @@ import type { QuickScopeReport, TaskRecord } from "../contracts.ts";
 import type { PrWatchNotice } from "../pr-watch/store.ts";
 import { renderRequestReceiptTable } from "../runtime/usage-receipt.ts";
 import type { TandemService } from "../service/controller.ts";
-import { QUICK_SCOPE_CHOICES, QUICK_SCOPE_LABELS, quickScopeLines } from "../tasks/quick.ts";
+import { QUICK_SCOPE_CHOICES, QUICK_SCOPE_LABELS, quickScopeLines } from "../tasks/quick-scope.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
 import type { SessionHost } from "./events.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";

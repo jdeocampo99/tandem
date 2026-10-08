@@ -44,7 +44,7 @@ import {
   ledgerSuggestions,
   recordReviewFindings,
 } from "./findings.ts";
-import { quickScopeAwaitingAnswer, quickScopeResumeRefusal } from "./quick.ts";
+import { quickScopeAwaitingAnswer, quickScopeResumeRefusal } from "./quick-scope.ts";
 import { decideRequiredStages, policyStageFacts, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel } from "./review-levels.ts";

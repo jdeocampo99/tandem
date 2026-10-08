@@ -189,18 +189,20 @@ import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { isActiveTask, transitionTask } from "../tasks/lifecycle.ts";
 import {
   checkQuickText,
+  QUICK_START_UNFINISHED,
+  quickApproval,
+  quickStartUnfinished,
+  quickTaskTitle,
+} from "../tasks/quick.ts";
+import {
   parseQuickScopeAnswer,
   QUICK_SCOPE_ANSWER_REFUSAL,
   QUICK_SCOPE_LABELS,
   QUICK_SCOPE_PROCEED_TEXT,
-  QUICK_START_UNFINISHED,
   type QuickScopeChoice,
-  quickApproval,
   quickConvertedText,
   quickScopeNextStep,
-  quickStartUnfinished,
-  quickTaskTitle,
-} from "../tasks/quick.ts";
+} from "../tasks/quick-scope.ts";
 import {
   decideRequiredStages,
   policyStageFacts,
@@ -345,6 +347,8 @@ export type TandemServiceOptions = Readonly<{
   readonly refreshSource?: () => Promise<SourceRefreshResult>;
   readonly workerTimeoutMs?: number;
   readonly run?: CommandRunner;
+  /** The terminal port; defaults to the one the saved settings select, built on `run`. */
+  readonly terminal?: TerminalBackend;
   readonly clock?: Clock;
   readonly idFactory?: IdFactory;
   /** Chooses a new scout's post-research disposition; defaults to deterministic cues alone. */
@@ -1979,19 +1983,23 @@ class TandemController {
         await this.reconcileTask(resumed);
       return;
     }
-    if (step === "cancel") {
-      const stopped = await this.cancel(
-        taskId,
-        answer.choice === "convert"
-          ? "The user turned this quick task into a request."
-          : "The user cancelled this quick task at its scope question.",
+    const convert = answer.choice === "convert";
+    if (step === "cancel") await this.cancelAtScopeQuestion(taskId, convert);
+    await this.closeQuickScopeQuestion(taskId, questionId, convert);
+  }
+
+  /** Cancels a quick task for a Cancel or Convert answer; throws while its worker may still run. */
+  private async cancelAtScopeQuestion(taskId: string, convert: boolean): Promise<void> {
+    const stopped = await this.cancel(
+      taskId,
+      convert
+        ? "The user turned this quick task into a request."
+        : "The user cancelled this quick task at its scope question.",
+    );
+    if (stopped.stage !== "cancelled")
+      throw new Error(
+        `Task ${taskId} could not be stopped yet: Tandem couldn't confirm its worker stopped, so it was not ${convert ? "converted" : "cancelled"}. The question is still open; answer it again once the worker has stopped.`,
       );
-      if (stopped.stage !== "cancelled")
-        throw new Error(
-          `Task ${taskId} could not be stopped yet: Tandem couldn't confirm its worker stopped, so it was not ${answer.choice === "convert" ? "converted" : "cancelled"}. The question is still open; answer it again once the worker has stopped.`,
-        );
-    }
-    await this.closeQuickScopeQuestion(taskId, questionId, answer.choice === "convert");
   }
 
   /**
@@ -3218,7 +3226,7 @@ function serviceDependencies(options: TandemServiceOptions): ServiceDependencies
     refreshSource,
     workerTimeoutMs,
     run,
-    terminal: terminalBackend(run, { home }),
+    terminal: options.terminal ?? terminalBackend(run, { home }),
     clock,
     idFactory,
     classifyResearchContinuation,

@@ -10,6 +10,7 @@ import type { SetupAnswer } from "../../src/onboarding/setup-answer.ts";
 import {
   SetupWorkflow,
   type SetupWorkflowDependencies,
+  setupSavedMessage,
 } from "../../src/onboarding/setup-workflow.ts";
 import { findCheckoutsByName } from "../../src/repos/locate.ts";
 
@@ -304,4 +305,29 @@ test("setup opens the chat of a repository that was already set up", async () =>
     `open ${join(code, "old")}`,
   ]);
   expect(report.opened).toEqual(["old"]);
+});
+
+test("a saved setup tells the coordinator which chats opened, in fixed words", () => {
+  const saved = (opened: readonly string[]) => ({ message: "", complete: true, opened });
+  expect(setupSavedMessage("setup", saved(["api", "web", "docs"]))).toBe(
+    "Setup saved. Chats for api, web and docs are open in the sidebar.",
+  );
+  expect(setupSavedMessage("setup", saved(["api", "web"]))).toBe(
+    "Setup saved. Chats for api and web are open in the sidebar.",
+  );
+  expect(setupSavedMessage("setup", saved(["api"]))).toBe(
+    "Setup saved. Chats for api are open in the sidebar.",
+  );
+  expect(setupSavedMessage("setup", saved([]))).toBe("Setup saved.");
+  expect(setupSavedMessage("settings", saved(["api"]))).toBe(
+    "Settings saved. New tasks will use them.",
+  );
+});
+
+test("a partly failed save tells the coordinator what failed, in either mode", () => {
+  const failed = { message: "Model choices were not saved: broke", complete: false, opened: [] };
+  for (const mode of ["setup", "settings"] as const)
+    expect(setupSavedMessage(mode, failed)).toBe(
+      "Setup was saved with problems:\nModel choices were not saved: broke",
+    );
 });

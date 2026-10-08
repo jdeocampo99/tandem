@@ -6,11 +6,8 @@ import { preparePrReviewRun } from "../pr-review/run.ts";
 import { unreleasedReservation } from "../runtime/activity.ts";
 import type { RuntimeTaskState } from "../runtime/schema.ts";
 import { describeError } from "../service/records.ts";
-import {
-  closeFinishedScoutPanes,
-  decideScoutWorktreeRelease,
-  observeScoutCheckout,
-} from "../service/scout-cleanup.ts";
+import { observeScoutCheckout } from "../service/scout-checkout.ts";
+import { closeFinishedScoutPanes, decideScoutWorktreeRelease } from "../service/scout-cleanup.ts";
 import { taskSourcePath } from "../service/source.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";

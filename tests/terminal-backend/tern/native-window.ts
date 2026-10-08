@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
-import { ActionEnvelope } from "../../../src/native/contract.ts";
+import { ActionEnvelope } from "../../../src/native/envelope.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../../src/terminal-backend/contract.ts";
 import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin.ts";
@@ -113,16 +113,15 @@ export async function resend(
 }
 
 /**
- * Lets Tern, Git, `ps` and Tern's process reader through `run` and refuses every other program, so
- * Tandem code under test cannot reach GitHub, a model or a worktree tool. Git only ever sees the
- * test's own repositories under its root. Refusals go to `log`.
+ * Lets Tern, Git and `ps` through `run` and refuses every other program, so Tandem code under test
+ * cannot reach GitHub, a model or a worktree tool. Git only ever sees the test's own repositories
+ * under its root. Refusals go to `log`.
  */
 export function isolatedRunner(run: CommandRunner, log: string): CommandRunner {
   const allowed: Readonly<Record<string, true>> = { tern: true, git: true, ps: true };
   return async (request) => {
     const program = basename(request.argv[0] ?? "");
-    const processReader = request.argv[1]?.endsWith("/terminal-backend/tern/process-reader.ts");
-    if (allowed[program] === true || (program === "bun" && processReader)) return run(request);
+    if (allowed[program] === true) return run(request);
     await appendFile(log, `refused ${JSON.stringify(request.argv)}\n`);
     return { code: 127, stdout: "", stderr: `isolated Tern test refuses ${program}` };
   };

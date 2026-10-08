@@ -59,7 +59,7 @@ end
 command("project-prev", "Tandem: Previous project", {verb = "project", target = "prev"}, false)
 command("project-next", "Tandem: Next project", {verb = "project", target = "next"}, false)
 
--- `nativeLink` in src/native/contract.ts writes these; PR links carry a number only.
+-- `nativeLink` in src/native/envelope.ts writes these; PR links carry a number only.
 -- `nativeAnswerLink` writes a quick task's scope answers: the click is the user's own choice.
 tern.route.link(function(link, cx)
  local taskId, questionId, choice = string.match(link.url, "^tandem://answer/([%w_-]+)/([%w_-]+)/([a-z]+)$")

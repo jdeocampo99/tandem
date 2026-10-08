@@ -1,0 +1,8 @@
+{
+  "path": ["src", "scripts", "evals"],
+  "format": ["typescript"],
+  "minTokens": 50,
+  "ignore": ["**/*.test.ts", "**/.claude-plugin/types/**"],
+  "reporters": ["console"],
+  "exitCode": 0
+}

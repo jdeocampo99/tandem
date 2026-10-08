@@ -6,7 +6,7 @@ import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
 import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { maybeShowCatchUp } from "../../../src/memory/native-visits.ts";
-import { parseBlockContext } from "../../../src/native/contract.ts";
+import { parseBlockContext } from "../../../src/native/block.ts";
 import { recordVisit, viewIndexPath } from "../../../src/native/store.ts";
 import { usageDisplay } from "../../../src/runtime/usage-display.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";

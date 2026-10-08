@@ -2,7 +2,7 @@
 
 Task stages, approvals, fix rounds, post-research continuation, child terminals, and Herdr status.
 
-Code: src/tasks/lifecycle.ts, src/tasks/required-stages.ts, src/tasks/quick.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
+Code: src/tasks/lifecycle.ts, src/tasks/required-stages.ts, src/tasks/quick.ts, src/tasks/quick-scope.ts, src/tasks/findings.ts, src/tasks/timeline.ts, src/tasks/timeline-store.ts,
 src/tasks/trace.ts, src/tasks/research-continuation.ts,
 src/tasks/research-continuation-classifier.ts, src/session/research-follow-up.ts,
 src/service/source.ts, src/terminal-backend/herdr/, src/session/worker.ts, src/session/worker-steering.ts,
@@ -33,7 +33,7 @@ src/harness/omp/terminal-extension.ts
 
 A fast lane for a clear, small change, with no interview and no brief. **No model ever decides
 that a request is quick. Only the user does, through the quick task composer.**
-Code: src/tasks/quick.ts (pure decisions), `startQuickTask` in src/service/controller.ts and
+Code: src/tasks/quick.ts and src/tasks/quick-scope.ts (pure decisions; the scope question in the latter), `startQuickTask` in src/service/controller.ts and
 src/service/quick-start.ts (the one start path).
 
 - **Entry point.** The palette's "Tandem: Quick task…" opens the native composer

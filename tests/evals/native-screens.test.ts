@@ -5,7 +5,7 @@ import { Readable } from "node:stream";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
-import { type Action, Outcome } from "../../src/native/contract.ts";
+import { type Action, Outcome } from "../../src/native/envelope.ts";
 import { projectStoreDirectory } from "../../src/native/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type { TerminalBackend, TerminalView } from "../../src/terminal-backend/contract.ts";
@@ -47,7 +47,7 @@ async function withScreens(
     const opened: TerminalView[] = [];
     let fail = false;
     // Reuse the scenario's terminal/process ownership ledger; capture only the presentation port.
-    const base = terminalBackend(world.run, { home: world.home });
+    const base = terminalBackend(world.run, { tern: world.tern, home: world.home });
     const terminal: TerminalBackend = {
       ...base,
       views: viewsWith(base, {

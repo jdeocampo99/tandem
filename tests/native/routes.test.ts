@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
 import { isApprovalVerb } from "../../src/native/actions.ts";
+import { VIEW_KINDS } from "../../src/native/block.ts";
 import {
   Action,
   ActionEnvelope,
@@ -8,9 +9,8 @@ import {
   NOTICE_CODES,
   nativeAnswerLink,
   nativeLink,
-  VIEW_KINDS,
-} from "../../src/native/contract.ts";
-import { QUICK_SCOPE_CHOICES } from "../../src/tasks/quick.ts";
+} from "../../src/native/envelope.ts";
+import { QUICK_SCOPE_CHOICES } from "../../src/tasks/quick-scope.ts";
 import { withParity } from "../evals/tern-parity/inventory.ts";
 
 const plugin = (name: string) =>

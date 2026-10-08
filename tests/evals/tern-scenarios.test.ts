@@ -30,7 +30,7 @@ test("a stale Tern id never closes a different pane whose title equals that id",
     });
     await seedScenarioRuntime(world, scenarioRuntimeTask({ endpoints: [stale], worktree: lease }));
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-    const terminal = terminalBackend(world.run, { home: world.home });
+    const terminal = terminalBackend(world.run, { tern: world.tern, home: world.home });
 
     await terminal.close({ endpoint: stale, cwd: world.repoPath });
     await expect(terminal.closeOwned({ endpoint: stale, cwd: world.repoPath })).rejects.toThrow(
@@ -66,7 +66,7 @@ test("busy Tern close preserves the worker, reservation, endpoint and lease", as
       }),
     );
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-    const terminal = terminalBackend(world.run, { home: world.home });
+    const terminal = terminalBackend(world.run, { tern: world.tern, home: world.home });
 
     await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toBeInstanceOf(
       EndpointBusyError,
@@ -93,7 +93,7 @@ test("relaunch reuses its durable exact-id empty session after acknowledged clea
       calls.push(request);
       return world.run(request);
     };
-    const terminal = terminalBackend(run, { home: world.home });
+    const terminal = terminalBackend(run, { tern: world.tern, home: world.home });
     const target = {
       sessionId: world.sessionId,
       cwd: world.repoPath,
@@ -119,7 +119,10 @@ test("relaunch reuses its durable exact-id empty session after acknowledged clea
       recordPath(world.home, world.sessionId, world.repoPath),
     );
     if (recorded === undefined) throw new Error("missing durable coordinator");
-    const relaunched = await terminalBackend(run, { home: world.home }).createWorkspace({
+    const relaunched = await terminalBackend(run, {
+      tern: world.tern,
+      home: world.home,
+    }).createWorkspace({
       ...target,
       previousEndpoint: recorded.endpoint,
     });
@@ -146,7 +149,7 @@ test("an unowned session with the project name gets a unique suffix and is never
       calls.push(request);
       return world.run(request);
     };
-    const terminal = terminalBackend(run, { home: world.home });
+    const terminal = terminalBackend(run, { tern: world.tern, home: world.home });
     const target = {
       sessionId: world.sessionId,
       cwd: world.repoPath,
@@ -166,7 +169,10 @@ test("an unowned session with the project name gets a unique suffix and is never
     const unrelated = await terminal.snapshot(target);
     expect(unrelated).toHaveLength(1);
     const before = calls.length;
-    const relaunched = await terminalBackend(run, { home: world.home }).createWorkspace({
+    const relaunched = await terminalBackend(run, {
+      tern: world.tern,
+      home: world.home,
+    }).createWorkspace({
       ...target,
       previousEndpoint: first.endpoint,
     });

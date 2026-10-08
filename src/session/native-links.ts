@@ -1,6 +1,6 @@
 import type { RequestBriefRecord, TaskRecord } from "../contracts.ts";
-import { type LinkKind, nativeAnswerLink, nativeLink } from "../native/contract.ts";
-import { QUICK_SCOPE_CHOICES, QUICK_SCOPE_LABELS } from "../tasks/quick.ts";
+import { type LinkKind, nativeAnswerLink, nativeLink } from "../native/envelope.ts";
+import { QUICK_SCOPE_CHOICES, QUICK_SCOPE_LABELS } from "../tasks/quick-scope.ts";
 import type { CoordinatorMessage } from "./coordinator-reply.ts";
 
 export type NativeReplyLink = Readonly<{ label: string; url: string }>;
@@ -26,6 +26,26 @@ function explicitReference(text: string, kind: string, id: string): boolean {
     `(?<![\\w-])${kind}(?:\\s+|\\s*[:#]\\s*)[\x60*]*#?${escapePattern(id)}(?![\\w-])`,
     "iu",
   ).test(text);
+}
+
+/**
+ * A quick task's open scope question gets its three answers as links once the reply names the
+ * task. Each click is the user's own choice; the CLI checks the question is still open.
+ */
+function scopeAnswerLinks(
+  text: string,
+  scoped: readonly TaskRecord[],
+  taskIds: ReadonlyMap<string, number>,
+): readonly NativeReplyLink[] {
+  return scoped.flatMap((task) => {
+    const question = task.communication?.question;
+    if (question?.scope === undefined || taskIds.get(task.id) !== 1) return [];
+    if (!safeId.test(question.id) || !mentioned(text, task.id)) return [];
+    return QUICK_SCOPE_CHOICES.map((choice) => ({
+      url: nativeAnswerLink(task.id, question.id, choice),
+      label: QUICK_SCOPE_LABELS[choice],
+    }));
+  });
 }
 
 /** Resolve only mentioned durable identities in the coordinator's project. */
@@ -59,17 +79,7 @@ export function nativeReplyLinks(
     if (explicitReference(text, "task", task.id) || mentioned(text, `tandem://task/${task.id}`))
       add("task", task.id, `Task ${task.id}`);
   }
-  // A quick task's open scope question gets its three answers as links once the reply names the
-  // task. Each click is the user's own choice; the CLI checks the question is still open.
-  for (const task of scoped) {
-    const question = task.communication?.question;
-    if (question?.scope === undefined || taskIds.get(task.id) !== 1) continue;
-    if (!safeId.test(question.id) || !mentioned(text, task.id)) continue;
-    for (const choice of QUICK_SCOPE_CHOICES) {
-      const url = nativeAnswerLink(task.id, question.id, choice);
-      result.set(url, { url, label: QUICK_SCOPE_LABELS[choice] });
-    }
-  }
+  for (const link of scopeAnswerLinks(text, scoped, taskIds)) result.set(link.url, link);
   const scopedBriefs = briefs.filter((b) => b.repoPath === repoPath);
   const briefIds = identityCounts(scopedBriefs);
   for (const brief of scopedBriefs) {

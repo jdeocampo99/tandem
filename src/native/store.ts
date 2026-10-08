@@ -21,7 +21,7 @@ import {
   VIEW_MODELS,
   ViewFile,
   type ViewFileKind,
-} from "./contract.ts";
+} from "./view-file.ts";
 
 /*
  * `<home>/tern/<projectKey>/` holds everything Tandem keeps for one project's native views:
@@ -232,46 +232,53 @@ async function withProjectLock<T>(
 
 type ViewWrite = Readonly<{ path: string; kind: ViewFileKind; model: unknown }>;
 
+/** A publication of one detail view, written without touching the index. */
+type DetailPublication =
+  | Readonly<{ brief: BriefView }>
+  | Readonly<{ setup: SetupView }>
+  | Readonly<{ quickTask: QuickTaskView }>;
+
+function detailWrite(home: string, project: string, publication: DetailPublication): ViewWrite {
+  if ("quickTask" in publication)
+    return {
+      path: viewDetailPath(home, project, QUICK_TASK_FILE),
+      kind: "quick-task",
+      model: publication.quickTask,
+    };
+  if ("setup" in publication)
+    return {
+      path: viewDetailPath(home, project, setupFile(publication.setup.mode)),
+      kind: "setup",
+      model: publication.setup,
+    };
+  return {
+    path: viewDetailPath(home, project, nativeBriefFile(publication.brief.requestId)),
+    kind: "brief",
+    model: publication.brief,
+  };
+}
+
 /**
  * Builds from fresh state only after taking the project lock and holds it through every write,
  * so an older tick finishes before a newer build reads. Only files whose model changed are
  * rewritten; each takes the next `seq`, details before the index. The sequence numbers are
  * committed to `state.json` before any file carries them, so a crash only skips numbers.
  */
-export async function publishViews<
-  Publication extends
-    | NativeViewsPublication
-    | Readonly<{ brief: BriefView }>
-    | Readonly<{ setup: SetupView }>
-    | Readonly<{ quickTask: QuickTaskView }>,
->(home: string, project: string, build: () => Promise<Publication>): Promise<Publication> {
+export async function publishViews<Publication extends NativeViewsPublication | DetailPublication>(
+  home: string,
+  project: string,
+  build: () => Promise<Publication>,
+): Promise<Publication> {
   return withProjectLock(home, project, async (store) => {
     const publication = await build();
-    const full = "bundle" in publication ? (publication as NativeViewsPublication) : undefined;
+    const built: NativeViewsPublication | DetailPublication = publication;
+    const full = "bundle" in built ? built : undefined;
     const writes: ViewWrite[] = [];
     let retained: ReadonlySet<string> | undefined;
-    if (full === undefined && "quickTask" in publication) {
-      writes.push({
-        path: viewDetailPath(home, project, QUICK_TASK_FILE),
-        kind: "quick-task",
-        model: (publication as Readonly<{ quickTask: QuickTaskView }>).quickTask,
-      });
-    } else if (full === undefined && "setup" in publication) {
-      const setup = (publication as Readonly<{ setup: SetupView }>).setup;
-      writes.push({
-        path: viewDetailPath(home, project, setupFile(setup.mode)),
-        kind: "setup",
-        model: setup,
-      });
-    } else if (full === undefined) {
-      const brief = (publication as Readonly<{ brief: BriefView }>).brief;
-      writes.push({
-        path: viewDetailPath(home, project, nativeBriefFile(brief.requestId)),
-        kind: "brief",
-        model: brief,
-      });
+    if (!("bundle" in built)) {
+      writes.push(detailWrite(home, project, built));
     } else {
-      const { bundle, details } = full;
+      const { bundle, details } = built;
       if (bundle.project !== project)
         throw new TypeError("A coordinator cannot publish another project's views");
       retained = new Set([
@@ -279,7 +286,7 @@ export async function publishViews<
         ...Object.values(bundle.tasks).map((task) => task.detailFile),
         ...Object.values(bundle.briefs).map((brief) => brief.detailFile),
         ...Object.values(bundle.pullRequests).map((pr) => pr.detailFile),
-        ...(full.retainedDetailFiles ?? []),
+        ...(built.retainedDetailFiles ?? []),
       ]);
       for (const file of retained) viewDetailPath(home, project, file);
       for (const detail of details) {

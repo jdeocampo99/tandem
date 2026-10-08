@@ -8,7 +8,7 @@ import {
 } from "../pr-review/review.ts";
 import { MAX_TASK_MESSAGE_CHARS, parseQuickScopeReport } from "../tasks/communication-protocol.ts";
 import { isBlockingFinding } from "../tasks/findings.ts";
-import { quickScopeQuestionText } from "../tasks/quick.ts";
+import { quickScopeQuestionText } from "../tasks/quick-scope.ts";
 import {
   parseReviewResult,
   type WorkerJob,

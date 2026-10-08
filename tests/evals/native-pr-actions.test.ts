@@ -2,10 +2,12 @@ import { expect, test } from "bun:test";
 import { Readable } from "node:stream";
 import { nativePrFile } from "../../src/board/native-views.ts";
 import { runTerminal } from "../../src/main.ts";
-import { blockArgs, Outcome } from "../../src/native/contract.ts";
+import { blockArgs } from "../../src/native/block.ts";
+import { Outcome } from "../../src/native/envelope.ts";
 import { viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
 import { activeRuntimeJob } from "../../src/runtime/activity.ts";
 import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import { prIndexEntry, publishFixture } from "../native/view-files.ts";
 import {
   SCENARIO_HEAD,
@@ -70,6 +72,7 @@ async function comment(
       TANDEM_POOL_ROOT: world.poolRoot,
     },
     run: world.run,
+    terminal: terminalBackend(world.run, { home: world.home, tern: world.tern }),
     service,
     stdout: (value) => output.push(value),
     stderr: () => {},
@@ -104,6 +107,7 @@ for (const state of ["draft", "open"] as const) {
         sessionId: world.sessionId,
         poolRoot: world.poolRoot,
         run: world.run,
+        terminal: terminalBackend(world.run, { home: world.home, tern: world.tern }),
         clock: world.clock,
         idFactory: world.idFactory,
         workerTimeoutMs: 1500,
@@ -147,6 +151,7 @@ test("a ready PR whose fix cannot start reports the saved feedback and blocker",
       sessionId: world.sessionId,
       poolRoot: world.poolRoot,
       run: world.run,
+      terminal: terminalBackend(world.run, { home: world.home, tern: world.tern }),
       clock: world.clock,
       idFactory: world.idFactory,
     });
@@ -187,6 +192,7 @@ test("a worker shell in the project's session cannot pass its PR comment off as 
       sessionId: world.sessionId,
       poolRoot: world.poolRoot,
       run: world.run,
+      terminal: terminalBackend(world.run, { home: world.home, tern: world.tern }),
       clock: world.clock,
       idFactory: world.idFactory,
     });

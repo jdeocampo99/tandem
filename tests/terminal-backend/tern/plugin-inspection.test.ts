@@ -11,7 +11,10 @@ test("live Tandem plugin blocks expose no agent or shell process", async () => {
       cwd: world.repoPath,
       blockProgram: "tandem.panel",
     });
-    const inspection = await ternBackend(world.run).inspect({ endpoint, cwd: world.repoPath });
+    const inspection = await ternBackend(world.run, world.tern).inspect({
+      endpoint,
+      cwd: world.repoPath,
+    });
     expect(inspection.activeWorker).toBe(false);
     expect(inspection.processInfo.foregroundProcesses).toEqual([]);
     expect(inspection.processInfo.shellPid).toBeUndefined();
@@ -35,7 +38,7 @@ test("discovery skips a live plugin block and reaches the real legacy coordinato
       world.repoPath,
     ]);
     await expect(
-      findRunningCoordinator(world.run, ternBackend(world.run), {
+      findRunningCoordinator(world.run, ternBackend(world.run, world.tern), {
         home: world.home,
         sessionId: world.sessionId,
         repoPath: world.repoPath,
@@ -63,7 +66,7 @@ for (const program of [
         blockProgram: program,
       });
       world.titlePane(endpoint.paneId, "tandem.panel");
-      const terminal = ternBackend(world.run);
+      const terminal = ternBackend(world.run, world.tern);
       await expect(terminal.inspect({ endpoint, cwd: world.repoPath })).rejects.toThrow(
         "live block has no child process",
       );
@@ -87,9 +90,9 @@ test("Tandem program identity never bypasses contradictory foreground evidence",
       blockProgram: "tandem.panel",
     });
     world.replaceForeground(endpoint.paneId, ["omp"]);
-    await expect(ternBackend(world.run).inspect({ endpoint, cwd: world.repoPath })).rejects.toThrow(
-      "live block has no child process",
-    );
+    await expect(
+      ternBackend(world.run, world.tern).inspect({ endpoint, cwd: world.repoPath }),
+    ).rejects.toThrow("live block has no child process");
   });
 });
 
@@ -98,7 +101,7 @@ test("a Tandem-named shell with a worker remains busy", async () => {
     const endpoint = world.openPane({ paneId: "48", cwd: world.repoPath });
     world.titlePane(endpoint.paneId, "tandem.panel");
     world.replaceForeground(endpoint.paneId, ["omp"]);
-    const terminal = ternBackend(world.run);
+    const terminal = ternBackend(world.run, world.tern);
     expect((await terminal.inspect({ endpoint, cwd: world.repoPath })).activeWorker).toBe(true);
     await expect(terminal.close({ endpoint, cwd: world.repoPath })).rejects.toThrow(
       "active foreground worker",

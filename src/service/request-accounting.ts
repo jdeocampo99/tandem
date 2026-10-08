@@ -123,7 +123,7 @@ export class RequestAccountingWorkflow {
   async briefs(): Promise<readonly RequestBriefRecord[]> {
     const repoPath = this.#deps.sourceRepoPath;
     const here = repoPath === undefined ? undefined : await canonicalPath(repoPath);
-    const records = [];
+    const records: RequestBriefRecord[] = [];
     for (const record of await this.#deps.requestStore.list()) {
       if (here === undefined || (await canonicalPath(record.repoPath)) === here) {
         records.push(record);

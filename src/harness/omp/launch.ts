@@ -2,12 +2,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalPath } from "../../coordinator/record.ts";
 import { COPY_ASSET_TOOL, SUBMIT_REPORT_TOOL } from "../../workers/terminal.ts";
-import type {
-  AgentKind,
-  AgentProcess,
-  Harness,
-  LaunchSpec,
-  UnrecordedCoordinatorMatch,
+import {
+  type AgentKind,
+  type AgentProcess,
+  HARNESS_EXECUTABLES,
+  type Harness,
+  type LaunchSpec,
+  type UnrecordedCoordinatorMatch,
 } from "../contract.ts";
 import { listOmpMcpServers, listOmpModels, validateModel } from "./adapter.ts";
 
@@ -226,7 +227,7 @@ function processNeedle(recorded: readonly string[]): string | undefined {
 }
 
 export const ompHarness: Harness = {
-  executable: "omp",
+  executable: HARNESS_EXECUTABLES.omp,
   displayName: "OMP",
   coordinatorFiles: [
     { name: "extension", path: COORDINATOR_EXTENSION_PATH, kind: "file" },

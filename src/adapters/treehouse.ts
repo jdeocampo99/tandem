@@ -330,38 +330,30 @@ async function prepareWorktreeLease(
   let lease = leaseFromMetadata(metadata, root, path, taskName, sourceHead, branch);
 
   try {
-    const repoRoot = resolve(
-      await readGitText(run, repo, ["rev-parse", "--show-toplevel"], "git primary root"),
-    );
-    const worktreeRoot = resolve(
-      await readGitText(run, path, ["rev-parse", "--show-toplevel"], "git worktree root"),
-    );
+    // Four independent reads of the primary checkout and the worktree, issued together.
+    const [primaryRoot, reportedRoot, primaryCommonDir, worktreeCommonDir] = await Promise.all([
+      readGitText(run, repo, ["rev-parse", "--show-toplevel"], "git primary root"),
+      readGitText(run, path, ["rev-parse", "--show-toplevel"], "git worktree root"),
+      readGitText(run, repo, ["rev-parse", "--git-common-dir"], "git primary common dir"),
+      readGitText(run, path, ["rev-parse", "--git-common-dir"], "git worktree common dir"),
+    ]);
+    const repoRoot = resolve(primaryRoot);
+    const worktreeRoot = resolve(reportedRoot);
     const physicalResolver = options.realpath ?? defaultRealpath;
-    const [physicalOwnedRoot, physicalRepoRoot, physicalWorktreeRoot, physicalReportedPath] =
-      await Promise.all([
-        physicalResolver(root),
-        physicalResolver(repoRoot),
-        physicalResolver(worktreeRoot),
-        physicalResolver(path),
-      ]);
-    const [physicalRepoCommon, physicalWorktreeCommon] = await Promise.all([
-      physicalResolver(
-        resolve(
-          repoRoot,
-          await readGitText(run, repo, ["rev-parse", "--git-common-dir"], "git primary common dir"),
-        ),
-      ),
-      physicalResolver(
-        resolve(
-          worktreeRoot,
-          await readGitText(
-            run,
-            path,
-            ["rev-parse", "--git-common-dir"],
-            "git worktree common dir",
-          ),
-        ),
-      ),
+    const [
+      physicalOwnedRoot,
+      physicalRepoRoot,
+      physicalWorktreeRoot,
+      physicalReportedPath,
+      physicalRepoCommon,
+      physicalWorktreeCommon,
+    ] = await Promise.all([
+      physicalResolver(root),
+      physicalResolver(repoRoot),
+      physicalResolver(worktreeRoot),
+      physicalResolver(path),
+      physicalResolver(resolve(repoRoot, primaryCommonDir)),
+      physicalResolver(resolve(worktreeRoot, worktreeCommonDir)),
     ]);
     if (physicalRepoRoot === physicalWorktreeRoot || physicalRepoRoot === physicalReportedPath) {
       throw new LeaseSafetyError(
@@ -388,63 +380,57 @@ async function prepareWorktreeLease(
       );
     }
 
-    await runChecked(
-      run,
-      { argv: ["git", "-C", repo, "cat-file", "-e", `${sourceHead}^{commit}`], cwd: repo },
-      "git source HEAD validation",
-    );
+    // Four independent reads, issued together; each result is judged below in the order the
+    // reads would otherwise have run, so the first problem found is the one reported.
+    const sourceRequest: CommandRequest = {
+      argv: ["git", "-C", repo, "cat-file", "-e", `${sourceHead}^{commit}`],
+      cwd: repo,
+    };
+    const branchRequest: CommandRequest = {
+      argv: ["git", "-C", path, "branch", "--show-current"],
+      cwd: path,
+    };
+    const statusRequest: CommandRequest = {
+      argv: ["git", "-C", path, "status", "--porcelain=v1", "--untracked-files=all"],
+      cwd: path,
+    };
+    const unmergedRequest: CommandRequest = {
+      argv: ["git", "-C", path, "diff", "--name-only", "--diff-filter=U"],
+      cwd: path,
+    };
+    const [sourceResult, branchResult, statusResult, unmergedResult] = await Promise.all([
+      run(sourceRequest),
+      run(branchRequest),
+      run(statusRequest),
+      run(unmergedRequest),
+    ]);
+    requireSuccess(sourceResult, sourceRequest, "git source HEAD validation");
     const baseHead = sourceHead;
     lease = leaseFromMetadata(metadata, root, path, taskName, baseHead, branch);
 
-    const branchResult = await runChecked(
-      run,
-      { argv: ["git", "-C", path, "branch", "--show-current"], cwd: path },
-      "git worktree branch identity",
-    );
+    requireSuccess(branchResult, branchRequest, "git worktree branch identity");
     const actualBranch = branchResult.stdout.trim();
-    if (actualBranch === branch && existingLease) {
-      const status = await runChecked(
-        run,
-        {
-          argv: ["git", "-C", path, "status", "--porcelain=v1", "--untracked-files=all"],
-          cwd: path,
-        },
-        "git existing task worktree status",
-      );
-      const unmerged = await runChecked(
-        run,
-        { argv: ["git", "-C", path, "diff", "--name-only", "--diff-filter=U"], cwd: path },
-        "git existing task worktree unmerged check",
-      );
-      if (status.stdout.trim() !== "" || unmerged.stdout.trim() !== "") {
-        throw new LeaseSafetyError("existing task worktree is dirty or has unmerged paths", lease);
-      }
-      return lease;
-    }
+    const reusesTaskBranch = actualBranch === branch && existingLease;
     const adopting =
       existingLease && input.adopt !== undefined && actualBranch === input.adopt.branch;
-    if (actualBranch !== "" && !adopting) {
+    if (!reusesTaskBranch && actualBranch !== "" && !adopting) {
       throw new LeaseSafetyError(
         `acquired worktree branch is ${JSON.stringify(actualBranch)}, expected detached checkout or task ${JSON.stringify(branch)}`,
         lease,
       );
     }
-    const status = await runChecked(
-      run,
-      {
-        argv: ["git", "-C", path, "status", "--porcelain=v1", "--untracked-files=all"],
-        cwd: path,
-      },
-      "git task worktree status",
-    );
-    const unmerged = await runChecked(
-      run,
-      { argv: ["git", "-C", path, "diff", "--name-only", "--diff-filter=U"], cwd: path },
-      "git task worktree unmerged check",
-    );
-    if (status.stdout.trim() !== "" || unmerged.stdout.trim() !== "") {
-      throw new LeaseSafetyError("acquired worktree is dirty or has unmerged paths", lease);
+    const subject = reusesTaskBranch ? "existing task worktree" : "task worktree";
+    requireSuccess(statusResult, statusRequest, `git ${subject} status`);
+    requireSuccess(unmergedResult, unmergedRequest, `git ${subject} unmerged check`);
+    if (statusResult.stdout.trim() !== "" || unmergedResult.stdout.trim() !== "") {
+      throw new LeaseSafetyError(
+        reusesTaskBranch
+          ? "existing task worktree is dirty or has unmerged paths"
+          : "acquired worktree is dirty or has unmerged paths",
+        lease,
+      );
     }
+    if (reusesTaskBranch) return lease;
     if (adopting && input.adopt !== undefined) {
       const scoutHead = await readGitText(run, path, ["rev-parse", "HEAD"], "git scout HEAD");
       if (scoutHead !== input.adopt.head) {

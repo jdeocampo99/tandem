@@ -82,6 +82,18 @@ export type SetupApplyResult = Readonly<{
   opened: readonly string[];
 }>;
 
+/** What the coordinator is told, in fixed words, after the setup block saved an answer. */
+export function setupSavedMessage(mode: SetupMode, result: SetupApplyResult): string {
+  if (!result.complete) return `Setup was saved with problems:\n${result.message}`;
+  if (mode === "settings") return "Settings saved. New tasks will use them.";
+  const opened = listNames(result.opened);
+  return `Setup saved. ${opened === "" ? "" : `Chats for ${opened} are open in the sidebar.`}`.trim();
+}
+
+function listNames(names: readonly string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
 type SetupFacts = Readonly<{
   ompCatalogue: readonly ModelRecord[];
   claudeCode: ClaudeCodeAvailability;

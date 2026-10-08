@@ -32,7 +32,11 @@ test("an absent terminal setting selects Tern, and settings can still name Herdr
 test("explicit Tern selection overrides saved Herdr and alerts reach only the recorded helper", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "herdr"\n');
-    const terminal = terminalBackend(world.run, { terminal: "tern", home: world.home });
+    const terminal = terminalBackend(world.run, {
+      tern: world.tern,
+      terminal: "tern",
+      home: world.home,
+    });
     const alert = () =>
       terminal.notify({
         sessionId: world.sessionId,
@@ -76,6 +80,7 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
       terminal: "tern",
       home: world.home,
       tern: {
+        ...world.tern,
         notificationEndpoint: async () => ({ ...endpoint, terminal: "herdr" }),
       },
     });
@@ -105,17 +110,19 @@ test("explicit Tern selection overrides saved Herdr and alerts reach only the re
   });
 });
 
-test("only Tern hosts native views, and the saved choice decides which terminal answers", async () => {
+test("only Tern hosts native views, and the choice saved when the port is composed answers", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     const settings = join(world.home, "settings.toml");
     await writeFile(settings, 'terminal = "herdr"\n');
-    const saved = terminalBackend(world.run, { home: world.home });
+    const saved = terminalBackend(world.run, { tern: world.tern, home: world.home });
     expect(saved.name).toBe("herdr");
     expect(saved.views).toBeUndefined();
     await writeFile(settings, 'terminal = "tern"\n');
-    expect(saved.name).toBe("tern");
-    expect(saved.views).toBeDefined();
-    expect(await saved.fences.list(world.home)).toEqual({ fences: [], failures: [] });
+    expect(saved.name).toBe("herdr");
+    const composed = terminalBackend(world.run, { tern: world.tern, home: world.home });
+    expect(composed.name).toBe("tern");
+    expect(composed.views).toBeDefined();
+    expect(await composed.fences.list(world.home)).toEqual({ fences: [], failures: [] });
     expect(
       terminalBackend(world.run, { terminal: "herdr", home: world.home }).views,
     ).toBeUndefined();
@@ -159,7 +166,7 @@ test("Tern launch context needs its injected workspace and namespace, a user's o
 test("a worker launch runs in its own Tern workspace even when the parent context is supplied", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "tern"\n');
-    const terminal = terminalBackend(world.run, { home: world.home });
+    const terminal = terminalBackend(world.run, { tern: world.tern, home: world.home });
     const session = { sessionId: world.sessionId, cwd: world.repoPath };
     const parent = await terminal.createWorkspace({
       ...session,
@@ -205,7 +212,11 @@ test("a worker launch runs in its own Tern workspace even when the parent contex
 test("the explicit factory choice builds Tern with an isolated home whose saved choice is Herdr", async () => {
   await withScenario({ terminal: "tern" }, async (world) => {
     await writeFile(join(world.home, "settings.toml"), 'terminal = "herdr"\n');
-    const terminal = terminalBackend(world.run, { terminal: "tern", home: world.home });
+    const terminal = terminalBackend(world.run, {
+      tern: world.tern,
+      terminal: "tern",
+      home: world.home,
+    });
     const created = await terminal.createWorkspace({
       sessionId: world.sessionId,
       cwd: world.repoPath,

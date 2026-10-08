@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import type { CommandRunner } from "../../../src/contracts.ts";
+import { openSetupBeside } from "../../../src/harness/coordinator-session.ts";
 import { runTerminal } from "../../../src/main.ts";
 import {
   nativeAlertCounts,
@@ -366,7 +367,7 @@ export class TernParityHost {
   async openPanel(project: ScenarioTernProject = this.project): Promise<number> {
     const id = await terminalBackend(this.#run, {
       home: this.world.home,
-      tern: { clock: this.#clock },
+      tern: { ...this.world.tern, clock: this.#clock },
     }).openPanel({
       coordinator: project.coordinator,
       cwd: project.worktree.path,
@@ -374,6 +375,26 @@ export class TernParityHost {
     });
     await this.settle();
     return Number(id);
+  }
+
+  /** The setup block opens the way a Tandem coordinator's startup opens it: `openSetupBeside`. */
+  async openSetup(project: ScenarioTernProject = this.project): Promise<boolean> {
+    const opened = await openSetupBeside(
+      terminalBackend(this.#run, {
+        home: this.world.home,
+        tern: { ...this.world.tern, clock: this.#clock },
+      }),
+      this.#service(project),
+      {
+        home: this.world.home,
+        sessionId: this.world.sessionId,
+        repo: project.repoPath,
+        cwd: project.worktree.path,
+        paneId: project.coordinator.paneId,
+      },
+    );
+    await this.settle();
+    return opened;
   }
 
   /** The project's coordinator service, which lives as long as the window. */
@@ -387,6 +408,7 @@ export class TernParityHost {
       poolRoot,
       coordinatorPaneId: project.coordinator.paneId,
       run: this.#run,
+      terminal: terminalBackend(this.#run, { home, tern: this.world.tern }),
       clock,
       idFactory,
     });
@@ -603,11 +625,15 @@ export class TernParityHost {
         TANDEM_PROJECT_ROOTS: dirname(world.repoPath),
       },
       run: this.#run,
-      terminal: terminalBackend(this.#run, { home: world.home, tern: { clock: this.#clock } }),
+      terminal: terminalBackend(this.#run, {
+        home: world.home,
+        tern: { ...world.tern, clock: this.#clock },
+      }),
       createService: (options) =>
         createTandemService({
           ...options,
           run: this.#run,
+          terminal: terminalBackend(this.#run, { home: options.home, tern: world.tern }),
           clock: world.clock,
           idFactory: world.idFactory,
         }),
@@ -724,7 +750,7 @@ export class TernParityHost {
     const paneKey = JSON.stringify(panes);
     const paths = await listFiles(
       join(this.world.home, "tern"),
-      /^(index|task-.+|brief-.+|pr-.+|setup-.+)\.json$|\.ticket\.json$/u,
+      /^(index|task-.+|brief-.+|pr-.+|setup-.+|quick-task-composer)\.json$|\.ticket\.json$/u,
     );
     const files: Record<string, string | boolean> = {};
     for (const path of paths) {

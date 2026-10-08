@@ -14,7 +14,7 @@ import {
   deliverPrWatchNotices,
 } from "../../src/session/notifications.ts";
 import { transitionTask } from "../../src/tasks/lifecycle.ts";
-import { quickScopeQuestionText } from "../../src/tasks/quick.ts";
+import { quickScopeQuestionText } from "../../src/tasks/quick-scope.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { StoreLockTimeoutError } from "../../src/tasks/store-errors.ts";
 import { recordingSessionHost } from "../evals/scenario.ts";

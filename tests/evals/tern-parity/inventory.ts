@@ -6,6 +6,7 @@ import { withPrWatches } from "../../../src/pr-watch/store.ts";
 import { reviseRequestBriefRecord } from "../../../src/requests/brief.ts";
 import { createRequestBriefStore } from "../../../src/requests/store.ts";
 import { nativeReplyLinks } from "../../../src/session/native-links.ts";
+import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import { content } from "../../board/fixtures.ts";
 import {
   SCENARIO_POLICY,
@@ -609,7 +610,7 @@ export const inventory: readonly InventoryEntry[] = [
   },
   {
     view: "Keys and palette",
-    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; eight palette commands; project commands hidden",
+    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; nine palette commands; project commands hidden",
     run: () =>
       withParity(async (parity) => {
         const { host, world } = parity;
@@ -621,6 +622,7 @@ export const inventory: readonly InventoryEntry[] = [
           commands.filter((command) => command.visible).map((command) => command.title),
         ).toEqual([
           "Tandem: New request…",
+          "Tandem: Quick task…",
           "Tandem: Open task…",
           "Tandem: Toggle board",
           "Tandem: Show PRs",
@@ -1571,6 +1573,29 @@ export const inventory: readonly InventoryEntry[] = [
         expect(blockKinds(world)).toEqual(["tandem.panel", "tandem.task"]);
       });
     },
+  },
+  {
+    view: "Setup",
+    item: "A coordinator's startup opens the setup block beside its conversation",
+    run: () =>
+      withParity(async ({ host, world, project }) => {
+        expect(await host.openSetup()).toBe(true);
+        const setup = host.pane("setup");
+        const views = terminalBackend(world.run, { home: world.home, tern: world.tern }).views;
+        if (views === undefined) throw new Error("Tern hosts no native views");
+        expect(
+          await views.isView({
+            coordinator: project.coordinator,
+            cwd: project.worktree.path,
+            home: world.home,
+            origin: { paneId: String(setup) },
+            view: { kind: "setup", mode: "setup" },
+          }),
+        ).toBe(true);
+        expect(world.ternBlocks().find((block) => block.paneId === String(setup))?.tabId).toBe(
+          project.coordinator.tabId,
+        );
+      }),
   },
   {
     view: "Setup",

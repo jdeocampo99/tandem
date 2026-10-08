@@ -60,7 +60,7 @@ import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import { type FixRoundGate, fixRoundGate } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
-import { quickScopeQuestionAllowed } from "../tasks/quick.ts";
+import { quickScopeQuestionAllowed } from "../tasks/quick-scope.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
 import type { EndpointInspection, TerminalBackend } from "../terminal-backend/contract.ts";

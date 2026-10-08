@@ -26,7 +26,7 @@ test("a coordinator quarantine note refuses every effect on that coordinator bef
       lease: worktree,
       endpoint: coordinator,
     });
-    const cli = ternCli(world.run, { home: world.home });
+    const cli = ternCli(world.run, { ...world.tern, home: world.home });
     const target = { endpoint: coordinator, cwd: world.repoPath };
     await expect(
       cli.mutate({ ...target, verb: "run", line: { command: ["true"] } }),
@@ -47,10 +47,13 @@ test("an uncertain focus is not quarantined because repeating it converges", asy
     world.failAt({ boundary: "tern", action: "tern focus" });
     const target = { endpoint, cwd: world.repoPath };
     await expect(
-      ternCli(world.run, { home: world.home }).mutate({ ...target, verb: "focus" }),
+      ternCli(world.run, { ...world.tern, home: world.home }).mutate({ ...target, verb: "focus" }),
     ).rejects.toBeInstanceOf(TernOutcomeUnknownError);
-    await ternCli(world.run, { home: world.home }).mutate({ ...target, verb: "focus" });
-    await ternCli(world.run, { home: world.home }).mutate({
+    await ternCli(world.run, { ...world.tern, home: world.home }).mutate({
+      ...target,
+      verb: "focus",
+    });
+    await ternCli(world.run, { ...world.tern, home: world.home }).mutate({
       ...target,
       verb: "send",
       input: { keys: ["ctrl+c"] },

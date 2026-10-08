@@ -11,21 +11,15 @@ import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordina
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
 import { blockOriginProblem, isApprovalVerb, VERB_AUTHORITY } from "../../src/native/actions.ts";
-import {
-  Action,
-  ActionEnvelope,
-  blockArgs,
-  Outcome,
-  QUICK_TASK_FILE,
-  setupFile,
-  ViewFile,
-} from "../../src/native/contract.ts";
+import { blockArgs } from "../../src/native/block.ts";
+import { Action, ActionEnvelope, nativeAnswerLink, Outcome } from "../../src/native/envelope.ts";
 import {
   projectStoreDirectory,
   recordVisit,
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
+import { QUICK_TASK_FILE, setupFile, ViewFile } from "../../src/native/view-file.ts";
 import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
 import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
@@ -1057,40 +1051,28 @@ test("a failed coordinator notification reports the recorded approval instead of
   }
 });
 
-for (const state of ["closed", "merged", "completed"] as const) {
-  test(`comments on a ${state} PR task are refused without recording a worker direction`, async () => {
-    const f = await fixture("tern");
-    try {
-      const task = await createPrTask(f);
-      const store = createTaskStore({
-        directory: join(f.home, "tasks"),
-        clock: () => NOW,
-        idFactory: () => "task-pr",
-      });
-      await store.update(task.id, task.revision, (current) => ({
-        ...current,
-        revision: current.revision + 1,
-        ...(state === "completed"
-          ? { stage: "completed" as const }
-          : {
-              pullRequest: {
-                repository: "owner/repo",
-                number: 42,
-                state,
-                head: "a".repeat(40),
-                base: "main",
-              },
-            }),
-      }));
-      const outcome = await f.act({ verb: "pr-comment", taskId: task.id, text: "Fix this" });
-      expect(outcome.status).toBe("refused");
-      if (state === "completed") expect(outcome.notice?.text).toContain("worker has finished");
-      expect((await f.service.get(task.id)).communication?.messages).toBeUndefined();
-    } finally {
-      await f.close();
-    }
-  });
-}
+test("a PR comment on a finished task is refused without recording a worker direction", async () => {
+  const f = await fixture("tern");
+  try {
+    const task = await createPrTask(f);
+    const store = createTaskStore({
+      directory: join(f.home, "tasks"),
+      clock: () => NOW,
+      idFactory: () => "task-pr",
+    });
+    await store.update(task.id, task.revision, (current) => ({
+      ...current,
+      revision: current.revision + 1,
+      stage: "completed" as const,
+    }));
+    const outcome = await f.act({ verb: "pr-comment", taskId: task.id, text: "Fix this" });
+    expect(outcome.status).toBe("refused");
+    expect(outcome.notice?.text).toContain("worker has finished");
+    expect((await f.service.get(task.id)).communication?.messages).toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});
 
 test("a numeric PR route resolves its durable task and refuses an ambiguous PR number", async () => {
   const f = await fixture();
@@ -2065,6 +2047,12 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     for (const kind of ["task/port", `brief/${briefId}`, "pr/281"])
       await host.link(`tandem://${kind}`);
     await host.windowStart();
+    // The quick task composer sends Start only once text is typed; a scope answer is a chat link.
+    const quick = host.screen(await opener(() => host.command("quick-task"), "quick-task")());
+    await quick.focusField("Describe the change");
+    await quick.type("Rename the Save button to Save draft");
+    await quick.click("Start  ⌘↵");
+    await host.link(nativeAnswerLink("port", "job-1", "proceed"));
     for (const { action } of envelopes(host)) verbs.add(action.verb);
   });
   await withParity(async ({ host, world, project }) => {

@@ -141,7 +141,7 @@ lives in `approvalPrompt` in src/session/actions.ts.
 ## Native view actions
 
 Every native click runs `tandem native act` once with one `ActionEnvelope` on stdin and prints
-one `Outcome` (both in `src/native/contract.ts`). The view never edits durable state.
+one `Outcome` (both in `src/native/envelope.ts`). The view never edits durable state.
 The envelope is `{v: 1, origin, action}`. `origin` is either a block's exact decimal `pane` with
 the `ctx` it was launched with, echoed verbatim, or a window command's focused `pane`, absolute
 `cwd` and optional opaque `window` key. The pane must be listed by exactly one recorded

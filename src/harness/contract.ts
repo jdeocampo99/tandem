@@ -18,6 +18,12 @@ export function parseHarnessName(value: unknown, field: string): HarnessName {
   );
 }
 
+/** The program each harness's commands start with; recorded commands are checked against it. */
+export const HARNESS_EXECUTABLES: Readonly<Record<KnownHarness, string>> = {
+  omp: "omp",
+  "claude-code": "claude",
+};
+
 /** What every model outside Claude Code runs in, and what anything saved without a harness ran in. */
 export const DEFAULT_HARNESS: HarnessName = parseHarnessName("omp", "harness");
 

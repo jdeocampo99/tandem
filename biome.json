@@ -43,7 +43,33 @@
               }
             ]
           }
-        }
+        },
+        "noNonNullAssertion": "error",
+        "noParameterAssign": "error",
+        "noUselessElse": "error",
+        "noProcessEnv": "error"
+      },
+      "performance": {
+        "noBarrelFile": "error",
+        "noReExportAll": "error"
+      },
+      "correctness": {
+        "noUnusedFunctionParameters": "error"
+      },
+      "suspicious": {
+        "noDeprecatedImports": "error",
+        "noTsIgnore": "error",
+        "noImportCycles": "error",
+        "noEmptyBlockStatements": "error",
+        "noConsole": "error",
+        "noFocusedTests": "off",
+        "noUnusedExpressions": "error",
+        "noEvolvingTypes": "error"
+      },
+      "nursery": {
+        "useExhaustiveSwitchCases": "error",
+        "noFloatingPromises": "error",
+        "noMisusedPromises": "error"
       }
     }
   },
@@ -164,7 +190,7 @@
               "level": "error",
               "options": {
                 "deniedGlobals": {
-                  "Bun": "Only src/terminal-backend/tern/cli.ts spawns processes (process-reader.ts runs ps for it). Spawn Tern through ternCli and mutate."
+                  "Bun": "Only src/terminal-backend/tern/cli.ts spawns processes (process-reader.ts runs ps and reads native argv in-process for it). Spawn Tern through ternCli and mutate."
                 }
               }
             }
@@ -216,6 +242,89 @@
                 ]
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["tests/**", "**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noFocusedTests": "error",
+            "noEmptyBlockStatements": "off",
+            "noConsole": "off",
+            "noEvolvingTypes": "off"
+          },
+          "style": {
+            "noProcessEnv": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["evals/**", ".claude/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "off"
+          },
+          "style": {
+            "noProcessEnv": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/harness/claude-code/sidecar.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConsole": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/config/**",
+        "src/main.ts",
+        "src/cli.ts",
+        "src/worker.ts",
+        "src/validation-worker.ts",
+        "src/harness/claude-code/sidecar.ts",
+        "src/harness/omp/extension.ts",
+        "src/harness/omp/terminal-extension.ts",
+        "src/harness/omp/worker-control.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "src/adapters/commands.ts",
+        "src/harness/claude-code/launch.ts",
+        "src/harness/omp/host.ts",
+        "src/service/controller.ts",
+        "src/tasks/store-lock.ts",
+        "src/terminal-backend/setup.ts",
+        "src/terminal-backend/herdr/setup.ts",
+        "src/terminal-backend/herdr/status.ts",
+        "src/terminal-backend/tern/cli.ts",
+        "src/terminal-backend/tern/plugin.ts",
+        "src/terminal/cli-application.ts",
+        "src/terminal/cli-process.ts",
+        "src/terminal/environment.ts"
+      ],
+      "linter": {
+        "rules": {
+          "style": {
+            "noProcessEnv": "off"
           }
         }
       }

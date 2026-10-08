@@ -186,11 +186,19 @@ function createTerminalInteraction(
     return {
       interactive,
       prompter: { ask: dependencies.prompt, write: stdout },
-      close: () => {},
+      close: () => {
+        // The injected prompt owns no readline to close.
+      },
     };
   }
   if (!interactive) {
-    return { interactive, prompter: undefined, close: () => {} };
+    return {
+      interactive,
+      prompter: undefined,
+      close: () => {
+        // A non-interactive run opens no readline.
+      },
+    };
   }
   let resources: ReadlineResources | undefined = createReadlineResources(input, output);
   return {

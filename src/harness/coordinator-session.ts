@@ -8,6 +8,7 @@ import {
 } from "../config/environment.ts";
 import type { CommandRunner } from "../contracts.ts";
 import { canonicalPath } from "../coordinator/record.ts";
+import { findRecordedOwner } from "../coordinator/recorded-owner.ts";
 import { refreshCoordinatorSourceUnlocked } from "../coordinator/source.ts";
 import { isTandemCheckout } from "../coordinator/tandem-checkout.ts";
 import { publishViews } from "../native/store.ts";
@@ -29,6 +30,7 @@ import {
   researchContinuationClassifierConfig,
 } from "../tasks/research-continuation-classifier.ts";
 import { terminalBackend } from "../terminal-backend/compose.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 
 const DEFAULT_TICK_INTERVAL_MS = 2_000;
 
@@ -95,6 +97,50 @@ function createCoordinatorService(
   });
 }
 
+/**
+ * Publishes the setup view and opens its block beside the coordinator recorded in this exact pane
+ * and worktree; false when the terminal hosts no native views, so setup runs in the chat.
+ */
+export async function openSetupBeside(
+  terminal: TerminalBackend,
+  service: Pick<TandemService, "setupView">,
+  coordinator: Readonly<{
+    home: string;
+    sessionId: string;
+    repo: string;
+    cwd: string;
+    paneId: string | undefined;
+  }>,
+): Promise<boolean> {
+  // Herdr has no native blocks; its setup runs in the chat, and nothing is published for it.
+  const views = terminal.views;
+  if (views === undefined) return false;
+  if (coordinator.paneId === undefined)
+    throw new Error("the coordinator is not running in a Tandem Tern pane");
+  const setup = await service.setupView(coordinator.repo, "setup");
+  await publishViews(
+    coordinator.home,
+    await canonicalPath(coordinator.repo, "repoPath"),
+    async () => ({ setup }),
+  );
+  const owner = await findRecordedOwner(coordinator.home, {
+    by: "project",
+    sessionId: coordinator.sessionId,
+    path: await canonicalPath(coordinator.cwd, "cwd"),
+    terminal: "tern",
+    paneId: coordinator.paneId,
+  });
+  if (owner.status !== "owned")
+    throw new Error("Native view requires exactly one recorded coordinator");
+  const opened = await views.open({
+    coordinator: owner.record.endpoint,
+    cwd: coordinator.cwd,
+    home: coordinator.home,
+    view: { kind: "setup", mode: "setup" },
+  });
+  return opened.opened;
+}
+
 /** One coordinator conversation's session, on whichever harness `harness` describes. */
 export function bindCoordinator(
   options: CoordinatorOptions,
@@ -136,24 +182,14 @@ export function bindCoordinator(
         paneId: environment.coordinatorPaneId,
       });
     },
-    openSetup: async () => {
-      // Herdr has no native blocks; its setup runs in the chat, and nothing is published for it.
-      if (terminal.views === undefined) return false;
-      if (environment.coordinatorPaneId === undefined) {
-        throw new Error("the coordinator is not running in a Tandem Tern pane");
-      }
-      const setup = await coordinatorService().setupView(environment.repo, "setup");
-      await publishViews(
-        environment.home,
-        await canonicalPath(environment.repo, "repoPath"),
-        async () => ({ setup }),
-      );
-      return terminal.openSetup({
+    openSetup: () =>
+      openSetupBeside(terminal, coordinatorService(), {
+        home: environment.home,
         sessionId: environment.sessionId,
+        repo: environment.repo,
         cwd: harness.cwd,
         paneId: environment.coordinatorPaneId,
-      });
-    },
+      }),
     readReport: readResearchReport,
     appendUsage: (entry) => appendCoordinatorUsage(environment.home, entry),
     compactTokens: coordinatorCompactTokens(environmentSnapshot),

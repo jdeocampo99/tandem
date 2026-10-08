@@ -7,7 +7,7 @@ import { boardView } from "../../src/board/view.ts";
 import { saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal } from "../../src/main.ts";
-import { Outcome } from "../../src/native/contract.ts";
+import { Outcome } from "../../src/native/envelope.ts";
 import {
   nativeAlertCounts,
   projectStoreDirectory,
@@ -64,7 +64,11 @@ for (const failure of ["none", "focus", "catchup", "helper-moved"] as const) {
       await recordVisit(world.home, world.repoPath, baseline);
       const focused: string[] = [];
       let opens = 0;
-      const base = terminalBackend(world.run, { terminal: "tern", home: world.home });
+      const base = terminalBackend(world.run, {
+        tern: world.tern,
+        terminal: "tern",
+        home: world.home,
+      });
       const terminal: TerminalBackend = {
         ...base,
         notify: async () => {},

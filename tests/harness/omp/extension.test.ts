@@ -146,7 +146,7 @@ test("extension binds services to a clean source while preserving original ident
     appendEntry: () => undefined,
   } as unknown as ExtensionAPI;
 
-  createTandemExtension({
+  await createTandemExtension({
     environment: {
       home: "/tmp/tandem-home",
       sessionId: "session-a",
@@ -210,7 +210,7 @@ test("before_agent_start exposes a blocked source refresh instead of silently pl
     appendEntry: () => undefined,
   } as unknown as ExtensionAPI;
 
-  createTandemExtension({ service })(pi);
+  await createTandemExtension({ service })(pi);
   const beforeAgentStart = handlers.get("before_agent_start");
   if (beforeAgentStart === undefined) throw new Error("before_agent_start handler missing");
   const context = {
@@ -277,7 +277,7 @@ test("session shutdown waits for an interval reconciliation already in flight", 
     appendEntry: () => undefined,
   } as unknown as ExtensionAPI;
 
-  createTandemExtension({ service })(pi);
+  await createTandemExtension({ service })(pi);
   const sessionStart = handlers.get("session_start");
   const sessionShutdown = handlers.get("session_shutdown");
   if (sessionStart === undefined || sessionShutdown === undefined)
@@ -333,7 +333,7 @@ test("OMP delivers a wake's hidden identifiers first, then the shown prompt that
     sendMessage: (message: unknown, options: unknown) => calls.push({ message, options }),
     appendEntry: (customType: string) => calls.push({ entry: customType }),
   } as unknown as ExtensionAPI;
-  createTandemExtension({
+  await createTandemExtension({
     service,
     processEnvironment: {},
     environment: { home: "/tmp/tandem-home", sessionId: "s", poolRoot: "/tmp/pool", repo: "/repo" },
@@ -417,7 +417,7 @@ test("a tick that only waited out the state lock leaves the Herdr status alone; 
       appendEntry: () => undefined,
     } as unknown as ExtensionAPI;
 
-    createTandemExtension({
+    await createTandemExtension({
       service,
       run,
       processEnvironment: {

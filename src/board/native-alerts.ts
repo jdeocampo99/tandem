@@ -3,7 +3,7 @@ import type { TaskRecord } from "../contracts.ts";
 import { type AlertObservation, deliverNewAlerts } from "../native/store.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
 import { defaultIdFactory } from "../runtime/persistence.ts";
-import { QUICK_SCOPE_TITLE } from "../tasks/quick.ts";
+import { QUICK_SCOPE_TITLE } from "../tasks/quick-scope.ts";
 import { createTaskStore } from "../tasks/store.ts";
 import type { StoredTimelineEvent } from "../tasks/timeline.ts";
 import { readTimeline } from "../tasks/timeline-store.ts";

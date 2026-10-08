@@ -51,94 +51,39 @@ export function savedTerminal(settings: HomeSettings): TerminalName {
   return settings.terminal ?? "tern";
 }
 
-/** The only place the saved terminal chooses an implementation. */
+/**
+ * The only place the saved terminal chooses an implementation. The choice is read once, when the
+ * port is composed: no Tandem action changes it, and a process keeps the terminal it started with.
+ */
 export function terminalBackend(
   run: CommandRunner,
   options: TerminalComposition = {},
 ): TerminalBackend {
-  // Keep each adapter's ownership and uncertain-effect ledger across successive calls.
-  const backends = new Map<TerminalName, TerminalBackend>();
-  const select = (): TerminalBackend => {
-    const chosen =
-      options.terminal ??
-      (options.home === undefined ? "tern" : savedTerminal(readHomeSettingsSync(options.home)));
-    const cached = backends.get(chosen);
-    if (cached !== undefined) return cached;
-    const home = options.home;
-    const notificationEndpoint =
-      options.tern?.notificationEndpoint ??
-      (home === undefined
-        ? undefined
-        : (target: SessionTarget) => notificationEndpointFor(home, target));
-    const backend =
-      chosen === "herdr"
-        ? herdrBackend(run, options.herdr)
-        : ternBackend(run, {
-            ...options.tern,
-            ...(home === undefined ? {} : { home }),
-            ...(notificationEndpoint === undefined
-              ? {}
-              : {
-                  notificationEndpoint: async (target) => {
-                    const endpoint = await notificationEndpoint(target);
-                    if (endpoint !== undefined) assertTerminalEndpoint("tern", endpoint);
-                    return endpoint;
-                  },
-                }),
-          });
-    if (backend.name !== chosen)
-      throw new Error(`terminal factory returned ${backend.name} for ${chosen}`);
-    const guarded = guardTerminalIdentity(backend);
-    backends.set(chosen, guarded);
-    return guarded;
-  };
-  return {
-    get name() {
-      return select().name;
-    },
-    get views() {
-      return select().views;
-    },
-    fences: {
-      list: (home) => select().fences.list(home),
-      settle: (fence) => select().fences.settle(fence),
-    },
-    inspect: (input) => select().inspect(input),
-    runCommand: (input) => select().runCommand(input),
-    sendKeys: (input) => select().sendKeys(input),
-    interrupt: (input) => select().interrupt(input),
-    close: (input) => select().close(input),
-    closeOwned: (input) => select().closeOwned(input),
-    isPaneGone: (input) => select().isPaneGone(input),
-    isEndpointGone: (input) => select().isEndpointGone(input),
-    createWorkspace: (input) => select().createWorkspace(input),
-    splitBeside: (input) => select().splitBeside(input),
-    listWorkspaces: (input) => select().listWorkspaces(input),
-    orderWorkspaceAfter: (input) => select().orderWorkspaceAfter(input),
-    workspaceLabel: (input) => select().workspaceLabel(input),
-    renameWorkspace: (input) => select().renameWorkspace(input),
-    listPanes: (input) => select().listPanes(input),
-    snapshot: (input) => select().snapshot(input),
-    focusWorkspace: (input) => select().focusWorkspace(input),
-    focusAgent: (input) => select().focusAgent(input),
-    sessionRunning: (input) => select().sessionRunning(input),
-    sessionDetail: (input) => select().sessionDetail(input),
-    serverCommand: (input) => select().serverCommand(input),
-    clientCommand: (input) => select().clientCommand(input),
-    launchEnvironment: (input) => select().launchEnvironment(input),
-    paneEnvironment: (input) => select().paneEnvironment(input),
-    paneIdentity: (pane) => select().paneIdentity(pane),
-    checkInstall: (input) => select().checkInstall(input),
-    notify: (input) => select().notify(input),
-    openWelcome: (input) => select().openWelcome(input),
-    openSetup: (input) => select().openSetup(input),
-    promptAgent: (input) => select().promptAgent(input),
-    openPanel: (input) => select().openPanel(input),
-    isPanelOpen: (input) => select().isPanelOpen(input),
-    closePanel: (input) => select().closePanel(input),
-    fitPanel: (input) => select().fitPanel(input),
-    agentStatusReporter: (input) => select().agentStatusReporter(input),
-  };
+  const home = options.home;
+  const chosen =
+    options.terminal ?? (home === undefined ? "tern" : savedTerminal(readHomeSettingsSync(home)));
+  const notificationEndpoint =
+    options.tern?.notificationEndpoint ??
+    (home === undefined
+      ? undefined
+      : (target: SessionTarget) => notificationEndpointFor(home, target));
+  const backend =
+    chosen === "herdr"
+      ? herdrBackend(run, options.herdr)
+      : ternBackend(run, {
+          ...options.tern,
+          ...(home === undefined ? {} : { home }),
+          ...(notificationEndpoint === undefined
+            ? {}
+            : {
+                notificationEndpoint: async (target) => {
+                  const endpoint = await notificationEndpoint(target);
+                  if (endpoint !== undefined) assertTerminalEndpoint("tern", endpoint);
+                  return endpoint;
+                },
+              }),
+        });
+  return guardTerminalIdentity(backend);
 }
 
 /** A launch uses its selected backend's context, so foreign inherited ids are ignored. */
