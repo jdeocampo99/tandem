@@ -655,6 +655,7 @@ class TandemController {
   readonly #control: TaskControlWorkflow;
   readonly #recoveryCentral: CentralRecoveryWorkflow;
   readonly #requests: RequestBriefWorkflow;
+  readonly #liveTasks: LiveTaskWorkflow;
   readonly #accounting: RequestAccountingWorkflow;
   readonly #prReviews: PrReviewWorkflow;
   readonly #drafts: DraftRefreshWorkflow;
@@ -664,7 +665,6 @@ class TandemController {
   readonly #setup: SetupWorkflow;
   #tickPromise: Promise<readonly TaskRecord[]> | undefined;
   #shutdownPromise: Promise<void> | undefined;
-  readonly #liveTasks: LiveTaskWorkflow;
   #sourceRefreshPromise: Promise<SourceRefreshResult> | undefined;
   #sourceRefreshError: string | undefined;
   #sourceReadyHead: string | undefined;
