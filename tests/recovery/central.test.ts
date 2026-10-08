@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -686,3 +686,56 @@ test("reportBlock records the typed cause and blocks through the given effect, u
   );
   expect(calls).toEqual([{ taskId: "task-1", reason: cause.summary, cause }]);
 });
+
+for (const previousStage of ["implementing", "reviewing"] as const) {
+  test(`a restart approval racing from ${previousStage} to validating does nothing and spends no budget`, async () => {
+    const f = await fixture({ job: deadJob() });
+    let restore = () => {};
+    try {
+      const task = await f.store.read("task-1");
+      if (task === undefined) throw new Error("fixture task missing");
+      const questionId = `${RESTART_QUESTION_ID_PREFIX}race`;
+      await f.store.update(task.id, task.revision, (current) => ({
+        ...current,
+        revision: current.revision + 1,
+        stage: "blocked",
+        previousStage,
+        communication: {
+          revision: 0,
+          messages: [],
+          question: { id: questionId, text: "Restart?", recommendation: "restart" },
+        },
+      }));
+      const before = await readRuntimeState(f.runtimePath);
+      const exclusive = f.store.exclusive;
+      let calls = 0;
+      const race = spyOn(f.store, "exclusive").mockImplementation(async (operation) => {
+        if (++calls === 2) {
+          const current = await f.store.read("task-1");
+          if (current === undefined) throw new Error("fixture task missing");
+          await f.store.update(current.id, current.revision, (entry) => ({
+            ...entry,
+            revision: entry.revision + 1,
+            stage: "validating",
+          }));
+        }
+        return exclusive(operation);
+      });
+      restore = () => race.mockRestore();
+
+      expect(await f.workflow.answerRestartQuestion("task-1", questionId, "restart")).toEqual({
+        handled: true,
+      });
+
+      expect((await f.store.read("task-1"))?.stage).toBe("validating");
+      expect(await readRuntimeState(f.runtimePath)).toEqual(before);
+      expect(f.relaunchCalls).toHaveLength(0);
+      expect(f.revalidateCalls).toHaveLength(0);
+      expect(f.relaunchReviewerCalls).toHaveLength(0);
+      expect(f.blockedReasons).toHaveLength(0);
+    } finally {
+      restore();
+      await f.cleanup();
+    }
+  });
+}

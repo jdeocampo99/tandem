@@ -485,9 +485,7 @@
     },
     "src/recovery/central.ts": {
       "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1,
-      "tandem/hidden-clock": 2,
-      "tandem/type-assertion": 1
+      "style/noExcessiveLinesPerFile": 1
     },
     "src/report/build.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
@@ -674,7 +672,7 @@
       "style/noNestedTernary": 1
     },
     "src/tasks/control.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 4,
+      "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noExcessiveLinesPerFile": 1
     },
@@ -956,8 +954,7 @@
       "style/noExcessiveLinesPerFile": 1
     },
     "src/workers/terminal-control.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "tandem/hidden-clock": 2
+      "complexity/noExcessiveCognitiveComplexity": 1
     },
     "src/workers/terminal.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -1496,9 +1493,8 @@
       "style/noExcessiveLinesPerFile": 1,
       "tandem/hidden-clock": 5
     },
-    "tests/workers/terminal-control.test.ts": {
-      "tandem/hidden-clock": 1,
-      "tandem/json-parse-cast": 1
+    "tests/workers/terminal-control-fixture.ts": {
+      "tandem/hidden-clock": 1
     },
     "tests/workers/terminal.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
