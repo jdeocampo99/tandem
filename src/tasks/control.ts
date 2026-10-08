@@ -1,5 +1,4 @@
 import { readCheckpoint } from "../adapters/git.ts";
-import { EndpointOwnershipError } from "../adapters/primitives.ts";
 import type {
   BlockCause,
   Clock,
@@ -30,14 +29,14 @@ import {
   text,
 } from "../service/records.ts";
 import { taskSourcePath } from "../service/source.ts";
-import type { EndpointInspection, TerminalBackend } from "../terminal-backend/contract.ts";
+import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { readValidationResult } from "../validation-worker.ts";
 import { readWorkerResult } from "../workers/jobs.ts";
 import { claimOf, type OperationClaim, ownsOperation } from "../workers/operation-claim.ts";
 import { workerDelegationStopped } from "../workers/terminal.ts";
 import {
-  pauseWorkerTerminal,
   prepareWorkerTerminal,
+  stopWorkerPane,
   workerJobForEndpoint,
   workerJobOccupyingEndpoint,
 } from "../workers/terminal-control.ts";
@@ -402,7 +401,10 @@ export class TaskControlWorkflow {
         return prepared.task;
       }
       const { task, runtime, event } = prepared;
-      const stopFailure = await this.pauseOwnedWorkers(task, runtime);
+      const stopFailure =
+        runtime.jobs.some(activeRuntimeJob) && runtime.endpoints.length === 0
+          ? "a durable worker job has no endpoint identity"
+          : await this.stopOwnedWorkers(runtime, workerCwd(task, runtime), "control");
       return this.#deps.store.exclusive(async (store) => {
         const current = await store.read(taskId);
         if (current === undefined) throw new Error(`task ${taskId} is missing`);
@@ -473,36 +475,6 @@ export class TaskControlWorkflow {
         }`,
       );
     }
-  }
-
-  /** Pauses every owned worker pane; returns why the task could not be proven stopped, if so. */
-  private async pauseOwnedWorkers(
-    task: TaskRecord,
-    runtime: RuntimeTaskState,
-  ): Promise<string | undefined> {
-    const cwd = workerCwd(task, runtime);
-    let stopFailure: string | undefined;
-    for (const endpoint of runtime.endpoints) {
-      const job = await workerJobOccupyingEndpoint(runtime.jobs, endpoint);
-      try {
-        await pauseWorkerTerminal(this.#deps.terminal, {
-          endpoint,
-          cwd,
-          ...(job === undefined ? {} : { job }),
-        });
-        const inspection = await this.#deps.terminal.inspect({ endpoint, cwd });
-        if (!(await workerDelegationStopped(inspection, job))) {
-          stopFailure = `pane ${endpoint.paneId} still has an active worker`;
-        }
-      } catch (error) {
-        if (isMissingEndpoint(error)) continue;
-        stopFailure = `pane ${endpoint.paneId} could not be proven stopped: ${describeError(error)}`;
-      }
-    }
-    if (runtime.jobs.some(activeRuntimeJob) && runtime.endpoints.length === 0) {
-      stopFailure = "a durable worker job has no endpoint identity";
-    }
-    return stopFailure;
   }
 
   private async blockUnstoppedTask(
@@ -693,7 +665,7 @@ export class TaskControlWorkflow {
     job: DurableJob | undefined,
   ): Promise<OwnedEndpointProbe> {
     try {
-      const inspection: EndpointInspection = await this.#deps.terminal.inspect({
+      const inspection = await this.#deps.terminal.inspect({
         endpoint,
         cwd,
       });
@@ -701,7 +673,7 @@ export class TaskControlWorkflow {
         ? { status: "stopped", detail: undefined }
         : { status: "active", detail: `pane ${endpoint.paneId} still has an active worker` };
     } catch (error) {
-      if (error instanceof EndpointOwnershipError && error.reason === "missing") {
+      if (isMissingEndpoint(error)) {
         return { status: "missing", detail: `pane ${endpoint.paneId} is no longer present` };
       }
       return { status: "rejected", detail: describeError(error) };
@@ -841,45 +813,11 @@ export class TaskControlWorkflow {
     });
   }
 
-  /**
-   * Inspects the pane and pauses its worker only if it is still running. Throws when the pane
-   * cannot be inspected or paused.
-   */
-  private async ensureWorkerStopped(
-    endpoint: Endpoint,
-    cwd: string,
-    jobs: readonly DurableJob[],
-  ): Promise<boolean> {
-    const job = await workerJobOccupyingEndpoint(jobs, endpoint);
-    const inspection = await this.#deps.terminal.inspect({ endpoint, cwd });
-    if (await workerDelegationStopped(inspection, job)) return true;
-    await pauseWorkerTerminal(this.#deps.terminal, {
-      endpoint,
-      cwd,
-      ...(job === undefined ? {} : { job }),
-    });
-    return workerDelegationStopped(await this.#deps.terminal.inspect({ endpoint, cwd }), job);
-  }
-
   async reconcileStopRequest(task: TaskRecord, runtime: RuntimeTaskState): Promise<void> {
-    const cwd = workerCwd(task, runtime);
-    for (const endpoint of runtime.endpoints) {
-      try {
-        if (!(await this.ensureWorkerStopped(endpoint, cwd, runtime.jobs))) {
-          await this.#deps.setRuntimeError(
-            task.id,
-            `stop request remains pending because pane ${endpoint.paneId} is still active`,
-          );
-          return;
-        }
-      } catch (error) {
-        if (isMissingEndpoint(error)) continue;
-        await this.#deps.setRuntimeError(
-          task.id,
-          `stop request could not stop pane ${endpoint.paneId}: ${describeError(error)}`,
-        );
-        return;
-      }
+    const failure = await this.stopOwnedWorkers(runtime, workerCwd(task, runtime), "reconcile");
+    if (failure !== undefined) {
+      await this.#deps.setRuntimeError(task.id, failure);
+      return;
     }
     const active = runtime.jobs.find(activeRuntimeJob);
     if (active !== undefined) {
@@ -1005,7 +943,7 @@ export class TaskControlWorkflow {
         lastError: "new instruction requires evidence invalidation",
       }));
       await writeRuntimeState(this.#deps.runtimePath, requested);
-      const stopFailure = await this.stopWorkersForRedirect(runtime, cwd);
+      const stopFailure = await this.stopOwnedWorkers(runtime, cwd, "redirect");
       if (stopFailure !== undefined) {
         const reason = `could not safely redirect task ${taskId}: ${stopFailure}`;
         await writeRuntimeState(
@@ -1045,21 +983,36 @@ export class TaskControlWorkflow {
     });
   }
 
-  /** Stops every owned worker before a redirect; returns the first pane that would not stop. */
-  private async stopWorkersForRedirect(
+  private async stopOwnedWorkers(
     runtime: RuntimeTaskState,
     cwd: string,
+    context: "control" | "redirect" | "reconcile",
   ): Promise<string | undefined> {
+    let failure: string | undefined;
     for (const endpoint of runtime.endpoints) {
-      try {
-        if (!(await this.ensureWorkerStopped(endpoint, cwd, runtime.jobs))) {
-          return `pane ${endpoint.paneId} still has an active worker`;
-        }
-      } catch (error) {
-        return `pane ${endpoint.paneId} could not be proven stopped: ${describeError(error)}`;
+      const job = await workerJobOccupyingEndpoint(runtime.jobs, endpoint);
+      const stopped = await stopWorkerPane(this.#deps.terminal, {
+        endpoint,
+        cwd,
+        ...(job === undefined ? {} : { job }),
+        goal: "pause",
+        skipStopped: context !== "control",
+      });
+      if (stopped.status === "stopped") continue;
+      if (stopped.status === "still-running") {
+        failure =
+          context === "reconcile"
+            ? `stop request remains pending because pane ${endpoint.paneId} is still active`
+            : `pane ${endpoint.paneId} still has an active worker`;
+      } else {
+        failure =
+          context === "reconcile"
+            ? `stop request could not stop pane ${endpoint.paneId}: ${describeError(stopped.error)}`
+            : `pane ${endpoint.paneId} could not be proven stopped: ${describeError(stopped.error)}`;
       }
+      if (context !== "control") return failure;
     }
-    return undefined;
+    return failure;
   }
 
   /** Closes reviewer panes a redirect retires; returns the block cause for one that won't close. */

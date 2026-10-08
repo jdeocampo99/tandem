@@ -1,12 +1,12 @@
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isRecord } from "../runtime/schema.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import { ensurePrivateDirectoryTree } from "./lock.ts";
 import {
   type CoordinatorRecord,
   canonicalHome,
   digest,
-  isRecord,
   registrySessionDirectory,
 } from "./record.ts";
 

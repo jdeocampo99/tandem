@@ -3,6 +3,7 @@ import type { CommandRunner } from "../contracts.ts";
 import type { PullRequestRef } from "./pull-request.ts";
 import type { RoundReply } from "./replies.ts";
 import type { PrReview } from "./review.ts";
+import type { PrReviewState } from "./state.ts";
 
 /** The verdict is always the user's; Tandem never picks it. */
 export type ReviewVerdict = "comment" | "approve" | "request-changes";
@@ -275,3 +276,28 @@ async function currentHead(
     };
   }
 }
+
+export function confirmedReviewUrl(value: string, state: PrReviewState, reply = false): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("Use the GitHub review link you checked on this PR.");
+  }
+  if (
+    url.origin !== "https://github.com" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.pathname.toLowerCase() !== `/${state.ref.repo}/pull/${state.ref.number}`.toLowerCase() ||
+    !(reply ? /^#discussion_r[1-9][0-9]*$/u : /^#pullrequestreview-[1-9][0-9]*$/u).test(url.hash)
+  )
+    throw new Error(
+      `Use a GitHub ${reply ? "reply" : "review"} link for this same PR, including its ${reply ? "discussion" : "review"} anchor.`,
+    );
+  return url.href;
+}
+
+export type PostReceiptOutcome =
+  | Readonly<{ kind: "posted"; url: string }>
+  | Exclude<PostReviewOutcome | PostedReviewLookup, { url: string }>;

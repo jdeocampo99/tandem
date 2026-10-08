@@ -1,6 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
-import { readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
 import { z } from "zod";
 import { quoteShellCommand } from "../../adapters/commands.ts";
 import {
@@ -10,12 +7,7 @@ import {
   EndpointBusyError,
   EndpointOwnershipError,
 } from "../../adapters/primitives.ts";
-import {
-  type CommandResult,
-  type CommandRunner,
-  type Endpoint,
-  MODEL_ROLE_ORDER,
-} from "../../contracts.ts";
+import type { CommandResult, CommandRunner, Endpoint } from "../../contracts.ts";
 import type { Receipt } from "../../native/block.ts";
 import { type EndpointInspection, type EndpointTarget, isWorkerProcess } from "../contract.ts";
 import type { TernEndpoint } from "../identity.ts";
@@ -32,8 +24,8 @@ import {
   SessionAck,
   type TernListing,
   TernOutcomeUnknownError,
-  TernQuarantinedError,
 } from "./protocol.ts";
+import { ternQuarantine } from "./quarantine.ts";
 
 /** The command runner. Only this module invokes it; every other module goes through `ternCli`. */
 export type TernRunner = CommandRunner;
@@ -141,55 +133,14 @@ type Results = {
   notify: undefined;
 };
 
-/**
- * Whether an unknown outcome of each verb is recorded durably against its subject. A focus is
- * idempotent. Opens record their own outcome as a ticket, creations as their launch reservation,
- * and a browser opening is reported once and pauses nothing.
- */
-const QUARANTINES: Readonly<Record<Verb, boolean>> = {
-  focus: false,
-  run: true,
-  send: true,
-  rename: true,
-  split: true,
-  newTab: false,
-  newSession: false,
-  close: true,
-  killSession: true,
-  open: false,
-  browser: false,
-  notify: true,
-};
-
 const READ_VERBS = ["ls", "process", "inspect"] as const;
 type ReadArgs = readonly [(typeof READ_VERBS)[number], ...string[]];
-const QUARANTINE_DIRECTORY = "tern-quarantine";
 const RECEIPT_WAIT_MS = 5_000;
 const Opened = z.object({
   blocks: z.array(z.union([Id, z.number().int().safe().positive().transform(String)])),
   discarded: z.boolean(),
 });
 const BrowserOpened = z.object({ ok: z.object({ block: Id }) });
-const QuarantineRecord = z.object({
-  version: z.literal(1),
-  key: z.string(),
-  operation: z.string(),
-  reason: z.string(),
-  at: z.string(),
-  /** The exact pane the effect targeted, so `tandem fix` can prove it gone or idle. */
-  endpoint: z.object({
-    terminal: z.literal("tern"),
-    sessionId: z.string(),
-    terminalSessionId: Id.optional(),
-    workspaceId: z.string(),
-    tabId: z.string(),
-    paneId: Id,
-    role: z.enum(MODEL_ROLE_ORDER),
-    generation: z.number().int().nonnegative(),
-  }),
-  cwd: z.string(),
-});
-
 export function missing(endpoint: Endpoint): EndpointOwnershipError {
   return new EndpointOwnershipError(
     endpoint,
@@ -198,252 +149,12 @@ export function missing(endpoint: Endpoint): EndpointOwnershipError {
   );
 }
 
-function paneKey(endpoint: Endpoint): string {
-  return `pane:${endpoint.terminalSessionId ?? ""}:${endpoint.paneId}`;
-}
-
-type Subjects = Readonly<{
-  /** Durable keys whose record refuses the op. */
-  refused: readonly string[];
-  /** The key and pane an unknown outcome of the op is recorded against. */
-  recorded?: Readonly<{ key: string; endpoint: Endpoint }>;
-}>;
-
-function subjects(op: TernOp): Subjects {
-  switch (op.verb) {
-    case "split":
-      return {
-        refused: [paneKey(op.endpoint), `split:${paneKey(op.endpoint)}`],
-        recorded: { key: `split:${paneKey(op.endpoint)}`, endpoint: op.endpoint },
-      };
-    case "newTab":
-      return {
-        refused:
-          op.beside !== undefined && "endpoint" in op.beside ? [paneKey(op.beside.endpoint)] : [],
-      };
-    case "newSession":
-      return { refused: [] };
-    case "killSession":
-      // The kill finishes the close of `closed`; its doubt belongs to that pane.
-      return {
-        refused: [paneKey(op.closed)],
-        recorded: { key: paneKey(op.closed), endpoint: op.closed },
-      };
-    case "notify":
-      return {
-        refused: [paneKey(op.helper)],
-        recorded: { key: paneKey(op.helper), endpoint: op.helper },
-      };
-    case "close":
-      return {
-        refused: [paneKey(op.endpoint), ...(op.owner === undefined ? [] : [paneKey(op.owner)])],
-        recorded: { key: paneKey(op.endpoint), endpoint: op.endpoint },
-      };
-    default:
-      return {
-        refused: [paneKey(op.endpoint)],
-        recorded: { key: paneKey(op.endpoint), endpoint: op.endpoint },
-      };
-  }
-}
-
-function endpointsOf(op: TernOp): readonly Endpoint[] {
-  switch (op.verb) {
-    case "newTab":
-      return op.beside !== undefined && "endpoint" in op.beside ? [op.beside.endpoint] : [];
-    case "newSession":
-      return [];
-    case "killSession":
-      return [op.closed];
-    case "notify":
-      return [op.helper];
-    case "close":
-      return op.owner === undefined ? [op.endpoint] : [op.endpoint, op.owner];
-    default:
-      return [op.endpoint];
-  }
-}
-
-function quarantineFile(key: string): string {
-  return `${createHash("sha256").update(key).digest("hex")}.json`;
-}
-
-/** One lock per record, shared by the writer, the absent-pane close and `tandem fix`. */
-async function withRecordLock<T>(directory: string, file: string, body: () => Promise<T>) {
-  // Loaded on use, as the coordinator notes are, to keep worker startup light.
-  const [{ ensurePrivateDirectoryTree }, { acquireDarwinFileLock }] = await Promise.all([
-    import("../../coordinator/lock.ts"),
-    import("../../tasks/store-lock.ts"),
-  ]);
-  await ensurePrivateDirectoryTree(directory, "Tern quarantine directory");
-  const release = await acquireDarwinFileLock(
-    join(directory, `${file.slice(0, -".json".length)}.lock`),
-    10_000,
-    20,
-  );
-  try {
-    return await body();
-  } finally {
-    await release();
-  }
-}
-
-/** Refuses an op whose subject or coordinator holds a durable quarantine, in any process. */
-async function refuseQuarantined(home: string | undefined, op: TernOp): Promise<void> {
-  if (home === undefined) return;
-  for (const key of subjects(op).refused) {
-    let record: z.infer<typeof QuarantineRecord>;
-    try {
-      record = QuarantineRecord.parse(
-        JSON.parse(await readFile(join(home, QUARANTINE_DIRECTORY, quarantineFile(key)), "utf8")),
-      );
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
-      throw new TernQuarantinedError(`tern ${op.verb}`, error);
-    }
-    throw new TernQuarantinedError(
-      `tern ${op.verb}`,
-      `an earlier ${record.operation} is quarantined: ${record.reason}`,
-    );
-  }
-  const endpoints = endpointsOf(op);
-  if (endpoints.length === 0) return;
-  // Loaded on use: worker startup reaches this module and must not load coordinator storage.
-  const { listCoordinatorQuarantineRecords } = await import("../../coordinator/quarantine.ts");
-  const notes = await listCoordinatorQuarantineRecords(home);
-  if (
-    notes.some((note) =>
-      endpoints.some(
-        (endpoint) =>
-          note.endpoint?.terminal === "tern" &&
-          note.endpoint.paneId === endpoint.paneId &&
-          note.endpoint.terminalSessionId === endpoint.terminalSessionId,
-      ),
-    )
-  )
-    throw new TernQuarantinedError(
-      `tern ${op.verb}`,
-      "an earlier coordinator effect is quarantined",
-    );
-}
-
-async function recordQuarantine(
-  home: string,
-  subject: NonNullable<Subjects["recorded"]>,
-  cwd: string,
-  error: TernOutcomeUnknownError,
-): Promise<void> {
-  const directory = join(home, QUARANTINE_DIRECTORY);
-  const file = quarantineFile(subject.key);
-  const record: z.infer<typeof QuarantineRecord> = {
-    version: 1,
-    key: subject.key,
-    operation: error.operation,
-    reason: error.cause instanceof Error ? error.cause.message : String(error.cause),
-    at: new Date().toISOString(),
-    endpoint: QuarantineRecord.shape.endpoint.parse(subject.endpoint),
-    cwd,
-  };
-  await withRecordLock(directory, file, async () => {
-    const temporary = join(directory, `${file}.${randomUUID()}.tmp`);
-    await writeFile(temporary, JSON.stringify(record), { flag: "wx", mode: 0o600 });
-    await rename(temporary, join(directory, file));
-  });
-}
-
-/** An exact pane proven absent can never repeat the doubted effect, so its record goes. */
-async function forgetQuarantine(home: string | undefined, endpoint: Endpoint): Promise<void> {
-  if (home === undefined) return;
-  const directory = join(home, QUARANTINE_DIRECTORY);
-  for (const key of [paneKey(endpoint), `split:${paneKey(endpoint)}`]) {
-    const file = quarantineFile(key);
-    if (!(await Bun.file(join(directory, file)).exists())) continue;
-    await withRecordLock(directory, file, () => rm(join(directory, file), { force: true }));
-  }
-}
-
-/** A pane whose last Tandem effect ended with an unknown outcome, so Tandem refuses to touch it. */
-export type QuarantinedPane =
-  | Readonly<{
-      status: "readable";
-      path: string;
-      /** The record exactly as listed, so a clear never removes one that changed since. */
-      record: string;
-      key: string;
-      operation: string;
-      reason: string;
-      at: string;
-      endpoint: Endpoint;
-      cwd: string;
-    }>
-  | Readonly<{ status: "unreadable"; path: string; reason: string }>;
-
-/** Every record under `<home>/tern-quarantine/`, read without changing anything. */
-export async function listTernQuarantine(home: string): Promise<QuarantinedPane[]> {
-  const directory = join(home, QUARANTINE_DIRECTORY);
-  let names: string[];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
-    throw error;
-  }
-  const panes: QuarantinedPane[] = [];
-  for (const name of names.filter((each) => /^[\da-f]{64}\.json$/u.test(each)).toSorted()) {
-    const path = join(directory, name);
-    try {
-      const record = await readFile(path, "utf8");
-      const { endpoint, version: _version, ...parsed } = QuarantineRecord.parse(JSON.parse(record));
-      const { terminalSessionId, ...placement } = endpoint;
-      panes.push({
-        status: "readable",
-        path,
-        record,
-        ...parsed,
-        endpoint: {
-          ...placement,
-          ...(terminalSessionId === undefined ? {} : { terminalSessionId }),
-        },
-      });
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") continue;
-      panes.push({
-        status: "unreadable",
-        path,
-        reason: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
-  return panes;
-}
-
-/** Removes one record under its lock, only while it is unchanged and `conclusive` re-proves it. */
-export async function clearTernQuarantine(
-  pane: Readonly<{ path: string; record: string }>,
-  conclusive: () => Promise<boolean>,
-): Promise<"cleared" | "settled" | "changed" | "unproven"> {
-  // A listed record's file name is its key's digest, the same lock every mutate of that pane takes.
-  return withRecordLock(dirname(pane.path), basename(pane.path), async () => {
-    let current: string;
-    try {
-      current = await readFile(pane.path, "utf8");
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return "settled";
-      throw error;
-    }
-    if (current !== pane.record) return "changed";
-    if (!(await conclusive())) return "unproven";
-    await rm(pane.path, { force: true });
-    return "cleared";
-  });
-}
-
 type Core = Readonly<{
   run: TernRunner;
   binary: string;
   windowKey: string | undefined;
   environment: Readonly<Record<string, string>> | undefined;
-  home: string | undefined;
+  quarantine: ReturnType<typeof ternQuarantine>;
   clock: () => number;
   wait: (milliseconds: number) => Promise<void>;
   readForeground: ForegroundReader;
@@ -649,7 +360,7 @@ async function paneEffect(
   args: readonly string[],
 ) {
   await exactPane(core, op);
-  await refuseQuarantined(core.home, op);
+  await core.quarantine.refuse(op);
   const ack = await spawn(core, op.cwd, args, BlockAck);
   if (ack.block !== op.endpoint.paneId)
     throw new TernOutcomeUnknownError(`tern ${args[0]}`, "acknowledgement names another block");
@@ -718,7 +429,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
   },
   split: async (core, op) => {
     const placement = await exactPane(core, op);
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     const before = await ls(core, op.cwd);
     const created = await spawn(
       core,
@@ -750,7 +461,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
       throw new AdapterProtocolError("tern new tab", "exact Tern session is absent", "");
     if (beside !== undefined && "tab" in beside && !session.tabs.some((t) => t.id === beside.tab))
       throw new AdapterProtocolError("tern new tab", "exact parent Tern tab moved", "");
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     const created = await spawn(core, op.cwd, ["new", "tab", op.session, "--cwd", op.cwd], Created);
     if (created.session !== op.session)
       throw new TernOutcomeUnknownError("tern new tab", "new tab belongs to another session");
@@ -761,7 +472,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
   },
   newSession: async (core, op) => {
     const before = await ls(core, op.cwd);
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     const created = await spawn(
       core,
       op.cwd,
@@ -781,7 +492,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
         if (listing.detached.length > 0)
           throw new EndpointOwnershipError(op.endpoint, "detached panes make closure ambiguous");
         // A window-scoped listing cannot see other windows, so it never proves the pane is gone.
-        if (core.windowKey === undefined) await forgetQuarantine(core.home, op.endpoint);
+        if (core.windowKey === undefined) await core.quarantine.forget(op.endpoint);
         return { absent: true };
       }
       before = await proveView(core, { ...op.view, endpoint: op.endpoint, cwd: op.cwd });
@@ -796,7 +507,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
           error.reason === "missing"
         ) {
           // exactPane reports missing only from an exact scoped listing with no detached blocks.
-          if (core.windowKey === undefined) await forgetQuarantine(core.home, op.endpoint);
+          if (core.windowKey === undefined) await core.quarantine.forget(op.endpoint);
           return { absent: true };
         }
         throw error;
@@ -805,7 +516,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
       // This is the last call before close: recheck the exact identity, never use a title fallback.
       before = await exactPane(core, op);
     }
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     const ack = await spawn(core, op.cwd, ["close", op.endpoint.paneId], BlockAck);
     if (ack.block !== op.endpoint.paneId)
       throw new TernOutcomeUnknownError("tern close", "acknowledgement names another block");
@@ -827,7 +538,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
     const rechecked = (await ls(core, op.cwd)).sessions.find((entry) => entry.id === op.session);
     if (rechecked === undefined || rechecked.tabs.some((tab) => tab.blocks.length > 0))
       return undefined;
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     const killed = await spawn(core, op.cwd, ["kill", "session", op.session], SessionAck);
     try {
       if (killed.session !== op.session) throw new Error("kill acknowledged another session");
@@ -853,7 +564,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
   open: async (core, op) => {
     await exactPane(core, op);
     if (op.closes !== undefined) await proveView(core, op.closes);
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     let acknowledged: readonly string[] = [];
     try {
       const outcome = await core.run(request(core, op.cwd, ["open", op.route]));
@@ -892,7 +603,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
       throw new Error("Browser owner id is not exactly representable");
     const before = blocks(await ls(core, op.cwd));
     await exactPane(core, op);
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     const opened = await spawn(
       core,
       op.cwd,
@@ -936,7 +647,7 @@ const handlers: { [V in Verb]: (core: Core, op: Op<V>) => Promise<Results[V]> } 
     if ((await inspect(core, target)).processInfo.shellPid !== pid)
       throw new EndpointOwnershipError(op.helper, "notification tty process changed");
     await exactPane(core, target);
-    await refuseQuarantined(core.home, op);
+    await core.quarantine.refuse(op);
     let written: CommandResult;
     try {
       written = await core.run({
@@ -967,23 +678,7 @@ async function mutate<O extends TernOp>(core: Core, op: O): Promise<Results[O["v
   try {
     return await handler(core, op);
   } catch (error) {
-    const subject = subjects(op).recorded;
-    if (
-      error instanceof TernOutcomeUnknownError &&
-      QUARANTINES[op.verb] &&
-      subject !== undefined &&
-      core.home !== undefined &&
-      !(error instanceof TernQuarantinedError)
-    ) {
-      try {
-        await recordQuarantine(core.home, subject, op.cwd, error);
-      } catch (cause) {
-        throw new TernOutcomeUnknownError(
-          error.operation,
-          `${String(error.cause)}; its quarantine could not be recorded: ${String(cause)}`,
-        );
-      }
-    }
+    await core.quarantine.record(op, error);
     throw error;
   }
 }
@@ -1018,7 +713,9 @@ function facade(core: Core): TernCli {
       facade({
         ...core,
         ...(change.windowKey === undefined ? {} : { windowKey: change.windowKey }),
-        ...(change.home === undefined ? {} : { home: change.home }),
+        ...(change.home === undefined
+          ? {}
+          : { quarantine: ternQuarantine(change.home, core.clock) }),
       }),
     unscoped: () => facade({ ...core, windowKey: undefined }),
     ls: (cwd, timeoutMs) => ls(core, cwd, timeoutMs),
@@ -1033,13 +730,14 @@ function facade(core: Core): TernCli {
 }
 
 export function ternCli(run: TernRunner, options: TernOptions = {}): TernCli {
+  const clock = options.clock ?? Date.now;
   return facade({
     run,
     binary: options.binary ?? ternBinary(options.environment),
     windowKey: options.windowKey,
     environment: options.environment,
-    home: options.home,
-    clock: options.clock ?? Date.now,
+    quarantine: ternQuarantine(options.home, clock),
+    clock,
     wait: options.wait ?? Bun.sleep,
     readForeground: options.readForeground ?? readForeground,
   });

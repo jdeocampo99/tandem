@@ -3,12 +3,12 @@ import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Endpoint, WorktreeLease } from "../contracts.ts";
 import { writeJsonAtomically } from "../runtime/persistence.ts";
+import { isRecord } from "../runtime/schema.ts";
 import { ensurePrivateDirectoryTree } from "./lock.ts";
 import {
   canonicalHome,
   canonicalPath,
   isMissing,
-  isRecord,
   parseEndpoint,
   parseWorktree,
   sessionText,

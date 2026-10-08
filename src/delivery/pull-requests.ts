@@ -6,17 +6,19 @@ import {
   readCheckpoint,
 } from "../adapters/git.ts";
 import {
-  AdapterCommandError,
   AdapterProtocolError,
   ApprovalRequiredError,
+  isRecord,
+  readGitText,
+  runChecked,
 } from "../adapters/primitives.ts";
 import type {
   CommandRequest,
-  CommandResult,
   CommandRunner,
   PullRequestMetadata,
   TaskRecord,
 } from "../contracts.ts";
+import { describeError } from "../service/records.ts";
 import type { PrSummary } from "./evidence.ts";
 import {
   assertDraftTaskShape,
@@ -45,7 +47,7 @@ type RemotePullRequest = PullRequestMetadata &
   }>;
 
 /** A clean checkout proven to sit on one branch at one commit, with its origin identity read. */
-export type DeliveryCheckout = Readonly<{
+type DeliveryCheckout = Readonly<{
   readonly cwd: string;
   readonly branch: string;
   readonly head: string;
@@ -91,64 +93,9 @@ const NEUTRAL_CHECK_VALUES: Readonly<Record<string, true>> = {
   SKIPPED: true,
   SKIPPING: true,
 };
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function readRunner(run: unknown): CommandRunner {
   if (typeof run !== "function") throw new TypeError("run must be an argv command runner");
   return run as CommandRunner;
-}
-
-function describeError(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) return error.message;
-  if (typeof error === "string" && error.trim().length > 0) return error.trim();
-  return String(error);
-}
-
-async function runChecked(
-  run: CommandRunner,
-  request: CommandRequest,
-  operation: string,
-): Promise<CommandResult> {
-  const result = await run(request);
-  if (
-    !isRecord(result) ||
-    typeof result.code !== "number" ||
-    !Number.isSafeInteger(result.code) ||
-    typeof result.stdout !== "string" ||
-    typeof result.stderr !== "string"
-  ) {
-    throw new AdapterProtocolError(
-      operation,
-      "command runner returned malformed result",
-      String(result),
-    );
-  }
-  if (result.code !== 0) throw new AdapterCommandError(operation, request, result as CommandResult);
-  return result as CommandResult;
-}
-
-export async function runGit(
-  run: CommandRunner,
-  cwd: string,
-  args: readonly string[],
-  operation: string,
-): Promise<CommandResult> {
-  return runChecked(run, { argv: ["git", "-C", cwd, ...args], cwd }, operation);
-}
-
-export async function readGitText(
-  run: CommandRunner,
-  cwd: string,
-  args: readonly string[],
-  operation: string,
-): Promise<string> {
-  const result = await runGit(run, cwd, args, operation);
-  const text = result.stdout.trim();
-  if (text.length === 0)
-    throw new AdapterProtocolError(operation, "git returned empty stdout", result.stdout);
-  return text;
 }
 
 async function readCleanCheckpoint(run: CommandRunner, cwd: string): Promise<string> {
@@ -217,12 +164,12 @@ function assertRepositoryIdentity(remote: string, expected: string): void {
   }
 }
 
-/** Observes one checkout and proves it is clean, on the expected branch, and has a GitHub origin. */
-export async function deliveryCheckout(
+async function assertReadyCheckout(
   run: CommandRunner,
-  cwd: string,
-  branch: string,
+  task: TaskRecord,
 ): Promise<DeliveryCheckout> {
+  const shape = assertTaskShape(task);
+  const { cwd, branch } = shape;
   const head = await readCleanCheckpoint(run, cwd);
   const actualBranch = await readGitText(
     run,
@@ -241,21 +188,12 @@ export async function deliveryCheckout(
     ["remote", "get-url", "origin"],
     "delivery remote identity",
   );
-  return { cwd, branch, head, remote };
-}
-
-async function assertReadyCheckout(
-  run: CommandRunner,
-  task: TaskRecord,
-): Promise<DeliveryCheckout> {
-  const shape = assertTaskShape(task);
-  const observed = await deliveryCheckout(run, shape.cwd, shape.branch);
-  if (observed.head !== shape.head) {
+  if (head !== shape.head) {
     throw new Error(
-      `task worktree HEAD ${JSON.stringify(observed.head)} does not match reviewed HEAD ${JSON.stringify(shape.head)}`,
+      `task worktree HEAD ${JSON.stringify(head)} does not match reviewed HEAD ${JSON.stringify(shape.head)}`,
     );
   }
-  return observed;
+  return { cwd, branch, head, remote };
 }
 
 async function assertUnchangedCheckout(run: CommandRunner, ready: DeliveryCheckout): Promise<void> {

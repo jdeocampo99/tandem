@@ -8,7 +8,7 @@ import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { ActionEnvelope } from "../../../src/native/envelope.ts";
 import { terminalBackend } from "../../../src/terminal-backend/compose.ts";
 import type { TerminalBackend } from "../../../src/terminal-backend/contract.ts";
-import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/plugin.ts";
+import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/preferences.ts";
 
 /** Every real-Tern test runs only on macOS with this one opt-in. */
 export const ternNativeEnabled =

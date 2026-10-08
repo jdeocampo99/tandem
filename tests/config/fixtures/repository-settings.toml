@@ -1,0 +1,56 @@
+# Tandem settings for this project. Edit with `tandem config`.
+# Uncomment a line (remove the leading "#") to turn a setting on.
+# Changes apply to tasks started afterwards; running tasks keep the settings they began with.
+
+# The repository these settings belong to. Don't change this.
+repoPath = "/example/repo"
+
+# Commands that prepare a fresh working copy before a coding agent starts, like installing
+# dependencies. They run every time an agent starts, so they should be safe to repeat.
+setupCommands = ["make deps"]
+
+# Checks every change must pass before Tandem accepts it. Each one runs in the project folder.
+# For no checks at all, set validation = "none" with no validationCommands: tasks then skip
+# validation and are labeled unvalidated.
+validationCommands = ["make check"]
+
+# Commands that stop what agents started in a working copy, like a Docker or database stack.
+# They run in the task's working copy once the task is finished and its agents are closed.
+# cleanupCommands = ["docker compose down"]
+
+# How many times reviewers may send a change back for fixes before Tandem asks you.
+# maxFixRounds = 2
+
+# Tandem gives coding agents and reviewers its own code standards and principles. Set "none" to
+# leave them out and let this repository's AGENTS.md, CLAUDE.md, and instructions govern.
+# standards = "tandem"
+
+# Extra instructions for agents at each stage. Keep this section below the settings above.
+# [instructions]
+# implementation = ["Keep changes small and match the surrounding code."]
+# validation = []
+# review = ["Flag any change to the public API."]
+
+# Files in this repository whose contents are given to agents as instructions, by stage.
+# [instructionFiles]
+# implementation = ["docs/CONTRIBUTING.md"]
+# validation = []
+# review = []
+
+# How PR watch merges published pull requests and how patient it is with CI. mergeWith is
+# "auto-merge" (GitHub's own), "queue-label" (add queueLabel; blockedLabel is the label the queue
+# adds when it kicks a pull request out), or "off". Until mergeWith is set, PR watch retries CI
+# but never merges; Tandem offers to set it up the first time it watches one of your pull
+# requests here.
+# [merging]
+# mergeWith = "queue-label"
+# queueLabel = "mergequeue"
+# blockedLabel = "blocked"
+# maxCiRetries = 1
+# stuckAfterMinutes = 60
+
+# Use a different model for one role in this project only. Roles: coordinator, scout,
+# implementer, reviewer, presentation. Other roles keep your saved choices.
+# [models.implementer]
+# model = "provider/model"
+# thinking = "high"

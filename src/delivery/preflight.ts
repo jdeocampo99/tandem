@@ -1,4 +1,5 @@
 import { type GitCheckpoint, readCheckpoint } from "../adapters/git.ts";
+import { readGitText } from "../adapters/primitives.ts";
 import type { CommandRunner, TaskRecord } from "../contracts.ts";
 import { taskRuntime } from "../runtime/activity.ts";
 import { readRuntimeState } from "../runtime/persistence.ts";
@@ -25,21 +26,6 @@ export type DeliveryPreflightResult = Readonly<{
   /** The task's own draft, which final publication updates in place rather than duplicating. */
   readonly draftPullRequest?: TaskRecord["pullRequest"];
 }>;
-
-async function gitText(
-  run: CommandRunner,
-  cwd: string,
-  args: readonly string[],
-): Promise<string | undefined> {
-  try {
-    const result = await run({ argv: ["git", "-C", cwd, ...args], cwd });
-    if (result.code !== 0) return undefined;
-    const value = result.stdout.trim();
-    return value.length === 0 ? undefined : value;
-  } catch {
-    return undefined;
-  }
-}
 
 function githubRepository(remote: string): string | undefined {
   try {
@@ -91,11 +77,21 @@ export async function deliveryPreflight(
       `the worktree is at ${current.head ?? "an unknown commit"}, not the reviewed commit ${task.reviewHead}`,
     );
   }
-  const branch = await gitText(deps.run, cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const branch = await readGitText(
+    deps.run,
+    cwd,
+    ["symbolic-ref", "--quiet", "--short", "HEAD"],
+    "delivery worktree branch",
+  ).catch(() => undefined);
   if (branch !== worktree.branch) {
     refusals.push(`the worktree is on ${branch ?? "no branch"}, not ${worktree.branch}`);
   }
-  const remote = await gitText(deps.run, cwd, ["remote", "get-url", "origin"]);
+  const remote = await readGitText(
+    deps.run,
+    cwd,
+    ["remote", "get-url", "origin"],
+    "delivery remote identity",
+  ).catch(() => undefined);
   const repository = remote === undefined ? undefined : githubRepository(remote);
   if (repository === undefined) {
     refusals.push(

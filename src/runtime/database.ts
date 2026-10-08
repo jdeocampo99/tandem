@@ -3,29 +3,25 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, mkdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { acquireDarwinFileLock } from "../tasks/store-lock.ts";
+import { isRecord } from "./schema.ts";
 
 type StateDatabase = Database;
 type DatabaseContext = { home: string; db: StateDatabase; rollbackOnly: boolean };
 const databaseContext = new AsyncLocalStorage<DatabaseContext>();
 
 export function databasePath(home: string): string {
-  const root = resolve(home);
-  return join(root, "state.sqlite");
+  return join(resolve(home), "state.sqlite");
 }
 
-type NativeLockContext = Readonly<{ home: string; release: () => Promise<void> }>;
+type NativeLockContext = Readonly<{ home: string }>;
 const nativeLockContext = new AsyncLocalStorage<NativeLockContext>();
-
-function normalizedHome(home: string): string {
-  return resolve(home);
-}
 
 async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
     return true;
   } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+    if (isRecord(error) && error.code === "ENOENT") {
       return false;
     }
     throw error;
@@ -155,25 +151,22 @@ function assertSchema(db: StateDatabase): void {
     .query(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('metadata','tasks','runtime_state')",
     )
-    .all() as readonly { name?: unknown }[];
-  const names = new Set(rows.map((row) => row.name));
+    .all();
+  const names = new Set(rows.filter(isRecord).map((row) => row.name));
   if (!names.has("metadata") || !names.has("tasks") || !names.has("runtime_state")) {
     throw new Error("authoritative state database is missing required tables");
   }
   const markers = db
     .query("SELECT key, value FROM metadata WHERE key IN ('schema_version','initialized')")
-    .all() as readonly {
-    key?: unknown;
-    value?: unknown;
-  }[];
-  const markerValues = new Map(markers.map((row) => [row.key, row.value]));
+    .all();
+  const markerValues = new Map(markers.filter(isRecord).map((row) => [row.key, row.value]));
   if (markerValues.get("schema_version") !== "1" || markerValues.get("initialized") !== "1") {
     throw new Error("authoritative state database has no valid initialization marker");
   }
 }
 
 async function openDatabase(home: string): Promise<StateDatabase> {
-  const root = normalizedHome(home);
+  const root = resolve(home);
   await mkdir(root, { recursive: true, mode: 0o700 });
   await chmod(root, 0o700);
   const path = databasePath(root);
@@ -194,6 +187,7 @@ async function openDatabase(home: string): Promise<StateDatabase> {
     ensurePrWatchTable(db);
     ensureTaskEventsTable(db);
     await chmod(path, 0o600);
+    return db;
   } catch (error) {
     try {
       db?.close();
@@ -202,16 +196,14 @@ async function openDatabase(home: string): Promise<StateDatabase> {
     }
     throw new Error(`could not open authoritative state database ${path}`, { cause: error });
   }
-  if (db === undefined) throw new Error(`could not open authoritative state database ${path}`);
-  return db;
 }
 
 export function currentStateDatabase(home: string): StateDatabase | undefined {
   const current = databaseContext.getStore();
   if (current === undefined) return undefined;
-  if (current.home !== normalizedHome(home)) {
+  if (current.home !== resolve(home)) {
     throw new Error(
-      `nested state transaction home mismatch: ${current.home} versus ${normalizedHome(home)}`,
+      `nested state transaction home mismatch: ${current.home} versus ${resolve(home)}`,
     );
   }
   return current.db;
@@ -223,7 +215,7 @@ export async function withStateLock<Result>(
   timeoutMs = 5_000,
   pollMs = 20,
 ): Promise<Result> {
-  const root = normalizedHome(home);
+  const root = resolve(home);
   const current = nativeLockContext.getStore();
   if (typeof operation !== "function")
     throw new TypeError("state lock operation must be a function");
@@ -245,7 +237,7 @@ export async function withStateLock<Result>(
   await chmod(root, 0o700);
   const release = await acquireDarwinFileLock(join(root, ".state.lock"), timeoutMs, pollMs);
   try {
-    return await nativeLockContext.run({ home: root, release }, operation);
+    return await nativeLockContext.run({ home: root }, operation);
   } finally {
     await release();
   }
@@ -258,7 +250,7 @@ export async function withStateTransaction<Result>(
 ): Promise<Result> {
   if (typeof operation !== "function")
     throw new TypeError("database transaction operation must be a function");
-  const root = normalizedHome(home);
+  const root = resolve(home);
   const current = databaseContext.getStore();
   if (current !== undefined) {
     if (current.home !== root) {
@@ -273,53 +265,56 @@ export async function withStateTransaction<Result>(
   }
   return withStateLock(
     root,
-    async () => {
-      const db = await openDatabase(root);
-      try {
-        db.exec("BEGIN IMMEDIATE");
-        return await databaseContext.run({ home: root, db, rollbackOnly: false }, async () => {
-          try {
-            const result = await operation(db);
-            if (databaseContext.getStore()?.rollbackOnly) {
-              throw new Error("state transaction marked rollback-only by a nested failure");
-            }
-            db.exec("COMMIT");
-            return result;
-          } catch (error) {
-            try {
-              db.exec("ROLLBACK");
-            } catch {
-              // Preserve the callback failure.
-            }
-            throw error;
-          }
-        });
-      } finally {
-        db.close();
-      }
-    },
+    () => runStateTransaction(root, operation),
     lockOptions?.timeoutMs,
     lockOptions?.pollMs,
   );
 }
 
+async function runStateTransaction<Result>(
+  home: string,
+  operation: (db: StateDatabase) => Result | PromiseLike<Result>,
+): Promise<Result> {
+  const db = await openDatabase(home);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    const context: DatabaseContext = { home, db, rollbackOnly: false };
+    return await databaseContext.run(context, () => commitStateTransaction(context, operation));
+  } finally {
+    db.close();
+  }
+}
+
+async function commitStateTransaction<Result>(
+  context: DatabaseContext,
+  operation: (db: StateDatabase) => Result | PromiseLike<Result>,
+): Promise<Result> {
+  const { db } = context;
+  try {
+    const result = await operation(db);
+    if (context.rollbackOnly) {
+      throw new Error("state transaction marked rollback-only by a nested failure");
+    }
+    db.exec("COMMIT");
+    return result;
+  } catch (error) {
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // Preserve the callback failure.
+    }
+    throw error;
+  }
+}
+
 export function readTaskPayload(db: StateDatabase, id: string): unknown | undefined {
-  const row = db.query("SELECT payload FROM tasks WHERE id = ?").get(id) as
-    | { payload?: unknown }
-    | null
-    | undefined;
-  if (row === null || row === undefined || typeof row.payload !== "string") return undefined;
-  return JSON.parse(row.payload) as unknown;
+  const payload = payloadText(db.query("SELECT payload FROM tasks WHERE id = ?").get(id));
+  return payload === undefined ? undefined : (JSON.parse(payload) as unknown);
 }
 
 export function readAllTaskPayloads(db: StateDatabase): readonly unknown[] {
-  const rows = db.query("SELECT payload FROM tasks ORDER BY id").all() as readonly {
-    payload?: unknown;
-  }[];
-  return rows.map((row) => {
-    if (typeof row.payload !== "string") throw new Error("task payload is not text");
-    return JSON.parse(row.payload) as unknown;
-  });
+  const rows = db.query("SELECT payload FROM tasks ORDER BY id").all();
+  return parsePayloads(rows, "task payload is not text");
 }
 
 export function writeTaskPayload(
@@ -338,22 +333,13 @@ export function deleteTaskPayload(db: StateDatabase, id: string): void {
 }
 
 export function readRequestBriefPayload(db: StateDatabase, id: string): unknown | undefined {
-  const row = db.query("SELECT payload FROM request_briefs WHERE id = ?").get(id) as
-    | { payload?: unknown }
-    | null
-    | undefined;
-  if (row === null || row === undefined || typeof row.payload !== "string") return undefined;
-  return JSON.parse(row.payload) as unknown;
+  const payload = payloadText(db.query("SELECT payload FROM request_briefs WHERE id = ?").get(id));
+  return payload === undefined ? undefined : (JSON.parse(payload) as unknown);
 }
 
 export function readAllRequestBriefPayloads(db: StateDatabase): readonly unknown[] {
-  const rows = db.query("SELECT payload FROM request_briefs ORDER BY id").all() as readonly {
-    payload?: unknown;
-  }[];
-  return rows.map((row) => {
-    if (typeof row.payload !== "string") throw new Error("request brief payload is not text");
-    return JSON.parse(row.payload) as unknown;
-  });
+  const rows = db.query("SELECT payload FROM request_briefs ORDER BY id").all();
+  return parsePayloads(rows, "request brief payload is not text");
 }
 
 export function writeRequestBriefPayload(
@@ -379,7 +365,7 @@ export function insertRequestUsagePayload(
 ): boolean {
   const existing = db
     .query("SELECT 1 AS present FROM request_usage_events WHERE event_key = ?")
-    .get(entry.eventKey) as { present?: unknown } | null | undefined;
+    .get(entry.eventKey);
   if (existing !== null && existing !== undefined) return false;
   db.query(
     "INSERT INTO request_usage_events(event_key, request_id, recorded_at, payload) VALUES (?, ?, ?, ?)",
@@ -399,8 +385,8 @@ export function readRequestUsagePayloads(
     .query(
       "SELECT payload FROM request_usage_events WHERE request_id = ? ORDER BY recorded_at, event_key",
     )
-    .all(requestId) as readonly { payload?: unknown }[];
-  return parsedPayloads(rows);
+    .all(requestId);
+  return rows.map(parseOptionalPayload);
 }
 
 /** Appends one task-scoped usage event unless its key is already recorded. */
@@ -415,7 +401,7 @@ export function insertTaskUsagePayload(
 ): boolean {
   const existing = db
     .query("SELECT 1 AS present FROM task_usage_events WHERE event_key = ?")
-    .get(entry.eventKey) as { present?: unknown } | null | undefined;
+    .get(entry.eventKey);
   if (existing !== null && existing !== undefined) return false;
   db.query(
     "INSERT INTO task_usage_events(event_key, task_id, recorded_at, payload) VALUES (?, ?, ?, ?)",
@@ -432,27 +418,35 @@ export function readTaskUsagePayloads(
     .query(
       "SELECT payload FROM task_usage_events WHERE task_id = ? ORDER BY recorded_at, event_key",
     )
-    .all(taskId) as readonly { payload?: unknown }[];
-  return parsedPayloads(rows);
+    .all(taskId);
+  return rows.map(parseOptionalPayload);
 }
 
-function parsedPayloads(rows: readonly { payload?: unknown }[]): readonly (unknown | null)[] {
+function payloadText(row: unknown): string | undefined {
+  return isRecord(row) && typeof row.payload === "string" ? row.payload : undefined;
+}
+
+function parsePayloads(rows: readonly unknown[], message: string): readonly unknown[] {
   return rows.map((row) => {
-    if (typeof row.payload !== "string") return null;
-    try {
-      return JSON.parse(row.payload) as unknown;
-    } catch {
-      return null;
-    }
+    const payload = payloadText(row);
+    if (payload === undefined) throw new Error(message);
+    return JSON.parse(payload) as unknown;
   });
 }
 
+function parseOptionalPayload(row: unknown): unknown | null {
+  const payload = payloadText(row);
+  if (payload === undefined) return null;
+  try {
+    return JSON.parse(payload) as unknown;
+  } catch {
+    return null;
+  }
+}
+
 export function readRepoLocation(db: StateDatabase, repo: string): string | undefined {
-  const row = db.query("SELECT path FROM repo_locations WHERE repo = ?").get(repo) as
-    | { path?: unknown }
-    | null
-    | undefined;
-  return typeof row?.path === "string" ? row.path : undefined;
+  const row = db.query("SELECT path FROM repo_locations WHERE repo = ?").get(repo);
+  return isRecord(row) && typeof row.path === "string" ? row.path : undefined;
 }
 
 export function writeRepoLocation(
@@ -469,13 +463,8 @@ export function deleteRepoLocation(db: StateDatabase, repo: string): void {
 }
 
 export function readPrWatchPayloads(db: StateDatabase): readonly unknown[] {
-  const rows = db.query("SELECT payload FROM pr_watches ORDER BY key").all() as readonly {
-    payload?: unknown;
-  }[];
-  return rows.map((row) => {
-    if (typeof row.payload !== "string") throw new Error("PR watch payload is not text");
-    return JSON.parse(row.payload) as unknown;
-  });
+  const rows = db.query("SELECT payload FROM pr_watches ORDER BY key").all();
+  return parsePayloads(rows, "PR watch payload is not text");
 }
 
 export function writePrWatchPayload(db: StateDatabase, key: string, payload: unknown): void {
@@ -503,25 +492,19 @@ export function readTaskEventPayloads(
 ): readonly Readonly<{ seq: number; payload: unknown }>[] {
   const rows = db
     .query("SELECT seq, payload FROM task_events WHERE task_id = ? ORDER BY seq")
-    .all(taskId) as readonly { seq?: unknown; payload?: unknown }[];
-  return rows.map((row) => {
-    const seq = typeof row.seq === "number" ? row.seq : 0;
-    if (typeof row.payload !== "string") return { seq, payload: null };
-    try {
-      return { seq, payload: JSON.parse(row.payload) as unknown };
-    } catch {
-      return { seq, payload: null };
-    }
-  });
+    .all(taskId);
+  return rows.map((row) => ({
+    seq: isRecord(row) && typeof row.seq === "number" ? row.seq : 0,
+    payload: parseOptionalPayload(row),
+  }));
 }
 
 /** A value kept in the metadata table by its own key, such as the PR watch poll schedule. */
 export function readMetadataPayload(db: StateDatabase, key: string): unknown | undefined {
-  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(key) as
-    | { value?: unknown }
-    | null
-    | undefined;
-  return typeof row?.value === "string" ? (JSON.parse(row.value) as unknown) : undefined;
+  const row = db.query("SELECT value FROM metadata WHERE key = ?").get(key);
+  return isRecord(row) && typeof row.value === "string"
+    ? (JSON.parse(row.value) as unknown)
+    : undefined;
 }
 
 export function writeMetadataPayload(db: StateDatabase, key: string, payload: unknown): void {
@@ -531,25 +514,20 @@ export function writeMetadataPayload(db: StateDatabase, key: string, payload: un
 }
 
 export function readRuntimePayload(db: StateDatabase): unknown | undefined {
-  const row = db.query("SELECT payload FROM runtime_state WHERE id = 1").get() as
-    | { payload?: unknown }
-    | null
-    | undefined;
+  const row = db.query("SELECT payload FROM runtime_state WHERE id = 1").get();
   if (row === null || row === undefined) return undefined;
-  if (typeof row.payload !== "string") throw new Error("runtime payload is not text");
+  const payload = payloadText(row);
+  if (payload === undefined) throw new Error("runtime payload is not text");
   try {
-    return JSON.parse(row.payload) as unknown;
+    return JSON.parse(payload) as unknown;
   } catch (error) {
     throw new Error("runtime payload is invalid JSON", { cause: error });
   }
 }
 
 export function runtimeStateWasInitialized(db: StateDatabase): boolean {
-  const row = db.query("SELECT value FROM metadata WHERE key = 'runtime_initialized'").get() as
-    | { value?: unknown }
-    | null
-    | undefined;
-  return row?.value === "1";
+  const row = db.query("SELECT value FROM metadata WHERE key = 'runtime_initialized'").get();
+  return isRecord(row) && row.value === "1";
 }
 
 export function writeRuntimePayload(db: StateDatabase, payload: unknown): void {

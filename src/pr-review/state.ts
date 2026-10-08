@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { isRecord } from "../adapters/primitives.ts";
+import type { TaskRecord } from "../contracts.ts";
 import type { ReviewVerdict } from "./post.ts";
 import type { PullRequestRef } from "./pull-request.ts";
 import { roundReplies } from "./replies.ts";
@@ -84,6 +85,15 @@ export function prReviewWorktreePath(home: string, taskId: string): string {
 
 export function latestRound(state: PrReviewState): PrReviewRound | undefined {
   return state.rounds.at(-1);
+}
+
+export function findRound(
+  state: PrReviewState,
+  binding: Pick<PrReviewRound, "generation" | "head">,
+): PrReviewRound | undefined {
+  return state.rounds.find(
+    (round) => round.generation === binding.generation && round.head === binding.head,
+  );
 }
 
 export function lensLabel(lens: ReviewLens): string {
@@ -255,4 +265,33 @@ function textAt(value: unknown, source: string): string {
 function stringAt(value: unknown, source: string): string {
   if (typeof value !== "string") throw new TypeError(`${source} must be text`);
   return value;
+}
+
+export function postedRound(task: TaskRecord, binding: PrReviewRound, message?: string) {
+  const state = message === undefined ? reviewState(task) : task.prReview;
+  const round = state === undefined ? undefined : findRound(state, binding);
+  if (state === undefined || round?.posted === undefined)
+    throw new Error(message ?? "The review receipt was not saved.");
+  return { task, state, round, posted: round.posted };
+}
+
+export function reviewState(task: TaskRecord): PrReviewState {
+  if (task.prReview === undefined) throw new Error(`Task ${task.id} is not a PR review.`);
+  return task.prReview;
+}
+
+export function replaceLatestRound(state: PrReviewState, round: PrReviewRound): PrReviewState {
+  return { ...state, rounds: [...state.rounds.slice(0, -1), round] };
+}
+
+export function samePr(left: PrReviewState, right: PrReviewState): boolean {
+  return left.ref.repo === right.ref.repo && left.ref.number === right.ref.number;
+}
+
+export function replaceRound(
+  state: PrReviewState,
+  round: PrReviewRound,
+  next: PrReviewRound,
+): PrReviewState {
+  return { ...state, rounds: state.rounds.map((entry) => (entry === round ? next : entry)) };
 }

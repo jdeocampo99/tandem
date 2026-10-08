@@ -1,5 +1,6 @@
 import { lstat, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { readGitText } from "../adapters/primitives.ts";
 import {
   type AcquireWorktreeInput,
   acquireWorktree,
@@ -113,22 +114,6 @@ function describeFailure(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function gitOutput(
-  run: CommandRunner,
-  worktreePath: string,
-  args: readonly string[],
-  operation: string,
-): Promise<string> {
-  const result = await run({ argv: ["git", "-C", worktreePath, ...args], cwd: worktreePath });
-  if (result.code !== 0) {
-    const detail = result.stderr.trim() || result.stdout.trim();
-    throw new Error(
-      `${operation} failed with exit code ${result.code}${detail.length === 0 ? "" : `: ${detail}`}`,
-    );
-  }
-  return result.stdout;
-}
-
 /** What git says about one checkout: its commit, its branch (empty when detached), and its changes. */
 export type CoordinatorCheckoutState = Readonly<{
   readonly head: string;
@@ -146,27 +131,33 @@ export async function readCoordinatorCheckoutState(
   worktreePath: string,
 ): Promise<CoordinatorCheckoutState> {
   const [head, branch, status, unmerged] = await Promise.all([
-    gitOutput(run, worktreePath, ["rev-parse", "HEAD"], "git worktree HEAD"),
-    gitOutput(run, worktreePath, ["branch", "--show-current"], "git worktree branch"),
-    gitOutput(
-      run,
-      worktreePath,
-      ["status", "--porcelain=v1", "--untracked-files=all"],
-      "git worktree status",
-    ),
-    gitOutput(
-      run,
-      worktreePath,
-      ["diff", "--name-only", "--diff-filter=U"],
-      "git worktree unmerged check",
-    ),
+    readGitText(run, worktreePath, ["rev-parse", "HEAD"], {
+      operation: "git worktree HEAD",
+      allowEmpty: true,
+      failure: "plain",
+    }),
+    readGitText(run, worktreePath, ["branch", "--show-current"], {
+      operation: "git worktree branch",
+      allowEmpty: true,
+      failure: "plain",
+    }),
+    readGitText(run, worktreePath, ["status", "--porcelain=v1", "--untracked-files=all"], {
+      operation: "git worktree status",
+      allowEmpty: true,
+      failure: "plain",
+    }),
+    readGitText(run, worktreePath, ["diff", "--name-only", "--diff-filter=U"], {
+      operation: "git worktree unmerged check",
+      allowEmpty: true,
+      failure: "plain",
+    }),
   ]);
-  if (head.trim().length === 0) throw new Error("git reported no HEAD commit");
+  if (head.length === 0) throw new Error("git reported no HEAD commit");
   return {
-    head: head.trim(),
-    branch: branch.trim(),
-    dirty: status.trim().length !== 0,
-    unmerged: unmerged.trim().length !== 0,
+    head,
+    branch,
+    dirty: status.length !== 0,
+    unmerged: unmerged.length !== 0,
   };
 }
 

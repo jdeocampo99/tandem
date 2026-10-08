@@ -1,10 +1,10 @@
+import { readGitText } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, PullRequestMetadata, TaskRecord } from "../contracts.ts";
 import { draftProgressDigest } from "../delivery/evidence.ts";
 import {
   type DraftPublication,
   publishTaskDraft,
   pushPublishedTask,
-  readGitText,
   refreshTaskDraft,
 } from "../delivery/pull-requests.ts";
 import { appendDiagnosticEvent } from "../runtime/diagnostics.ts";
