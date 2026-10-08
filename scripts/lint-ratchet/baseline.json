@@ -947,11 +947,7 @@
       "complexity/noExcessiveCognitiveComplexity": 1
     },
     "src/workers/terminal.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1,
-      "tandem/hidden-clock": 7,
-      "tandem/type-assertion": 10
+      "complexity/noExcessiveCognitiveComplexity": 1
     },
     "src/workers/validation-stage.ts": {
       "complexity/noExcessiveLinesPerFunction": 3,
