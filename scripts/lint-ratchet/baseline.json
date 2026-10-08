@@ -522,9 +522,7 @@
       "suspicious/noUnnecessaryConditions": 1
     },
     "src/runtime/database.ts": {
-      "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1,
-      "tandem/type-assertion": 16
+      "style/noExcessiveLinesPerFile": 1
     },
     "src/runtime/diagnostics.ts": {
       "tandem/hidden-clock": 1
