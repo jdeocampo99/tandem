@@ -2,20 +2,19 @@ import { expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { EndpointInspection } from "../../src/terminal-backend/contract.ts";
 import {
+  liveWorkerTerminal,
   readWorkerTerminalCommand,
   replyUsage,
   requestWorkerTerminalCommand,
   traceWorkerTurn,
   type WorkerTerminalJob,
   type WorkerTerminalState,
+  workerDelegationStopped,
   writeWorkerTerminal,
 } from "../../src/workers/terminal.ts";
-import {
-  parseCommand,
-  parseTerminal,
-  parseTokenTally,
-} from "../../src/workers/terminal-records.ts";
+import { isTokenTally, parseCommand, parseTerminal } from "../../src/workers/terminal-records.ts";
 
 const NOW = 1_700_000_000_000;
 const state: WorkerTerminalState = {
@@ -128,9 +127,67 @@ test("usage decoding retains null cache defaults and refuses missing or invalid 
     costUsd: 0,
     replies: 0.5,
   } as const;
-  expect(parseTokenTally(tally)).toBe(tally);
-  expect(parseTokenTally({ ...tally, replies: -1 })).toBeUndefined();
-  expect(parseTokenTally({ ...tally, provider: " " })).toBeUndefined();
+  expect(isTokenTally(tally) ? tally : undefined).toBe(tally);
+  const negativeReplies = { ...tally, replies: -1 };
+  expect(isTokenTally(negativeReplies) ? negativeReplies : undefined).toBeUndefined();
+  const blankProvider = { ...tally, provider: " " };
+  expect(isTokenTally(blankProvider) ? blankProvider : undefined).toBeUndefined();
+});
+
+test("injected clocks bound live heartbeat freshness and stopped delegation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "tandem-terminal-freshness-"));
+  try {
+    const job: WorkerTerminalJob = {
+      ...identity,
+      role: "implementer",
+      cwd: root,
+      jobPath: join(root, "job.json"),
+    };
+    const inspection: EndpointInspection = {
+      endpoint: {
+        terminal: "herdr",
+        sessionId: "session",
+        workspaceId: "workspace",
+        tabId: "tab",
+        paneId: "pane",
+        role: "implementer",
+        generation: job.generation,
+      },
+      pane: { paneId: "pane", tabId: "tab", workspaceId: "workspace", foregroundCwd: root },
+      processInfo: {
+        paneId: "pane",
+        shellPid: undefined,
+        foregroundProcessGroupId: undefined,
+        foregroundProcesses: [
+          { pid: state.pid, name: "omp", argv: ["omp"], argv0: "omp", commandLine: "omp" },
+        ],
+      },
+      activeWorker: true,
+    };
+    const current = { ...state, cwd: root };
+    await writeWorkerTerminal(job.jobPath, current);
+    for (const offset of [-30_000, 0, 30_000]) {
+      expect(await liveWorkerTerminal(inspection, job, () => NOW + offset)).toEqual(current);
+      expect(await workerDelegationStopped(inspection, job, () => NOW + offset)).toBe(true);
+    }
+    for (const offset of [-30_001, 30_001]) {
+      await expect(liveWorkerTerminal(inspection, job, () => NOW + offset)).rejects.toThrow(
+        "interactive worker terminal heartbeat is stale",
+      );
+      await expect(workerDelegationStopped(inspection, job, () => NOW + offset)).rejects.toThrow(
+        "interactive worker terminal heartbeat is stale",
+      );
+    }
+    await writeWorkerTerminal(job.jobPath, { ...current, completed: false, phase: "busy" });
+    expect(await workerDelegationStopped(inspection, job, () => NOW)).toBe(false);
+    await writeWorkerTerminal(job.jobPath, { ...current, completed: false, phase: "paused" });
+    expect(await workerDelegationStopped(inspection, job, () => NOW)).toBe(true);
+    await expect(workerDelegationStopped(inspection, job, () => NOW + 30_001)).rejects.toThrow(
+      "interactive worker terminal heartbeat is stale",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("control uses injected IDs, exact deadlines, fifty-millisecond polls and owned cleanup", async () => {

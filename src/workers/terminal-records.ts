@@ -198,7 +198,7 @@ export function usageCounts(
   return { provider, model, input, output, cacheRead, cacheWrite, costUsd };
 }
 
-function isTokenTally(value: unknown): value is WorkerTokenTally {
+export function isTokenTally(value: unknown): value is WorkerTokenTally {
   if (!record(value) || value.schemaVersion !== 1) return false;
   return (
     text(value.provider) &&
@@ -210,8 +210,4 @@ function isTokenTally(value: unknown): value is WorkerTokenTally {
     count(value.costUsd) &&
     count(value.replies)
   );
-}
-
-export function parseTokenTally(value: unknown): WorkerTokenTally | undefined {
-  return isTokenTally(value) ? value : undefined;
 }

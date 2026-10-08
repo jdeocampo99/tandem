@@ -103,7 +103,8 @@ export async function readWorkerTokenTally(
   jobPath: string,
 ): Promise<records.WorkerTokenTally | undefined> {
   try {
-    return records.parseTokenTally(await records.readOptionalJson(`${jobPath}.usage.json`));
+    const value = await records.readOptionalJson(`${jobPath}.usage.json`);
+    return records.isTokenTally(value) ? value : undefined;
   } catch {
     return undefined;
   }
