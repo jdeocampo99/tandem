@@ -1,13 +1,15 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  applyPreferences,
   configureTernPluginSettings,
   describeTernPluginKeys,
   PreferenceWriteNotCommittedError,
+  planPreferences,
   planTernPluginKeys,
   restoreTernPluginSettings,
-} from "../../../src/terminal-backend/tern/plugin.ts";
+} from "../../../src/terminal-backend/tern/preferences.ts";
 
 test("Tandem shortcuts override presets while preserving custom chord aliases and sequences", () => {
   const plan = planTernPluginKeys(
@@ -39,6 +41,8 @@ test("both Tern character and physical digit shortcuts route to the same project
 test("first link records exact changes and restoration preserves later customizations", async () => {
   const root = await mkdtemp("/tmp/tandem-keys-restore-");
   const path = join(root, "settings.json");
+  let ids = 0;
+  const input = { path, newId: () => `preference-${++ids}` };
   try {
     await writeFile(
       path,
@@ -48,7 +52,10 @@ test("first link records exact changes and restoration preserves later customiza
         keybinds: { "super+shift+B": "my-board" },
       }),
     );
-    const configured = await configureTernPluginSettings({ path });
+    const configured = await configureTernPluginSettings(input);
+    expect(ids).toBe(2);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect((await stat(`${path}.tandem.json`)).mode & 0o777).toBe(0o600);
     expect(configured.applied).toEqual({ sidebar: true, keys: true });
     expect(configured.skipped).toEqual(["cmd+shift+b"]);
     expect(describeTernPluginKeys(configured.skipped)).toBe("Command+Shift+B");
@@ -62,7 +69,8 @@ test("first link records exact changes and restoration preserves later customiza
     installed.tabs_autohide = false;
     installed.opacity = 60;
     await writeFile(path, JSON.stringify(installed));
-    const restored = await restoreTernPluginSettings({ path });
+    const restored = await restoreTernPluginSettings(input);
+    expect(ids).toBe(3);
     expect(restored.preserved).toEqual(["cmd+shift+p", "sidebar"]);
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
       opacity: 60,
@@ -231,4 +239,60 @@ test("an unclassified write failure preserves its receipt without claiming confi
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("preference plans preserve exact settings and record bytes for an alternate preset", () => {
+  const input = '{"opacity":42,"keymap":"tmux","tabs_autohide":false}';
+  expect(planPreferences(input, undefined)).toEqual({
+    status: "apply",
+    record:
+      '{\n  "version": 1,\n  "keybindsExisted": false,\n  "keys": [],\n  "sidebar": {\n    "previous": false,\n    "installed": true\n  }\n}\n',
+    settings: '{\n  "tabs_autohide": true,\n  "keymap": "tmux",\n  "opacity": 42\n}\n',
+    applied: { sidebar: true, keys: false },
+    preset: "tmux",
+    skipped: [],
+  });
+});
+
+test("an existing preference record never reapplies settings the user removed", () => {
+  const record =
+    '{"version":1,"keybindsExisted":false,"keys":[{"key":"cmd+shift+b","installed":"plugin.tandem.board"}],"sidebar":{"installed":true}}';
+  expect(
+    planPreferences('{"tabs_autohide":false,"keybinds":{"super+shift+B":"my-board"}}', record),
+  ).toEqual({
+    status: "configured",
+    configured: false,
+    skipped: ["cmd+shift+b"],
+  });
+  expect(
+    planPreferences(
+      '{"tabs_autohide":true,"keybinds":{"cmd+shift+b":"plugin.tandem.board"}}',
+      record,
+    ),
+  ).toEqual({
+    status: "configured",
+    configured: true,
+    skipped: [],
+  });
+});
+
+test("fully configured preferences need no new record and malformed records fail closed", () => {
+  expect(planPreferences('{"tabs_autohide":true,"keymap":"tmux"}', undefined)).toEqual({
+    status: "configured",
+    configured: true,
+    skipped: [],
+  });
+  expect(() => planPreferences("{}", "{}")).toThrow();
+});
+
+test("preference application saves its record before changing settings", async () => {
+  const plan = planPreferences('{"keymap":"tmux"}', undefined);
+  if (plan.status !== "apply") throw new Error("expected an apply plan");
+  const writes: string[] = [];
+  await applyPreferences(plan, {
+    saveRecord: async (text) => void writes.push(`record:${text}`),
+    saveSettings: async (text) => void writes.push(`settings:${text}`),
+    discardRecord: async (text) => void writes.push(`discard:${text}`),
+  });
+  expect(writes).toEqual([`record:${plan.record}`, `settings:${plan.settings}`]);
 });

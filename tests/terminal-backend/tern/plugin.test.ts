@@ -8,11 +8,12 @@ import {
 } from "../../../src/terminal-backend/compose.ts";
 import { TERN_BINARY } from "../../../src/terminal-backend/tern/cli.ts";
 import {
-  configureTernPluginSettings,
   ensureTernPlugin,
   reloadTernPlugin,
   TernRequiredError,
 } from "../../../src/terminal-backend/tern/plugin.ts";
+
+import { configureTernPluginSettings } from "../../../src/terminal-backend/tern/preferences.ts";
 
 const scratch = await mkdtemp("/tmp/tandem-plugin-scratch-");
 afterAll(() => rm(scratch, { recursive: true, force: true }));

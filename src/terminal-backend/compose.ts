@@ -11,10 +11,11 @@ import { TERN_CONTEXT } from "./tern/context.ts";
 import {
   ensureTernPlugin,
   reloadTernPlugin,
-  restoreTernPluginPreferences,
   type TernPluginDependencies,
   TernRequiredError,
 } from "./tern/plugin.ts";
+
+import { restoreTernPluginPreferences } from "./tern/preferences.ts";
 
 export type TerminalComposition = Readonly<{
   /** Overrides saved settings; without either choice, Tern is the default. */
