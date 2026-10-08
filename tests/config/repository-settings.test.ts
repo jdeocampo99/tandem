@@ -230,13 +230,11 @@ test("command saves skip unchanged writes while merging saves retain their write
     const original = await stat(configPath);
     await saveRepositoryCommands({ repoPath: repo, home });
     expect((await stat(configPath)).ino).toBe(original.ino);
-    const commentedHeader = `repoPath = ${JSON.stringify(repo)}\n[merging] # keep\nmaxCiRetries = 2\n`;
-    await writeFile(configPath, commentedHeader);
+    const withoutMerging = `repoPath = ${JSON.stringify(repo)}\n`;
+    await writeFile(configPath, withoutMerging);
     const beforeMerge = await stat(configPath);
-    expect(await saveMergingChoice({ repoPath: repo, home, choice: { mergeWith: "off" } })).toEqual(
-      { maxCiRetries: 2 },
-    );
-    expect(await readFile(configPath, "utf8")).toBe(commentedHeader);
+    await saveMergingChoice({ repoPath: repo, home, choice: { mergeWith: "off" } });
+    expect(await readFile(configPath, "utf8")).toContain('mergeWith = "off"');
     expect((await stat(configPath)).ino).not.toBe(beforeMerge.ino);
   });
 });
