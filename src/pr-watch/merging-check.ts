@@ -1,4 +1,4 @@
-import type { MergingChoice } from "../config/repositories.ts";
+import type { MergingChoice } from "../config/repository-settings.ts";
 import type { CommandRunner } from "../contracts.ts";
 import {
   type BranchRules,

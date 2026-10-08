@@ -11,7 +11,14 @@ import type {
 } from "../contracts.ts";
 import { writeTextAtomically } from "../runtime/persistence.ts";
 import { type ModelSettings, readModelSettingsAt } from "./models.ts";
-import { copyPolicy, defaultPolicy, parsePolicy, parsePolicyOverride } from "./policy.ts";
+import { copyPolicy, parsePolicy, parsePolicyOverride } from "./policy.ts";
+import { DISCOVERY_FILES, discoverRepositoryCommands } from "./repository-discovery.ts";
+import {
+  applySettingsEdit,
+  type MergingChoice,
+  type RepositoryCommandEdit,
+  serializeCentralConfig,
+} from "./repository-settings.ts";
 import {
   assertContainedReference,
   assertPhysicalRepositoryReference,
@@ -22,6 +29,8 @@ import {
   isAlreadyExistsError,
   isContainedPath,
   isNotFoundError,
+  type PolicyTextReader,
+  type PolicyTextWriter,
   type ResolvedHome,
   repositoryRoot,
 } from "./storage.ts";
@@ -42,14 +51,6 @@ const CENTRAL_CONFIG_FILE = "settings.toml";
 /** The JSON envelope projects were saved in before settings.toml; still read, never written. */
 const LEGACY_CONFIG_FILE = "config.json";
 const CENTRAL_SCHEMA_VERSION = 1;
-
-/** Reads an absolute Tandem or target-repository file; return undefined only when the optional file is absent. */
-export type PolicyTextReader = (
-  absolutePath: string,
-) => Promise<string | undefined> | string | undefined;
-
-/** Writes a new Tandem-owned policy file at an absolute path. */
-export type PolicyTextWriter = (absolutePath: string, text: string) => Promise<void> | void;
 
 export type PolicyResolutionOptions = Readonly<{
   repoPath: string;
@@ -103,7 +104,7 @@ export type OnboardRepoResult = Readonly<{
  * that runs it, then the checks its other build files name. Suggestions only; none is prefilled
  * except the package.json proposal. `sources` names the files they came from, in order.
  */
-export type OnboardingDiscovery = Readonly<{
+type OnboardingDiscovery = Readonly<{
   commands: readonly string[];
   sources: readonly string[];
   lockfile?: string;
@@ -215,15 +216,6 @@ function readCleanupCommandList(value: unknown, source: string): readonly string
 }
 
 export type MergeWith = "auto-merge" | "queue-label" | "off";
-
-/** The user's answer to "how does this repository merge?", as saved into `[merging]`. */
-export type MergingChoice =
-  | Readonly<{ readonly mergeWith: "auto-merge" | "off" }>
-  | Readonly<{
-      readonly mergeWith: "queue-label";
-      readonly queueLabel: string;
-      readonly blockedLabel?: string;
-    }>;
 
 /**
  * How PR watch merges this repository's pull requests, as written in `[merging]`; each key left
@@ -495,106 +487,21 @@ export async function saveMergingChoice(
   if (!file.endsWith(".toml")) {
     throw new Error(`${file} is from before settings.toml; merging can't be saved into it.`);
   }
-  const before = await readFile(file, "utf8");
-  const current = readMergingTable(readSettingsToml(before, file, root).merging, file);
-  if (current?.mergeWith !== undefined) {
-    throw new Error(`${file} already says how this project merges; change it with tandem config.`);
-  }
-  const lines = mergingLines(options.choice);
-  const after =
-    current === undefined
-      ? `${before.replace(/\n*$/u, "\n")}\n[merging]\n${lines}`
-      : before.replace(/^\[merging\][ \t]*$/mu, `[merging]\n${lines.trimEnd()}`);
-  const saved = readMergingTable(readSettingsToml(after, file, root).merging, file);
-  if ((await readFile(file, "utf8")) !== before) {
-    throw new Error(`${file} changed while saving; nothing was written. Try again.`);
-  }
-  await writeTextAtomically(file, after);
-  return saved ?? {};
-}
-
-function mergingLines(choice: MergingChoice): string {
-  const lines = [`mergeWith = ${JSON.stringify(choice.mergeWith)}`];
-  if (choice.mergeWith === "queue-label") {
-    lines.push(`queueLabel = ${JSON.stringify(choice.queueLabel)}`);
-    if (choice.blockedLabel !== undefined) {
-      lines.push(`blockedLabel = ${JSON.stringify(choice.blockedLabel)}`);
+  return updateSettingsFile(file, (before) => {
+    const current = readMergingTable(readSettingsToml(before, file, root).merging, file);
+    if (current?.mergeWith !== undefined) {
+      throw new Error(
+        `${file} already says how this project merges; change it with tandem config.`,
+      );
     }
-  }
-  return `${lines.join("\n")}\n`;
-}
-
-/** The index just past the TOML array opening at `open`; brackets inside strings or comments don't count. */
-function listEnd(text: string, open: number): number {
-  if (text[open] !== "[")
-    throw new TypeError("settings.toml has a command setting that is not a list");
-  let depth = 0;
-  for (let index = open; index < text.length; index += 1) {
-    const char = text[index];
-    if (char === '"' || char === "'") {
-      index += 1;
-      while (index < text.length && text[index] !== char) {
-        if (char === '"' && text[index] === "\\") index += 1;
-        index += 1;
-      }
-    } else if (char === "#") {
-      while (index < text.length && text[index] !== "\n") index += 1;
-    } else if (char === "[") {
-      depth += 1;
-    } else if (char === "]") {
-      depth -= 1;
-      if (depth === 0) return index + 1;
-    }
-  }
-  throw new TypeError("settings.toml has an unterminated command list");
-}
-
-/**
- * Sets one top-level command list: in place when the file has it, over the commented example when
- * it only has that, else just above the first table. Nothing else in the file changes.
- */
-function withCommandList(text: string, key: string, values: readonly string[]): string {
-  const line = `${key} = ${tomlList(values)}`;
-  const tableStart = text.search(/^[ \t]*\[/mu);
-  const head = tableStart === -1 ? text : text.slice(0, tableStart);
-  const tail = text.slice(head.length);
-  const set = new RegExp(`^${key}[ \\t]*=[ \\t]*`, "mu").exec(head);
-  if (set !== null) {
-    return (
-      head.slice(0, set.index) + line + head.slice(listEnd(head, set.index + set[0].length)) + tail
-    );
-  }
-  const example = new RegExp(`^#[ \\t]*${key}[ \\t]*=.*$`, "mu").exec(head);
-  if (example !== null) {
-    return (
-      head.slice(0, example.index) + line + head.slice(example.index + example[0].length) + tail
-    );
-  }
-  return `${head.replace(/\n*$/u, "\n")}\n${line}\n${tail === "" ? "" : `\n${tail}`}`;
-}
-
-/**
- * Sets or clears the top-level `validation = "none"` line, the user's "no checks"; it goes just
- * above `validationCommands` when the file has that line, else above the first table.
- */
-function withNoChecks(text: string, noChecks: boolean): string {
-  const tableStart = text.search(/^[ \t]*\[/mu);
-  const head = tableStart === -1 ? text : text.slice(0, tableStart);
-  const tail = text.slice(head.length);
-  const set = /^validation[ \t]*=.*\n?/mu.exec(head);
-  if (!noChecks) {
-    return set === null
-      ? text
-      : head.slice(0, set.index) + head.slice(set.index + set[0].length) + tail;
-  }
-  if (set !== null) {
-    return `${head.slice(0, set.index)}${NO_CHECKS_LINE}\n${head.slice(set.index + set[0].length)}${tail}`;
-  }
-  const anchor = /^#?[ \t]*validationCommands[ \t]*=/mu.exec(head);
-  if (anchor !== null) {
-    return `${head.slice(0, anchor.index)}${NO_CHECKS_LINE}\n${head.slice(anchor.index)}${tail}`;
-  }
-  return `${head.replace(/\n*$/u, "\n")}\n${NO_CHECKS_LINE}\n${tail === "" ? "" : `\n${tail}`}`;
+    const after = applySettingsEdit(before, {
+      kind: "merging",
+      choice: options.choice,
+      existingTable: current !== undefined,
+    });
+    const saved = readMergingTable(readSettingsToml(after, file, root).merging, file);
+    return { after, result: saved ?? {}, write: true };
+  });
 }
 
 /**
@@ -604,17 +511,7 @@ function withNoChecks(text: string, noChecks: boolean): string {
  * settings path is refused like any other policy read.
  */
 export async function saveRepositoryCommands(
-  options: Readonly<{
-    repoPath: string;
-    home: string;
-    validationCommands?: readonly string[];
-    setupCommands?: readonly string[];
-    /**
-     * true saves "no checks" (`validation = "none"`, no validation commands); false with
-     * validation commands removes it. Undefined leaves the choice as it is.
-     */
-    noChecks?: boolean;
-  }>,
+  options: RepositoryCommandEdit & Readonly<{ repoPath: string; home: string }>,
 ): Promise<void> {
   const root = await repositoryRoot(options.repoPath);
   const file = await existingCentralFile(centralPaths(root, await configuredHome(options.home)));
@@ -636,31 +533,39 @@ export async function saveRepositoryCommands(
   if (options.noChecks === true && (options.validationCommands?.length ?? 0) > 0) {
     throw new TypeError("No checks can't be saved together with validation commands");
   }
-  const before = await readFile(file, "utf8");
-  readSettingsToml(before, file, root);
-  let after = before;
-  for (const [key, values] of edits) {
-    if (values !== undefined) after = withCommandList(after, key, values);
-  }
-  if (options.noChecks !== undefined) after = withNoChecks(after, options.noChecks);
-  const saved = readSettingsToml(after, file, root);
-  for (const [key, values] of edits) {
-    if (values !== undefined && JSON.stringify(saved[key]) !== JSON.stringify(values)) {
-      throw new TypeError(`${file} did not keep ${key} as saved; nothing was written.`);
+  await updateSettingsFile(file, (before) => {
+    readSettingsToml(before, file, root);
+    const after = applySettingsEdit(before, { ...options, kind: "commands" });
+    const saved = readSettingsToml(after, file, root);
+    for (const [key, values] of edits) {
+      if (values !== undefined && JSON.stringify(saved[key]) !== JSON.stringify(values)) {
+        throw new TypeError(`${file} did not keep ${key} as saved; nothing was written.`);
+      }
     }
+    if (options.noChecks !== undefined && (saved.validation === "none") !== options.noChecks) {
+      throw new TypeError(
+        `${file} did not keep the validation choice as saved; nothing was written.`,
+      );
+    }
+    // The edited file must still be a valid policy, such as no checks beside no commands.
+    parsePolicy(parseSettingsToml(after, file, root));
+    return { after, result: undefined, write: after !== before };
+  });
+}
+
+async function updateSettingsFile<T>(
+  file: string,
+  edit: (before: string) => Readonly<{ after: string; result: T; write: boolean }>,
+): Promise<T> {
+  const before = await readFile(file, "utf8");
+  const { after, result, write } = edit(before);
+  if (write) {
+    if ((await readFile(file, "utf8")) !== before) {
+      throw new Error(`${file} changed while saving; nothing was written. Try again.`);
+    }
+    await writeTextAtomically(file, after);
   }
-  if (options.noChecks !== undefined && (saved.validation === "none") !== options.noChecks) {
-    throw new TypeError(
-      `${file} did not keep the validation choice as saved; nothing was written.`,
-    );
-  }
-  // The edited file must still be a valid policy, such as no checks beside no commands.
-  parsePolicy(parseSettingsToml(after, file, root));
-  if (after === before) return;
-  if ((await readFile(file, "utf8")) !== before) {
-    throw new Error(`${file} changed while saving; nothing was written. Try again.`);
-  }
-  await writeTextAtomically(file, after);
+  return result;
 }
 
 /** Resolves central policy by canonical repository identity and pins guidance from the requested checkout. */
@@ -682,223 +587,6 @@ export async function resolveRepoPolicy(options: PolicyResolutionOptions): Promi
   return { config: copyPolicy(config), guidance };
 }
 
-type ValidationProposal = Readonly<{
-  commands: readonly string[];
-  /** The scripts the commands run, in order; empty when none were proposed. */
-  scripts: readonly string[];
-  unresolved: readonly string[];
-  approvalRequired: boolean;
-}>;
-
-function proposeValidationCommands(
-  packageText: string | undefined,
-  runner: string,
-): ValidationProposal {
-  if (packageText === undefined) {
-    return {
-      commands: [],
-      scripts: [],
-      unresolved: ["package.json is missing; no validation commands were proposed"],
-      approvalRequired: false,
-    };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = parseJson(packageText, "package.json");
-  } catch {
-    return {
-      commands: [],
-      scripts: [],
-      unresolved: ["package.json is invalid JSON; no validation commands were proposed"],
-      approvalRequired: false,
-    };
-  }
-  if (!isRecord(parsed)) {
-    return {
-      commands: [],
-      scripts: [],
-      unresolved: ["package.json must be an object; no validation commands were proposed"],
-      approvalRequired: false,
-    };
-  }
-  const scripts = parsed.scripts;
-  if (scripts === undefined) {
-    return {
-      commands: [],
-      scripts: [],
-      unresolved: ["package.json has no scripts; no validation commands were proposed"],
-      approvalRequired: false,
-    };
-  }
-  if (!isRecord(scripts)) {
-    return {
-      commands: [],
-      scripts: [],
-      unresolved: ["package.json.scripts must be an object; no validation commands were proposed"],
-      approvalRequired: false,
-    };
-  }
-
-  const hasCiLocal =
-    typeof scripts["ci:local"] === "string" && scripts["ci:local"].trim().length > 0;
-  const scriptNames = hasCiLocal
-    ? (["ci:local"] as const)
-    : (["check", "typecheck", "lint", "test"] as const);
-  const commands: string[] = [];
-  const found: string[] = [];
-  for (const scriptName of scriptNames) {
-    if (typeof scripts[scriptName] === "string" && scripts[scriptName].trim().length > 0) {
-      commands.push(`${runner} run ${scriptName}`);
-      found.push(scriptName);
-    }
-  }
-
-  const unresolved = hasCiLocal
-    ? []
-    : ["package.json has no ci:local script; review the validation proposal before approval"];
-  if (commands.length === 0) {
-    unresolved.push("package.json has no discovered validation scripts; no commands were proposed");
-  }
-  return {
-    commands,
-    scripts: found,
-    unresolved,
-    approvalRequired: commands.length > 0,
-  };
-}
-
-function packageScriptCommands(packageText: string | undefined, runner: string): readonly string[] {
-  if (packageText === undefined) return [];
-  let parsed: unknown;
-  try {
-    parsed = parseJson(packageText, "package.json");
-  } catch {
-    return [];
-  }
-  if (!isRecord(parsed) || !isRecord(parsed.scripts)) return [];
-  return Object.entries(parsed.scripts)
-    .filter(([, body]) => typeof body === "string" && body.trim().length > 0)
-    .map(([name]) => `${runner} run ${name}`);
-}
-
-/** The build files ecosystem detection reads, as text; a missing file is simply absent. */
-export const ECOSYSTEM_FILES = [
-  "go.mod",
-  "Cargo.toml",
-  "pyproject.toml",
-  "uv.lock",
-  "Makefile",
-  "makefile",
-  "justfile",
-  "Justfile",
-] as const;
-
-export type EcosystemFile = (typeof ECOSYSTEM_FILES)[number];
-
-/** One suggested check and the file it was found in. */
-export type EcosystemCheck = Readonly<{ command: string; from: string }>;
-
-/** The task-runner targets worth suggesting, in the order they are offered. */
-const RUNNER_TARGETS = ["check", "lint", "test"] as const;
-
-/** Makefile rule names on a line like `test lint: deps`; `:=` and `::=` assignments are not rules. */
-function makeTargets(text: string): ReadonlySet<string> {
-  const names = new Set<string>();
-  for (const match of text.matchAll(/^([A-Za-z0-9_.\- ]+?)[ \t]*::?(?!=)/gmu)) {
-    for (const name of (match[1] ?? "").split(/\s+/u)) names.add(name);
-  }
-  return names;
-}
-
-/** just recipe names on a line like `test *args:` or `@lint:`; `:=` assignments are not recipes. */
-function justRecipes(text: string): ReadonlySet<string> {
-  const names = new Set<string>();
-  for (const match of text.matchAll(/^@?([A-Za-z_][A-Za-z0-9_-]*)[^:=\n]*:(?!=)/gmu)) {
-    names.add(match[1] ?? "");
-  }
-  return names;
-}
-
-/**
- * The checks a repository's build files suggest, read as text and never executed: Go, Rust, a uv
- * Python project, and `check`/`lint`/`test` targets of a Makefile or justfile. Pure.
- */
-export function detectEcosystemChecks(
-  files: Readonly<Partial<Record<EcosystemFile, string>>>,
-): readonly EcosystemCheck[] {
-  const checks: EcosystemCheck[] = [];
-  const add = (from: string, commands: readonly string[]) => {
-    for (const command of commands) checks.push({ command, from });
-  };
-  if (files["go.mod"] !== undefined) add("go.mod", ["go vet ./...", "go test ./..."]);
-  if (files["Cargo.toml"] !== undefined) add("Cargo.toml", ["cargo clippy", "cargo test"]);
-  if (files["pyproject.toml"] !== undefined && files["uv.lock"] !== undefined) {
-    add("pyproject.toml and uv.lock", ["uv run pytest"]);
-  }
-  for (const name of ["Makefile", "makefile"] as const) {
-    const text = files[name];
-    if (text === undefined) continue;
-    const targets = makeTargets(text);
-    add(
-      name,
-      RUNNER_TARGETS.filter((target) => targets.has(target)).map((target) => `make ${target}`),
-    );
-    break;
-  }
-  for (const name of ["justfile", "Justfile"] as const) {
-    const text = files[name];
-    if (text === undefined) continue;
-    const recipes = justRecipes(text);
-    add(
-      name,
-      RUNNER_TARGETS.filter((target) => recipes.has(target)).map((target) => `just ${target}`),
-    );
-    break;
-  }
-  return checks;
-}
-
-type PackageManager = Readonly<{
-  install: string;
-  /** The tool that runs package.json scripts; absent for a lockfile that is not JavaScript's. */
-  runner?: string;
-  lockfile: string;
-}>;
-
-/** Lockfile → the install that reproduces it exactly and the tool that runs package scripts. */
-const LOCKFILE_PACKAGE_MANAGERS: readonly (readonly [string, Omit<PackageManager, "lockfile">])[] =
-  [
-    ["bun.lock", { install: "bun install --frozen-lockfile", runner: "bun" }],
-    ["bun.lockb", { install: "bun install --frozen-lockfile", runner: "bun" }],
-    ["pnpm-lock.yaml", { install: "pnpm install --frozen-lockfile", runner: "pnpm" }],
-    ["yarn.lock", { install: "yarn install --immutable", runner: "yarn" }],
-    ["package-lock.json", { install: "npm ci", runner: "npm" }],
-    ["uv.lock", { install: "uv sync --frozen" }],
-  ];
-
-/**
- * The tool that runs package.json scripts: the JavaScript lockfile's own, `bun` with no lockfile,
- * and `npm` beside a uv.lock, since a Python project is never assumed to have bun.
- */
-function scriptRunner(manager: PackageManager | undefined): string {
-  if (manager === undefined) return "bun";
-  return manager.runner ?? "npm";
-}
-
-/** The first lockfile found decides the package manager; none means no install and bun scripts. */
-async function detectPackageManager(
-  root: string,
-  readText: PolicyTextReader | undefined,
-): Promise<PackageManager | undefined> {
-  for (const [lockfile, manager] of LOCKFILE_PACKAGE_MANAGERS) {
-    if ((await readRepositoryFile(root, lockfile, readText, false)) !== undefined) {
-      return { ...manager, lockfile };
-    }
-  }
-  return undefined;
-}
-
 function onboardingUnresolved(
   proposal: Readonly<{ unresolved: readonly string[] }>,
   policy: RepoPolicy,
@@ -909,88 +597,6 @@ function onboardingUnresolved(
   }
   return deduplicateStrings(unresolved);
 }
-
-function tomlList(values: readonly string[]): string {
-  return `[${values.map((value) => JSON.stringify(value)).join(", ")}]`;
-}
-
-/**
- * Writes settings.toml with the proposed commands filled in and every other setting present but
- * commented out, each with what it does and an example, so the file documents itself.
- */
-function serializeCentralConfig(
-  root: string,
-  validationCommands: readonly string[],
-  setupCommands: readonly string[],
-  noChecks: boolean,
-): string {
-  const defaults = defaultPolicy();
-  const setting = (values: readonly string[], key: string, example: string): string =>
-    values.length > 0 ? `${key} = ${tomlList(values)}` : `# ${key} = ${example}`;
-  const validation = noChecks
-    ? `${NO_CHECKS_LINE}\nvalidationCommands = []`
-    : setting(validationCommands, "validationCommands", '["npm run lint", "npm test"]');
-  return `# Tandem settings for this project. Edit with \`tandem config\`.
-# Uncomment a line (remove the leading "#") to turn a setting on.
-# Changes apply to tasks started afterwards; running tasks keep the settings they began with.
-
-# The repository these settings belong to. Don't change this.
-repoPath = ${JSON.stringify(root)}
-
-# Commands that prepare a fresh working copy before a coding agent starts, like installing
-# dependencies. They run every time an agent starts, so they should be safe to repeat.
-${setting(setupCommands, "setupCommands", '["npm ci", "npx prisma generate"]')}
-
-# Checks every change must pass before Tandem accepts it. Each one runs in the project folder.
-# For no checks at all, set validation = "none" with no validationCommands: tasks then skip
-# validation and are labeled unvalidated.
-${validation}
-
-# Commands that stop what agents started in a working copy, like a Docker or database stack.
-# They run in the task's working copy once the task is finished and its agents are closed.
-# cleanupCommands = ["docker compose down"]
-
-# How many times reviewers may send a change back for fixes before Tandem asks you.
-# maxFixRounds = ${defaults.maxFixRounds}
-
-# Tandem gives coding agents and reviewers its own code standards and principles. Set "none" to
-# leave them out and let this repository's AGENTS.md, CLAUDE.md, and instructions govern.
-# standards = "tandem"
-
-# Extra instructions for agents at each stage. Keep this section below the settings above.
-# [instructions]
-# implementation = ["Keep changes small and match the surrounding code."]
-# validation = []
-# review = ["Flag any change to the public API."]
-
-# Files in this repository whose contents are given to agents as instructions, by stage.
-# [instructionFiles]
-# implementation = ["docs/CONTRIBUTING.md"]
-# validation = []
-# review = []
-
-# How PR watch merges published pull requests and how patient it is with CI. mergeWith is
-# "auto-merge" (GitHub's own), "queue-label" (add queueLabel; blockedLabel is the label the queue
-# adds when it kicks a pull request out), or "off". Until mergeWith is set, PR watch retries CI
-# but never merges; Tandem offers to set it up the first time it watches one of your pull
-# requests here.
-# [merging]
-# mergeWith = "queue-label"
-# queueLabel = "mergequeue"
-# blockedLabel = "blocked"
-# maxCiRetries = 1
-# stuckAfterMinutes = 60
-
-# Use a different model for one role in this project only. Roles: coordinator, scout,
-# implementer, reviewer, presentation. Other roles keep your saved choices.
-# [models.implementer]
-# model = "provider/model"
-# thinking = "high"
-`;
-}
-
-/** The line that saves "no checks". */
-const NO_CHECKS_LINE = 'validation = "none"';
 
 /** The absolute path of a repository's central settings file, whether or not it exists yet. */
 export async function centralConfigPath(repoPath: string, home: string): Promise<string> {
@@ -1019,31 +625,22 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     throw centralOverwriteError(configPath);
   }
 
-  const packageText = await readRepositoryFile(
-    checkoutRoot,
-    "package.json",
-    options.readText,
-    false,
-  );
-  const manager = await detectPackageManager(checkoutRoot, options.readText);
-  const runner = scriptRunner(manager);
-  const ecosystem = detectEcosystemChecks(await readEcosystemFiles(checkoutRoot, options.readText));
+  const files = await readDiscoveryFiles(checkoutRoot, options.readText);
   const noChecks = options.noChecks === true;
   if (noChecks && (options.validationCommands?.length ?? 0) > 0) {
     throw new TypeError("No checks can't be saved together with validation commands");
   }
-  const discovered = proposeValidationCommands(packageText, runner);
+  const discovered = discoverRepositoryCommands(files);
   // Commands the user chose, or their choice of none, are theirs to vouch for: nothing unresolved.
-  const proposal: ValidationProposal =
+  const proposal =
     options.validationCommands === undefined && !noChecks
-      ? discovered
+      ? discovered.proposal
       : {
           commands: options.validationCommands ?? [],
-          scripts: [],
           unresolved: [],
           approvalRequired: true,
         };
-  const setupCommands = options.setupCommands ?? (manager === undefined ? [] : [manager.install]);
+  const setupCommands = options.setupCommands ?? discovered.setupCommands;
   const proposedPolicy = existingConfig
     ? copyPolicy(currentPolicy)
     : parsePolicyOverride(
@@ -1060,7 +657,11 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
   if (options.write === true) {
     await writeCentralConfig(
       paths,
-      serializeCentralConfig(root, proposal.commands, setupCommands, noChecks),
+      serializeCentralConfig(root, {
+        validationCommands: proposal.commands,
+        setupCommands,
+        noChecks,
+      }),
       options.writeText,
     );
     written = true;
@@ -1079,38 +680,31 @@ export async function onboardRepo(options: OnboardRepoOptions): Promise<OnboardR
     noChecks: proposedPolicy.validation === "none",
     setupCommands: proposedPolicy.setupCommands,
     unresolved,
-    discovery: discoveryOf(packageScriptCommands(packageText, runner), ecosystem, manager),
+    discovery: discovered.discovery,
   };
 }
 
-/**
- * Each ecosystem file that exists, as text; never executed. One that can't be read safely (a
- * symlink out of the repository, a directory) only loses its suggestions.
- */
-async function readEcosystemFiles(
+/** Ecosystem read failures only lose suggestions; package and lockfile failures still block setup. */
+async function readDiscoveryFiles(
   root: string,
   readText: PolicyTextReader | undefined,
-): Promise<Partial<Record<EcosystemFile, string>>> {
-  const files: Partial<Record<EcosystemFile, string>> = {};
-  for (const name of ECOSYSTEM_FILES) {
-    const text = await readRepositoryFile(root, name, readText, false).catch(() => undefined);
-    if (text !== undefined) files[name] = text;
+): Promise<Parameters<typeof discoverRepositoryCommands>[0]> {
+  const packageText = await readRepositoryFile(root, "package.json", readText, false);
+  let lockfile: string | undefined;
+  for (const name of DISCOVERY_FILES.lockfiles) {
+    if ((await readRepositoryFile(root, name, readText, false)) !== undefined) {
+      lockfile = name;
+      break;
+    }
   }
-  return files;
-}
-
-function discoveryOf(
-  scripts: readonly string[],
-  ecosystem: readonly EcosystemCheck[],
-  manager: PackageManager | undefined,
-): OnboardingDiscovery {
-  const sources = [
-    ...(scripts.length > 0 ? ["package.json scripts"] : []),
-    ...ecosystem.map((check) => check.from),
-  ];
+  const ecosystemFiles: Partial<Record<string, string>> = {};
+  for (const name of DISCOVERY_FILES.ecosystem) {
+    const text = await readRepositoryFile(root, name, readText, false).catch(() => undefined);
+    if (text !== undefined) ecosystemFiles[name] = text;
+  }
   return {
-    commands: deduplicateStrings([...scripts, ...ecosystem.map((check) => check.command)]),
-    sources: deduplicateStrings(sources),
-    ...(manager === undefined ? {} : { lockfile: manager.lockfile }),
+    ...(packageText === undefined ? {} : { packageText }),
+    ...(lockfile === undefined ? {} : { lockfile }),
+    ecosystemFiles,
   };
 }

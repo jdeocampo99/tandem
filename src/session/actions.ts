@@ -1,6 +1,6 @@
 import { isBoardView } from "../board/view.ts";
 import type { SelfImprovementMode } from "../config/home-settings.ts";
-import type { MergingChoice } from "../config/repositories.ts";
+import type { MergingChoice } from "../config/repository-settings.ts";
 import type { CreatableTaskKind, RepoPolicy, RequestBriefContent } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import { type MemoryShowResult, renderCatchUpCard, renderMemoryShow } from "../memory/view.ts";

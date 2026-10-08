@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { TandemBoundaryEnvironment } from "../config/environment.ts";
 import { parseModelAssignments } from "../config/models.ts";
-import type { MergingChoice } from "../config/repositories.ts";
+import type { MergingChoice } from "../config/repository-settings.ts";
 import type { ModelSpec, RepoPolicy } from "../contracts.ts";
 import type { PrSummary } from "../delivery/evidence.ts";
 import type { CoordinatorFile } from "../harness/contract.ts";

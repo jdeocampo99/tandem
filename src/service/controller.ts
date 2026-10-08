@@ -31,7 +31,6 @@ import {
 } from "../config/operating-profile.ts";
 import { parsePolicyOverride } from "../config/policy.ts";
 import {
-  type MergingChoice,
   type MergingSettingsFile,
   type OnboardRepoResult,
   onboardRepo,
@@ -40,6 +39,7 @@ import {
   saveMergingChoice,
   saveRepositoryCommands,
 } from "../config/repositories.ts";
+import type { MergingChoice } from "../config/repository-settings.ts";
 import { findSkills } from "../config/skills.ts";
 import type {
   AnswerTaskInput,

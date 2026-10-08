@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parsePolicy, parsePolicyOverride } from "../../src/config/policy.ts";
 import {
-  detectEcosystemChecks,
   onboardRepo,
   resolveRepoPolicy,
   saveRepositoryCommands,
@@ -19,50 +18,6 @@ async function withRepo(run: (repo: string, home: string) => Promise<void>): Pro
     await rm(root, { recursive: true, force: true });
   }
 }
-
-test("Go, Rust, and uv Python projects suggest their usual checks, named by their files", () => {
-  expect(
-    detectEcosystemChecks({
-      "go.mod": "module example.com/x\n",
-      "Cargo.toml": "[package]\n",
-      "pyproject.toml": "[project]\n",
-      "uv.lock": "version = 1\n",
-    }),
-  ).toEqual([
-    { command: "go vet ./...", from: "go.mod" },
-    { command: "go test ./...", from: "go.mod" },
-    { command: "cargo clippy", from: "Cargo.toml" },
-    { command: "cargo test", from: "Cargo.toml" },
-    { command: "uv run pytest", from: "pyproject.toml and uv.lock" },
-  ]);
-  // pytest through uv needs both the project and its lockfile.
-  expect(detectEcosystemChecks({ "pyproject.toml": "[project]\n" })).toEqual([]);
-});
-
-test("Makefile and justfile check, lint, and test targets are read as text, never run", () => {
-  const makefile = [
-    "VERSION := 1",
-    "test: build",
-    "\tgo test ./...",
-    "lint fmt: deps",
-    "\tgolangci-lint run",
-    "deploy:",
-    "\t./deploy",
-    "check:= not a rule",
-  ].join("\n");
-  expect(detectEcosystemChecks({ Makefile: makefile })).toEqual([
-    { command: "make lint", from: "Makefile" },
-    { command: "make test", from: "Makefile" },
-  ]);
-  const justfile = ["set shell := ['bash']", "check:", "  cargo check", "@test *args:", "  x"].join(
-    "\n",
-  );
-  expect(detectEcosystemChecks({ justfile })).toEqual([
-    { command: "just check", from: "justfile" },
-    { command: "just test", from: "justfile" },
-  ]);
-  expect(detectEcosystemChecks({})).toEqual([]);
-});
 
 test("onboarding offers ecosystem checks as suggestions only, never as proposed commands", async () => {
   await withRepo(async (repo, home) => {
@@ -165,4 +120,50 @@ test('validation = "none" holds only while no validation command is configured',
   const layered = parsePolicyOverride({ validationCommands: ["make check"] }, global);
   expect(layered.validation).toBeUndefined();
   expect(parsePolicyOverride({}, global).validation).toBe("none");
+});
+
+test("onboarding keeps lockfile selection separate from the later ecosystem snapshot", async () => {
+  await withRepo(async (repo, home) => {
+    const reads: string[] = [];
+    const snapshots = new Map<string, (string | undefined)[]>([
+      [join(repo, "uv.lock"), ["", undefined]],
+      [join(repo, "package.json"), ['{"scripts":{"test":"test"}}']],
+      [join(repo, "pyproject.toml"), ["[project]"]],
+    ]);
+    const result = await onboardRepo({
+      repoPath: repo,
+      home,
+      readText: (file) => {
+        reads.push(file);
+        return snapshots.get(file)?.shift();
+      },
+    });
+    expect(result.setupCommands.map((command) => command.name)).toEqual(["uv sync --frozen"]);
+    expect(result.discovery).toEqual({
+      commands: ["npm run test"],
+      sources: ["package.json scripts"],
+      lockfile: "uv.lock",
+    });
+    expect(
+      reads
+        .filter((file) => file.startsWith(`${repo}/`))
+        .map((file) => file.slice(repo.length + 1)),
+    ).toEqual([
+      "package.json",
+      "bun.lock",
+      "bun.lockb",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "package-lock.json",
+      "uv.lock",
+      "go.mod",
+      "Cargo.toml",
+      "pyproject.toml",
+      "uv.lock",
+      "Makefile",
+      "makefile",
+      "justfile",
+      "Justfile",
+    ]);
+  });
 });
