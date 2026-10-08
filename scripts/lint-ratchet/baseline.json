@@ -169,10 +169,6 @@
       "style/noExcessiveLinesPerFile": 1,
       "tandem/hidden-clock": 1
     },
-    "src/coordinator/record.ts": {
-      "style/noExcessiveLinesPerFile": 1,
-      "tandem/type-assertion": 4
-    },
     "src/coordinator/registry.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "tandem/hidden-clock": 1
@@ -401,14 +397,12 @@
       "style/noNestedTernary": 1,
       "suspicious/noShadow": 2
     },
+    "src/pr-review/receipts.ts": {
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "complexity/noExcessiveLinesPerFunction": 2
+    },
     "src/pr-review/render.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
-    },
-    "src/pr-review/reply-posting.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 2,
-      "complexity/useMaxParams": 1,
-      "style/noNestedTernary": 1
     },
     "src/pr-review/review.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -427,11 +421,10 @@
       "tandem/type-assertion": 1
     },
     "src/pr-review/service.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 3,
-      "complexity/noExcessiveLinesPerFunction": 3,
-      "complexity/useMaxParams": 1,
+      "complexity/noExcessiveCognitiveComplexity": 1,
+      "complexity/noExcessiveLinesPerFunction": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 3
+      "suspicious/noShadow": 2
     },
     "src/pr-review/state.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -482,9 +475,7 @@
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
-      "suspicious/noShadow": 1,
-      "suspicious/noUnnecessaryConditions": 1,
-      "tandem/type-assertion": 11
+      "suspicious/noUnnecessaryConditions": 1
     },
     "src/presentations/session.ts": {
       "complexity/useMaxParams": 3,
@@ -494,9 +485,7 @@
     },
     "src/recovery/central.ts": {
       "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1,
-      "tandem/hidden-clock": 2,
-      "tandem/type-assertion": 1
+      "style/noExcessiveLinesPerFile": 1
     },
     "src/report/build.ts": {
       "complexity/noExcessiveCognitiveComplexity": 2,
@@ -531,9 +520,7 @@
       "suspicious/noUnnecessaryConditions": 1
     },
     "src/runtime/database.ts": {
-      "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1,
-      "tandem/type-assertion": 16
+      "style/noExcessiveLinesPerFile": 1
     },
     "src/runtime/diagnostics.ts": {
       "tandem/hidden-clock": 1
@@ -546,7 +533,7 @@
       "complexity/noExcessiveLinesPerFunction": 3,
       "style/noExcessiveLinesPerFile": 1,
       "style/noNestedTernary": 1,
-      "tandem/type-assertion": 7
+      "tandem/type-assertion": 1
     },
     "src/runtime/usage-codec.ts": {
       "tandem/type-assertion": 2
@@ -685,7 +672,7 @@
       "style/noNestedTernary": 1
     },
     "src/tasks/control.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 4,
+      "complexity/noExcessiveCognitiveComplexity": 3,
       "complexity/noExcessiveLinesPerFunction": 2,
       "style/noExcessiveLinesPerFile": 1
     },
@@ -900,15 +887,9 @@
       "complexity/noExcessiveLinesPerFunction": 1,
       "complexity/useMaxParams": 1,
       "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 1,
-      "tandem/type-assertion": 7
+      "suspicious/noUnnecessaryConditions": 1
     },
     "src/worker.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1,
-      "complexity/useMaxParams": 2,
-      "style/noExcessiveLinesPerFile": 1,
-      "style/noNestedTernary": 1,
       "suspicious/noUnnecessaryConditions": 1
     },
     "src/workers/admission.ts": {
@@ -967,8 +948,7 @@
       "style/noExcessiveLinesPerFile": 1
     },
     "src/workers/terminal-control.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "tandem/hidden-clock": 2
+      "complexity/noExcessiveCognitiveComplexity": 1
     },
     "src/workers/terminal.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
@@ -1507,9 +1487,8 @@
       "style/noExcessiveLinesPerFile": 1,
       "tandem/hidden-clock": 5
     },
-    "tests/workers/terminal-control.test.ts": {
-      "tandem/hidden-clock": 1,
-      "tandem/json-parse-cast": 1
+    "tests/workers/terminal-control-fixture.ts": {
+      "tandem/hidden-clock": 1
     },
     "tests/workers/terminal.test.ts": {
       "style/noExcessiveLinesPerFile": 1,
