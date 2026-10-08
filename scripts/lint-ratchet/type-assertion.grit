@@ -2,6 +2,7 @@ language js
 
 TsAsExpression() as $cast where {
   $cast <: not `$_ as const`,
+  $cast <: not `$_ as unknown`,
   $cast <: not `JSON.parse($_) as $_`,
   register_diagnostic(span=$cast, message="[tandem/type-assertion] Type assertion: narrow, parse, or fix the type instead of asserting it.", severity="error")
 }
