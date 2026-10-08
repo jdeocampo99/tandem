@@ -64,10 +64,10 @@ import {
 import { retireCoordinatorWorkspace } from "./workspace.ts";
 
 /** Version of the machine-readable reconciliation report; bumped when its shape changes. */
-export const RECONCILE_REPORT_SCHEMA_VERSION = 3 as const;
+const RECONCILE_REPORT_SCHEMA_VERSION = 3 as const;
 
 /** The kinds of resource reconciliation knows how to classify. */
-export type ReconcileResourceKind =
+type ReconcileResourceKind =
   | "coordinator"
   | "worktree-lease"
   | "scout-task"
@@ -80,16 +80,16 @@ export type ReconcileResourceKind =
  * What the plan says should happen to one resource: release it through its owner, keep it and say
  * why, or leave it exactly where it is and record that Tandem could not explain it.
  */
-export type ReconcileAction = "clean" | "retain" | "quarantine";
+type ReconcileAction = "clean" | "retain" | "quarantine";
 
 /**
  * Where one resource ended up, once the plan was applied or reported as a dry run. `freeable` is a
  * task worktree that can be returned only with its own explicit approval.
  */
-export type ReconcileOutcome = "cleaned" | "retained" | "quarantined" | "failed" | "freeable";
+type ReconcileOutcome = "cleaned" | "retained" | "quarantined" | "failed" | "freeable";
 
 /** One stored coordinator record as the scan observed it, without changing anything. */
-export type ObservedCoordinator = Readonly<{
+type ObservedCoordinator = Readonly<{
   readonly found: DiscoveredCoordinatorRecord;
   readonly liveness: CoordinatorLiveness;
   /** Read only for a record no live coordinator answers for, so live panes stay undisturbed. */
@@ -97,13 +97,13 @@ export type ObservedCoordinator = Readonly<{
 }>;
 
 /** Whether a stored record still proves a coordinator is running under it. */
-export type CoordinatorLiveness =
+type CoordinatorLiveness =
   | Readonly<{ readonly status: "live" }>
   | Readonly<{ readonly status: "stopped" }>
   | Readonly<{ readonly status: "ambiguous"; readonly detail: string }>;
 
 /** One Treehouse lease in a pool, with the checkout behind it when Tandem may judge it. */
-export type ObservedPoolLease = Readonly<{
+type ObservedPoolLease = Readonly<{
   readonly repoPath: string;
   readonly poolRoot: string;
   readonly leaseId: string;
@@ -116,7 +116,7 @@ export type ObservedPoolLease = Readonly<{
 }>;
 
 /** One terminal implementation task whose earlier cleanup did not finish releasing its resources. */
-export type ObservedPendingImplementation = Readonly<{
+type ObservedPendingImplementation = Readonly<{
   readonly taskId: string;
   readonly repoPath: string;
   readonly reason: string;
@@ -125,14 +125,14 @@ export type ObservedPendingImplementation = Readonly<{
 }>;
 
 /** One terminal scout whose child resources an earlier coordinator did not finish releasing. */
-export type ObservedPendingScout = Readonly<{
+type ObservedPendingScout = Readonly<{
   readonly taskId: string;
   readonly repoPath: string;
   readonly reason: string;
 }>;
 
 /** Something the read-only scan itself could not complete, reported rather than assumed empty. */
-export type ReconcileScanFailure = Readonly<{
+type ReconcileScanFailure = Readonly<{
   readonly kind: "worktree-lease" | FenceKind;
   readonly subject: string;
   readonly reason: string;
@@ -157,7 +157,7 @@ export type ReconcileObservation = Readonly<{
 }>;
 
 /** One planned resource, carrying exactly what its owner needs to act on it. */
-export type ReconcilePlanItem =
+type ReconcilePlanItem =
   | Readonly<{
       readonly kind: "coordinator";
       readonly action: ReconcileAction;
@@ -274,7 +274,7 @@ export type ReconcileScanInput = Readonly<{
   readonly discard?: boolean;
 }>;
 
-export type ReconcileApplyInput = Readonly<{
+type ReconcileApplyInput = Readonly<{
   readonly run: CommandRunner;
   readonly terminal: TerminalBackend;
   readonly home: string;
@@ -302,7 +302,7 @@ export type ReconcileInput = Readonly<{
 }>;
 
 /** What one applied plan item actually did, which can differ from what the plan predicted. */
-export type ReconcileResult = Readonly<{
+type ReconcileResult = Readonly<{
   readonly item: ReconcilePlanItem;
   readonly outcome: ReconcileOutcome;
   readonly reason: string;
@@ -1116,7 +1116,7 @@ function reconcileWork(plan: ReconcilePlan): ReconcileWork {
  * terminal, under the record's own lock, while it is exactly as listed and its pane re-proves it;
  * the pane itself is never touched.
  */
-export async function applyTandemReconciliation(
+async function applyTandemReconciliation(
   input: ReconcileApplyInput,
 ): Promise<readonly ReconcileResult[]> {
   const results = new Map<ReconcilePlanItem, ReconcileResult>();
