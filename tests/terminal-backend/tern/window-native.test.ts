@@ -6,7 +6,7 @@ import { z } from "zod";
 import {
   configureTernPluginSettings,
   restoreTernPluginSettings,
-} from "../../../src/terminal-backend/tern/plugin.ts";
+} from "../../../src/terminal-backend/tern/preferences.ts";
 import { launchTernWindow, recordedActions, recordingCli } from "./native-window.ts";
 
 const enabled = process.platform === "darwin" && process.env.TANDEM_TERN_NATIVE === "1";
