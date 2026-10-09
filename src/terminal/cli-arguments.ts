@@ -200,7 +200,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       continue;
     }
     if (command === undefined) {
-      const parsed = commandFromToken(token, argv[index + 1]);
+      const parsed = commandFromToken(token, token === "pr" ? argv[index + 1] : undefined);
       command = parsed.command;
       index += parsed.consumed;
       continue;
