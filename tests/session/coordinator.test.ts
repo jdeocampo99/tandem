@@ -5,12 +5,12 @@ import { TANDEM_COORDINATOR_INSTRUCTIONS } from "../../src/instructions.ts";
 import { SETUP_WELCOME_TEXT } from "../../src/onboarding/checklist.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { runTandemCommand } from "../../src/session/actions.ts";
+import { type CoordinatorDeps, CoordinatorSession } from "../../src/session/coordinator.ts";
 import { sourceRefreshStatus } from "../../src/session/coordinator-context.ts";
 import { reviewStatus } from "../../src/session/coordinator-status.ts";
-import { type CoordinatorDeps, CoordinatorSession } from "../../src/session/coordinator.ts";
 import type { SessionHost } from "../../src/session/events.ts";
-import type { AgentState, AgentStatusReporter } from "../../src/terminal-backend/contract.ts";
 import { WELCOME_TEXT } from "../../src/terminal/welcome.ts";
+import type { AgentState, AgentStatusReporter } from "../../src/terminal-backend/contract.ts";
 import { fakeSessionTime, recordingSessionHost } from "../evals/scenario.ts";
 import { task } from "./fixtures.ts";
 
