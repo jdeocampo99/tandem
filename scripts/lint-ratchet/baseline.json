@@ -787,11 +787,6 @@
       "complexity/noExcessiveLinesPerFunction": 1,
       "tandem/type-assertion": 1
     },
-    "src/terminal/cli-arguments.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "tandem/type-assertion": 7
-    },
     "src/terminal/cli-commands.ts": {
       "style/noExcessiveLinesPerFile": 1
     },
