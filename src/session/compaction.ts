@@ -1,6 +1,7 @@
 import type { TandemEnvironmentSource } from "../config/environment.ts";
 import type { TaskRecord } from "../contracts.ts";
 import { isTerminalTask } from "../service/records.ts";
+import type { SessionDeps, SessionHost } from "./events.ts";
 
 /** Context size, in tokens, past which an idle coordinator compacts once a task finishes. */
 export const DEFAULT_COORDINATOR_COMPACT_TOKENS = 128_000;
@@ -43,4 +44,47 @@ export function atCompactionBoundary(
   state: Readonly<{ readonly taskFinished: boolean; readonly idle: boolean }>,
 ): boolean {
   return state.taskFinished && state.idle && !tasks.some(waitsOnUser);
+}
+
+/** Compacts once per newly finished non-scout task, when the coordinator is idle and over budget. */
+export class EarlyCompaction {
+  private knownFinished: Set<string> | undefined;
+  private taskFinished = false;
+  private compacting = false;
+
+  constructor(
+    private readonly compactTokens: number,
+    private readonly host: SessionHost,
+    private readonly logError: SessionDeps["logError"],
+  ) {}
+
+  /** Uses every listed task, like the digest and notifications, because this coordinator sees them all. */
+  compactIfAtBoundary(tasks: readonly TaskRecord[], idle: boolean): void {
+    if (this.compactTokens === 0 || !this.host.capabilities.proactiveCompaction) return;
+    const finished = finishedTaskIds(tasks);
+    const previous = this.knownFinished;
+    if (previous !== undefined && [...finished].some((id) => !previous.has(id))) {
+      this.taskFinished = true;
+    }
+    this.knownFinished = finished;
+    if (
+      this.compacting ||
+      !atCompactionBoundary(tasks, { taskFinished: this.taskFinished, idle })
+    ) {
+      return;
+    }
+    // The boundary is used up either way, so a later unrelated idle moment never compacts.
+    this.taskFinished = false;
+    const tokens = this.host.contextTokens();
+    if (tokens === undefined || tokens < this.compactTokens) return;
+    this.compacting = true;
+    // Not awaited: compaction re-enters the session through `compacted`, which reconciles, and
+    // this runs inside `reconcile`.
+    void this.host
+      .perform({ type: "compact" })
+      .catch((error: unknown) => this.logError("Tandem extension operation failed", error))
+      .finally(() => {
+        this.compacting = false;
+      });
+  }
 }

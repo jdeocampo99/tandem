@@ -8,9 +8,9 @@ import { runTandemCommand } from "../../src/session/actions.ts";
 import {
   type CoordinatorDeps,
   CoordinatorSession,
-  reviewStatus,
-  sourceRefreshStatus,
 } from "../../src/session/coordinator.ts";
+import { sourceRefreshStatus } from "../../src/session/coordinator-context.ts";
+import { reviewStatus } from "../../src/session/coordinator-status.ts";
 import type { SessionHost } from "../../src/session/events.ts";
 import { WELCOME_TEXT } from "../../src/terminal/welcome.ts";
 import type { AgentState, AgentStatusReporter } from "../../src/terminal-backend/contract.ts";
