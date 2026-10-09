@@ -89,11 +89,11 @@ export class CoordinatorStatus {
   async updateTasks(
     tasks: readonly TaskRecord[],
     repo: string,
-    realpath: (path: string) => Promise<string>,
+    owner: Readonly<{ realpath(path: string): Promise<string> }>,
   ): Promise<void> {
     if (this.reporter === undefined) return;
-    const resolved = await realpath(repo);
-    this.setTasks(await coordinatorTaskStatus(tasks, resolved, realpath));
+    const resolved = await owner.realpath(repo);
+    this.setTasks(await coordinatorTaskStatus(tasks, resolved, owner.realpath));
     this.report();
   }
 

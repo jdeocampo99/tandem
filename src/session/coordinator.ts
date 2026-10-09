@@ -254,7 +254,7 @@ export class CoordinatorSession {
     try {
       const service = this.service();
       const tasks = runTick ? await service.tick() : await service.list();
-      await this.status.updateTasks(tasks, this.deps.environment.repo, this.deps.realpath);
+      await this.status.updateTasks(tasks, this.deps.environment.repo, this.deps);
       await deliverPendingNotifications({
         host: this.deps.host,
         service,
