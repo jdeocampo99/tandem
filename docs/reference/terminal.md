@@ -127,7 +127,9 @@ notifications are disabled. Coordinator ask notifications stay enabled.
 - Ordinary close first proves the foreground process group and its argv against native macOS
   evidence. Daemon-hosted Tandem blocks are recognized only by an exact `tandem.<block-id>`
   program with no child, foreground group or foreground process; discovery can skip them without
-  treating them as agents or shells. Titles never prove that exception. Other live panes without
+  treating them as agents or shells. Titles never prove that exception. Browser blocks, which
+  `tern ls` marks with a `browser` URL, are hosted by the window: `tern process` refuses them, so
+  inspection reports them idle with no processes from the listing alone. Other live panes without
   process proof remain ambiguous. Busy panes refuse close unless the caller explicitly
   authorizes force; force still requires ownership and exact acknowledgement.
   Project close checks both coordinator and recorded alert helper before closing either.

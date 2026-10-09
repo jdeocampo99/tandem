@@ -50,6 +50,44 @@ test("discovery skips a live plugin block and reaches the real legacy coordinato
   });
 });
 
+test("coordinator discovery skips a browser block Tern's daemon cannot inspect", async () => {
+  await withScenario({ terminal: "tern" }, async (world) => {
+    const owner = world.openPane({ paneId: "48", cwd: world.repoPath });
+    const opened = await world.run({
+      argv: [
+        "tern",
+        "browser",
+        JSON.stringify({ op: "open", owner: Number(owner.paneId), url: "http://localhost:61440/" }),
+        "--json",
+      ],
+      cwd: world.repoPath,
+    });
+    const browser: string = JSON.parse(opened.stdout).ok.block;
+    const coordinator = world.openPane({ paneId: "49", cwd: world.repoPath });
+    world.replaceForeground(coordinator.paneId, [
+      "omp",
+      "--extension",
+      fileURLToPath(new URL("../../../src/harness/omp/extension.ts", import.meta.url)),
+      "--cwd",
+      world.repoPath,
+    ]);
+    const terminal = ternBackend(world.run, world.tern);
+    const inspection = await terminal.inspect({
+      endpoint: { ...owner, paneId: browser },
+      cwd: world.repoPath,
+    });
+    expect(inspection.activeWorker).toBe(false);
+    expect(inspection.processInfo.foregroundProcesses).toEqual([]);
+    await expect(
+      findRunningCoordinator(world.run, terminal, {
+        home: world.home,
+        sessionId: world.sessionId,
+        repoPath: world.repoPath,
+      }),
+    ).rejects.toThrow(`pre-registry Tandem coordinator`);
+  });
+});
+
 for (const program of [
   "",
   "sh",

@@ -246,6 +246,25 @@ async function readForegroundGroup(core: Core, group: number) {
 
 async function inspect(core: Core, target: EndpointTarget): Promise<EndpointInspection> {
   const found = await exactPane(core, target);
+  // The window hosts browser blocks; the daemon has no process for them and `tern process`
+  // refuses them, so Tern's own listing is the proof that nothing runs there.
+  if (found.block.browser !== undefined)
+    return {
+      endpoint: target.endpoint,
+      pane: {
+        paneId: found.block.id,
+        workspaceId: found.tab.id,
+        tabId: found.tab.id,
+        foregroundCwd: found.block.cwd,
+      },
+      processInfo: {
+        paneId: found.block.id,
+        shellPid: undefined,
+        foregroundProcessGroupId: undefined,
+        foregroundProcesses: [],
+      },
+      activeWorker: false,
+    };
   const processArgs = ["process", target.endpoint.paneId];
   let proc = await query(core, target.cwd, processArgs, Processes);
   let nativeProcesses: readonly { pid: number; name: string; argv: string[] }[] = [];

@@ -321,6 +321,19 @@ function missingPane(): CommandResult {
   return commandResult("", 1, JSON.stringify({ error: { code: "pane_not_found" } }));
 }
 
+/** A pane as `tern ls` lists it. Like Tern, a browser block names its URL and is not live. */
+function ternListedBlock(paneId: string, p: PaneState): Readonly<Record<string, unknown>> {
+  const base = { id: paneId, title: p.title ?? paneId, cwd: p.foregroundCwd };
+  if (p.browserUrl !== undefined)
+    return { ...base, live: false, program: "", args: [], browser: p.browserUrl };
+  return {
+    ...base,
+    live: true,
+    ...(p.blockProgram === undefined ? {} : { program: p.blockProgram }),
+    ...(p.blockArgs === undefined ? {} : { args: p.blockArgs }),
+  };
+}
+
 function positionalArguments(argv: readonly string[]): readonly string[] {
   return argv.filter((entry) => !entry.startsWith("--"));
 }
@@ -833,7 +846,7 @@ export async function createScenarioWorld(
         workspaceId: owner.workspaceId,
         tabId: owner.tabId,
         ...(owner.ternSessionId === undefined ? {} : { ternSessionId: owner.ternSessionId }),
-        ...(input.url === undefined ? {} : { browserUrl: input.url }),
+        browserUrl: input.url ?? "about:blank",
         foregroundCwd: owner.foregroundCwd,
         shellPid: nextPid,
         processes: [],
@@ -856,14 +869,7 @@ export async function createScenarioWorld(
             name: workspaceLabels.get(tabId) ?? null,
             blocks: present()
               .filter(([, p]) => p.tabId === tabId)
-              .map(([paneId, p]) => ({
-                id: paneId,
-                title: p.title ?? paneId,
-                cwd: p.foregroundCwd,
-                live: true,
-                ...(p.blockProgram === undefined ? {} : { program: p.blockProgram }),
-                ...(p.blockArgs === undefined ? {} : { args: p.blockArgs }),
-              })),
+              .map(([paneId, p]) => ternListedBlock(paneId, p)),
           })),
         })),
         detached: [],
@@ -888,6 +894,8 @@ export async function createScenarioWorld(
     if (found === undefined) return commandResult("", 1, "no block is called that id");
     const [paneId, pane] = found;
     if (verb === "process") {
+      if (pane.browserUrl !== undefined)
+        return commandResult("", 1, "no such pane in this session daemon");
       const foreground = pane.processes[0];
       return ok({
         pane: paneId,

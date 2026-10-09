@@ -14,6 +14,8 @@ const Block = z.object({
   cols: z.number().optional(),
   program: z.string().optional(),
   args: z.array(z.string()).optional(),
+  /** Set only on Tern's browser blocks, which the window hosts without any daemon process. */
+  browser: z.string().optional(),
 });
 const Tab = z.object({ id: Id, name: z.string().nullable(), blocks: z.array(Block) });
 const Session = z.object({ id: Id, name: z.string(), tabs: z.array(Tab) });
