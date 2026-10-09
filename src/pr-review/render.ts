@@ -1,3 +1,4 @@
+import type { PostReceiptOutcome } from "./post.ts";
 import { roundReplies, sentWithoutClaim } from "./replies.ts";
 import type { PrReviewRound, PrReviewState } from "./state.ts";
 
@@ -97,4 +98,25 @@ export function renderReviewText(state: PrReviewState, round: PrReviewRound): st
   if (notes.length > 0) lines.push("", ...notes);
   if (round.posted !== undefined) lines.push("", `Posted: ${round.posted.url}`);
   return `${lines.join("\n")}\n`;
+}
+
+export function reviewPostFailure(
+  prUrl: string,
+  outcome: Exclude<PostReceiptOutcome, { kind: "posted" }>,
+  recovering: boolean,
+): string {
+  if (outcome.kind === "moved") {
+    const head = outcome.head.slice(0, 12);
+    return recovering
+      ? uncertainPostMessage(prUrl, `A new post was refused because the PR moved to ${head}.`)
+      : `The PR moved to ${head} since this review, so the comments could land on the wrong lines. Ask for a re-review first.`;
+  }
+  if (outcome.kind === "failed")
+    return recovering
+      ? uncertainPostMessage(prUrl, `A new post was refused: ${outcome.message}`)
+      : `The review was not sent: ${outcome.message}`;
+  return uncertainPostMessage(
+    prUrl,
+    outcome.kind === "absent" ? "GitHub has not returned the saved marker yet." : outcome.message,
+  );
 }
