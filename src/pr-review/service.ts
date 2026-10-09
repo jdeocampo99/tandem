@@ -1,28 +1,17 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
-import { listenPresentation, openPresentation } from "../adapters/lavish.ts";
+import { readFile } from "node:fs/promises";
 import { ApprovalRequiredError } from "../adapters/primitives.ts";
 import type { Clock, CommandRunner, TaskRecord } from "../contracts.ts";
-import { checkoutQuestion, findCheckout, type RepoLocation } from "../repos/locate.ts";
 import { commentableLines } from "./diff.ts";
 import { applyEdits, type PrReviewEdits, submissionEdits } from "./edits.ts";
-import { buildReviewPage, parseReviewSubmission, type ReviewSubmission } from "./page.ts";
-import { readPageComment, readSubmissionText } from "./page-feedback.ts";
-import { readPageSources, reviewPageInput } from "./page-input.ts";
+import type { ReviewSubmission } from "./page.ts";
+import { ReviewPages } from "./page-session.ts";
 import type { PostReceiptOutcome, ReviewVerdict } from "./post.ts";
-import {
-  acknowledgement,
-  findPullRequestRef,
-  isRefusal,
-  type PullRequestFacts,
-  readPullRequest,
-} from "./pull-request.ts";
 import { createReviewReceipts } from "./receipts.ts";
-import { renderReviewText, replyPostNotes, uncertainPostMessage, wantsPage } from "./render.ts";
+import { renderReviewText, replyPostNotes, reviewPostFailure } from "./render.ts";
 import type { ReviewLens } from "./review.ts";
+import { startPrReview } from "./start.ts";
 import {
   latestRound,
-  lensLabel,
   type PrReviewMode,
   type PrReviewRound,
   type PrReviewState,
@@ -125,147 +114,40 @@ export type PrReviewDependencies = Readonly<{
   settle: (taskId: string) => Promise<void>;
 }>;
 
+export type ReviewedRound = Readonly<{
+  task: TaskRecord;
+  state: PrReviewState;
+  round: PrReviewRound;
+}>;
+
 export function createPrReviewWorkflow(deps: PrReviewDependencies) {
-  /** Tasks whose review page this process opened and has not seen close. */
-  const openPages = new Set<string>();
-  const receipts = createReviewReceipts(deps);
+  const taskReview = new TaskReview(deps);
+  const pages = new ReviewPages(deps, taskReview.reviewed);
+  return {
+    start: (input: StartPrReviewInput) => startPrReview(deps, input),
+    show: pages.show,
+    listen: pages.listen,
+    openPages: pages.openPages,
+    edit: taskReview.edit,
+    submit: taskReview.submit,
+    post: taskReview.post,
+    again: taskReview.again,
+    ask: taskReview.ask,
+    close: taskReview.close,
+  };
+}
 
-  async function start(input: StartPrReviewInput): Promise<StartPrReviewResult> {
-    const ref = findPullRequestRef(input.pullRequest);
-    if (ref === undefined) {
-      return { kind: "refused", message: "That doesn't look like a GitHub pull request link." };
-    }
-    const existing = (await deps.listTasks()).find(
-      (task) =>
-        task.prReview !== undefined &&
-        task.prReview.closed !== true &&
-        task.stage !== "cancelled" &&
-        task.prReview.ref.repo === ref.repo &&
-        task.prReview.ref.number === ref.number,
-    );
-    if (existing !== undefined) {
-      return {
-        kind: "existing",
-        taskId: existing.id,
-        message: `I'm already reviewing ${ref.repo}#${ref.number} as task ${existing.id}. Ask for a re-review to look at new pushes.`,
-      };
-    }
-    const facts = await readPullRequest(deps.run, ref, deps.home);
-    if (isRefusal(facts)) return facts;
-    const location = await findCheckout(ref.repo, input, {
-      home: deps.home,
-      run: deps.run,
-      clock: deps.clock,
-      roots: await deps.projectRoots(),
-    });
-    if (location.kind !== "found") {
-      return {
-        kind: "needs-location",
-        repo: ref.repo,
-        paths: location.kind === "ambiguous" ? location.paths : [],
-        message: checkoutQuestion(ref.repo, location, input.checkout),
-        nextStep:
-          "Ask the user this, then call review-pr again with checkout set to their path, or clone true if they say to clone it.",
-      };
-    }
-    const lens = input.lens ?? { kind: "full" };
-    const task = await deps.createTask({
-      repoPath: input.repoPath,
-      objective: `Review ${ref.repo}#${ref.number}: ${facts.title || "pull request"}`,
-      prReview: stateFor(facts, location, lens),
-    });
-    const label = lensLabel(lens);
-    return { kind: "started", taskId: task.id, message: acknowledgement(facts, label) };
+export type PrReviewWorkflow = ReturnType<typeof createPrReviewWorkflow>;
+
+class TaskReview {
+  private readonly receipts: ReturnType<typeof createReviewReceipts>;
+
+  constructor(private readonly deps: PrReviewDependencies) {
+    this.receipts = createReviewReceipts(deps);
   }
 
-  async function show(
-    taskId: string,
-    options: Readonly<{ page?: boolean }> = {},
-  ): Promise<ShowPrReviewResult> {
-    const { task, state, round } = await reviewed(taskId);
-    const text = renderReviewText(state, round);
-    if (options.page !== true && !(options.page === undefined && wantsPage(round))) {
-      return { taskId: task.id, text };
-    }
-    if (deps.openNativePage !== undefined) {
-      await deps.openNativePage(task);
-      return { taskId: task.id, text };
-    }
-    const patch = await readFile(prReviewRunDiffPath(deps.home, task.id, round.generation), "utf8");
-    const sources = await readPageSources(deps.run, state.checkout, round, patch);
-    const path = pagePath(task.id, round);
-    const filesPath = path.replace(/\.html$/u, ".files.json");
-    const built = await buildReviewPage(
-      reviewPageInput(state, round, patch, sources),
-      basename(filesPath),
-    );
-    await mkdir(pageDirectory(task.id), { recursive: true, mode: 0o700 });
-    await writeFile(filesPath, built.files, { mode: 0o600 });
-    await writeFile(path, built.html, { mode: 0o600 });
-    const opened = await openPresentation(deps.run, path, pageDirectory(task.id));
-    openPages.add(task.id);
-    return {
-      taskId: task.id,
-      text,
-      ...(opened.sessionUrl === undefined ? {} : { pageUrl: opened.sessionUrl }),
-    };
-  }
-
-  /**
-   * Waits for the open page's next feedback; `reply` is shown in the page first. Only the tagged
-   * Submit control's prompt row counts as a submission; anything else typed there is a comment.
-   */
-  async function listen(
-    taskId: string,
-    signal: AbortSignal,
-    reply?: string,
-  ): Promise<ReviewPageEvent> {
-    if (!openPages.has(taskId)) return { kind: "closed" };
-    const { task, round } = await reviewed(taskId);
-    let observation: Awaited<ReturnType<typeof listenPresentation>>;
-    try {
-      observation = await listenPresentation(
-        async (request) => {
-          if (signal.aborted) throw new Error("review page listener stopped");
-          return deps.run({ ...request, signal });
-        },
-        pagePath(task.id, round),
-        pageDirectory(task.id),
-        { agentReply: reply },
-      );
-    } catch (error) {
-      if (signal.aborted) return { kind: "stopped" };
-      openPages.delete(task.id);
-      return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
-    }
-    const ended = observation.terminal;
-    if (ended) openPages.delete(task.id);
-    if (observation.status !== "feedback") {
-      if (
-        !ended &&
-        observation.status !== "browser_disconnected" &&
-        observation.status !== "error"
-      ) {
-        return { kind: "other", ended: false };
-      }
-      openPages.delete(task.id);
-      return { kind: "closed" };
-    }
-    const submitted = readSubmissionText(observation.rawFeedback);
-    if (submitted !== undefined) {
-      const parsed = parseReviewSubmission(submitted);
-      return parsed.ok
-        ? { kind: "submission", submission: parsed.submission, ended }
-        : { kind: "invalid", problems: parsed.problems, ended };
-    }
-    const comment = readPageComment(observation.rawFeedback);
-    return comment === undefined
-      ? { kind: "other", ended }
-      : { kind: "comment", text: comment, ended };
-  }
-
-  async function edit(taskId: string, edits: PrReviewEdits): Promise<ShowPrReviewResult> {
-    const { task, state, round } = await reviewed(taskId);
+  readonly edit = async (taskId: string, edits: PrReviewEdits): Promise<ShowPrReviewResult> => {
+    const { task, state, round } = await this.reviewed(taskId);
     if (round.posted !== undefined) {
       throw new Error(
         `This review was already posted at ${round.posted.url}; ask for a re-review instead.`,
@@ -276,24 +158,24 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
     }
     const edited: PrReviewRound = {
       ...round,
-      review: applyEdits(round.review, edits, await commentable(task.id, round)),
+      review: applyEdits(round.review, edits, await this.commentable(task.id, round)),
     };
     const next = replaceLatestRound(state, edited);
-    await deps.updatePrReview(task, next);
+    await this.deps.updatePrReview(task, next);
     return { taskId: task.id, text: renderReviewText(next, edited) };
-  }
+  };
 
   /**
    * Posts what the user chose on the page. The click on Submit is the user's approval, so this
    * posts without asking again; it still pins to the reviewed commit and refuses if the PR moved.
    * The exact submission is saved before posting; an uncertain outcome must be reconciled.
    */
-  async function submit(
+  readonly submit = async (
     taskId: string,
     submission: ReviewSubmission,
     expected?: ReviewSubmissionBinding,
-  ): Promise<PostPrReviewResult> {
-    const { task, state, round } = await reviewed(taskId);
+  ): Promise<PostPrReviewResult> => {
+    const { task, state, round } = await this.reviewed(taskId);
     if (
       expected !== undefined &&
       (round.head !== expected.head ||
@@ -307,10 +189,10 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       throw new Error(`This review was already posted at ${round.posted.url}.`);
     }
     if (round.pendingPost !== undefined) {
-      return postResult(
+      return this.postResult(
         task.id,
         state.url,
-        await receipts.publish({ task, state, round }, round.pendingPost.verdict),
+        await this.receipts.publish({ task, state, round }, round.pendingPost.verdict),
       );
     }
     const review = applyEdits(
@@ -319,31 +201,31 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
         ...(submission.replies === undefined ? {} : { replies: submission.replies }),
       },
       submissionEdits(round.review, submission),
-      await commentable(task.id, round),
+      await this.commentable(task.id, round),
     );
-    return postResult(
+    return this.postResult(
       task.id,
       state.url,
-      await receipts.publish({ task, state, round: { ...round, review } }, submission.verdict),
+      await this.receipts.publish({ task, state, round: { ...round, review } }, submission.verdict),
     );
-  }
+  };
 
-  async function post(
+  readonly post = async (
     taskId: string,
     verdict: ReviewVerdict,
     approved: boolean,
     recovery?: ReviewPostRecovery,
-  ): Promise<PostPrReviewResult> {
+  ): Promise<PostPrReviewResult> => {
     if (!approved) throw new ApprovalRequiredError("posting a PR review needs the user's approval");
-    const reviewedRound = await reviewed(taskId);
+    const reviewedRound = await this.reviewed(taskId);
     const result =
       recovery === undefined
-        ? await receipts.publish(reviewedRound, verdict)
-        : await receipts.recover(reviewedRound, verdict, recovery);
-    return postResult(taskId, reviewedRound.state.url, result);
-  }
+        ? await this.receipts.publish(reviewedRound, verdict)
+        : await this.receipts.recover(reviewedRound, verdict, recovery);
+    return this.postResult(taskId, reviewedRound.state.url, result);
+  };
 
-  async function postResult(
+  private async postResult(
     taskId: string,
     prUrl: string,
     result: ReceiptResult,
@@ -352,44 +234,33 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       return {
         taskId,
         posted: false,
-        message: reviewFailure(prUrl, result.outcome, result.recovering),
+        message: reviewPostFailure(prUrl, result.outcome, result.recovering),
       };
-    const { state, round, posted } = postedRound(await deps.getTask(taskId), result.round);
-    const label = result.label;
-    const count = round.replyPosts?.filter((post) => post.kind === "posted").length ?? 0;
+    const { state, round, posted } = postedRound(await this.deps.getTask(taskId), result.round);
+    const count = round.replyPosts?.filter((reply) => reply.kind === "posted").length ?? 0;
     const notes = replyPostNotes(state.url, round);
     return {
       taskId,
       posted: true,
       url: posted.url,
-      message: `${label}${count === 0 ? "" : ` with ${count} ${count === 1 ? "reply" : "replies"}`}: ${posted.url}${notes.length === 0 ? "" : `\n${notes.join("\n")}`}`,
+      message: `${result.label}${count === 0 ? "" : ` with ${count} ${count === 1 ? "reply" : "replies"}`}: ${posted.url}${notes.length === 0 ? "" : `\n${notes.join("\n")}`}`,
     };
   }
 
-  /** Reviews the author's new pushes, checking each of the user's earlier comments. */
-  async function again(taskId: string): Promise<TaskRecord> {
-    return rerun(taskId, "re-review");
-  }
-
-  /** Sends a follow-up question already in the task inbox to the reviewer. */
-  async function ask(taskId: string): Promise<TaskRecord> {
-    return rerun(taskId, "question");
-  }
-
-  async function rerun(taskId: string, mode: PrReviewMode): Promise<TaskRecord> {
-    const task = await deps.getTask(taskId);
+  private async rerun(taskId: string, mode: PrReviewMode): Promise<TaskRecord> {
+    const task = await this.deps.getTask(taskId);
     const state = reviewState(task);
     if (state.closed === true) throw new Error(`The review in task ${task.id} is closed.`);
     if (task.stage !== "completed") {
       throw new Error(`Task ${task.id} is ${task.stage}; wait for it to finish first.`);
     }
-    const updated = await deps.updatePrReview(task, { ...state, mode });
-    await deps.runAgain(updated);
-    return deps.getTask(task.id);
+    const updated = await this.deps.updatePrReview(task, { ...state, mode });
+    await this.deps.runAgain(updated);
+    return this.deps.getTask(task.id);
   }
 
-  async function close(taskId: string): Promise<TaskRecord> {
-    const task = await deps.getTask(taskId);
+  readonly close = async (taskId: string): Promise<TaskRecord> => {
+    const task = await this.deps.getTask(taskId);
     const state = reviewState(task);
     if (task.stage !== "completed" && task.stage !== "cancelled") {
       throw new Error(
@@ -397,91 +268,33 @@ export function createPrReviewWorkflow(deps: PrReviewDependencies) {
       );
     }
     const updated =
-      state.closed === true ? task : await deps.updatePrReview(task, { ...state, closed: true });
-    await deps.settle(updated.id);
-    return deps.getTask(task.id);
-  }
+      state.closed === true
+        ? task
+        : await this.deps.updatePrReview(task, { ...state, closed: true });
+    await this.deps.settle(updated.id);
+    return this.deps.getTask(task.id);
+  };
 
-  async function reviewed(
-    taskId: string,
-  ): Promise<{ task: TaskRecord; state: PrReviewState; round: PrReviewRound }> {
-    const task = await deps.getTask(taskId);
+  readonly reviewed = async (taskId: string): Promise<ReviewedRound> => {
+    const task = await this.deps.getTask(taskId);
     const state = reviewState(task);
     const round = latestRound(state);
     if (round === undefined) throw new Error(`Task ${task.id} has no finished review yet.`);
     return { task, state, round };
-  }
+  };
 
   /** New-side lines the round's diff can anchor a comment on. */
-  async function commentable(
+  private async commentable(
     taskId: string,
     round: PrReviewRound,
   ): Promise<ReadonlyMap<string, ReadonlySet<number>>> {
     return commentableLines(
-      await readFile(prReviewRunDiffPath(deps.home, taskId, round.generation), "utf8"),
+      await readFile(prReviewRunDiffPath(this.deps.home, taskId, round.generation), "utf8"),
     );
   }
 
-  function pageDirectory(taskId: string): string {
-    return join(deps.home, "pr-review", taskId);
-  }
-
-  function pagePath(taskId: string, round: PrReviewRound): string {
-    return join(pageDirectory(taskId), `review-${round.generation}.html`);
-  }
-
-  return {
-    start,
-    show,
-    listen,
-    openPages: (): readonly string[] => [...openPages],
-    edit,
-    submit,
-    post,
-    again,
-    ask,
-    close,
-  };
-}
-
-export type PrReviewWorkflow = ReturnType<typeof createPrReviewWorkflow>;
-
-function stateFor(
-  facts: PullRequestFacts,
-  location: Extract<RepoLocation, { kind: "found" }>,
-  lens: ReviewLens,
-): PrReviewState {
-  return {
-    ref: facts.ref,
-    url: facts.url,
-    title: facts.title,
-    author: facts.author,
-    baseRef: facts.baseRef,
-    checkout: location.path,
-    remote: location.remote,
-    lens,
-    mode: "review",
-    rounds: [],
-  };
-}
-
-function reviewFailure(
-  prUrl: string,
-  outcome: Extract<ReceiptResult, { kind: "unconfirmed" }>["outcome"],
-  recovering: boolean,
-): string {
-  if (outcome.kind === "moved") {
-    const head = outcome.head.slice(0, 12);
-    return recovering
-      ? uncertainPostMessage(prUrl, `A new post was refused because the PR moved to ${head}.`)
-      : `The PR moved to ${head} since this review, so the comments could land on the wrong lines. Ask for a re-review first.`;
-  }
-  if (outcome.kind === "failed")
-    return recovering
-      ? uncertainPostMessage(prUrl, `A new post was refused: ${outcome.message}`)
-      : `The review was not sent: ${outcome.message}`;
-  return uncertainPostMessage(
-    prUrl,
-    outcome.kind === "absent" ? "GitHub has not returned the saved marker yet." : outcome.message,
-  );
+  /** Reviews the author's new pushes, checking each of the user's earlier comments. */
+  readonly again = async (taskId: string): Promise<TaskRecord> => this.rerun(taskId, "re-review");
+  /** Sends a follow-up question already in the task inbox to the reviewer. */
+  readonly ask = async (taskId: string): Promise<TaskRecord> => this.rerun(taskId, "question");
 }

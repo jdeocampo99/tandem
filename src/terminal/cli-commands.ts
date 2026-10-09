@@ -15,15 +15,13 @@ import { harnessFor } from "../harness/resolve.ts";
 import type { TandemService } from "../service/controller.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import {
-  type CliCommand,
   CliConsentError,
-  type CliInvocation,
-  type CliResult,
   CliUsageError,
   parseMergeMethod,
   requiredPositionOrOption,
   text,
-} from "./cli-arguments.ts";
+} from "./cli-argument-values.ts";
+import type { CliCommand, CliInvocation, CliResult } from "./cli-arguments.ts";
 import {
   createInputFromInvocation,
   jsonObjectFromFile,
