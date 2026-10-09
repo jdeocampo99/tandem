@@ -43,6 +43,8 @@ local function command(id: string, title: string, action: {[string]: unknown}, p
 end
 
 command("new-request", "Tandem: New request…", {verb = "open", ref = {kind = "new-request"}})
+-- Small, well-defined changes. No interview. `tern.command` has no subtitle; the composer says it.
+command("quick-task", "Tandem: Quick task…", {verb = "open", ref = {kind = "quick-task"}})
 command("open-task", "Tandem: Open task…", {verb = "open", ref = {kind = "task-picker"}})
 command("board", "Tandem: Toggle board", {verb = "open", ref = {kind = "board"}})
 command("prs", "Tandem: Show PRs", {verb = "open", ref = {kind = "prs"}})
@@ -58,7 +60,13 @@ command("project-prev", "Tandem: Previous project", {verb = "project", target = 
 command("project-next", "Tandem: Next project", {verb = "project", target = "next"}, false)
 
 -- `nativeLink` in src/native/envelope.ts writes these; PR links carry a number only.
+-- `nativeAnswerLink` writes a quick task's scope answers: the click is the user's own choice.
 tern.route.link(function(link, cx)
+ local taskId, questionId, choice = string.match(link.url, "^tandem://answer/([%w_-]+)/([%w_-]+)/([a-z]+)$")
+ if taskId and questionId and (choice == "proceed" or choice == "convert" or choice == "cancel") then
+  run(cx, {verb = "quick-answer", taskId = taskId, questionId = questionId, choice = choice})
+  return { handled = true }
+ end
  local kind, id = string.match(link.url, "^tandem://([a-z]+)/([%w_-]+)$")
  if kind == "task" and id then run(cx, {verb = "open", ref = {kind = "task", taskId = id}})
  elseif kind == "brief" and id then run(cx, {verb = "open", ref = {kind = "brief", requestId = id}})

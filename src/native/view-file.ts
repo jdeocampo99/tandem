@@ -29,6 +29,7 @@ const PanelRow = z.object({
   detail: opt(str),
   secondary: str,
   target: PanelTarget,
+  badge: opt(z.literal("QUICK")),
   pullRequest: opt(z.object({ number: num, url: str })),
 });
 const ProjectRow = z.object({
@@ -62,6 +63,7 @@ const BoardCard = z.object({
   model: opt(str),
   costLabel: opt(str),
   harnessGlyph: opt(str),
+  badge: opt(z.literal("QUICK")),
   pullRequest: opt(z.object({ number: num, draft: bool, url: str })),
 });
 const Board = z.object({
@@ -177,6 +179,7 @@ const TaskModel = z.object({
   stuck: opt(z.object({ reason: str })),
   requestId: opt(str),
   pullRequest: opt(z.object({ number: num })),
+  scope: opt(z.object({ label: str, text: str, note: opt(str) })),
   message: z.object({ placeholder: str, model: opt(str) }),
   cost: opt(
     z.object({
@@ -391,6 +394,22 @@ const SetupModel = z.object({
   section: opt(z.enum(SETUP_SECTIONS)),
 });
 
+/**
+ * The quick task composer's model: `QuickTaskView` (src/tasks/quick.ts), the project the click
+ * is proved against and the validation the block mirrors so Start is disabled for text that is too short or too long.
+ */
+const QuickTaskModel = z.object({
+  schemaVersion: z.literal(1),
+  repo: str,
+  branch: str,
+  placeholder: str,
+  minChars: num.int().positive(),
+  minWords: num.int().positive(),
+  maxChars: num.int().positive(),
+  tooShort: str,
+  tooLong: str,
+});
+
 /** The model schema of each view file kind. The index feeds every screen without a detail file. */
 export const VIEW_MODELS = {
   index: IndexModel,
@@ -398,9 +417,13 @@ export const VIEW_MODELS = {
   brief: BriefModel,
   pr: PrModel,
   setup: SetupModel,
+  "quick-task": QuickTaskModel,
 } as const;
 export type ViewFileKind = keyof typeof VIEW_MODELS;
-export const ViewFileKind = z.enum(["index", "task", "brief", "pr", "setup"]);
+export const ViewFileKind = z.enum(["index", "task", "brief", "pr", "setup", "quick-task"]);
+
+/** The composer's one detail file; like every detail file it starts with its block kind. */
+export const QUICK_TASK_FILE = "quick-task-composer.json";
 
 export function setupFile(mode: SetupMode): string {
   return `setup-${mode}.json`;

@@ -76,7 +76,8 @@ export async function copyMockupAsset(
 
 /**
  * The worktree's `git status --porcelain=v1` output, or undefined when git cannot report it. The
- * settle-time checkpoint check stays authoritative, so an unreadable status never blocks a report.
+ * settle-time checkpoint check stays authoritative, so an unreadable status never blocks a finished
+ * report; only a quick task's scope question, which claims no changes, refuses it.
  */
 async function worktreeStatus(cwd: string): Promise<string | undefined> {
   try {
@@ -85,6 +86,17 @@ async function worktreeStatus(cwd: string): Promise<string | undefined> {
       cwd,
     });
     return result.code === 0 ? result.stdout : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The commit `cwd` has checked out, or undefined when git cannot report it. */
+async function worktreeHead(cwd: string): Promise<string | undefined> {
+  try {
+    const result = await runCommand({ argv: ["git", "-C", cwd, "rev-parse", "HEAD"], cwd });
+    const head = result.stdout.trim();
+    return result.code === 0 && head.length > 0 ? head : undefined;
   } catch {
     return undefined;
   }
@@ -143,6 +155,7 @@ export function workerSession(
         generation: job.generation,
       }),
     gitStatus: worktreeStatus,
+    gitHead: worktreeHead,
     readFile: (path) => readFile(path, "utf8"),
     copyAsset: copyMockupAsset,
     trace: jobTrace(jobPath),

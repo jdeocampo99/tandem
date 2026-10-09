@@ -10,7 +10,7 @@ import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
 import { blocks, type LocatedBlock, TernOutcomeUnknownError } from "./protocol.ts";
 
-const detailKinds: readonly ViewKind[] = ["task", "brief", "pr", "setup"];
+const detailKinds: readonly ViewKind[] = ["task", "brief", "pr", "setup", "quick-task"];
 
 async function recordedCoordinator(home: string, target: EndpointTarget) {
   const owner = await findRecordedOwner(home, {

@@ -6,8 +6,9 @@ import {
   type PrReview,
   parsePrReview,
 } from "../pr-review/review.ts";
-import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import { MAX_TASK_MESSAGE_CHARS, parseQuickScopeReport } from "../tasks/communication-protocol.ts";
 import { isBlockingFinding } from "../tasks/findings.ts";
+import { quickScopeQuestionText } from "../tasks/quick-scope.ts";
 import {
   parseReviewResult,
   type WorkerJob,
@@ -265,6 +266,8 @@ export type SubmittedReport = Readonly<{
   readonly recommendation?: string | undefined;
   readonly artifactPath?: string | undefined;
   readonly review?: unknown;
+  /** A quick task's one scope question: Tandem renders the question from these fields. */
+  readonly scopeExceeded?: unknown;
 }>;
 
 export type ResolvedReport = Readonly<{
@@ -299,7 +302,7 @@ export function resolveSubmittedReport(
   if (!reviews && report.length === 0) throw new ReportRejection("report must not be empty");
 
   const question =
-    status === "needs-decision" ? decisionQuestion(submission) : noQuestion(submission);
+    status === "needs-decision" ? decisionQuestion(job, submission) : noQuestion(submission);
   if (submission.artifactPath !== undefined && role !== "presentation") {
     throw new ReportRejection(`${role} reports do not take an artifactPath`);
   }
@@ -369,17 +372,44 @@ function submittedPrReview(report: string): PrReview {
   }
 }
 
-function decisionQuestion(submission: SubmittedReport): WorkerQuestion {
+function decisionQuestion(job: WorkerJob, submission: SubmittedReport): WorkerQuestion {
+  if (submission.scopeExceeded !== undefined) return scopeQuestion(job, submission);
   const text = boundedLine(submission.question, "question");
   if (text === undefined) throw new ReportRejection("needs-decision requires a question");
   const recommendation = boundedLine(submission.recommendation, "recommendation");
   return recommendation === undefined ? { text } : { text, recommendation };
 }
 
+/**
+ * A quick task's one scope question. Only its implementer may ask it, only once, and Tandem writes
+ * the question from the fields, so the worker supplies facts, never the wording.
+ */
+function scopeQuestion(job: WorkerJob, submission: SubmittedReport): WorkerQuestion {
+  if (job.role !== "implementer" || job.quickScope === undefined)
+    throw new ReportRejection("scopeExceeded is only for a quick task's implementer");
+  if (job.quickScope === "spent")
+    throw new ReportRejection(
+      "this quick task already asked its scope question and the user chose to proceed; make the change within your proposed plan, or ask an ordinary needs-decision question",
+    );
+  if (submission.question !== undefined || submission.recommendation !== undefined)
+    throw new ReportRejection(
+      "a scope question takes only scopeExceeded; Tandem writes the question from it",
+    );
+  let scope: ReturnType<typeof parseQuickScopeReport>;
+  try {
+    scope = parseQuickScopeReport(submission.scopeExceeded, "scopeExceeded");
+  } catch (error) {
+    throw new ReportRejection(error instanceof Error ? error.message : String(error));
+  }
+  return { text: quickScopeQuestionText(scope), scope };
+}
+
 function noQuestion(submission: SubmittedReport): undefined {
   if (submission.question !== undefined || submission.recommendation !== undefined) {
     throw new ReportRejection("question and recommendation are only for needs-decision");
   }
+  if (submission.scopeExceeded !== undefined)
+    throw new ReportRejection("scopeExceeded is only for a needs-decision outcome");
   return undefined;
 }
 

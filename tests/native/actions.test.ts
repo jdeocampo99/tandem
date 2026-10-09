@@ -12,20 +12,26 @@ import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
 import { blockOriginProblem, isApprovalVerb, VERB_AUTHORITY } from "../../src/native/actions.ts";
 import { blockArgs } from "../../src/native/block.ts";
-import { Action, ActionEnvelope, Outcome } from "../../src/native/envelope.ts";
+import { Action, ActionEnvelope, nativeAnswerLink, Outcome } from "../../src/native/envelope.ts";
 import {
   projectStoreDirectory,
   recordVisit,
   viewDetailPath,
   viewIndexPath,
 } from "../../src/native/store.ts";
-import { setupFile, ViewFile } from "../../src/native/view-file.ts";
+import { QUICK_TASK_FILE, setupFile, ViewFile } from "../../src/native/view-file.ts";
 import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
 import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
-import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import {
+  createTandemService,
+  type StartQuickTaskInput,
+  type TandemService,
+} from "../../src/service/controller.ts";
+import { createTask } from "../../src/tasks/lifecycle.ts";
+import { clockTime, quickApproval } from "../../src/tasks/quick.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type {
@@ -499,11 +505,13 @@ test("approval classification covers every verb, and only navigation is open to 
     "brief-approve",
     "brief-request-changes",
     "pr-comment",
+    "quick-start",
     "restart",
     "review-submit",
     "setup-save",
     "steer",
   ]);
+  expect(VERB_AUTHORITY["quick-answer"].kind).toBe("reply");
 });
 
 test("an approval-bearing origin must echo exactly this coordinator's block context", () => {
@@ -2039,6 +2047,12 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     for (const kind of ["task/port", `brief/${briefId}`, "pr/281"])
       await host.link(`tandem://${kind}`);
     await host.windowStart();
+    // The quick task composer sends Start only once text is typed; a scope answer is a chat link.
+    const quick = host.screen(await opener(() => host.command("quick-task"), "quick-task")());
+    await quick.focusField("Describe the change");
+    await quick.type("Rename the Save button to Save draft");
+    await quick.click("Start  ⌘↵");
+    await host.link(nativeAnswerLink("port", "job-1", "proceed"));
     for (const { action } of envelopes(host)) verbs.add(action.verb);
   });
   await withParity(async ({ host, world, project }) => {
@@ -2288,6 +2302,266 @@ test("setup-save refuses an answer the CLI cannot parse before saving or prompti
     expect(Action.safeParse({ verb: "setup-save" }).success).toBe(false);
     expect(Action.safeParse({ verb: "setup-save", answer: [] }).success).toBe(false);
     expect(Action.safeParse({ verb: "setup-save", answer: {}, extra: 1 }).success).toBe(false);
+  } finally {
+    await f.close();
+  }
+});
+
+const QUICK_TEXT = "Rename the Save button to Save draft on the settings page";
+
+/** The origin the quick task composer's Start sends: its own pane and the context it was launched with. */
+function composerOrigin(f: Fixture, pane = "102", coordinator: string = f.endpoint.paneId) {
+  const [, ctx] = blockArgs(viewDetailPath(f.home, f.repo, QUICK_TASK_FILE), {
+    coordinator,
+    cwd: f.clean,
+    home: f.home,
+    index: viewIndexPath(f.home, f.repo),
+  });
+  return { pane, ctx };
+}
+
+/** The quick task the service would create, recorded with every call it got. */
+function quickService(f: Fixture, calls: StartQuickTaskInput[]): TandemService {
+  return {
+    ...f.service,
+    startQuickTask: async (input) => {
+      calls.push(input);
+      return {
+        ...createTask(
+          {
+            id: "task-q1",
+            repoPath: f.repo,
+            kind: "implementation",
+            objective: QUICK_TEXT,
+            title: "Rename the Save button",
+            acceptanceCriteria: [],
+            surfaces: ["*"],
+            policy: {
+              config: defaultPolicy(),
+              guidance: { implementation: [], validation: [], review: [] },
+            },
+            quick: quickApproval({ text: QUICK_TEXT, at: NOW }),
+          },
+          NOW,
+        ),
+        stage: "queued",
+        scopeApproved: true,
+      };
+    },
+  };
+}
+
+test("Start is the user's approval: it records exactly the typed text and tells the coordinator in fixed words", async () => {
+  const f = await fixture("tern");
+  try {
+    const calls: StartQuickTaskInput[] = [];
+    const service = quickService(f, calls);
+    expect(
+      await f.act(
+        { verb: "quick-start", text: `${QUICK_TEXT}\n` },
+        { deps: { service }, origin: composerOrigin(f) },
+      ),
+    ).toEqual({ status: "done" });
+    expect(calls).toEqual([{ repoPath: f.repo, text: QUICK_TEXT }]);
+    expect(f.prompts).toEqual([
+      `Quick task started\ntask-q1 · Rename the Save button\nScope approved ${clockTime(NOW)}`,
+    ]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Start refuses text that does not describe a change, an unproven origin and a foreign coordinator", async () => {
+  const f = await fixture("tern");
+  try {
+    const calls: StartQuickTaskInput[] = [];
+    const service = quickService(f, calls);
+    expect(
+      await f.act(
+        { verb: "quick-start", text: "fix it" },
+        { deps: { service }, origin: composerOrigin(f) },
+      ),
+    ).toEqual({
+      status: "refused",
+      notice: { code: "failed", text: "Describe the change in a sentence or two." },
+    });
+    const unlisted = await f.act(
+      { verb: "quick-start", text: QUICK_TEXT },
+      { deps: { service }, origin: { pane: "999", cwd: f.clean } },
+    );
+    expect(unlisted.status).toBe("refused");
+    f.setOwner(false);
+    const occupied = await f.act(
+      { verb: "quick-start", text: QUICK_TEXT },
+      { deps: { service }, origin: composerOrigin(f) },
+    );
+    expect(occupied.status).toBe("refused");
+    expect(calls).toEqual([]);
+    expect(f.prompts).toEqual([]);
+    expect(
+      Action.safeParse({ verb: "quick-start", text: QUICK_TEXT, repoPath: "/x" }).success,
+    ).toBe(false);
+  } finally {
+    await f.close();
+  }
+});
+
+test("Start is refused unless Tern proves the click came from this coordinator's quick task composer", async () => {
+  const f = await fixture("tern");
+  try {
+    const calls: StartQuickTaskInput[] = [];
+    const service = quickService(f, calls);
+    const start = { verb: "quick-start", text: QUICK_TEXT };
+    // A worker pane in the project's session, piping a window-style envelope with its own pane.
+    const fromWorkerWindow = await f.act(start, {
+      deps: { service },
+      origin: { pane: "102", cwd: f.clean },
+    });
+    expect(fromWorkerWindow).toEqual({
+      status: "refused",
+      notice: {
+        code: "origin-unproven",
+        text: "Only Tandem's own view can do this. Open it and make the choice there. Nothing was changed.",
+      },
+    });
+    // The coordinator's own pane, as any window command would send it.
+    expect(
+      (await f.act(start, { deps: { service }, origin: { pane: f.endpoint.paneId, cwd: f.clean } }))
+        .status,
+    ).toBe("refused");
+    // A copied composer context sent from the coordinator's own pane.
+    const forged = await f.act(start, {
+      deps: { service },
+      origin: composerOrigin(f, "101"),
+    });
+    expect(forged).toEqual({
+      status: "refused",
+      notice: {
+        code: "origin-unproven",
+        text: "The conversation pane is not a Tandem view. Open the view and make the choice there. Nothing was changed.",
+      },
+    });
+    // A context naming another coordinator is not this project's composer.
+    expect(
+      (await f.act(start, { deps: { service }, origin: composerOrigin(f, "102", "777") })).status,
+    ).toBe("refused");
+    // Herdr hosts no composer, so nothing there can prove a Start.
+    expect(
+      (
+        await f.act(start, {
+          deps: { service, terminal: { ...f.deps.terminal, views: undefined } },
+          origin: composerOrigin(f),
+        })
+      ).status,
+    ).toBe("refused");
+    expect(calls).toEqual([]);
+    expect(f.prompts).toEqual([]);
+
+    expect(await f.act(start, { deps: { service }, origin: composerOrigin(f) })).toEqual({
+      status: "done",
+    });
+    expect(calls).toEqual([{ repoPath: f.repo, text: QUICK_TEXT }]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a started quick task whose coordinator cannot be told says so instead of inviting a second start", async () => {
+  const f = await fixture("tern");
+  try {
+    const calls: StartQuickTaskInput[] = [];
+    const outcome = await f.act(
+      { verb: "quick-start", text: QUICK_TEXT },
+      {
+        origin: composerOrigin(f),
+        deps: {
+          service: quickService(f, calls),
+          terminal: {
+            ...f.deps.terminal,
+            promptAgent: async () => {
+              throw new Error("pane is busy");
+            },
+          },
+        },
+      },
+    );
+    expect(outcome.status).toBe("done");
+    expect(outcome.notice?.code).toBe("quick-warning");
+    expect(outcome.notice?.text).toContain("Do not start it again");
+    expect(calls).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("the quick task composer opens beside the conversation from its published model, only in Tern", async () => {
+  const f = await fixture("tern");
+  try {
+    expect(await f.act({ verb: "open", ref: { kind: "quick-task" } })).toEqual({ status: "done" });
+    expect(f.opened).toEqual([{ kind: "quick-task" }]);
+    const file = ViewFile.parse(
+      JSON.parse(await readFile(viewDetailPath(f.home, f.repo, QUICK_TASK_FILE), "utf8")),
+    );
+    expect(file.kind).toBe("quick-task");
+    expect(file.model).toEqual({
+      schemaVersion: 1,
+      repo: "repo",
+      branch: "default branch",
+      placeholder: "Describe the change",
+      minChars: 15,
+      minWords: 3,
+      maxChars: 4000,
+      tooShort: "Describe the change in a sentence or two.",
+      tooLong: "Too long for a quick task. Start a request instead.",
+    });
+    const herdr = await f.act(
+      { verb: "open", ref: { kind: "quick-task" } },
+      { deps: { terminal: { ...f.deps.terminal, views: undefined } } },
+    );
+    expect(herdr.status).toBe("refused");
+    expect(f.opened).toHaveLength(1);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a scope-question link answers through the ordinary answer path, only while that question is open", async () => {
+  const f = await fixture("tern");
+  try {
+    const answers: { taskId: string; questionId: string; text: string }[] = [];
+    const scope = { files: 9, areas: ["billing"], plan: "turn it into a request" };
+    const asking = {
+      ...(await createPrTask(f)),
+      communication: { revision: 0, messages: [], question: { id: "job-1", text: "q", scope } },
+    };
+    const service: TandemService = {
+      ...f.service,
+      get: async () => asking,
+      answer: async (input) => {
+        answers.push(input);
+        return f.service.messages(asking.id);
+      },
+    };
+    const answer = { verb: "quick-answer", taskId: asking.id, questionId: "job-1" };
+    expect(await f.act({ ...answer, choice: "convert" }, { deps: { service } })).toEqual({
+      status: "done",
+    });
+    expect(answers).toEqual([
+      { taskId: asking.id, questionId: "job-1", text: "Convert to request" },
+    ]);
+    // A reply link answers only from the conversation pane where Tandem wrote it.
+    const fromWorker = await f.act(
+      { ...answer, choice: "proceed" },
+      { deps: { service }, origin: { pane: "102", cwd: f.clean } },
+    );
+    expect(fromWorker.notice?.code).toBe("origin-unproven");
+    const stale = await f.act(
+      { ...answer, questionId: "job-0", choice: "proceed" },
+      { deps: { service } },
+    );
+    expect(stale.notice?.text).toContain("no longer open");
+    expect(Action.safeParse({ ...answer, choice: "approve" }).success).toBe(false);
+    expect(answers).toHaveLength(1);
   } finally {
     await f.close();
   }

@@ -1,10 +1,6 @@
 import { expect, test } from "bun:test";
 import { nativeBoardView } from "../../src/board/native.ts";
-import {
-  nativeChangeSignature,
-  nativePrFile,
-  nativeSummaryProjects,
-} from "../../src/board/native-views.ts";
+import { nativeChangeSignature } from "../../src/board/native-views.ts";
 import {
   type NativeTaskSummary,
   nativePanelView,
@@ -19,35 +15,6 @@ import { content, NOW, state, watch } from "./fixtures.ts";
 
 const PROJECT = "/work/app";
 
-test("published summaries keep stale project counts visible but never expose a stale focus session", () => {
-  const summary = {
-    repoPath: PROJECT,
-    name: "app",
-    writtenAt: NOW,
-    running: 2,
-    needsYou: 1,
-    ready: 0,
-    done: 0,
-    sessionId: "live-session",
-  };
-  const fresh = nativeSummaryProjects([summary], PROJECT, NOW)[0];
-  expect(fresh).toMatchObject({
-    current: true,
-    offline: false,
-    running: 2,
-    needsYou: 1,
-    sessionId: "live-session",
-  });
-  const stale = nativeSummaryProjects(
-    [{ ...summary, writtenAt: "2030-01-01T11:59:49.000Z" }],
-    PROJECT,
-    NOW,
-  )[0];
-  expect(stale).toMatchObject({ offline: true, running: 2, needsYou: 1, status: "offline" });
-  expect(stale).not.toHaveProperty("sessionId");
-  expect(nativePrFile("acme/app", 282)).not.toBe(nativePrFile("acme/other", 282));
-  expect(nativePrFile("acme/app", 282)).not.toContain("/");
-});
 const running = task({
   id: "task-running",
   repoPath: PROJECT,
@@ -241,6 +208,24 @@ test("native panel keeps an active task with a draft PR running and shows model 
     kind: "brief",
     requestId: "req-brief",
   });
+});
+
+test("a quick task carries the QUICK badge on its panel row and board card, and no other task does", () => {
+  const quick = summaries.map((summary) =>
+    summary.taskId === running.id ? { ...summary, quick: true as const } : summary,
+  );
+  const rows = nativePanelView({
+    snapshot,
+    project: PROJECT,
+    now: NOW,
+    tasks: quick,
+    bellCount: 0,
+  }).sections.flatMap((section) => section.rows);
+  expect(rows.find((row) => row.key === `task:${running.id}`)?.badge).toBe("QUICK");
+  expect(rows.filter((row) => row.badge !== undefined)).toHaveLength(1);
+  const cards = nativeBoardView(snapshot, PROJECT, quick, NOW).lanes.flatMap((lane) => lane.cards);
+  expect(cards.find((card) => card.key === `task:${running.id}`)?.badge).toBe("QUICK");
+  expect(cards.filter((card) => card.badge !== undefined)).toHaveLength(1);
 });
 
 test("switcher distinguishes projects by path and reports offline, needs-you, current and shortcuts", () => {

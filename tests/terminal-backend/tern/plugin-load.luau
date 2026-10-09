@@ -34,10 +34,10 @@ end
 assert(openRoute and linkRoute and next(imports)==nil)
 local count=0
 for _,def in definitions do assert(type(def.init)=='function' and type(def.view)=='function'); count+=1 end
-assert(count==10)
+assert(count==11)
 count=0
 for _,def in commands do assert(type(def.run)=='function'); count+=1 end
-assert(count==19 and commands['new-request'] and commands['project-next'] and commands['settings'])
+assert(count==20 and commands['new-request'] and commands['project-next'] and commands['settings'])
 loading=false
 assert(openRoute({path='/unrelated.txt'}, {})==nil and next(imports)==nil)
 local cx={token='state'}
@@ -52,8 +52,8 @@ for id,def in definitions do
  def.init(cx,{'fixture'},'saved')
  assert(imports['./' .. id]==1, 'second pane reloaded its block')
 end
-for _,name in {'view','title','key','event','resize','save'} do assert(callbackCount[name]==10) end
-assert(callbackCount.init==20)
+for _,name in {'view','title','key','event','resize','save'} do assert(callbackCount[name]==11) end
+assert(callbackCount.init==22)
 assert(openRoute({path='/tmp/tern/0a1b/open/ab12.cd34.ticket.json'},{}).handled)
 assert(imports['./layout']==nil)
 while #timers>0 do table.remove(timers,1)({}) end

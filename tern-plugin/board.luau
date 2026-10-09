@@ -4,12 +4,13 @@ local rt = require("./rt")
 local screen = require("./screen")
 local ui = tern.ui
 
-type Card = { key: string, title: string, branch: string?, detail: string, time: string?, model: string?, costLabel: string?, harnessGlyph: string?, stuck: boolean, pullRequest: { number: number, draft: boolean, url: string }? }
+type Card = { key: string, title: string, branch: string?, detail: string, time: string?, model: string?, costLabel: string?, harnessGlyph: string?, stuck: boolean, badge: string?, pullRequest: { number: number, draft: boolean, url: string }? }
 type Lane = { title: string, count: number, cards: { Card } }
 type State = { view: rt.Watch, args: { string }, origin: rt.Origin }
 
 local function cardNode(card: Card): Node
  local title = {ui.el("span", {class="tdm-harness", text=card.harnessGlyph or ""}), ui.el("strong", {text=card.title})}
+ if card.badge then table.insert(title, ui.el("span", {class="tdm-quick", text=card.badge})) end
  if card.stuck then table.insert(title, ui.el("span", {class="tdm-stuck", text="stuck"})) end
  local foot = {ui.el("span", {text=card.model or "model unavailable"}), ui.el("span", {text=card.costLabel or "cost unavailable"})}
  if card.pullRequest then

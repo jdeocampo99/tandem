@@ -38,7 +38,14 @@ import {
 const TICKET_LIFETIME_MS = 10_000;
 const TICKET = ".ticket.json";
 const RECEIPT = ".receipt.json";
-const reusableRoots: readonly ViewKind[] = ["board", "usage", "catchup", "prs", "setup"];
+const reusableRoots: readonly ViewKind[] = [
+  "board",
+  "usage",
+  "catchup",
+  "prs",
+  "setup",
+  "quick-task",
+];
 
 /** The host failed before any layout effect, so the open settled and the user can retry it. */
 export class NativeViewNotOpenedError extends Error {

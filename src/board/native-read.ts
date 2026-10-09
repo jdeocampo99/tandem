@@ -504,6 +504,7 @@ function taskSummary(
     ...(branch === undefined ? {} : { branch }),
     ...(cost === undefined ? {} : { costMicros: cost.amountMicros }),
     unpricedSamples: cost?.unavailableSamples ?? 0,
+    ...(task.quick === undefined ? {} : { quick: true }),
     ...(pr === undefined
       ? {}
       : {

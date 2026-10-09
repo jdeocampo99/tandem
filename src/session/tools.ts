@@ -468,6 +468,26 @@ export function submitReportSchema(role: WorkerRole) {
         .describe("Required for completed: the absolute path of the written artifact."),
     });
   }
+  if (role === "implementer") {
+    return base.extend({
+      scopeExceeded: z
+        .strictObject({
+          files: z.number().int().positive().describe("How many files the change would touch."),
+          areas: z
+            .array(z.string())
+            .describe("The areas of the code those files are in, one to six short names."),
+          decision: z
+            .string()
+            .optional()
+            .describe("A design decision still open, only when there is one."),
+          plan: z.string().describe("Your short proposed plan, one sentence."),
+        })
+        .optional()
+        .describe(
+          "Quick tasks only, with outcome needs-decision and no question: the request clearly exceeds a small change. Tandem writes the question to the user from these fields. Make no changes before asking.",
+        ),
+    });
+  }
   if (reviews) {
     return base.extend({
       review: reviewResultSchema

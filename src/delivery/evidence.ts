@@ -16,6 +16,7 @@ import {
   ValidationConfigurationError,
 } from "../tasks/acceptance.ts";
 import { findingHeadline, fixRoundBudget } from "../tasks/findings.ts";
+import { approvedScopeMarkdown } from "../tasks/quick.ts";
 import { recordedReviewLevel } from "../tasks/review-levels.ts";
 
 export type PrSummary = Readonly<{
@@ -264,6 +265,7 @@ export function describeTaskPr(task: TaskRecord, summary: PrSummary): string {
     ...(task.manualVerification === undefined
       ? {}
       : { manualVerification: task.manualVerification }),
+    ...(task.quick === undefined ? {} : { approvedScope: approvedScopeMarkdown(task.quick) }),
   });
 }
 
@@ -503,6 +505,7 @@ export function draftProgressDigest(task: TaskRecord): string {
     task.reviewRound,
     task.reviewHead ?? "",
     task.objective,
+    task.quick?.scopeExtendedAt ?? "",
     summarizeDraftProgress(task),
   ]);
 }
@@ -537,5 +540,8 @@ export function describeTaskDraftPr(input: DraftDescriptionInput): string {
     activity: progress.activity.map(draftText),
     blockers: progress.blockers,
     remainingChecks: progress.remainingChecks,
+    ...(input.task.quick === undefined
+      ? {}
+      : { approvedScope: approvedScopeMarkdown(input.task.quick) }),
   });
 }

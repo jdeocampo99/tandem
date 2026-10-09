@@ -84,6 +84,15 @@
 .tt-stuck > *:first-child {
   flex-grow: 1;
 }
+.tt-scope {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  border-left: 3px solid light-dark(#d0d7de, #30363d);
+  white-space: pre-wrap;
+}
 .tt-message {
   margin: 0 24px 16px;
   padding: 12px;

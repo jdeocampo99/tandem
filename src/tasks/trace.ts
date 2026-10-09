@@ -245,6 +245,10 @@ function eventText(event: TimelineEvent): string {
       return `steered (message ${event.messageId})`;
     case "admission-waiting":
       return `waiting for admission (${ADMISSION_WAIT_WORDS[event.reason]})`;
+    case "quick-approved":
+      return "quick task approved by the user (Start)";
+    case "quick-scope-extended":
+      return `user chose Proceed on scope question ${event.questionId}`;
   }
 }
 

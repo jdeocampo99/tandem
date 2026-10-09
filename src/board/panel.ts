@@ -558,6 +558,8 @@ export type NativeTaskSummary = Readonly<{
   branch?: string;
   costMicros?: number;
   unpricedSamples: number;
+  /** The user started it as a quick task. */
+  quick?: true;
   pullRequest?: Readonly<{ repo: string; number: number; url: string; draft: boolean }>;
 }>;
 export type NativeProjectRow = Readonly<{
@@ -581,6 +583,8 @@ export type NativePanelRow = Readonly<{
   detail: string;
   secondary: string;
   target: NativePanelTarget;
+  /** The `QUICK` badge: the user started this task as a quick task. */
+  badge?: "QUICK";
   pullRequest?: NativeTaskSummary["pullRequest"];
 }>;
 export type NativePanelView = Readonly<{
@@ -717,6 +721,7 @@ export function nativePanelView(
         .filter(Boolean)
         .join(" · "),
       target,
+      ...(task?.quick === true ? { badge: "QUICK" as const } : {}),
       ...(pr === undefined ? {} : { pullRequest: pr }),
     };
     const section =

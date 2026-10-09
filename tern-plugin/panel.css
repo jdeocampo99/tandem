@@ -95,6 +95,15 @@
   font-size: 10px;
   white-space: nowrap;
 }
+.tdp-badge {
+  color: #c9d1d9;
+  border: 1px solid #6e7681;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 9px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .tdp-second {
   display: flex;
   gap: 5px;

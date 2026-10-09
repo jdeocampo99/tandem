@@ -9,7 +9,7 @@ import {
   viewDetailPath,
   viewIndexPath,
 } from "../../native/store.ts";
-import { setupFile } from "../../native/view-file.ts";
+import { QUICK_TASK_FILE, setupFile } from "../../native/view-file.ts";
 import type { ViewsCapability } from "../contract.ts";
 import { ternEndpoint } from "../identity.ts";
 import type { TernCli } from "./cli.ts";
@@ -75,6 +75,7 @@ async function detailFile(
 ): Promise<string | undefined> {
   if (view.kind === "brief") return nativeBriefFile(view.requestId);
   if (view.kind === "setup") return setupFile(view.mode);
+  if (view.kind === "quick-task") return QUICK_TASK_FILE;
   return detailForView(await readPublished(home, project), view);
 }
 
@@ -85,6 +86,7 @@ function placementFor(view: Exclude<ViewHostingInput["view"], { kind: "browser" 
     view.kind === "pr" ||
     view.kind === "prs" ||
     view.kind === "task-picker" ||
+    view.kind === "quick-task" ||
     (view.kind === "setup" && view.mode === "setup")
     ? "split"
     : "window";

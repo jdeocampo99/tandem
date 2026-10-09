@@ -47,7 +47,7 @@ Ask the coordinator about any task · tandem status --json for task IDs · tande
 
 | Section | Rows |
 | --- | --- |
-| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question; tasks stopped on a model (routing) question for their current generation, shown as `model question: keep <model>? <why>` instead of their running stage; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
+| Needs you | Briefs whose current draft is not approved (new, or changed after approval); tasks with an open question (a [quick task](task-lifecycle.md#quick-tasks)'s scope question reads `Scope exceeds quick task`); tasks stopped on a model (routing) question for their current generation, shown as `model question: keep <model>? <why>` instead of their running stage; tasks awaiting approval, blocked (with the reason), or ready; pull requests PR watch marked red. Always shown; "Nothing needs you." when empty. |
 | Running | Tasks paused by the user, queued, researching, implementing, checking, in review, or fixing findings, grouped by repository path. Groups sort by project name and path; tasks sort by workflow stage, objective, and task ID. Each task shows the time since it was created, or `idle 42m` once its worker's receipt shows no progress for over 5 minutes (heartbeats do not count). Left out when empty. |
 | PRs | Every other watched pull request, as PR watch's rows with `owner/repo#N`. Left out when empty. |
 | This week | One line for the 7 days before now, across every project: tasks whose timeline last moved them to completed or merged in that window, how many of those that went through review passed it the first time, and what those tasks cost. Left out when none finished. |
@@ -282,7 +282,8 @@ tests/board/snapshot.test.ts, tests/terminal/panel.test.ts.
   `herdr notification show` for all of them, with Herdr's needs-input sound. One new row reads
   `Tandem: <name>` over `<reason> · prefix+t for status`; several read
   `Tandem: N things need you` over their names.
-- Blocked tasks stay listed but never notify: recovery restarts most blocks on its own.
+- Blocked tasks stay listed but never notify: recovery restarts most blocks on its own. A quick
+  task's scope question blocks its task too, but its row is a question, so it notifies.
 - Rows already there when the coordinator started count as seen, so a relaunch or `tandem update`
   notifies nothing.
 - Herdr delivers it through the user's `[ui.toast]` setting (in-app toast, system or terminal

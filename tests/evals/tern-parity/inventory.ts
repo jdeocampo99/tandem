@@ -610,7 +610,7 @@ export const inventory: readonly InventoryEntry[] = [
   },
   {
     view: "Keys and palette",
-    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; eight palette commands; project commands hidden",
+    item: "⌘⇧B, ⌘⇧P, ⌘⇧U, ⌘⇧,, ⌘1–9, ⌘⇧[ ]; nine palette commands; project commands hidden",
     run: () =>
       withParity(async (parity) => {
         const { host, world } = parity;
@@ -622,6 +622,7 @@ export const inventory: readonly InventoryEntry[] = [
           commands.filter((command) => command.visible).map((command) => command.title),
         ).toEqual([
           "Tandem: New request…",
+          "Tandem: Quick task…",
           "Tandem: Open task…",
           "Tandem: Toggle board",
           "Tandem: Show PRs",

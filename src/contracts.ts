@@ -56,6 +56,51 @@ export type TaskQuestion = Readonly<{
   readonly id: string;
   readonly text: string;
   readonly recommendation?: string;
+  /** Set only on a quick task's one scope question; code renders it, the worker only fills it. */
+  readonly scope?: QuickScopeReport;
+}>;
+
+/**
+ * What a quick task's implementer reports when the request clearly exceeds a small change, before
+ * changing any file. Tandem renders the question from these fields (src/tasks/quick.ts).
+ */
+export type QuickScopeReport = Readonly<{
+  /** How many files the change would touch. */
+  readonly files: number;
+  /** The areas of the code those files are in, such as "billing" or "the CLI". */
+  readonly areas: readonly string[];
+  /** A design decision still open, when there is one. */
+  readonly decision?: string;
+  /** A short proposed plan. */
+  readonly plan: string;
+}>;
+
+/**
+ * The user's own approval of a quick task: their click on Start in the quick task composer. No
+ * model ever decides that a request is quick. `text` is what they typed, verbatim, and is the
+ * approved scope.
+ */
+export type QuickTaskApproval = Readonly<{
+  readonly kind: "quick-task";
+  readonly text: string;
+  /** sha256 of `text`, so the approved bytes can be checked later. */
+  readonly textDigest: string;
+  readonly approvedAt: IsoTimestamp;
+  /** The one scope question the worker asked; a quick task never asks another. */
+  readonly scopeQuestionId?: string;
+  /** When the user answered Proceed to that question, stretching the approved scope. */
+  readonly scopeExtendedAt?: IsoTimestamp;
+  /**
+   * The user's answer to that question, recorded before any of its effects so a crash part-way
+   * through is finished by the next tick instead of leaving the task half answered.
+   */
+  readonly scopeAnswer?: QuickScopeAnswer;
+}>;
+
+/** A recorded answer to a quick task's scope question; `at` is when the user chose it. */
+export type QuickScopeAnswer = Readonly<{
+  readonly choice: "proceed" | "convert" | "cancel";
+  readonly at: IsoTimestamp;
 }>;
 
 export type TaskCommunication = Readonly<{
@@ -829,6 +874,8 @@ export type TaskRecord = {
   readonly target?: TaskTarget;
   /** The workstream the user filed this work under, such as "billing"; see project-memory.md. */
   readonly workstream?: string;
+  /** Present on a quick task: the user approved its typed text as the scope, with no interview. */
+  readonly quick?: QuickTaskApproval;
 };
 
 /**

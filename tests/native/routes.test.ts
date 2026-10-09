@@ -7,8 +7,10 @@ import {
   ActionEnvelope,
   LINK_KINDS,
   NOTICE_CODES,
+  nativeAnswerLink,
   nativeLink,
 } from "../../src/native/envelope.ts";
+import { QUICK_SCOPE_CHOICES } from "../../src/tasks/quick-scope.ts";
 import { withParity } from "../evals/tern-parity/inventory.ts";
 
 const plugin = (name: string) =>
@@ -61,6 +63,23 @@ test("T3: every reply link Tandem writes routes to an open action the contract a
   });
 });
 
+test("T3: every scope-question answer link routes to a quick-answer action the contract accepts", async () => {
+  await withParity(async ({ host }) => {
+    for (const choice of QUICK_SCOPE_CHOICES) {
+      const before = host.cli.length;
+      expect(await host.link(nativeAnswerLink("port", "job-1", choice))).toBe(true);
+      const answers = host.cli
+        .slice(before)
+        .map((run) => ActionEnvelope.parse(JSON.parse(run.stdin ?? "")).action)
+        .filter((action) => action.verb === "quick-answer");
+      expect(answers).toEqual([
+        { verb: "quick-answer", taskId: "port", questionId: "job-1", choice },
+      ]);
+    }
+    expect(() => nativeAnswerLink("../escape", "job-1", "proceed")).toThrow();
+  });
+});
+
 /** Every verb a plugin file names as a string literal, whether it builds or compares an action. */
 async function sentVerbs(name: string): Promise<readonly Action["verb"][]> {
   const verbs = Action.options.map((option) => option.shape.verb.value);
@@ -70,7 +89,7 @@ async function sentVerbs(name: string): Promise<readonly Action["verb"][]> {
   });
 }
 
-test("window commands and reply links send only navigational verbs", async () => {
+test("window commands and reply links send only navigational or reply verbs", async () => {
   const verbs = await sentVerbs("window.luau");
   expect(verbs).toContain("open");
   expect(verbs.filter(isApprovalVerb)).toEqual([]);
@@ -78,7 +97,14 @@ test("window commands and reply links send only navigational verbs", async () =>
 
 test("only the blocks Tandem proves for them send approval-bearing verbs", async () => {
   // pr-content.luau is the PR pane's content, embedded by both the PR and task blocks.
-  const provable = ["brief.luau", "pr.luau", "pr-content.luau", "setup.luau", "task.luau"];
+  const provable = [
+    "brief.luau",
+    "pr.luau",
+    "pr-content.luau",
+    "quick-task.luau",
+    "setup.luau",
+    "task.luau",
+  ];
   const names = (await readdir(new URL("../../tern-plugin/", import.meta.url))).filter((name) =>
     name.endsWith(".luau"),
   );

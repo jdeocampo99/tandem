@@ -30,7 +30,11 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import { defaultBranch } from "../service/draft-refresh.ts";
+import { startQuickTask } from "../service/quick-start.ts";
 import { fixRequestStalled, prFixRequest, taskForPrNumber } from "../tasks/pull-request.ts";
+import { checkQuickText, quickTaskView } from "../tasks/quick.ts";
+import { quickScopeAnswer } from "../tasks/quick-scope.ts";
 import {
   DEFAULT_COORDINATOR_SESSION,
   environmentSource,
@@ -162,6 +166,12 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
       const refusal = await proveBlockOrigin(act, authority.views(envelope.action));
       if (refusal !== undefined) return refusal;
     }
+    if (authority.kind === "reply" && act.origin.paneId !== act.record.endpoint.paneId)
+      return notice(
+        "refused",
+        "origin-unproven",
+        "Only a link in the coordinator conversation can answer this. Nothing was changed.",
+      );
     // The verb table's mapped type pairs each handler with its own action variant.
     const handler = HANDLERS[envelope.action.verb] as Handler<Action["verb"]>;
     return await handler(act, envelope.action as never);
@@ -275,12 +285,15 @@ async function locate(
 
 /**
  * What a verb may do on the user's behalf. `navigation` only shows, focuses or records what the
- * user looked at, so any pane the project's session lists may send it. `approval` approves or
- * changes scope, answers or directs work in the user's name, posts, restarts or saves settings, so
- * only one of `views(action)`, proved by `proveBlockOrigin`, may send it.
+ * user looked at, so any pane the project's session lists may send it. `reply` answers from a
+ * reply link Tandem wrote into the coordinator conversation, so only the recorded coordinator's own
+ * pane may send it. `approval` approves or changes scope, answers or directs work in the user's
+ * name, posts, restarts or saves settings, so only one of `views(action)`, proved by
+ * `proveBlockOrigin`, may send it.
  */
 type Authority<A extends Action> =
   | Readonly<{ kind: "navigation" }>
+  | Readonly<{ kind: "reply" }>
   | Readonly<{ kind: "approval"; views: (action: A) => readonly ProvableView[] }>;
 
 const NAVIGATION = { kind: "navigation" } as const;
@@ -314,6 +327,9 @@ export const VERB_AUTHORITY: {
     kind: "approval",
     views: (action) => [{ kind: "brief", requestId: action.requestId }],
   },
+  "quick-start": { kind: "approval", views: () => [{ kind: "quick-task" }] },
+  // A scope answer is a reply link in the conversation; the question itself is rechecked.
+  "quick-answer": { kind: "reply" },
   "pr-comment": { kind: "approval", views: taskViews },
   "review-submit": { kind: "approval", views: taskViews },
   // A setup block of either mode proves the click; saving then parses the answer itself.
@@ -444,6 +460,8 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
     );
   },
   "setup-save": saveSetup,
+  "quick-start": startQuick,
+  "quick-answer": answerQuickScope,
 };
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
@@ -567,16 +585,23 @@ async function open(act: Act, ref: ViewRef): Promise<Outcome> {
       return newRequest(act);
     case "setup":
       return openSetup(act, ref.mode, ref.section);
+    case "quick-task":
+      return openQuickTask(act);
   }
 }
 
-async function requireBriefProject(act: Act, briefRepoPath: string): Promise<void> {
-  const [briefRepo, selectedRepo] = await Promise.all([
-    canonicalPath(briefRepoPath, "brief repoPath"),
+/** A brief or task named by id acts only in the project its origin proved. */
+async function requireSelectedProject(act: Act, repoPath: string, what: string): Promise<void> {
+  const [named, selectedRepo] = await Promise.all([
+    canonicalPath(repoPath, `${what} repoPath`),
     canonicalPath(act.environment.repo, "selected repoPath"),
   ]);
-  if (briefRepo !== selectedRepo)
-    throw new Error("This brief does not belong to the selected Tandem project");
+  if (named !== selectedRepo)
+    throw new Error(`This ${what} does not belong to the selected Tandem project`);
+}
+
+function requireBriefProject(act: Act, briefRepoPath: string): Promise<void> {
+  return requireSelectedProject(act, briefRepoPath, "brief");
 }
 
 async function openDetail(
@@ -984,6 +1009,60 @@ async function openSetup(act: Act, mode: SetupMode, section?: SetupSection): Pro
     throw new Error("Finish setting up Tandem first. Settings open once setup is saved.");
   await publishSetup(act, owner, mode, section);
   return viewOutcome(await show(act, owner, { kind: "setup", mode }));
+}
+
+/**
+ * Opens the quick task composer beside the conversation, after publishing its model: the proved
+ * project and the branch its pull request targets. Only a Tern coordinator hosts it.
+ */
+async function openQuickTask(act: Act): Promise<Outcome> {
+  const owner = await ternOwner(act, "starting a quick task");
+  const branch = await defaultBranch(act.run, owner.worktree.path).catch(() => "default branch");
+  await publishViews(act.environment.home, owner.repoPath, async () => ({
+    quickTask: quickTaskView({ repoPath: owner.repoPath, branch }),
+  }));
+  return viewOutcome(await show(act, owner, { kind: "quick-task" }));
+}
+
+/**
+ * Start in the quick task composer. The click is the user's approval of exactly the text they
+ * typed, like Approve on a brief: Tandem's code checks the text, records that approval, creates
+ * and approves the task, and tells the coordinator in fixed words. No model takes part.
+ */
+async function startQuick(
+  act: Act,
+  action: Extract<Action, { verb: "quick-start" }>,
+): Promise<Outcome> {
+  const owner = await ternOwner(act, "starting a quick task");
+  const checked = checkQuickText(action.text);
+  if (!checked.ok) return notice("refused", "failed", checked.problem);
+  const started = await startQuickTask(
+    act.service(),
+    { repoPath: owner.repoPath, text: checked.text },
+    (text) => promptCoordinator(act, owner, text),
+  );
+  return started.told
+    ? DONE
+    : notice(
+        "done",
+        "quick-warning",
+        `Task ${started.task.id} started, but the coordinator could not be told: ${started.problem}. Do not start it again.`,
+      );
+}
+
+/** A scope-question link: the user's own choice, sent through the ordinary answer path. */
+async function answerQuickScope(
+  act: Act,
+  action: Extract<Action, { verb: "quick-answer" }>,
+): Promise<Outcome> {
+  const service = act.service();
+  const task = await service.get(action.taskId);
+  await requireSelectedProject(act, task.repoPath, "task");
+  await service.answer({
+    taskId: task.id,
+    ...quickScopeAnswer(task, action.questionId, action.choice),
+  });
+  return DONE;
 }
 
 /**

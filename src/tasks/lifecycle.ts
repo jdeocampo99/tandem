@@ -9,6 +9,7 @@ import {
   isSafeRequestId,
   type Notification,
   type PullRequestMetadata,
+  type QuickTaskApproval,
   type RequiredStages,
   type ResearchContinuation,
   type ResearchHandoff,
@@ -43,6 +44,7 @@ import {
   ledgerSuggestions,
   recordReviewFindings,
 } from "./findings.ts";
+import { quickScopeAwaitingAnswer, quickScopeResumeRefusal } from "./quick-scope.ts";
 import { decideRequiredStages, policyStageFacts, requiredStagesOf } from "./required-stages.ts";
 import { checkResearchContinuation, defaultResearchContinuation } from "./research-continuation.ts";
 import { recordedReviewLevel } from "./review-levels.ts";
@@ -74,6 +76,8 @@ export type TaskInput = Readonly<{
   readonly workstream?: string;
   /** Implementation tasks only; decided by `decideRequiredStages` from the brief it runs under. */
   readonly requiredStages?: RequiredStages;
+  /** The user's own quick-task approval of the typed text; implementation tasks only. */
+  readonly quick?: QuickTaskApproval;
 }>;
 
 export type TaskTransitionContext = Readonly<{
@@ -330,6 +334,9 @@ function assertTaskInput(input: TaskInput): void {
   }
   if (input.requiredStages !== undefined && input.kind !== "implementation") {
     throw new TypeError("only implementation tasks record required stages");
+  }
+  if (input.quick !== undefined && input.kind !== "implementation") {
+    throw new TypeError("only implementation tasks may be quick");
   }
   if (!isNonEmptyText(input.objective)) {
     throw new TypeError("Task objective must be a non-empty string");
@@ -867,6 +874,7 @@ export function createTask(input: TaskInput, now: IsoTimestamp): TaskRecord {
     ...(input.prReview === undefined ? {} : { prReview: input.prReview }),
     ...(input.target === undefined ? {} : { target: { ...input.target } }),
     ...(input.workstream === undefined ? {} : { workstream: input.workstream }),
+    ...(input.quick === undefined ? {} : { quick: { ...input.quick } }),
     ...(input.kind === "implementation"
       ? {
           requiredStages: {
@@ -1364,6 +1372,10 @@ function pauseTask(
 
 function resumeTask(task: TaskRecord, context: TaskTransitionContext): TaskRecord {
   assertStageIn(task, "resume", ["paused", "blocked"]);
+  // A quick task's scope question gates its implementer: only the user's Proceed reopens work.
+  if (quickScopeAwaitingAnswer(task)) {
+    throw new TaskTransitionError("approval-required", task, quickScopeResumeRefusal(task.id));
+  }
   const { previousStage } = task;
   if (previousStage === undefined || !OPEN_STAGES.includes(previousStage)) {
     throw new TaskTransitionError(

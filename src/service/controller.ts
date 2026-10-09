@@ -50,6 +50,8 @@ import type {
   IdFactory,
   IsoTimestamp,
   PullRequestMetadata,
+  QuickScopeAnswer,
+  QuickTaskApproval,
   RepoPolicy,
   RequestBriefRecord,
   ResearchContinuation,
@@ -186,6 +188,22 @@ import { inspectTask, type TaskInspection } from "../tasks/inspection.ts";
 import type { TaskEvent, TaskTransitionContext } from "../tasks/lifecycle.ts";
 import { isActiveTask, transitionTask } from "../tasks/lifecycle.ts";
 import {
+  checkQuickText,
+  QUICK_START_UNFINISHED,
+  quickApproval,
+  quickStartUnfinished,
+  quickTaskTitle,
+} from "../tasks/quick.ts";
+import {
+  parseQuickScopeAnswer,
+  QUICK_SCOPE_ANSWER_REFUSAL,
+  QUICK_SCOPE_LABELS,
+  QUICK_SCOPE_PROCEED_TEXT,
+  type QuickScopeChoice,
+  quickConvertedText,
+  quickScopeNextStep,
+} from "../tasks/quick-scope.ts";
+import {
   decideRequiredStages,
   policyStageFacts,
   pullRequestPublished,
@@ -284,6 +302,16 @@ export type CreateTaskRequest = Readonly<{
 /** The internal create request behind `reviewPr`; the generic create action never takes it. */
 type PrReviewTaskRequest = Omit<CreateTaskRequest, "kind"> &
   Readonly<{ readonly kind: "pr-review"; readonly prReview: PrReviewState }>;
+/**
+ * A quick task as the user typed it. Only the native Start click, proved by the click transport,
+ * calls this; the coordinator's tool has no action that reaches it, and there is deliberately no
+ * CLI command, because a worker's shell cannot be told apart from the user's. No model can start
+ * a quick task.
+ */
+export type StartQuickTaskInput = Readonly<{
+  readonly repoPath: string;
+  readonly text: string;
+}>;
 export type ModelOptionsResult = Readonly<{
   readonly modelSettings: ModelSettings;
   readonly availableModels: readonly ModelRecord[];
@@ -400,6 +428,8 @@ export type TandemService = Readonly<{
     input: { readonly base: string },
   ) => Promise<DeliveryPreflightResult>;
   readonly approve: (id: string) => Promise<TaskRecord>;
+  /** Records the user's quick-task approval of their text, then creates and approves the task. */
+  readonly startQuickTask: (input: StartQuickTaskInput) => Promise<TaskRecord>;
   readonly draftRequestBrief: (input: DraftRequestBriefInput) => Promise<RequestBriefView>;
   readonly reviewRequestBrief: (requestId: string) => Promise<RequestBriefView>;
   readonly closeRequestBriefReview: (
@@ -1014,6 +1044,7 @@ class TandemController {
       list: () => this.list(),
       get: (id) => this.get(id),
       approve: (id) => this.approve(id),
+      startQuickTask: (input) => this.startQuickTask(input),
       draftRequestBrief: (input) => this.draftRequestBrief(input),
       reviewRequestBrief: (requestId) => this.#requests.review(requestId),
       closeRequestBriefReview: (requestId, briefRevision) =>
@@ -1390,13 +1421,66 @@ class TandemController {
   }
 
   async create(input: CreateTaskRequest | PrReviewTaskRequest): Promise<TaskRecord> {
+    return this.createTask(input, undefined);
+  }
+
+  /**
+   * The user's quick task: their text, checked without a model, becomes the approved scope of a new
+   * implementation task, which is then approved through the ordinary `approve` path. Validation,
+   * review, the draft PR and publishing approval stay as for every implementation task.
+   */
+  async startQuickTask(input: StartQuickTaskInput): Promise<TaskRecord> {
+    if (!isRecord(input)) throw new TypeError("quick task input must be an object");
+    const checked = checkQuickText(text(input.text, "text"));
+    if (!checked.ok) throw new Error(checked.problem);
+    const quick = quickApproval({ text: checked.text, at: this.#deps.clock() });
+    const created = await this.createTask(
+      {
+        repoPath: input.repoPath,
+        kind: "implementation",
+        objective: checked.text,
+        title: quickTaskTitle(checked.text),
+        acceptanceCriteria: [],
+        // The user named no surfaces, so every pinned validation command applies.
+        surfaces: ["*"],
+      },
+      quick,
+    );
+    try {
+      return await this.approve(created.id);
+    } catch (error) {
+      // An unapproved quick task would wait for an approval no one is asked for, and a retried
+      // Start would create a second one, so a failed approval cancels the task it created.
+      const cause = describeError(error);
+      try {
+        await this.cancel(created.id, `Quick task could not start: ${cause}`);
+      } catch (cancelError) {
+        throw new Error(
+          `Quick task ${created.id} could not start (${cause}) and could not be cancelled (${describeError(cancelError)}); it is still awaiting approval. Cancel it before starting it again.`,
+          { cause: error },
+        );
+      }
+      throw new Error(
+        `Quick task could not start: ${cause}. Task ${created.id} was cancelled; start it again when ready.`,
+        { cause: error },
+      );
+    }
+  }
+
+  private async createTask(
+    input: CreateTaskRequest | PrReviewTaskRequest,
+    quick: QuickTaskApproval | undefined,
+  ): Promise<TaskRecord> {
     await this.ensureSourceReady();
     if (!isRecord(input)) throw new TypeError("create input must be an object");
+    if (quick !== undefined && (input.kind !== "implementation" || input.requestId !== undefined))
+      throw new TypeError("a quick task is an implementation task under no request");
     // Implementation work the coordinator did not attribute joins the repository's one open
-    // approved request, so its time and tokens land on that request's receipt.
+    // approved request, so its time and tokens land on that request's receipt. A quick task's
+    // scope is the user's own text, so it never joins a request.
     const requestId =
       input.requestId ??
-      (input.kind === "implementation"
+      (input.kind === "implementation" && quick === undefined
         ? await this.#requests.openRequestForNewWork(input.repoPath, await this.#deps.store.list())
         : undefined);
     const brief =
@@ -1471,6 +1555,7 @@ class TandemController {
               }
             : {}),
           skills,
+          ...(quick === undefined ? {} : { quick }),
         },
         source.repoPath,
         policy,
@@ -1810,11 +1895,194 @@ class TandemController {
       await this.answerKeepFixing(taskId, questionId, answer);
       return;
     }
+    const asked = (await this.get(taskId)).communication?.question;
+    if (asked?.id === questionId && asked.scope !== undefined) {
+      await this.answerQuickScope(taskId, questionId, answer);
+      return;
+    }
+    await this.answerWorker(taskId, questionId, answer);
+  }
+
+  /** An ordinary answer: an instruction to the worker, which resumes the task that asked. */
+  private async answerWorker(taskId: string, questionId: string, answer: string): Promise<void> {
     const result = await this.#source.appendAnswer(taskId, questionId, answer);
     if (!result.resumed) return;
     const resumed = await this.#control.resumeTask(taskId, QUESTION_ANSWERED);
     if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage)) {
       await this.reconcileTask(resumed);
+    }
+  }
+
+  /**
+   * Answers a quick task's scope question. The choice is recorded on the quick approval first, in
+   * one write, and then its effects run; each effect is guarded so `finishQuickScopeAnswer`, here or
+   * on the next tick after a crash, applies it once. Proceed's record also stretches the approved
+   * scope, so review sees it, then the worker is told; it may not ask again. Convert to request and
+   * Cancel cancel the task first and refuse, leaving the question open, when it could not be proven
+   * stopped; answering again retries that cancel. Convert then hands the user's words and the
+   * worker's findings to the coordinator in the same write that closes the question. An answer
+   * that is not one of the three leaves the question open; a different choice than the one already
+   * recorded is refused once the recorded one is finished.
+   */
+  private async answerQuickScope(
+    taskId: string,
+    questionId: string,
+    answer: string,
+  ): Promise<void> {
+    const choice = parseQuickScopeAnswer(answer);
+    if (choice === undefined) throw new Error(QUICK_SCOPE_ANSWER_REFUSAL);
+    const recorded = await this.recordQuickScopeAnswer(taskId, questionId, choice);
+    await this.finishQuickScopeAnswer(taskId, true);
+    if (recorded.choice !== choice)
+      throw new Error(
+        `Task ${taskId}'s scope question was already answered "${QUICK_SCOPE_LABELS[recorded.choice]}"; that answer stands.`,
+      );
+  }
+
+  /** Records the user's scope answer before any effect, or returns the one already recorded. */
+  private async recordQuickScopeAnswer(
+    taskId: string,
+    questionId: string,
+    choice: QuickScopeChoice,
+  ): Promise<QuickScopeAnswer> {
+    return this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      const quick = current?.quick;
+      if (
+        current === undefined ||
+        quick === undefined ||
+        quick.scopeQuestionId !== questionId ||
+        current.communication?.question?.id !== questionId
+      )
+        throw new Error(`Task ${taskId} is no longer asking question ${questionId}`);
+      if (quick.scopeAnswer !== undefined) return quick.scopeAnswer;
+      const scopeAnswer = { choice, at: this.#deps.clock() };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        quick: {
+          ...quick,
+          scopeAnswer,
+          ...(choice === "proceed" ? { scopeExtendedAt: scopeAnswer.at } : {}),
+        },
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
+      }));
+      return scopeAnswer;
+    });
+  }
+
+  /**
+   * Applies what is left of a recorded scope answer (`quickScopeNextStep`). The user's own answer
+   * retries a cancel that could not prove the worker stopped; a tick never does.
+   */
+  private async finishQuickScopeAnswer(taskId: string, retryCancel: boolean): Promise<void> {
+    const task = await this.get(taskId);
+    const answer = task.quick?.scopeAnswer;
+    const questionId = task.quick?.scopeQuestionId;
+    if (answer === undefined || questionId === undefined) return;
+    const cancelTried =
+      !retryCancel && (await this.runtimeFor(taskId))?.stopRequest?.action === "cancel";
+    const step = quickScopeNextStep(task, cancelTried);
+    if (step === undefined || step === "wait") return;
+    if (step === "answer-worker") {
+      await this.answerWorker(taskId, questionId, QUICK_SCOPE_PROCEED_TEXT);
+      return;
+    }
+    if (step === "resume") {
+      const resumed = await this.#control.resumeTask(taskId, QUESTION_ANSWERED);
+      if (["validating", "reviewing", "awaiting-fixes"].includes(resumed.stage))
+        await this.reconcileTask(resumed);
+      return;
+    }
+    const convert = answer.choice === "convert";
+    if (step === "cancel") await this.cancelAtScopeQuestion(taskId, convert);
+    await this.closeQuickScopeQuestion(taskId, questionId, convert);
+  }
+
+  /** Cancels a quick task for a Cancel or Convert answer; throws while its worker may still run. */
+  private async cancelAtScopeQuestion(taskId: string, convert: boolean): Promise<void> {
+    const stopped = await this.cancel(
+      taskId,
+      convert
+        ? "The user turned this quick task into a request."
+        : "The user cancelled this quick task at its scope question.",
+    );
+    if (stopped.stage !== "cancelled")
+      throw new Error(
+        `Task ${taskId} could not be stopped yet: Tandem couldn't confirm its worker stopped, so it was not ${convert ? "converted" : "cancelled"}. The question is still open; answer it again once the worker has stopped.`,
+      );
+  }
+
+  /**
+   * Closes a cancelled quick task's scope question and, for Convert, hands the request to the
+   * coordinator, in one write. A question already closed means this already happened.
+   */
+  private async closeQuickScopeQuestion(
+    taskId: string,
+    questionId: string,
+    convert: boolean,
+  ): Promise<void> {
+    await this.#deps.store.exclusive(async (store) => {
+      const current = await store.read(taskId);
+      const question = current?.communication?.question;
+      if (current === undefined || question?.id !== questionId) return;
+      const { question: _question, ...communication } = current.communication ?? {
+        revision: 0,
+        messages: [],
+      };
+      await store.update(current.id, current.revision, (entry) => ({
+        ...entry,
+        communication,
+        ...(convert
+          ? {
+              notifications: [
+                ...entry.notifications,
+                {
+                  id: singleLine(this.#deps.idFactory(), "notification id"),
+                  message: quickConvertedText(entry, question.scope),
+                  acknowledged: false,
+                  kind: "coordinator" as const,
+                },
+              ],
+            }
+          : {}),
+        revision: entry.revision + 1,
+        updatedAt: this.#deps.clock(),
+      }));
+    });
+  }
+
+  /** Each tick finishes scope answers a crash left part-way; a failure waits for the next tick. */
+  private async finishQuickScopeAnswers(tasks: readonly TaskRecord[]): Promise<void> {
+    for (const task of tasks) {
+      if (quickStartUnfinished(task, this.#deps.clock())) {
+        await this.cancel(task.id, QUICK_START_UNFINISHED).catch((error: unknown) =>
+          appendDiagnosticEvent(
+            this.#deps.home,
+            {
+              event: "quick-start-unfinished",
+              taskId: task.id,
+              details: { errorClass: errorClassName(error) },
+            },
+            this.#deps.clock,
+          ),
+        );
+        continue;
+      }
+      if (quickScopeNextStep(task, false) === undefined) continue;
+      try {
+        await this.finishQuickScopeAnswer(task.id, false);
+      } catch (error) {
+        await appendDiagnosticEvent(
+          this.#deps.home,
+          {
+            event: "quick-scope-answer-unfinished",
+            taskId: task.id,
+            details: { errorClass: errorClassName(error) },
+          },
+          this.#deps.clock,
+        );
+      }
     }
   }
 
@@ -2195,6 +2463,7 @@ class TandemController {
 
   private async advance(): Promise<readonly TaskRecord[]> {
     await this.backfillRequiredStages(await this.#source.scopedTasks());
+    await this.finishQuickScopeAnswers(await this.#source.scopedTasks());
     const tasks = await this.#source.scopedTasks();
     for (const task of tasks) await this.reconcileOrBlock(task);
     await this.reconcilePresentations(new Set(tasks.map((task) => task.id)));

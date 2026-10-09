@@ -85,6 +85,7 @@ function workerSession(
     },
     readReceipt: async () => undefined,
     gitStatus: async () => "",
+    gitHead: async () => "base-head",
     readFile: async (path) => `contents of ${path}`,
     copyAsset: async (input) => `${input.artifactDir}/${input.name}`,
     trace: (event) => traces.push(event),
@@ -692,4 +693,39 @@ test("a completed idle worker acknowledges close; a busy pane records which flag
   worker.time.advance(250);
   await settle();
   expect(worker.states.at(-1)).toMatchObject({ phase: "closing", commandId: "close-1" });
+});
+
+test("a quick task's scope question is accepted only on a clean worktree still at its base HEAD", async () => {
+  const quick = { quickScope: "may-ask" as const, baseHead: "base-head" };
+  const ask = {
+    outcome: "needs-decision",
+    report: "Too big.",
+    scopeExceeded: { files: 9, areas: ["billing", "cli"], plan: "split it" },
+  };
+
+  const committed = workerSession(quick, { gitHead: async () => "worker-commit" });
+  const movedHead = await committed.session.submitReport(ask);
+  expect(movedHead.isError).toBe(true);
+  expect(movedHead.text).toContain("HEAD has moved");
+  expect(movedHead.text).toContain("before changing or committing anything");
+  expect(committed.results).toHaveLength(0);
+
+  const dirty = workerSession(quick, { gitStatus: async () => " M src/app.ts\n" });
+  expect((await dirty.session.submitReport(ask)).text).toContain("uncommitted changes");
+  expect(dirty.results).toHaveLength(0);
+
+  for (const unknown of [
+    workerSession(quick, { gitStatus: async () => undefined }),
+    workerSession(quick, { gitHead: async () => undefined }),
+    workerSession({ quickScope: "may-ask" }),
+  ]) {
+    const refused = await unknown.session.submitReport(ask);
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain("could not verify the worktree is unchanged");
+    expect(unknown.results).toHaveLength(0);
+  }
+
+  const clean = workerSession(quick);
+  expect((await clean.session.submitReport(ask)).isError).toBe(false);
+  expect(clean.results.at(-1)?.question?.scope).toEqual(ask.scopeExceeded);
 });

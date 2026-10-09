@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
-import type { TaskRecord } from "../contracts.ts";
+import type { QuickScopeReport, TaskRecord } from "../contracts.ts";
 import type { PrWatchNotice } from "../pr-watch/store.ts";
 import { renderRequestReceiptTable } from "../runtime/usage-receipt.ts";
 import type { TandemService } from "../service/controller.ts";
+import { QUICK_SCOPE_CHOICES, QUICK_SCOPE_LABELS, quickScopeLines } from "../tasks/quick-scope.ts";
 import { decideResearchFollowUp } from "../tasks/research-continuation.ts";
 import type { SessionHost } from "./events.ts";
 import { buildResearchFollowUpContent } from "./research-follow-up.ts";
@@ -27,6 +28,8 @@ type NotificationRef = Readonly<{
   readonly questionId?: string;
   readonly questionText?: string;
   readonly recommendation?: string;
+  /** A quick task's scope question, which renders from these fields rather than its text. */
+  readonly questionScope?: QuickScopeReport;
   readonly reportPath?: string;
   readonly followUp?: string;
   /** The research report's full text, when the follow-up asks for a summary and it is short enough. */
@@ -108,6 +111,7 @@ async function allPendingNotifications(
               ...(question.recommendation === undefined
                 ? {}
                 : { recommendation: question.recommendation }),
+              ...(question.scope === undefined ? {} : { questionScope: question.scope }),
             }),
         ...(judgmentNeeded && task.reportPath !== undefined ? { reportPath: task.reportPath } : {}),
         ...(judgmentNeeded && wake !== undefined ? { followUp: wake.followUp } : {}),
@@ -157,6 +161,11 @@ function notificationContent(notifications: readonly NotificationRef[]): string 
 function judgmentDisplayContent(notifications: readonly NotificationRef[]): string {
   return notifications
     .map((notification) => {
+      if (notification.questionScope !== undefined)
+        return [
+          ...quickScopeLines(notification.taskId, notification.questionScope),
+          QUICK_SCOPE_CHOICES.map((choice) => QUICK_SCOPE_LABELS[choice]).join(" · "),
+        ].join("\n");
       const lines = [compactText(notification.message, ACTION_SUMMARY_MAX_TEXT)];
       if (notification.questionText !== undefined) {
         lines.push(compactText(notification.questionText, ACTION_SUMMARY_MAX_TEXT));
@@ -181,9 +190,10 @@ function judgmentDisplayContent(notifications: readonly NotificationRef[]): stri
 function judgmentIdentifiers(notifications: readonly NotificationRef[]): string {
   const lines = notifications.map((notification) => {
     const ref = `task ${notification.taskId}, notification ${notification.notificationId}`;
-    return notification.questionId === undefined
-      ? ref
-      : `${ref}, question ${notification.questionId}`;
+    if (notification.questionId === undefined) return ref;
+    return notification.questionScope === undefined
+      ? `${ref}, question ${notification.questionId}`
+      : `${ref}, question ${notification.questionId}: the quick task's scope question. Show it as it is, naming task ${notification.taskId}. Only the user chooses; send their choice with answer, as exactly "Proceed", "Convert to request" or "Cancel". Never choose for them.`;
   });
   const followUps = notifications.flatMap((notification) =>
     notification.followUp === undefined ? [] : ["", notification.followUp],

@@ -15,6 +15,7 @@ export const VIEW_KINDS = [
   "usage",
   "catchup",
   "setup",
+  "quick-task",
 ] as const;
 export const ViewKind = z.enum(VIEW_KINDS);
 export type ViewKind = z.infer<typeof ViewKind>;

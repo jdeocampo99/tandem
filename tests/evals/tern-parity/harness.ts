@@ -750,7 +750,7 @@ export class TernParityHost {
     const paneKey = JSON.stringify(panes);
     const paths = await listFiles(
       join(this.world.home, "tern"),
-      /^(index|task-.+|brief-.+|pr-.+|setup-.+)\.json$|\.ticket\.json$/u,
+      /^(index|task-.+|brief-.+|pr-.+|setup-.+|quick-task-composer)\.json$|\.ticket\.json$/u,
     );
     const files: Record<string, string | boolean> = {};
     for (const path of paths) {

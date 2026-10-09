@@ -11,6 +11,7 @@ import {
   type FindingVerdict,
   isAgentRole,
   type ModelSpec,
+  type QuickScopeReport,
   type ReviewLens,
   type ReviewLevel,
   type ReviewMode,
@@ -20,7 +21,7 @@ import {
   type ThinkingLevel,
 } from "../contracts.ts";
 import { DEFAULT_HARNESS, type HarnessName, parseHarnessName } from "../harness/contract.ts";
-import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
+import { MAX_TASK_MESSAGE_CHARS, parseQuickScopeReport } from "../tasks/communication-protocol.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
 import type { ExecutionIdentity } from "./execution-gate.ts";
 
@@ -67,6 +68,16 @@ export type WorkerJob = Readonly<{
   /** The implementer's playbook steps; its report is rejected while any is open in its to-do list. */
   readonly playbookSteps?: readonly string[];
   /**
+   * A quick task's implementer: `may-ask` while its one scope question is unasked, `spent` after.
+   * Absent on every other job, which may not submit `scopeExceeded`.
+   */
+  readonly quickScope?: "may-ask" | "spent";
+  /**
+   * A quick task implementer's worktree starting HEAD. Its scope question says no changes were
+   * made, so it is refused unless the worktree is clean and HEAD still equals this commit.
+   */
+  readonly baseHead?: string;
+  /**
    * A scout job reviewing a pull request: it gets a read-only git/gh shell, and when
    * `structuredReport` is set its report must be one PrReview JSON object.
    */
@@ -81,6 +92,8 @@ export type WorkerJob = Readonly<{
 export type WorkerQuestion = Readonly<{
   readonly text: string;
   readonly recommendation?: string;
+  /** A quick task's scope question, which Tandem rendered as `text`. */
+  readonly scope?: QuickScopeReport;
 }>;
 
 export type WorkerStatus = "completed" | "needs-decision" | "failed";
@@ -143,7 +156,7 @@ export function parseWorkerQuestion(value: unknown): WorkerQuestion {
   if (!isRecord(value)) throw new TypeError("question must be an object");
   const keys = Object.keys(value);
   for (const key of keys) {
-    if (key !== "text" && key !== "recommendation") {
+    if (key !== "text" && key !== "recommendation" && key !== "scope") {
       throw new TypeError(`question contains unknown field ${key}`);
     }
   }
@@ -152,9 +165,12 @@ export function parseWorkerQuestion(value: unknown): WorkerQuestion {
     value.recommendation === undefined
       ? undefined
       : readBoundedSingleLineText(value.recommendation, "question.recommendation");
+  const scope =
+    value.scope === undefined ? undefined : parseQuickScopeReport(value.scope, "question.scope");
   return {
     text,
     ...(recommendation === undefined ? {} : { recommendation }),
+    ...(scope === undefined ? {} : { scope }),
   };
 }
 
@@ -450,6 +466,22 @@ export function parseWorkerJob(value: unknown): WorkerJob {
   if (playbookSteps !== undefined && role !== "implementer") {
     throw new TypeError("playbookSteps is only permitted for implementer jobs");
   }
+  if (
+    value.quickScope !== undefined &&
+    value.quickScope !== "may-ask" &&
+    value.quickScope !== "spent"
+  ) {
+    throw new TypeError("quickScope must be may-ask or spent");
+  }
+  const quickScope = value.quickScope;
+  if (quickScope !== undefined && role !== "implementer") {
+    throw new TypeError("quickScope is only permitted for implementer jobs");
+  }
+  const baseHead =
+    value.baseHead === undefined ? undefined : readSingleLineText(value.baseHead, "baseHead");
+  if (baseHead !== undefined && quickScope === undefined) {
+    throw new TypeError("baseHead is only permitted for quick task implementer jobs");
+  }
   const prReview = value.prReview === undefined ? undefined : readPrReviewJob(value.prReview);
   if (prReview !== undefined && role !== "scout") {
     throw new TypeError("prReview is only permitted for scout jobs");
@@ -473,6 +505,8 @@ export function parseWorkerJob(value: unknown): WorkerJob {
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
     ...(setup === undefined ? {} : { setup }),
     ...(playbookSteps === undefined ? {} : { playbookSteps }),
+    ...(quickScope === undefined ? {} : { quickScope }),
+    ...(baseHead === undefined ? {} : { baseHead }),
     ...(prReview === undefined ? {} : { prReview }),
   };
 }

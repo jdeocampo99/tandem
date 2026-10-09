@@ -17,6 +17,7 @@ import {
   ledgerSuggestions,
   settledFindings,
 } from "./findings.ts";
+import { quickApprovalLine } from "./quick.ts";
 import { recordedReviewLevel } from "./review-levels.ts";
 
 /** Named bounds every review brief is built and rendered within. */
@@ -85,6 +86,8 @@ export type ReviewBriefScope = Readonly<{
   readonly manualVerification: readonly string[];
   readonly principles: readonly string[];
   readonly nonGoals: readonly string[];
+  /** How a quick task's scope was approved, and whether the user stretched it. */
+  readonly approval?: string;
 }>;
 
 export type ReviewBriefIdentities = Readonly<{
@@ -412,6 +415,7 @@ export function buildReviewBrief(input: ReviewBriefInput): ReviewBrief {
       manualVerification,
       principles: task.policy.config.standards === "none" ? [] : CODE_STANDARD_NAMES,
       nonGoals,
+      ...(task.quick === undefined ? {} : { approval: quickApprovalLine(task.quick) }),
     },
     identities: {
       head,
@@ -507,6 +511,7 @@ function renderSections(brief: ReviewBrief, compact: boolean): string {
     "## Approved scope",
     `- objective: ${brief.scope.objective}`,
     `- scope approved: ${brief.scope.scopeApproved}`,
+    ...(brief.scope.approval === undefined ? [] : [`- approval: ${brief.scope.approval}`]),
     `- surfaces: ${brief.scope.surfaces}`,
     "- automated checks:",
     ...brief.scope.acceptanceCriteria.map((entry) => `  - ${entry}`),

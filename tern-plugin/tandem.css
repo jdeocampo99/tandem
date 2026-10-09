@@ -43,3 +43,33 @@
   border-radius: 6px;
   background: rgba(210, 170, 60, 0.1);
 }
+/* The quick task composer: layout only, so text keeps the theme's own colors. */
+.quick-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+.quick-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(140, 150, 170, 0.2);
+  padding-bottom: 8px;
+}
+.quick-composer > .sf-input {
+  min-height: 96px;
+}
+.quick-chip {
+  align-self: flex-start;
+  border: 1px solid rgba(140, 150, 170, 0.4);
+  border-radius: 10px;
+  padding: 2px 8px;
+}
+.quick-bottom {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  padding: 8px 12px;
+}

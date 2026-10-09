@@ -1,6 +1,21 @@
 import { z } from "zod";
 import { SETUP_MODES, SETUP_SECTIONS } from "../onboarding/setup-view.ts";
+import { QUICK_SCOPE_CHOICES, type QuickScopeChoice } from "../tasks/quick-scope.ts";
 import { AbsolutePath, PaneId } from "./block.ts";
+
+/**
+ * The only spelling of a scope-question answer link, `tandem://answer/TASK/QUESTION/CHOICE`.
+ * `window.luau` turns it into a `quick-answer` action from the focused pane.
+ */
+export function nativeAnswerLink(
+  taskId: string,
+  questionId: string,
+  choice: QuickScopeChoice,
+): string {
+  if (!/^[\w-]+$/u.test(taskId) || !/^[\w-]+$/u.test(questionId))
+    throw new Error(`Not a native answer link: ${taskId}/${questionId}`);
+  return `tandem://answer/${taskId}/${questionId}/${choice}`;
+}
 
 /** Reply links a coordinator prints and `host.luau`'s `route.link` turns into an `open` action. */
 export const LINK_KINDS = ["task", "brief", "pr"] as const;
@@ -46,6 +61,7 @@ export const ViewRef = z.discriminatedUnion("kind", [
         "inbox",
         "task-picker",
         "new-request",
+        "quick-task",
       ]),
     })
     .strict(),
@@ -124,6 +140,20 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("merged-link"), url: z.string().url() }).strict(),
   /** The setup block's answer: parsed by `parseSetupAnswer`, so its shape lives in one place. */
   z.object({ verb: z.literal("setup-save"), answer: z.record(z.string(), z.unknown()) }).strict(),
+  /**
+   * The quick task composer's Start: the user's text, verbatim. The click is their approval of it
+   * as the scope; `checkQuickText` (src/tasks/quick.ts) validates it, never a model.
+   */
+  z.object({ verb: z.literal("quick-start"), text: z.string().max(16_000) }).strict(),
+  /** The user's answer to a quick task's scope question, clicked from its chat link. */
+  z
+    .object({
+      verb: z.literal("quick-answer"),
+      taskId: Id,
+      questionId: Id,
+      choice: z.enum(QUICK_SCOPE_CHOICES),
+    })
+    .strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -147,6 +177,7 @@ export const NOTICE_CODES = [
   "review-unconfirmed",
   "feedback-saved",
   "setup-incomplete",
+  "quick-warning",
   "origin-unproven",
 ] as const;
 export const NoticeCode = z.enum(NOTICE_CODES);

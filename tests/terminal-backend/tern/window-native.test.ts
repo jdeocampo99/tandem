@@ -26,7 +26,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
 );
 
 (enabled ? test : test.skip)(
-  "isolated window keeps eight palette commands and consented project keys; real schema accepts tmux",
+  "isolated window keeps nine palette commands and consented project keys; real schema accepts tmux",
   async () => {
     const root = await mkdtemp("/tmp/tdm-window-native-");
     const config = join(root, "config");
@@ -161,6 +161,7 @@ const node: z.ZodType<ControlNode> = z.lazy(() =>
       ).toEqual(
         [
           "Tandem: New request…",
+          "Tandem: Quick task…",
           "Tandem: Open task…",
           "Tandem: Show PRs",
           "Tandem: Toggle board",

@@ -378,6 +378,20 @@ function submitReportCases(role: WorkerRole): readonly Case[] {
     },
     { name: "review", input: { outcome: done, review }, valid: role === "reviewer" },
     {
+      name: "quick-task scope report",
+      input: {
+        outcome: "needs-decision",
+        report: "r",
+        scopeExceeded: { files: 9, areas: ["billing", "cli"], plan: "split it" },
+      },
+      valid: role === "implementer",
+    },
+    {
+      name: "quick-task scope report without a plan",
+      input: { outcome: "needs-decision", report: "r", scopeExceeded: { files: 9, areas: [] } },
+      valid: false,
+    },
+    {
       name: "review with a bad severity",
       input: {
         outcome: done,
@@ -467,7 +481,7 @@ test("submit_report shows each role only the fields it can fill", () => {
   const common = ["outcome", "report", "question", "recommendation"];
 
   expect(fields("scout")).toEqual(common);
-  expect(fields("implementer")).toEqual(common);
+  expect(fields("implementer")).toEqual([...common, "scopeExceeded"]);
   expect(fields("reviewer")).toEqual([...common, "review"]);
   expect(fields("presentation")).toEqual([...common, "artifactPath"]);
 });

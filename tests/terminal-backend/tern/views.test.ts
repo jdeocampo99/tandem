@@ -1,9 +1,17 @@
 import { expect, test } from "bun:test";
-import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { AdapterCommandError, AdapterProtocolError } from "../../../src/adapters/primitives.ts";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+  AdapterCommandError,
+  AdapterError,
+  AdapterProtocolError,
+} from "../../../src/adapters/primitives.ts";
 import type { CommandRunner, Endpoint } from "../../../src/contracts.ts";
+import { saveCoordinatorRecord } from "../../../src/coordinator/registry.ts";
+import { DEFAULT_HARNESS } from "../../../src/harness/contract.ts";
 import { blockArgs } from "../../../src/native/block.ts";
-import { viewIndexPath } from "../../../src/native/store.ts";
+import { viewDetailPath, viewIndexPath } from "../../../src/native/store.ts";
+import { QUICK_TASK_FILE } from "../../../src/native/view-file.ts";
 import { ternBackend } from "../../../src/terminal-backend/tern/backend.ts";
 import { ternCli } from "../../../src/terminal-backend/tern/cli.ts";
 import { TernOutcomeUnknownError } from "../../../src/terminal-backend/tern/protocol.ts";
@@ -444,4 +452,113 @@ test("PR detail navigation resolves the cached repository and number without req
   );
   expect(detailForView(shown, { kind: "pr", taskId: "owned" })).toBe("pr-two%2Frepo-42.json");
   expect(detailForView(shown, { kind: "pr", repo: "missing/repo", number: 42 })).toBeUndefined();
+});
+
+test("only the exact quick task block Tandem launched for this coordinator proves a composer click", async () => {
+  const root = await realpath(await mkdtemp("/tmp/tandem-quick-proof-"));
+  const home = join(root, "home");
+  const repo = join(root, "repo");
+  const clean = join(root, "clean");
+  try {
+    await Promise.all([mkdir(home), mkdir(repo), mkdir(clean)]);
+    await saveCoordinatorRecord(home, {
+      schemaVersion: 1,
+      repoPath: repo,
+      endpoint,
+      harness: DEFAULT_HARNESS,
+      command: ["omp"],
+      worktree: {
+        root,
+        path: clean,
+        name: "coordinator",
+        baseHead: "a".repeat(40),
+        branch: "coord",
+        leaseId: "lease",
+        leaseHolder: "coordinator:test",
+        leasedAt: "2030-01-01T00:00:00.000Z",
+      },
+    });
+    const index = viewIndexPath(home, repo);
+    const composer = blockArgs(viewDetailPath(home, repo, QUICK_TASK_FILE), {
+      coordinator: "3",
+      cwd: clean,
+      home,
+      index,
+    });
+    let listed: readonly Readonly<Record<string, unknown>>[] = [];
+    const run: CommandRunner = async (request) => {
+      const verb = request.argv[1];
+      if (verb === "inspect")
+        return { code: 0, stderr: "", stdout: JSON.stringify({ clients: [{ kind: "window" }] }) };
+      if (verb !== "ls") throw new Error(`unexpected ${verb}`);
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          sessions: [
+            {
+              id: 1,
+              name: "fixture",
+              tabs: [
+                {
+                  id: 2,
+                  name: null,
+                  blocks: [
+                    { id: 3, title: "Coordinator", cwd: home, live: true },
+                    // A worker running in the project's session: a pane, but no Tandem block.
+                    { id: 5, title: "Worker", cwd: home, live: true },
+                    ...listed,
+                  ],
+                },
+              ],
+            },
+          ],
+          detached: [],
+        }),
+      };
+    };
+    const host = ternViewHost(ternCli(run));
+    const proves = (paneId: string) =>
+      host.isView({
+        coordinator: endpoint,
+        cwd: clean,
+        home,
+        origin: { paneId },
+        view: { kind: "quick-task" },
+      });
+    const block = (program: string, args: readonly string[]) => ({
+      id: 4,
+      title: "Quick task",
+      cwd: home,
+      live: true,
+      program,
+      args,
+    });
+
+    listed = [block("tandem.quick-task", composer)];
+    expect(await proves("4")).toBe(true);
+    expect(await proves("5")).toBe(false);
+    expect(await proves("3")).toBe(false);
+    listed = [block("tandem.board", composer)];
+    expect(await proves("4")).toBe(false);
+    listed = [
+      block(
+        "tandem.quick-task",
+        blockArgs(viewDetailPath(home, repo, QUICK_TASK_FILE), {
+          coordinator: "9",
+          cwd: clean,
+          home,
+          index,
+        }),
+      ),
+    ];
+    expect(await proves("4")).toBe(false);
+    listed = [
+      block("tandem.quick-task", composer),
+      { ...block("tandem.quick-task", composer), id: 6 },
+    ];
+    await expect(proves("4")).rejects.toBeInstanceOf(AdapterError);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

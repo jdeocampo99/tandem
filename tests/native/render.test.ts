@@ -6,8 +6,9 @@ import { fileURLToPath } from "node:url";
 import type { NativeViewsPublication } from "../../src/board/native-views.ts";
 import { blockArgs } from "../../src/native/block.ts";
 import { publishViews, viewDetailPath, viewIndexPath } from "../../src/native/store.ts";
-import { setupFile, ViewFile } from "../../src/native/view-file.ts";
+import { QUICK_TASK_FILE, setupFile, ViewFile } from "../../src/native/view-file.ts";
 import { SETUP_MODES, type SetupMode } from "../../src/onboarding/setup-view.ts";
+import { quickTaskView } from "../../src/tasks/quick.ts";
 import { luauBinary } from "../luau.ts";
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { taskScreenPublication } from "../tasks/task-screen-fixture.ts";
@@ -301,6 +302,26 @@ test("a model that cannot draw keeps the last good one and shows the unavailable
   expect(strings(prGood ?? {})).toContain("#281 ▾");
   expect(prBroken?.title).toBe("#281 ▾");
   expect(strings(prBroken ?? {})).toContain("#281 ▾");
+});
+
+test("the quick task composer draws its published project and holds Start until text is set", async () => {
+  await publishViews(home, project, async () => ({
+    quickTask: quickTaskView({ repoPath: project, branch: "main" }),
+  }));
+  const path = viewDetailPath(home, project, QUICK_TASK_FILE);
+  const [drawn] = await render([
+    { block: "quick-task", args: args(path), steps: [{ [path]: await readFile(path, "utf8") }] },
+  ]);
+  const shown = strings(drawn?.at(-1) ?? {});
+  expect(drawn?.at(-1)?.title).toBe("Quick task");
+  expect(shown).toEqual([
+    "Quick task",
+    "×",
+    "Small, well-defined changes. No interview.",
+    "Describe the change",
+    "repo · main",
+    "Start  ⌘↵",
+  ]);
 });
 
 test("the setup block draws the published setup and settings views", async () => {

@@ -85,6 +85,9 @@ src/service/draft-refresh.ts, src/presentations/, src/adapters/lavish.ts
   configured. No automated checks ran; this change passed review only, ..."), `# Manual verification` as unticked
   `- [ ]` items when the task has manual verification, and `# Known issues` listing every finding
   on the ledger not yet `addressed`.
+- A [quick task](task-lifecycle.md#quick-tasks)'s description, and its draft body, start with
+  `# Approved scope (quick task, HH:MM)` and the user's text quoted verbatim, plus a line when the
+  user chose Proceed on its scope question.
 - `describe` renders without publishing.
 
 ## Delivery preflight

@@ -60,6 +60,7 @@ import { readWorkerReceipt } from "../tasks/communication-persistence.ts";
 import { MAX_TASK_MESSAGE_CHARS } from "../tasks/communication-protocol.ts";
 import { type FixRoundGate, fixRoundGate } from "../tasks/findings.ts";
 import { type TaskEvent, type TaskTransitionContext, transitionTask } from "../tasks/lifecycle.ts";
+import { quickScopeQuestionAllowed } from "../tasks/quick-scope.ts";
 import type { TaskStore } from "../tasks/store.ts";
 import type { TranscriptRef } from "../tasks/timeline.ts";
 import type { EndpointInspection, TerminalBackend } from "../terminal-backend/contract.ts";
@@ -136,16 +137,20 @@ function commitRef(event: TaskEvent, job: DurableJob): Readonly<{ commit?: strin
   return head === undefined ? {} : { commit: head };
 }
 
-function workerQuestion(job: DurableJob, result: WorkerResult): TaskQuestion {
+function workerQuestion(task: TaskRecord, job: DurableJob, result: WorkerResult): TaskQuestion {
   const text =
     (result.question?.text ?? result.text).trim() || `Worker ${job.role} needs a decision`;
   const recommendation = result.question?.recommendation;
+  // A scope question stays one only on a quick task that has not asked one; otherwise it is an
+  // ordinary question, so a second one can never reopen the three-way choice.
+  const scope = quickScopeQuestionAllowed(task) ? result.question?.scope : undefined;
   return {
     id: job.id,
     text: text.slice(0, MAX_TASK_MESSAGE_CHARS),
     ...(recommendation === undefined
       ? {}
       : { recommendation: recommendation.slice(0, MAX_TASK_MESSAGE_CHARS) }),
+    ...(scope === undefined ? {} : { scope }),
   };
 }
 
@@ -569,7 +574,8 @@ export class WorkerWorkflow {
       return;
     }
     if (result.status === "failed" || result.status === "needs-decision") {
-      const question = result.status === "needs-decision" ? workerQuestion(job, result) : undefined;
+      const question =
+        result.status === "needs-decision" ? workerQuestion(task, job, result) : undefined;
       const reason =
         question === undefined
           ? (result.error ?? `worker ${result.status} for ${job.role}`)

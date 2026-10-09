@@ -72,13 +72,17 @@ export type TerminalView =
   | Readonly<{
       kind: "board" | "usage" | "prs" | "catchup" | "orchestrator" | "inbox" | "task-picker";
     }>
+  | Readonly<{ kind: "quick-task" }>
   | Readonly<{ kind: "task" | "pr"; taskId: string }>
   | Readonly<{ kind: "brief"; requestId: string }>
   | Readonly<{ kind: "pr"; repo: string; number: number }>
   | Readonly<{ kind: "setup"; mode: SetupMode }>;
 
 /** The views whose blocks carry the user's approval-bearing clicks; see `ViewsCapability.isView`. */
-export type ProvableView = Extract<TerminalView, { taskId: string } | { kind: "brief" | "setup" }>;
+export type ProvableView = Extract<
+  TerminalView,
+  { taskId: string } | { kind: "brief" | "setup" | "quick-task" }
+>;
 
 /** Presentation context from the initiating view; it grants no pane ownership. */
 export type ViewOrigin = Readonly<{ paneId?: string; windowId?: string; cwd?: string }>;
