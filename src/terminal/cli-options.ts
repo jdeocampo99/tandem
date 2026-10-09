@@ -197,7 +197,7 @@ export function parseOption(
     spec.apply(options);
     return index;
   }
-  const parsed = optionValue(argv, index, name);
-  spec.apply(options, parsed.value, name);
-  return parsed.nextIndex;
+  const parsedValue = optionValue(argv, index, name);
+  spec.apply(options, parsedValue.value, name);
+  return parsedValue.nextIndex;
 }
