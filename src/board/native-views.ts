@@ -18,8 +18,8 @@ export type NativeProjectSummary = Readonly<{
   done: number;
   sessionId?: string;
 }>;
-export type NativeTaskIndex = NativeTaskSummary & Readonly<{ detailFile: string }>;
-export type NativeBriefIndex = Pick<
+type NativeTaskIndex = NativeTaskSummary & Readonly<{ detailFile: string }>;
+type NativeBriefIndex = Pick<
   BriefView,
   "requestId" | "title" | "revision" | "changes" | "approvalState" | "abandoned" | "commentCount"
 > &
@@ -29,7 +29,7 @@ export type NativePrIndex = Readonly<{
   readAt: string;
   detailFile: string;
 }>;
-export type NativeDetail =
+type NativeDetail =
   | Readonly<{ version: 1; project: string; kind: "task"; data: TaskPageView }>
   | Readonly<{ version: 1; project: string; kind: "brief"; data: BriefView }>
   | Readonly<{ version: 1; project: string; kind: "pr"; data: PrPaneView }>;

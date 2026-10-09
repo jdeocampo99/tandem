@@ -12,7 +12,7 @@ import { type PrReview, parsePrReview, type ReviewLens } from "./review.ts";
  */
 export type PrReviewMode = "review" | "re-review" | "question";
 
-export type PostedReview = Readonly<{
+type PostedReview = Readonly<{
   url: string;
   verdict: ReviewVerdict;
   postedAt: string;
@@ -130,7 +130,7 @@ export function parsePrReviewState(value: unknown, source: string): PrReviewStat
   };
 }
 
-export function parseLens(value: unknown, source: string): ReviewLens {
+function parseLens(value: unknown, source: string): ReviewLens {
   const record = recordAt(value, source);
   if (record.kind === "full" || record.kind === "intent") return { kind: record.kind };
   if (record.kind === "focus") {

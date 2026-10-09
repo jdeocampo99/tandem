@@ -50,12 +50,12 @@ export type ReportViewInput = Readonly<{
  * A stuck, waiting, or queued stretch shorter than this is ordinary friction, not a choke. A review
  * loop qualifies by its round count instead.
  */
-export const CHOKE_THRESHOLD_MS = 5 * 60_000;
+const CHOKE_THRESHOLD_MS = 5 * 60_000;
 
 /** A review loop is named once review has sent the task back for fixes this many times. */
-export const REVIEW_LOOP_MIN_ROUNDS = 2;
+const REVIEW_LOOP_MIN_ROUNDS = 2;
 
-export const MAX_TITLE_CHARS = 80;
+const MAX_TITLE_CHARS = 80;
 
 /** Reaching any of these ends the task's wall window: later time is a human merging, not Tandem. */
 const WINDOW_END_STAGES: ReadonlySet<TaskStage> = new Set([

@@ -76,7 +76,7 @@ export type ModelRecord = Readonly<{
 export type AgentKind = AgentRole | "pr-reviewer";
 
 /** Where the agent keeps its conversation. */
-export type Conversation = Readonly<{ kind: "none" }> | SavedConversation;
+type Conversation = Readonly<{ kind: "none" }> | SavedConversation;
 
 export type SavedConversation = Readonly<{
   kind: "saved";

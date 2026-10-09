@@ -101,7 +101,7 @@ export async function removeCoordinatorRecord(
 }
 
 /** Whether a stored record sits in the registry directory of the session its endpoint names. */
-export type CoordinatorRecordPlacement = "session-directory" | "foreign-directory";
+type CoordinatorRecordPlacement = "session-directory" | "foreign-directory";
 
 /** One stored coordinator record, with the session it came from and where it was found. */
 export type DiscoveredCoordinatorRecord = Readonly<{

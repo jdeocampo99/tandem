@@ -37,9 +37,9 @@ export type ModelTierEvidenceGap = (typeof MODEL_TIER_EVIDENCE_GAPS)[number];
 export type ModelTierAxisRelation = "lower" | "equal" | "higher";
 
 /** Which axis makes a candidate a premium move. Money is named first when both axes rise. */
-export const MODEL_TIER_PREMIUM_AXES = ["monetary-cost", "quota-consumption"] as const;
+const MODEL_TIER_PREMIUM_AXES = ["monetary-cost", "quota-consumption"] as const;
 
-export type ModelTierPremiumAxis = (typeof MODEL_TIER_PREMIUM_AXES)[number];
+type ModelTierPremiumAxis = (typeof MODEL_TIER_PREMIUM_AXES)[number];
 
 /** One model's tier evidence exactly as the catalogue published it for one thinking level. */
 export type ModelTierEvidence = Readonly<{

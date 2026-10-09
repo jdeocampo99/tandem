@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { CommandRunner } from "../../contracts.ts";
 
 /** A setting that keeps Tandem's `--plugin-dir` mods from loading. */
-export type ModsOffSetting =
+type ModsOffSetting =
   | "disableAllHooks"
   | "allowManagedHooksOnly"
   | "allowManagedModsOnly"
@@ -12,7 +12,7 @@ export type ModsOffSetting =
  * The settings files a Tandem launch reads. `--setting-sources project,local` drops user settings,
  * and managed settings always apply.
  */
-export type SettingsSource = "managed" | "project" | "local";
+type SettingsSource = "managed" | "project" | "local";
 
 export type ModsOff = Readonly<{ setting: ModsOffSetting; source: SettingsSource }>;
 
@@ -26,7 +26,7 @@ export type SettingsFile = Readonly<{
 }>;
 
 /** Where macOS keeps Claude Code's managed settings, which apply to every launch. */
-export const CLAUDE_CODE_MANAGED_DIRECTORY = "/Library/Application Support/ClaudeCode";
+const CLAUDE_CODE_MANAGED_DIRECTORY = "/Library/Application Support/ClaudeCode";
 
 export type ClaudeCodeProbe = Readonly<{
   run: CommandRunner;

@@ -66,7 +66,7 @@ const DEFAULT_MODELS: Readonly<Record<AgentRole, ModelSpec>> = {
 type PolicyBase = RepoPolicy;
 
 /** Ten minutes: the timeout for a command written as a plain string or proposed by onboarding. */
-export const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 
 /**
  * A command written as a plain string (e.g. "npm ci") runs through the shell, so `&&` and quoting

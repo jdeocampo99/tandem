@@ -30,9 +30,9 @@ export type TourStop = Readonly<{
 }>;
 
 /** One part of the change, its stops in execution order; the page draws its diagram from these. */
-export type TourChapter = Readonly<{ title: string; why: string; stops: readonly TourStop[] }>;
+type TourChapter = Readonly<{ title: string; why: string; stops: readonly TourStop[] }>;
 
-export type PriorCommentStatus = Readonly<{
+type PriorCommentStatus = Readonly<{
   commentId: number;
   status: "addressed" | "not-addressed" | "replied";
   /** A short reply to post on the thread, such as "Looks good, thanks!". */

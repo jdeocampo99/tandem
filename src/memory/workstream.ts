@@ -120,7 +120,7 @@ export function replaceSections(memory: WorkstreamMemory, changes: SectionChange
   return { kind: "saved", memory: next, text };
 }
 
-export function followUps(memory: WorkstreamMemory): readonly FollowUp[] {
+function followUps(memory: WorkstreamMemory): readonly FollowUp[] {
   const found: FollowUp[] = [];
   for (const line of (memory.sections["follow-ups"] ?? "").split("\n")) {
     const text = line.replace(/^\s*[-*•]\s*/u, "").trim();

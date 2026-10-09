@@ -152,7 +152,7 @@ export class CommandTimeoutError extends CommandExecutionError {
   }
 }
 
-export class CommandSignaledError extends CommandExecutionError {
+class CommandSignaledError extends CommandExecutionError {
   constructor(
     request: CommandRequest,
     signal: string,
@@ -184,7 +184,7 @@ export class CommandStartError extends CommandExecutionError {
   }
 }
 
-export class CommandOutputError extends CommandExecutionError {
+class CommandOutputError extends CommandExecutionError {
   constructor(request: CommandRequest, cause: unknown) {
     super(
       `command output could not be captured (${describeRequest(request)}): ${describeError(cause)}`,

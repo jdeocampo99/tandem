@@ -54,7 +54,7 @@ export type ReportAgentRun = Readonly<{
   readonly costMicros?: number;
 }>;
 
-export type ReportChokeKind = "stuck" | "waiting-on-you" | "queued" | "review-loop";
+type ReportChokeKind = "stuck" | "waiting-on-you" | "queued" | "review-loop";
 
 /** The one stretch that cost the task the most time, named by a fixed rule. */
 export type ReportChoke = Readonly<{

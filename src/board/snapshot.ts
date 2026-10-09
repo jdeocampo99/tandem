@@ -29,7 +29,7 @@ export function boardSnapshotPath(home: string): string {
 }
 
 /** The snapshot in `text`, or undefined when it is not one this version of Tandem reads. */
-export function parseBoardSnapshot(text: string): BoardSnapshot | undefined {
+function parseBoardSnapshot(text: string): BoardSnapshot | undefined {
   let value: unknown;
   try {
     value = JSON.parse(text);

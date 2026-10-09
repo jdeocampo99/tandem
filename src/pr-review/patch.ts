@@ -3,7 +3,7 @@ export type LineRow =
   | Readonly<{ kind: "del"; text: string; old: number }>
   | Readonly<{ kind: "ctx"; text: string; old: number; new: number }>;
 
-export type HunkRow = Readonly<{
+type HunkRow = Readonly<{
   kind: "hunk";
   oldStart: number;
   oldCount: number;

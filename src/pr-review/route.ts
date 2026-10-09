@@ -17,7 +17,7 @@ import type { ReviewLens } from "./review.ts";
 
 /** Bumped whenever the questions below change shape or meaning. */
 export const PR_REVIEW_ROUTE_QUESTION_VERSION = "pr-review-route/1";
-export const PR_REVIEW_ROUTE_CONFIDENCE_THRESHOLD = 0.8;
+const PR_REVIEW_ROUTE_CONFIDENCE_THRESHOLD = 0.8;
 
 export type PrReviewRouteConfig = Readonly<{
   apiKey?: string;
@@ -30,7 +30,7 @@ export type PrReviewEvaluator = (
   options: JevEvaluationOptions,
 ) => Promise<JevEvaluationResponse>;
 
-export type PrReviewRoute = Readonly<{ pullRequest: string; lens: ReviewLens }>;
+type PrReviewRoute = Readonly<{ pullRequest: string; lens: ReviewLens }>;
 
 export type PrReviewRouteEvaluation = Readonly<{
   reason: string;

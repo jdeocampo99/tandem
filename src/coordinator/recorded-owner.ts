@@ -3,7 +3,7 @@ import type { CoordinatorRecord } from "./record.ts";
 import { listCoordinatorRecords } from "./registry.ts";
 
 /** A coordinator pane as a terminal places it. A recorded endpoint satisfies it directly. */
-export type CoordinatorPane = Pick<
+type CoordinatorPane = Pick<
   Endpoint,
   "terminal" | "sessionId" | "terminalSessionId" | "workspaceId" | "tabId" | "paneId" | "generation"
 >;

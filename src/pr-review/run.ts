@@ -28,7 +28,7 @@ import {
 const MAX_CALLERS = 30;
 
 /** One earlier inline comment on the PR, with the replies under it. */
-export type ThreadComment = Readonly<{
+type ThreadComment = Readonly<{
   id: number;
   author: string;
   path: string;
@@ -172,7 +172,7 @@ export async function readRunFiles(
 }
 
 /** Earlier inline comments grouped into threads, oldest first. */
-export async function readThreads(
+async function readThreads(
   run: CommandRunner,
   ref: PullRequestRef,
   cwd: string,
@@ -205,7 +205,7 @@ export async function readThreads(
   return [...roots.values()];
 }
 
-export async function currentLogin(run: CommandRunner, cwd: string): Promise<string> {
+async function currentLogin(run: CommandRunner, cwd: string): Promise<string> {
   const result = await run({ argv: ["gh", "api", "user", "--jq", ".login"], cwd });
   return result.code === 0 ? result.stdout.trim() : "";
 }

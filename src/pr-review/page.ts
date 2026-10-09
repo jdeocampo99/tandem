@@ -16,7 +16,7 @@ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
 import { assemblePage, embedJson, escapeHtml } from "../pages/assemble.ts";
 import { type FileDiff, type LineRow, parsePatch } from "./patch.ts";
 
-export type PageSeverity = "blocking" | "question" | "suggestion" | "nit";
+type PageSeverity = "blocking" | "question" | "suggestion" | "nit";
 
 export type TourStopInput = Readonly<{
   file: string;
@@ -70,7 +70,7 @@ export type BuiltReviewPage = Readonly<{
   files: string;
 }>;
 
-export type SubmissionVerdict = "comment" | "approve" | "request-changes";
+type SubmissionVerdict = "comment" | "approve" | "request-changes";
 
 /** What the page's Submit sends through `window.lavish.queuePrompt`, as JSON text. */
 export type ReviewSubmission = Readonly<{

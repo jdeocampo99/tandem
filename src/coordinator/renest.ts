@@ -31,7 +31,7 @@ export type RenestMove = Readonly<{
  * A workspace carrying Tandem's task label that no durable record names any more. Reported only:
  * a label is never ownership proof, so Tandem does not close it.
  */
-export type LeftoverWorkspace = Readonly<{ readonly workspaceId: string; readonly label: string }>;
+type LeftoverWorkspace = Readonly<{ readonly workspaceId: string; readonly label: string }>;
 
 /** What re-nesting planned, what it moved, and why anything was skipped. */
 export type RenestReport = Readonly<{

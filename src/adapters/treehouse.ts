@@ -271,10 +271,6 @@ function safeTaskBranchName(taskName: string): string {
   return `tandem/${component}`;
 }
 
-export function sanitizeTaskBranchName(taskName: string): string {
-  return safeTaskBranchName(taskName);
-}
-
 function leaseFromMetadata(
   metadata: LeaseMetadata,
   root: string,

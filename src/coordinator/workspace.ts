@@ -8,7 +8,7 @@ import { closeCoordinatorPanel } from "./panel.ts";
 import { assertCoordinatorEffectsSettled } from "./quarantine.ts";
 import { type CoordinatorRecord, canonicalPath } from "./record.ts";
 
-export type CoordinatorWorkspaceOutcome = "closed" | "already-clear" | "retained" | "quarantined";
+type CoordinatorWorkspaceOutcome = "closed" | "already-clear" | "retained" | "quarantined";
 
 /** What happened to a superseded coordinator's workspace, and why. */
 export type CoordinatorWorkspaceRetirement = Readonly<{

@@ -10,7 +10,7 @@ import type { HookEvent, HookReply, PromptOrigin, WireToolCall, WireUsage } from
 const PLUGIN_TOOL_PREFIX = "mcp__tandem__";
 
 /** The section of the system prompt that carries the coordinator's instructions each request. */
-export const COORDINATOR_SECTION_ID = "tandem:coordinator";
+const COORDINATOR_SECTION_ID = "tandem:coordinator";
 
 /**
  * The plugin directory sits two levels under src/harness/claude-code/, beside the sidecar. The

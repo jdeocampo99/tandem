@@ -7,7 +7,7 @@ import {
   markersFromText,
 } from "../../tasks/communication-protocol.ts";
 
-export type MarkerInsertion = { inserted: boolean };
+type MarkerInsertion = { inserted: boolean };
 
 function extractText(value: unknown): readonly string[] {
   if (typeof value === "string") return [value];
@@ -20,7 +20,7 @@ function extractText(value: unknown): readonly string[] {
   return texts;
 }
 
-export function markersFromMessages(messages: readonly AgentMessage[]): readonly Marker[] {
+function markersFromMessages(messages: readonly AgentMessage[]): readonly Marker[] {
   const markers: Marker[] = [];
   for (const message of messages) {
     if (!isRecord(message) || message.role !== "user") continue;
@@ -29,7 +29,7 @@ export function markersFromMessages(messages: readonly AgentMessage[]): readonly
   return markers;
 }
 
-export function collapseTextMarkers(
+function collapseTextMarkers(
   text: string,
   taskId: string,
   replacement: string,
@@ -52,7 +52,7 @@ export function collapseTextMarkers(
   return { text: lines.join("\n"), found };
 }
 
-export function collapseMessageMarkers(
+function collapseMessageMarkers(
   message: AgentMessage,
   taskId: string,
   replacement: string,
