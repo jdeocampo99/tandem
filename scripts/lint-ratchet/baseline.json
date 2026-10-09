@@ -408,12 +408,6 @@
       "suspicious/noShadow": 1,
       "tandem/type-assertion": 1
     },
-    "src/pr-review/service.ts": {
-      "complexity/noExcessiveCognitiveComplexity": 1,
-      "complexity/noExcessiveLinesPerFunction": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noShadow": 2
-    },
     "src/pr-review/state.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1,
       "tandem/type-assertion": 4

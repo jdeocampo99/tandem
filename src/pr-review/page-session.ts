@@ -105,11 +105,7 @@ export class ReviewPages {
 function pageEvent(observation: Awaited<ReturnType<typeof listenPresentation>>): ReviewPageEvent {
   const ended = observation.terminal;
   if (observation.status !== "feedback") {
-    if (
-      !ended &&
-      observation.status !== "browser_disconnected" &&
-      observation.status !== "error"
-    ) {
+    if (!ended && observation.status !== "browser_disconnected" && observation.status !== "error") {
       return { kind: "other", ended: false };
     }
     return { kind: "closed" };

@@ -114,7 +114,11 @@ export type PrReviewDependencies = Readonly<{
   settle: (taskId: string) => Promise<void>;
 }>;
 
-export type ReviewedRound = Readonly<{ task: TaskRecord; state: PrReviewState; round: PrReviewRound }>;
+export type ReviewedRound = Readonly<{
+  task: TaskRecord;
+  state: PrReviewState;
+  round: PrReviewRound;
+}>;
 
 export function createPrReviewWorkflow(deps: PrReviewDependencies) {
   const taskReview = new TaskReview(deps);
