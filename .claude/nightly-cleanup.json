@@ -12,11 +12,5 @@
     "herdr-plugin/**",
     "tests/terminal-backend/herdr/**"
   ],
-  "debt": {
-    "source": "ratchet",
-    "baseline": "scripts/lint-ratchet/baseline.json",
-    "update": "bun run lint:ratchet --update",
-    "updateMoves": "bun run lint:ratchet --update --allow-moves"
-  },
   "worktreeDir": ".claude/worktrees"
 }
