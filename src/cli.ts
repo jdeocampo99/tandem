@@ -1,12 +1,12 @@
 import { summarizeTandemActionValue } from "./session/summary.ts";
 import { type CliDependencies, createCliApplication } from "./terminal/cli-application.ts";
+import { CliConsentError, CliUsageError } from "./terminal/cli-argument-values.ts";
 import { type CliCommand, type CliRunResult, parseCliArgs } from "./terminal/cli-arguments.ts";
 import {
   CliInterruptError,
   type CliSignal,
   defaultCliSignalSource,
 } from "./terminal/cli-process.ts";
-import { CliConsentError, CliUsageError } from "./terminal/cli-values.ts";
 
 function renderValue(value: unknown, json: boolean, command?: CliCommand): string {
   if (json) return JSON.stringify(value) ?? "null";

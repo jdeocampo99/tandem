@@ -1,4 +1,3 @@
-import type { CliOptions } from "./cli-arguments.ts";
 import {
   CliUsageError,
   parseMergeMethod,
@@ -7,7 +6,8 @@ import {
   pathText,
   positiveInteger,
   text,
-} from "./cli-values.ts";
+} from "./cli-argument-values.ts";
+import type { CliOptions } from "./cli-arguments.ts";
 
 /** Paths preserve their literal argv spelling. */
 const LITERAL_OPTIONS: Readonly<Record<string, true>> = {

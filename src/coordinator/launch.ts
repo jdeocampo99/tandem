@@ -24,11 +24,11 @@ import {
 import { launchIo } from "../harness/launch-io.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import { tryShowCatchUp } from "../memory/native-visits.ts";
+import { CliUsageError, parseThinking, text } from "../terminal/cli-argument-values.ts";
 import type { CliOptions } from "../terminal/cli-arguments.ts";
 import { checkLaunchPath, checkLaunchText } from "../terminal/cli-input.ts";
 import type { RunInteractive, Sleep, StartPersistent } from "../terminal/cli-process.ts";
 import { mergeInheritedEnvironment } from "../terminal/cli-process.ts";
-import { CliUsageError, parseThinking, text } from "../terminal/cli-values.ts";
 import { terminalContextFor } from "../terminal-backend/compose.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import {

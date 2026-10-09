@@ -14,6 +14,13 @@ import { harnessOf } from "../harness/contract.ts";
 import { harnessFor } from "../harness/resolve.ts";
 import type { TandemService } from "../service/controller.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
+import {
+  CliConsentError,
+  CliUsageError,
+  parseMergeMethod,
+  requiredPositionOrOption,
+  text,
+} from "./cli-argument-values.ts";
 import type { CliCommand, CliInvocation, CliResult } from "./cli-arguments.ts";
 import {
   createInputFromInvocation,
@@ -35,13 +42,6 @@ import {
   type WatchControl,
   waitForWatchDelay,
 } from "./cli-process.ts";
-import {
-  CliConsentError,
-  CliUsageError,
-  parseMergeMethod,
-  requiredPositionOrOption,
-  text,
-} from "./cli-values.ts";
 
 const DEFAULT_WATCH_INTERVAL_MS = 2_000;
 
