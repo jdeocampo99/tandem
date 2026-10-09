@@ -167,9 +167,11 @@ export type CliRunResult = Readonly<{
 
 function commandFromToken(
   token: string,
-  nested: string | undefined,
+  argv: readonly string[],
+  nextIndex: number,
 ): Readonly<{ command: CliCommand; consumed: number }> {
   if (token === "pr") {
+    const nested = argv[nextIndex];
     if (nested === undefined) throw new CliUsageError("pr requires describe, publish, or merge");
     const command = PR_COMMANDS[nested];
     if (command === undefined)
@@ -200,7 +202,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
       continue;
     }
     if (command === undefined) {
-      const parsed = commandFromToken(token, token === "pr" ? argv[index + 1] : undefined);
+      const parsed = commandFromToken(token, argv, index + 1);
       command = parsed.command;
       index += parsed.consumed;
       continue;
