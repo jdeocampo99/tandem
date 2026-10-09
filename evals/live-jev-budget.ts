@@ -82,3 +82,29 @@ export function budgetGuard(spentTracker: { totalUsd: number }, budget: LiveJevB
     }
   };
 }
+
+function readFlag(args: readonly string[], name: string): string | undefined {
+  const index = args.indexOf(name);
+  return index === -1 ? undefined : args[index + 1];
+}
+
+export function readLiveJevRunOptions(
+  args: readonly string[],
+  configuredApiKey: string | undefined,
+): LiveJevRunOptions {
+  const apiKey = configuredApiKey?.trim();
+  if (apiKey === undefined || apiKey.length === 0) {
+    throw new Error("--live requires TYPESAFE_API_KEY to be set");
+  }
+  const repeatCount = Number(readFlag(args, "--repeat") ?? "");
+  const timeoutMs = Number(readFlag(args, "--timeout") ?? "");
+  const maxTotalCostUsd = Number(readFlag(args, "--budget") ?? "");
+  if (
+    !Number.isFinite(repeatCount) ||
+    !Number.isFinite(timeoutMs) ||
+    !Number.isFinite(maxTotalCostUsd)
+  ) {
+    throw new Error("--live requires --repeat, --timeout, and --budget to all be numbers");
+  }
+  return { apiKey, timeoutMs, repeatCount, budget: { maxTotalCostUsd } };
+}

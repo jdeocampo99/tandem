@@ -14,7 +14,11 @@
  */
 
 import { readFile } from "node:fs/promises";
-import type { JevEvaluationError, JevEvaluationResponse } from "../src/adapters/typesafe.ts";
+import {
+  type evaluateJev,
+  JevEvaluationError,
+  type JevEvaluationResponse,
+} from "../src/adapters/typesafe.ts";
 import type { PromptRoutingDecision } from "../src/session/prompt-routing.ts";
 
 /** Bump whenever a fixture field is added, removed, or reinterpreted. */
@@ -215,4 +219,21 @@ export async function loadPromptRoutingFixtures(
   path: string,
 ): Promise<readonly PromptRoutingFixture[]> {
   return parsePromptRoutingFixtures(await readFile(path, "utf8"));
+}
+
+export function fakeEvaluatorFor(
+  fixture: Pick<PromptRoutingFixture, "id" | "jevFailureCode" | "jevResponse">,
+): typeof evaluateJev {
+  return async () => {
+    if (fixture.jevFailureCode !== undefined) {
+      throw new JevEvaluationError(
+        fixture.jevFailureCode,
+        `fixture ${fixture.id} simulated failure`,
+      );
+    }
+    if (fixture.jevResponse === undefined) {
+      throw new Error(`fixture ${fixture.id} has no recorded jevResponse or jevFailureCode`);
+    }
+    return fixture.jevResponse;
+  };
 }

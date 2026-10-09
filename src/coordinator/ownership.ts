@@ -1,8 +1,8 @@
 import { lstat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { AdapterCommandError } from "../adapters/primitives.ts";
 import type { CommandRequest, CommandRunner, Endpoint } from "../contracts.ts";
-import { coordinatorHarnesses, harnessFor } from "../harness/resolve.ts";
+import { harnessFor } from "../harness/resolve.ts";
 import type {
   EndpointInspection,
   SessionPane,
@@ -14,7 +14,6 @@ import type { CoordinatorRecord } from "./record.ts";
 import {
   canonicalHome,
   canonicalPath,
-  digest,
   isMissing,
   ownershipFailure,
   pathIsWithin,
@@ -22,10 +21,9 @@ import {
   sessionText,
 } from "./record.ts";
 import { readCoordinatorRecord } from "./registry.ts";
+import { findUnrecordedCoordinator } from "./unrecorded.ts";
 
-const LEGACY_COORDINATOR_SESSION_DIRECTORY = "coordinator-sessions";
 export const COORDINATOR_SCRIPT_DIRECTORY = "coordinator-scripts";
-const LEGACY_COORDINATOR_REPOSITORY_KEY_LENGTH = 24;
 export type FindRunningCoordinatorInput = Readonly<{
   readonly home: string;
   readonly sessionId: string;
@@ -47,82 +45,6 @@ function isCoordinatorBootstrap(argv: readonly string[]): boolean {
   );
 }
 
-function legacySessionDirectory(home: string, repoPath: string): string {
-  return join(
-    home,
-    LEGACY_COORDINATOR_SESSION_DIRECTORY,
-    digest(repoPath).slice(0, LEGACY_COORDINATOR_REPOSITORY_KEY_LENGTH),
-  );
-}
-
-function legacyCoordinatorGuidance(sessionId: string, repoPath: string, paneId: string): Error {
-  return new Error(
-    `A pre-registry Tandem coordinator for ${JSON.stringify(repoPath)} is active in Herdr session ${JSON.stringify(sessionId)} (pane ${JSON.stringify(paneId)}), but no clean coordinator lease record proves ownership. Stop that coordinator manually, confirm its pane has exited, and relaunch tandem; Tandem will not adopt or duplicate it.`,
-  );
-}
-
-async function findUnrecordedCoordinator(
-  terminal: TerminalBackend,
-  home: string,
-  sessionId: string,
-  repoPath: string,
-): Promise<CoordinatorRecord | undefined> {
-  let panes: readonly SessionPane[];
-  try {
-    panes = await terminal.snapshot({ sessionId, cwd: repoPath, allowMissingSession: true });
-  } catch (error) {
-    if (!(error instanceof AdapterCommandError)) throw error;
-    const { result } = error;
-    throw new Error(
-      `could not inspect Herdr session ${JSON.stringify(sessionId)} before coordinator launch: ${result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`}`,
-    );
-  }
-  const sessionDirectory = await canonicalPath(
-    legacySessionDirectory(home, repoPath),
-    "coordinator session directory",
-  );
-  const harnesses = coordinatorHarnesses();
-  for (const pane of panes) {
-    const endpoint: Endpoint = {
-      terminal: terminal.name,
-      sessionId,
-      workspaceId: pane.workspaceId,
-      tabId: pane.tabId,
-      paneId: pane.paneId,
-      role: "coordinator",
-      generation: 0,
-    };
-    let inspection: EndpointInspection;
-    try {
-      inspection = await terminal.inspect({ endpoint, cwd: repoPath });
-    } catch (error) {
-      if (terminal.isEndpointGone(error)) continue;
-      throw error;
-    }
-    if (!inspection.activeWorker) continue;
-    for (const process of inspection.processInfo.foregroundProcesses) {
-      const harness = harnesses.find((candidate) => candidate.looksLikeAgent(process));
-      if (harness === undefined) continue;
-      if (process.argv.length === 0) {
-        throw ownershipFailure(
-          `active ${harness.executable} process in pane ${JSON.stringify(pane.paneId)} did not expose argv for legacy identity proof`,
-        );
-      }
-      const match = await harness.matchUnrecordedCoordinator(process.argv, {
-        repoPath,
-        sessionDirectory,
-      });
-      if (match === "unknown") {
-        throw ownershipFailure(
-          `active ${harness.executable} process in pane ${JSON.stringify(pane.paneId)} exposed an unverifiable Tandem invocation`,
-        );
-      }
-      if (match === "match") throw legacyCoordinatorGuidance(sessionId, repoPath, pane.paneId);
-    }
-  }
-  return undefined;
-}
-
 /**
  * Finds a coordinator only when the recorded Herdr pane and native OMP process
  * still prove ownership of the recorded clean worktree.
@@ -132,7 +54,7 @@ export async function findRunningCoordinator(
   terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, terminal, input, false, true);
+  return findOwnedCoordinator(run, terminal, input, "running");
 }
 
 /** Finds a running or cleanly stopped coordinator whose pane reset may close. */
@@ -141,7 +63,7 @@ export async function findResetCoordinator(
   terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, terminal, input, true, false);
+  return findOwnedCoordinator(run, terminal, input, "reset");
 }
 
 /**
@@ -153,7 +75,7 @@ export async function findRestartCoordinator(
   terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
 ): Promise<CoordinatorRecord | undefined> {
-  return findOwnedCoordinator(run, terminal, input, true, true);
+  return findOwnedCoordinator(run, terminal, input, "restart");
 }
 
 /**
@@ -177,12 +99,68 @@ async function liveCoordinatorProcess(
   return line?.trim().split(/\s+/u)[0];
 }
 
+async function inspectRecordedCoordinator(
+  terminal: TerminalBackend,
+  record: CoordinatorRecord,
+): Promise<EndpointInspection | undefined> {
+  try {
+    const worktreeDetails = await lstat(record.worktree.path);
+    if (!worktreeDetails.isDirectory()) {
+      throw ownershipFailure(
+        `recorded lease path ${JSON.stringify(record.worktree.path)} is not a directory`,
+      );
+    }
+  } catch (error) {
+    if (isMissing(error)) return undefined;
+    throw error;
+  }
+  try {
+    return await terminal.inspect({ endpoint: record.endpoint, cwd: record.worktree.path });
+  } catch (error) {
+    if (terminal.isEndpointGone(error)) return undefined;
+    throw error;
+  }
+}
+
+async function isAbandonedCoordinatorPane(
+  run: CommandRunner,
+  record: CoordinatorRecord,
+  inspection: EndpointInspection,
+): Promise<boolean> {
+  const foreground = inspection.processInfo.foregroundProcesses;
+  const stoppedBootstrap =
+    foreground.length === 1 && isCoordinatorBootstrap(foreground[0]?.argv ?? []);
+  if (!inspection.activeWorker || stoppedBootstrap) return false;
+  const livePid = await liveCoordinatorProcess(run, record);
+  if (livePid !== undefined) {
+    throw ownershipFailure(
+      livePid === "unknown"
+        ? `pane ${record.endpoint.paneId} runs something other than the coordinator, and this record is too old to tell whether the coordinator is still running elsewhere. Close whatever runs in that pane, then run \`tandem update\`.`
+        : `pane ${record.endpoint.paneId} runs something other than the coordinator, but the coordinator is still running elsewhere (process ${livePid}). Stop that process, then run \`tandem update\`.`,
+    );
+  }
+  return true;
+}
+
+async function assertCoordinatorCwd(
+  inspection: EndpointInspection,
+  record: CoordinatorRecord,
+): Promise<void> {
+  const foregroundCwd = inspection.pane.foregroundCwd;
+  if (foregroundCwd === undefined)
+    throw ownershipFailure("Herdr did not report the coordinator pane foreground cwd");
+  const canonicalForegroundCwd = await canonicalPath(foregroundCwd, "foreground cwd");
+  if (canonicalForegroundCwd !== record.worktree.path)
+    throw ownershipFailure(
+      `coordinator pane cwd ${JSON.stringify(canonicalForegroundCwd)} does not match lease ${JSON.stringify(record.worktree.path)}`,
+    );
+}
+
 async function findOwnedCoordinator(
   run: CommandRunner,
   terminal: TerminalBackend,
   input: FindRunningCoordinatorInput,
-  includeStopped: boolean,
-  includeAbandoned: boolean,
+  mode: "running" | "reset" | "restart",
 ): Promise<CoordinatorRecord | undefined> {
   if (typeof run !== "function") throw new TypeError("run must be an argv command runner");
   const home = await canonicalHome(input.home);
@@ -194,46 +172,22 @@ async function findOwnedCoordinator(
   await assertCoordinatorEffectsSettled(home, repoPath);
   const path = recordPath(home, sessionId, repoPath);
   const record = await readCoordinatorRecord(path);
-  if (record === undefined) return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
+  if (record === undefined)
+    return findUnrecordedCoordinator(terminal, { home, sessionId, repoPath });
   assertTerminalEndpoint(terminal.name, record.endpoint);
-  if (record.repoPath !== repoPath) {
+  if (record.repoPath !== repoPath)
     throw ownershipFailure(`record ${path} belongs to ${JSON.stringify(record.repoPath)}`);
-  }
-  if (record.endpoint.sessionId !== sessionId) {
+  if (record.endpoint.sessionId !== sessionId)
     throw ownershipFailure(
       `record ${path} belongs to Herdr session ${JSON.stringify(record.endpoint.sessionId)}`,
     );
-  }
 
-  try {
-    const worktreeDetails = await lstat(record.worktree.path);
-    if (!worktreeDetails.isDirectory()) {
-      throw ownershipFailure(
-        `recorded lease path ${JSON.stringify(record.worktree.path)} is not a directory`,
-      );
-    }
-  } catch (error) {
-    if (isMissing(error)) {
-      return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
-    }
-    throw error;
-  }
+  const inspection = await inspectRecordedCoordinator(terminal, record);
+  if (inspection === undefined)
+    return findUnrecordedCoordinator(terminal, { home, sessionId, repoPath });
 
-  let inspection: EndpointInspection;
-  try {
-    inspection = await terminal.inspect({
-      endpoint: record.endpoint,
-      cwd: record.worktree.path,
-    });
-  } catch (error) {
-    if (terminal.isEndpointGone(error)) {
-      return findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
-    }
-    throw error;
-  }
-
-  const matchingProcesses = inspection.processInfo.foregroundProcesses.filter((process) =>
-    harnessFor(record.harness).sameCommand(process.argv, record.command),
+  const matchingProcesses = inspection.processInfo.foregroundProcesses.filter((foregroundProcess) =>
+    harnessFor(record.harness).sameCommand(foregroundProcess.argv, record.command),
   );
   if (matchingProcesses.length > 1) {
     throw ownershipFailure(
@@ -241,42 +195,20 @@ async function findOwnedCoordinator(
     );
   }
   if (matchingProcesses.length === 0) {
-    const foreground = inspection.processInfo.foregroundProcesses;
-    const stoppedBootstrap =
-      foreground.length === 1 && isCoordinatorBootstrap(foreground[0]?.argv ?? []);
-    if (inspection.activeWorker && !stoppedBootstrap) {
-      const livePid = await liveCoordinatorProcess(run, record);
-      if (livePid !== undefined) {
-        throw ownershipFailure(
-          livePid === "unknown"
-            ? `pane ${record.endpoint.paneId} runs something other than the coordinator, and this record is too old to tell whether the coordinator is still running elsewhere. Close whatever runs in that pane, then run \`tandem update\`.`
-            : `pane ${record.endpoint.paneId} runs something other than the coordinator, but the coordinator is still running elsewhere (process ${livePid}). Stop that process, then run \`tandem update\`.`,
-        );
-      }
-      // The coordinator exited and the pane now runs something else. That pane is no longer
-      // ours to close, so it counts as stopped and a relaunch opens a fresh pane beside it.
-      if (!includeAbandoned) {
+    if (await isAbandonedCoordinatorPane(run, record, inspection)) {
+      if (mode === "reset") {
         throw ownershipFailure(
           `the coordinator isn't running in pane ${record.endpoint.paneId} any more, and something else is running there now. Run \`tandem update\` to start it again in a new window.`,
         );
       }
       return undefined;
     }
-    await findUnrecordedCoordinator(terminal, home, sessionId, repoPath);
-    if (!includeStopped) return undefined;
+    await findUnrecordedCoordinator(terminal, { home, sessionId, repoPath });
+    if (mode === "running") return undefined;
     assertStoppedCoordinatorShell(inspection);
   }
 
-  const foregroundCwd = inspection.pane.foregroundCwd;
-  if (foregroundCwd === undefined) {
-    throw ownershipFailure("Herdr did not report the coordinator pane foreground cwd");
-  }
-  const canonicalForegroundCwd = await canonicalPath(foregroundCwd, "foreground cwd");
-  if (canonicalForegroundCwd !== record.worktree.path) {
-    throw ownershipFailure(
-      `coordinator pane cwd ${JSON.stringify(canonicalForegroundCwd)} does not match lease ${JSON.stringify(record.worktree.path)}`,
-    );
-  }
+  await assertCoordinatorCwd(inspection, record);
   return record;
 }
 
@@ -302,7 +234,7 @@ export function snapshotPaneForEndpoint(
   endpoint: Endpoint,
   description: string,
 ): SessionPane | undefined {
-  const matches = panes.filter((pane) => pane.paneId === endpoint.paneId);
+  const matches = panes.filter((candidate) => candidate.paneId === endpoint.paneId);
   if (matches.length === 0) return undefined;
   if (matches.length !== 1) {
     throw ownershipFailure(
