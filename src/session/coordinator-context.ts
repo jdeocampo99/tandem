@@ -38,7 +38,13 @@ async function workstreamLines(service: TandemService, repo: string): Promise<re
 
 type ContextDeps = Pick<
   CoordinatorDeps,
-  "environment" | "host" | "realpath" | "isTandemCheckout" | "openWelcome" | "openSetup" | "logError"
+  | "environment"
+  | "host"
+  | "realpath"
+  | "isTandemCheckout"
+  | "openWelcome"
+  | "openSetup"
+  | "logError"
 >;
 
 /** The standing coordinator context and the Tandem checkout's first-time setup. */
