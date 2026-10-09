@@ -8,6 +8,7 @@ import type { PrSummary } from "../delivery/evidence.ts";
 import type { CoordinatorFile } from "../harness/contract.ts";
 import type { CreateTaskRequest } from "../service/controller.ts";
 import type { CliInvocation, CliOptions } from "./cli-arguments.ts";
+import type { PathStat } from "./cli-process.ts";
 import {
   CliUsageError,
   parseJsonObject,
@@ -17,7 +18,6 @@ import {
   stringArray,
   text,
 } from "./cli-values.ts";
-import type { PathStat } from "./cli-process.ts";
 
 export function repoFor(
   invocation: CliInvocation,

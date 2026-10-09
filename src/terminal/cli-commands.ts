@@ -16,13 +16,6 @@ import type { TandemService } from "../service/controller.ts";
 import type { TerminalBackend } from "../terminal-backend/contract.ts";
 import type { CliCommand, CliInvocation, CliResult } from "./cli-arguments.ts";
 import {
-  CliConsentError,
-  CliUsageError,
-  parseMergeMethod,
-  requiredPositionOrOption,
-  text,
-} from "./cli-values.ts";
-import {
   createInputFromInvocation,
   jsonObjectFromFile,
   mergingChoiceFrom,
@@ -42,6 +35,13 @@ import {
   type WatchControl,
   waitForWatchDelay,
 } from "./cli-process.ts";
+import {
+  CliConsentError,
+  CliUsageError,
+  parseMergeMethod,
+  requiredPositionOrOption,
+  text,
+} from "./cli-values.ts";
 
 const DEFAULT_WATCH_INTERVAL_MS = 2_000;
 
