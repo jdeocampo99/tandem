@@ -46,7 +46,16 @@ export async function startPrReview(
     clock: deps.clock,
     roots: await deps.projectRoots(),
   });
-  if (location.kind !== "found") return needsLocation(ref.repo, location, input.checkout);
+  if (location.kind !== "found") {
+    return {
+      kind: "needs-location",
+      repo: ref.repo,
+      paths: location.kind === "ambiguous" ? location.paths : [],
+      message: checkoutQuestion(ref.repo, location, input.checkout),
+      nextStep:
+        "Ask the user this, then call review-pr again with checkout set to their path, or clone true if they say to clone it.",
+    };
+  }
   const lens = input.lens ?? { kind: "full" };
   const task = await deps.createTask({
     repoPath: input.repoPath,
@@ -54,21 +63,6 @@ export async function startPrReview(
     prReview: stateFor(facts, location, lens),
   });
   return { kind: "started", taskId: task.id, message: acknowledgement(facts, lensLabel(lens)) };
-}
-
-function needsLocation(
-  repo: string,
-  location: Exclude<RepoLocation, { kind: "found" }>,
-  checkout: string | undefined,
-): StartPrReviewResult {
-  return {
-    kind: "needs-location",
-    repo,
-    paths: location.kind === "ambiguous" ? location.paths : [],
-    message: checkoutQuestion(repo, location, checkout),
-    nextStep:
-      "Ask the user this, then call review-pr again with checkout set to their path, or clone true if they say to clone it.",
-  };
 }
 
 function stateFor(
