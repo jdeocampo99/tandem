@@ -1,12 +1,7 @@
 import { summarizeTandemActionValue } from "./session/summary.ts";
 import { type CliDependencies, createCliApplication } from "./terminal/cli-application.ts";
-import {
-  type CliCommand,
-  CliConsentError,
-  type CliRunResult,
-  CliUsageError,
-  parseCliArgs,
-} from "./terminal/cli-arguments.ts";
+import { type CliCommand, type CliRunResult, parseCliArgs } from "./terminal/cli-arguments.ts";
+import { CliConsentError, CliUsageError } from "./terminal/cli-values.ts";
 import {
   CliInterruptError,
   type CliSignal,
