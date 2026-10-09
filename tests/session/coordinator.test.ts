@@ -5,12 +5,9 @@ import { TANDEM_COORDINATOR_INSTRUCTIONS } from "../../src/instructions.ts";
 import { SETUP_WELCOME_TEXT } from "../../src/onboarding/checklist.ts";
 import type { TandemService } from "../../src/service/controller.ts";
 import { runTandemCommand } from "../../src/session/actions.ts";
-import {
-  type CoordinatorDeps,
-  CoordinatorSession,
-  reviewStatus,
-  sourceRefreshStatus,
-} from "../../src/session/coordinator.ts";
+import { type CoordinatorDeps, CoordinatorSession } from "../../src/session/coordinator.ts";
+import { sourceRefreshStatus } from "../../src/session/coordinator-context.ts";
+import { reviewStatus } from "../../src/session/coordinator-status.ts";
 import type { SessionHost } from "../../src/session/events.ts";
 import { WELCOME_TEXT } from "../../src/terminal/welcome.ts";
 import type { AgentState, AgentStatusReporter } from "../../src/terminal-backend/contract.ts";
@@ -301,6 +298,40 @@ test("shutdown clears the tick timer, waits for the reconcile in flight, and rel
   time.advance(10_000);
   await session.reconcile(true);
   expect(ticks).toBe(2);
+});
+
+test("status refresh preserves the dependency receiver only for the coordinator repository", async () => {
+  const reports: string[] = [];
+  const lookups: { path: string; receiver: CoordinatorDeps | undefined }[] = [];
+  let tasks: TaskRecord[] = [];
+  const deps = coordinatorDeps(
+    { tick: async () => tasks },
+    {
+      status: recordingReporter(reports),
+      async realpath(this: CoordinatorDeps | undefined, path: string): Promise<string> {
+        lookups.push({ path, receiver: this });
+        if (path === "/repo") {
+          if (this === undefined) throw new Error("Missing repository lookup receiver");
+          return this.environment.repo;
+        }
+        return "/repo";
+      },
+    },
+  );
+  const session = new CoordinatorSession(deps);
+
+  await session.reconcile(true);
+  expect(reports).toEqual(["idle: "]);
+  expect(lookups).toHaveLength(1);
+  expect(lookups[0]?.path).toBe("/repo");
+  expect(lookups[0]?.receiver).toBe(deps);
+
+  tasks = [task({ stage: "implementing", repoPath: "/repo-alias" })];
+  await session.reconcile(true);
+  expect(reports).toEqual(["idle: ", `working: implementing: ${tasks[0]?.objective}`]);
+  expect(lookups.map((lookup) => lookup.path)).toEqual(["/repo", "/repo", "/repo-alias"]);
+  expect(lookups[1]?.receiver).toBe(deps);
+  expect(lookups[2]?.receiver).toBeUndefined();
 });
 
 test("an open ask shows the pane as waiting for the user's answer until it ends", () => {

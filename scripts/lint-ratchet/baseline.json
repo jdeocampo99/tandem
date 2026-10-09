@@ -589,11 +589,6 @@
     "src/session/coordinator-reply.ts": {
       "complexity/noExcessiveCognitiveComplexity": 1
     },
-    "src/session/coordinator.ts": {
-      "complexity/useMaxParams": 1,
-      "style/noExcessiveLinesPerFile": 1,
-      "suspicious/noUnnecessaryConditions": 5
-    },
     "src/session/investigate-route.ts": {
       "complexity/useMaxParams": 1
     },
