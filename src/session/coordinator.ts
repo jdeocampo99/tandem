@@ -77,7 +77,7 @@ export class CoordinatorSession {
   private readonly reviewPages: ReviewPageListeners;
   private cancelTick: Cancel | undefined;
   private reconcileInFlight: Promise<void> | undefined;
-  private shuttingDown = false;
+  private shuttingDown: boolean = false;
 
   constructor(private readonly deps: CoordinatorDeps) {
     this.status = new CoordinatorStatus(deps.status);

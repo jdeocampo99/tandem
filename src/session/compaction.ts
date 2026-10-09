@@ -50,7 +50,7 @@ export function atCompactionBoundary(
 export class EarlyCompaction {
   private knownFinished: Set<string> | undefined;
   private taskFinished = false;
-  private compacting = false;
+  private compacting: boolean = false;
 
   constructor(
     private readonly compactTokens: number,

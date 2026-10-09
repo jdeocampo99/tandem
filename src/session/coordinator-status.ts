@@ -65,7 +65,7 @@ async function coordinatorTaskStatus(
 
 /** The Herdr status of the coordinator pane: waiting for an answer, working, or its tasks' state. */
 export class CoordinatorStatus {
-  agentActive = false;
+  agentActive: boolean = false;
   private taskState: AgentState = "idle";
   private taskMessage: string | undefined;
   private readonly waitingInputs = new Set<string>();
