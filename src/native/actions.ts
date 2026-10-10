@@ -52,9 +52,9 @@ import {
   type ActionOrigin,
   type NoticeCode,
   type Outcome,
-  PR_GUIDE_PLUGIN,
   PluginEnvelope,
   type PluginOrigin,
+  PR_GUIDE_PLUGIN,
   type ViewRef,
 } from "./envelope.ts";
 import {

@@ -93,10 +93,7 @@ const prWatchFixRequestSchema = pullRequestRequest("pr-watch-fix");
  * The `pr-watch-fix` request a native `pr-fix` hand-off stands for, checked by the tool's own
  * strict schema so the hand-off has no fix pipeline of its own.
  */
-export function prFixToolRequest(
-  pr: Readonly<{ repo: string; number: number }>,
-  repoPath: string,
-) {
+export function prFixToolRequest(pr: Readonly<{ repo: string; number: number }>, repoPath: string) {
   return prWatchFixRequestSchema.parse({
     action: "pr-watch-fix",
     pullRequest: `${pr.repo}#${pr.number}`,
