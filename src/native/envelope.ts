@@ -20,6 +20,13 @@ const Text = z
   .refine((value) => !value.includes("\0"), "must not contain NUL characters")
   .transform((value) => value.trim());
 const Count = z.number().int().positive().safe();
+/** `owner/name`, spliced into `owner/name#N`, so no `#` or `/` beyond the one separator. */
+const GitHubRepository = z
+  .string()
+  .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/u, "must be owner/name");
+
+/** The manifest id of the PR Guide Tern plugin, the only plugin `pr-fix` accepts. */
+export const PR_GUIDE_PLUGIN = "prguide";
 
 /**
  * Where a click came from. A block echoes the context it was launched with; a window command
@@ -30,6 +37,15 @@ export const ActionOrigin = z.union([
   z.object({ pane: PaneId, cwd: AbsolutePath, window: z.string().min(1).optional() }).strict(),
 ]);
 export type ActionOrigin = z.infer<typeof ActionOrigin>;
+
+/**
+ * Where a plugin's own window click came from: the plugin's manifest id and the one Tandem project
+ * it acts on. It names no pane, so it is a separate origin that no pane consumer has to handle.
+ */
+export const PluginOrigin = z
+  .object({ plugin: z.string().min(1), repoPath: AbsolutePath })
+  .strict();
+export type PluginOrigin = z.infer<typeof PluginOrigin>;
 
 /** What an `open` action shows. PRs open by number, qualified by repository when known. */
 export const ViewRef = z.discriminatedUnion("kind", [
@@ -124,6 +140,10 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("merged-link"), url: z.string().url() }).strict(),
   /** The setup block's answer: parsed by `parseSetupAnswer`, so its shape lives in one place. */
   z.object({ verb: z.literal("setup-save"), answer: z.record(z.string(), z.unknown()) }).strict(),
+  /** The PR Guide plugin handing a watched pull request to Tandem's `pr-watch-fix` pipeline. */
+  z
+    .object({ verb: z.literal("pr-fix"), repo: GitHubRepository, number: Count, reason: Text })
+    .strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 
@@ -132,6 +152,12 @@ export const ActionEnvelope = z
   .object({ v: z.literal(1), origin: ActionOrigin, action: Action })
   .strict();
 export type ActionEnvelope = z.infer<typeof ActionEnvelope>;
+
+/** The same envelope sent by a plugin's own window; `ActionEnvelope` stays pane-origin only. */
+export const PluginEnvelope = z
+  .object({ v: z.literal(1), origin: PluginOrigin, action: Action })
+  .strict();
+export type PluginEnvelope = z.infer<typeof PluginEnvelope>;
 
 /**
  * What `rt.act` shows for an outcome. Each code has one toast title and level in `rt.luau`;

@@ -1,0 +1,19 @@
+{
+  "request": {
+    "v": 1,
+    "origin": { "plugin": "prguide", "repoPath": "$repo" },
+    "action": {
+      "verb": "pr-fix",
+      "repo": "owner/repo",
+      "number": 42,
+      "reason": "Merge conflicts with main"
+    }
+  },
+  "toolRequest": {
+    "action": "pr-watch-fix",
+    "pullRequest": "owner/repo#42",
+    "repoPath": "$repo"
+  },
+  "serviceInput": { "pullRequest": "owner/repo#42", "repoPath": "$repo" },
+  "outcome": { "status": "done" }
+}

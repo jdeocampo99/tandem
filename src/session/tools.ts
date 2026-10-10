@@ -78,6 +78,29 @@ const briefContentSchema = z.strictObject({
   skipReview: z.boolean().optional(),
 });
 
+const pullRequestRequest = <Action extends "pr-watch-start" | "pr-watch-stop" | "pr-watch-fix">(
+  action: Action,
+) =>
+  z.strictObject({
+    action: z.literal(action),
+    pullRequest: z.string().describe("A GitHub PR URL, owner/repo#123, or #123 here."),
+    repoPath: z.string().optional().describe("Where #123 is; defaults to this project."),
+  });
+
+const prWatchFixRequestSchema = pullRequestRequest("pr-watch-fix");
+
+/**
+ * The `pr-watch-fix` request a native `pr-fix` hand-off stands for, checked by the tool's own
+ * strict schema so the hand-off has no fix pipeline of its own.
+ */
+export function prFixToolRequest(pr: Readonly<{ repo: string; number: number }>, repoPath: string) {
+  return prWatchFixRequestSchema.parse({
+    action: "pr-watch-fix",
+    pullRequest: `${pr.repo}#${pr.number}`,
+    repoPath,
+  });
+}
+
 export const TANDEM_TOOL_DESCRIPTION =
   "Start, inspect, steer, and control Tandem work with {request:{action:...}}. Actions that need approval ask the user to confirm. A delivered message does not mean the work is done.";
 
@@ -363,13 +386,7 @@ export const tandemRequestSchema = z.strictObject({
       queueLabel: z.string().optional(),
       blockedLabel: z.string().optional(),
     }),
-    ...(["pr-watch-start", "pr-watch-stop", "pr-watch-fix"] as const).map((action) =>
-      z.strictObject({
-        action: z.literal(action),
-        pullRequest: z.string().describe("A GitHub PR URL, owner/repo#123, or #123 here."),
-        repoPath: z.string().optional().describe("Where #123 is; defaults to this project."),
-      }),
-    ),
+    ...(["pr-watch-start", "pr-watch-stop", "pr-watch-fix"] as const).map(pullRequestRequest),
     z.strictObject({ action: z.literal("memory-list"), repoPath: z.string() }),
     ...(["memory-show", "memory-done"] as const).map((action) =>
       z.strictObject({

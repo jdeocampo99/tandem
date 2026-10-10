@@ -30,6 +30,7 @@ import {
   type TandemService,
   type TandemServiceOptions,
 } from "../service/controller.ts";
+import { prFixToolRequest } from "../session/tools.ts";
 import { fixRequestStalled, prFixRequest, taskForPrNumber } from "../tasks/pull-request.ts";
 import {
   DEFAULT_COORDINATOR_SESSION,
@@ -48,8 +49,12 @@ import { type BlockContext, parseBlockContext } from "./block.ts";
 import {
   type Action,
   ActionEnvelope,
+  type ActionOrigin,
   type NoticeCode,
   type Outcome,
+  PluginEnvelope,
+  type PluginOrigin,
+  PR_GUIDE_PLUGIN,
   type ViewRef,
 } from "./envelope.ts";
 import {
@@ -76,6 +81,9 @@ export type NativeActDependencies = Readonly<{
 
 type Origin = Readonly<{ paneId: string; cwd: string; windowId?: string }>;
 
+type PluginAction = Extract<Action, { verb: "pr-fix" }>;
+type PaneAction = Exclude<Action, PluginAction>;
+
 /** One proven click: the project its exact pane belongs to, and the services that act on it. */
 type Act = Readonly<{
   environment: TandemBoundaryEnvironment;
@@ -89,7 +97,10 @@ type Act = Readonly<{
   service: () => TandemService;
 }>;
 
-type Handler<V extends Action["verb"]> = (
+/** One recorded project and the services that act on it, with no pane to prove. */
+type Project = Omit<Act, "origin" | "block">;
+
+type Handler<V extends PaneAction["verb"]> = (
   act: Act,
   action: Extract<Action, { verb: V }>,
 ) => Promise<Outcome>;
@@ -118,14 +129,18 @@ export async function readEnvelope(input: AsyncIterable<Uint8Array | string>): P
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function parseEnvelope(text: string): ActionEnvelope {
+/** A plugin's envelope names itself in `origin.plugin`; every other envelope names a pane. */
+function parseEnvelope(text: string): ActionEnvelope | PluginEnvelope {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
     throw new Error("A native action must be one JSON envelope");
   }
-  const parsed = ActionEnvelope.safeParse(raw);
+  const origin =
+    typeof raw === "object" && raw !== null && "origin" in raw ? raw.origin : undefined;
+  const named = typeof origin === "object" && origin !== null && "plugin" in origin;
+  const parsed = named ? PluginEnvelope.safeParse(raw) : ActionEnvelope.safeParse(raw);
   if (parsed.success) return parsed.data;
   throw new Error(
     parsed.error.issues
@@ -143,28 +158,28 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
   try {
     const envelope = parseEnvelope(text);
     const run = dependencies.run ?? runCommand;
-    const located = await locate(envelope, dependencies, run);
-    const act: Act = {
-      ...located,
-      run,
-      service: () => {
-        if (dependencies.service !== undefined) return dependencies.service;
-        created ??= (dependencies.createService ?? createTandemService)({
-          ...serviceOptions(located.environment),
-          run,
-        });
-        return created;
-      },
+    const serviceFor = (environment: TandemBoundaryEnvironment) => (): TandemService => {
+      if (dependencies.service !== undefined) return dependencies.service;
+      created ??= (dependencies.createService ?? createTandemService)({
+        ...serviceOptions(environment),
+        run,
+      });
+      return created;
     };
+    const { origin, action } = envelope;
+    if (action.verb === "pr-fix" || "plugin" in origin)
+      return await fromPlugin(envelope, dependencies, run, serviceFor);
+    const located = await locate(origin, dependencies, run);
+    const act: Act = { ...located, run, service: serviceFor(located.environment) };
     // The authority table's mapped type pairs each verb with its own action variant.
-    const authority = VERB_AUTHORITY[envelope.action.verb] as Authority<Action>;
+    const authority = VERB_AUTHORITY[action.verb] as Authority<Action>;
     if (authority.kind === "approval") {
-      const refusal = await proveBlockOrigin(act, authority.views(envelope.action));
+      const refusal = await proveBlockOrigin(act, authority.views(action));
       if (refusal !== undefined) return refusal;
     }
     // The verb table's mapped type pairs each handler with its own action variant.
-    const handler = HANDLERS[envelope.action.verb] as Handler<Action["verb"]>;
-    return await handler(act, envelope.action as never);
+    const handler = HANDLERS[action.verb] as Handler<PaneAction["verb"]>;
+    return await handler(act, action as never);
   } catch (error) {
     return notice("refused", "failed", message(error));
   } finally {
@@ -173,36 +188,73 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
 }
 
 /**
+ * A click that names a plugin, or a verb only a plugin may send. The origin alone decides, before
+ * any pane is listed or service built, so a refusal cannot have changed anything.
+ */
+async function fromPlugin(
+  { origin, action }: ActionEnvelope | PluginEnvelope,
+  dependencies: NativeActDependencies,
+  run: CommandRunner,
+  serviceFor: (environment: TandemBoundaryEnvironment) => () => TandemService,
+): Promise<Outcome> {
+  if (action.verb !== "pr-fix")
+    return notice(
+      "refused",
+      "origin-unproven",
+      "The PR Guide plugin can only hand a pull request to Tandem. Nothing was changed.",
+    );
+  const proven = pluginOrigin(origin);
+  if (typeof proven === "string") return notice("refused", "origin-unproven", proven);
+  const project = await locateProject(proven.repoPath, dependencies, run);
+  return handOff({ ...project, run, service: serviceFor(project.environment) }, action);
+}
+
+/** The project's environment as its one recorded coordinator names it. */
+function projectEnvironment(
+  base: TandemBoundaryEnvironment,
+  record: CoordinatorRecord,
+): TandemBoundaryEnvironment {
+  return {
+    ...base,
+    repo: record.repoPath,
+    sourceRepo: record.worktree.path,
+    sessionId: record.endpoint.sessionId,
+    parentWorkspaceId: record.endpoint.workspaceId,
+    coordinatorPaneId: record.endpoint.paneId,
+  };
+}
+
+/**
  * Proves the origin: the exact pane must be listed in exactly one recorded coordinator's session.
  * A block's echoed context names the Tandem home and the cwd it was opened for.
  */
 async function locate(
-  envelope: ActionEnvelope,
+  paneOrigin: ActionOrigin,
   dependencies: NativeActDependencies,
   run: CommandRunner,
 ): Promise<Omit<Act, "run" | "service">> {
   let home: string | undefined;
   let origin: Origin;
   let block: BlockContext | undefined;
-  if ("ctx" in envelope.origin) {
+  if ("ctx" in paneOrigin) {
     let ctx: BlockContext;
     try {
-      ctx = parseBlockContext(envelope.origin.ctx);
+      ctx = parseBlockContext(paneOrigin.ctx);
     } catch {
       throw new Error("The view's context is not one Tandem launched it with");
     }
     block = ctx;
     home = ctx.home;
     origin = {
-      paneId: envelope.origin.pane,
+      paneId: paneOrigin.pane,
       cwd: ctx.cwd,
       ...(ctx.window === undefined ? {} : { windowId: ctx.window }),
     };
   } else {
     origin = {
-      paneId: envelope.origin.pane,
-      cwd: envelope.origin.cwd,
-      ...(envelope.origin.window === undefined ? {} : { windowId: envelope.origin.window }),
+      paneId: paneOrigin.pane,
+      cwd: paneOrigin.cwd,
+      ...(paneOrigin.window === undefined ? {} : { windowId: paneOrigin.window }),
     };
   }
   const base = resolveTandemEnvironment(
@@ -258,14 +310,7 @@ async function locate(
     throw new Error(`Native action context does not identify exactly one Tandem project${reason}`);
   }
   return {
-    environment: {
-      ...base,
-      repo: record.repoPath,
-      sourceRepo: record.worktree.path,
-      sessionId: record.endpoint.sessionId,
-      parentWorkspaceId: record.endpoint.workspaceId,
-      coordinatorPaneId: record.endpoint.paneId,
-    },
+    environment: projectEnvironment(base, record),
     origin,
     ...(block === undefined ? {} : { block }),
     record,
@@ -274,13 +319,78 @@ async function locate(
 }
 
 /**
+ * The PR Guide plugin's origin, or why the origin cannot be it. Pure: a plugin is named by its
+ * manifest id and carries no pane, so nothing about the click is proved beyond the id and the
+ * project. Every other origin, and every other plugin, is refused.
+ */
+export function pluginOrigin(origin: ActionOrigin | PluginOrigin): PluginOrigin | string {
+  if (!("plugin" in origin))
+    return "Only the PR Guide plugin can hand a pull request to Tandem. Nothing was changed.";
+  return origin.plugin === PR_GUIDE_PLUGIN
+    ? origin
+    : "This request does not come from the PR Guide plugin. Nothing was changed.";
+}
+
+/**
+ * The one recorded coordinator whose project is `repoPath`, across sessions. An unknown project,
+ * two coordinators claiming it, an unreadable or misplaced record for it beside the valid one, or
+ * a coordinator that is not running refuses before any service is built.
+ */
+async function locateProject(
+  repoPath: string,
+  dependencies: NativeActDependencies,
+  run: CommandRunner,
+): Promise<Omit<Project, "run" | "service">> {
+  const base = resolveTandemEnvironment(dependencies.processEnvironment ?? environmentSource(), {
+    cwd: dependencies.cwd ?? process.cwd(),
+    sessionId: DEFAULT_COORDINATOR_SESSION,
+  });
+  const discovery = await discoverCoordinatorRecords({ home: base.home, repoPath });
+  const records = discovery.records
+    .filter((entry) => entry.placement === "session-directory")
+    .map((entry) => entry.record);
+  const [recorded] = records;
+  if (records.length > 1) throw new Error("More than one coordinator claims this project");
+  // A record that cannot be read, or sits in another session's folder, may be this project's real
+  // owner: one valid record beside it is not proof, so ownership is ambiguous and nothing is built.
+  const misplaced = discovery.records.length - records.length;
+  if (recorded === undefined) {
+    if (discovery.unreadable.length > 0)
+      throw new Error(
+        "Tandem has no readable coordinator for this project; unreadable records were skipped",
+      );
+    if (misplaced > 0)
+      throw new Error(
+        "Tandem has no coordinator for this project in its own session folder; misplaced records were skipped",
+      );
+    throw new Error("Tandem does not know this project");
+  }
+  if (discovery.unreadable.length > 0 || misplaced > 0)
+    throw new Error(
+      "Tandem cannot tell which coordinator owns this project; an unreadable or misplaced record names it too",
+    );
+  const terminal = dependencies.terminal ?? terminalBackend(run, { home: base.home });
+  const record = await findRunningCoordinator(run, terminal, {
+    home: base.home,
+    sessionId: recorded.endpoint.sessionId,
+    repoPath: recorded.repoPath,
+  });
+  if (record === undefined)
+    throw new Error("Open this project's Tandem coordinator before handing off a pull request");
+  return { environment: projectEnvironment(base, record), record, terminal };
+}
+
+/**
  * What a verb may do on the user's behalf. `navigation` only shows, focuses or records what the
  * user looked at, so any pane the project's session lists may send it. `approval` approves or
  * changes scope, answers or directs work in the user's name, posts, restarts or saves settings, so
- * only one of `views(action)`, proved by `proveBlockOrigin`, may send it.
+ * only one of `views(action)`, proved by `proveBlockOrigin`, may send it. `plugin` is sent by a
+ * plugin's own window, which has no Tandem pane or block: `pluginOrigin` accepts only the PR Guide
+ * plugin's id and `locateProject` the one recorded project it names.
  */
 type Authority<A extends Action> =
   | Readonly<{ kind: "navigation" }>
+  | Readonly<{ kind: "plugin" }>
   | Readonly<{ kind: "approval"; views: (action: A) => readonly ProvableView[] }>;
 
 const NAVIGATION = { kind: "navigation" } as const;
@@ -324,6 +434,7 @@ export const VERB_AUTHORITY: {
       return (named.length > 0 ? named : SETUP_MODES).map((mode) => ({ kind: "setup", mode }));
     },
   },
+  "pr-fix": { kind: "plugin" },
 };
 
 /** Whether a verb acts on the user's behalf and so needs a proven block origin. */
@@ -404,7 +515,7 @@ async function proveBlockOrigin(
   );
 }
 
-const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
+const HANDLERS: { [V in PaneAction["verb"]]: Handler<V> } = {
   open: (act, action) => open(act, action.ref),
   "open-project": async (act) => {
     const current = await ternOwner(act, "navigating");
@@ -445,6 +556,25 @@ const HANDLERS: { [V in Action["verb"]]: Handler<V> } = {
   },
   "setup-save": saveSetup,
 };
+
+/**
+ * Hands a pull request to the same `pr-watch-fix` pipeline the coordinator's tool runs, mapped
+ * through that tool's own strict request. That pipeline records the one owner of the branch: the
+ * watch, its fix task and the fix attempt. The click is the user's own, so there is no further
+ * approval; a task that could not start is `kept`, because the hand-off itself was recorded.
+ */
+async function handOff(project: Project, action: PluginAction): Promise<Outcome> {
+  const request = prFixToolRequest(action, project.record.repoPath);
+  const task = await project
+    .service()
+    .prWatchFix({ pullRequest: request.pullRequest, repoPath: request.repoPath });
+  if (task.stage !== "blocked") return DONE;
+  return notice(
+    "kept",
+    "failed",
+    `Tandem took over ${action.repo}#${action.number}, but the fix could not start: ${task.blockReason ?? task.blockCause?.summary ?? "task is blocked"}`,
+  );
+}
 
 /** What the project's last publication showed, as the store recorded it when it wrote the views. */
 async function published(act: Act, repoPath: string): Promise<Published> {
