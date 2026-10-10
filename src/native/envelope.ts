@@ -30,15 +30,22 @@ export const PR_GUIDE_PLUGIN = "prguide";
 
 /**
  * Where a click came from. A block echoes the context it was launched with; a window command
- * names the focused pane's absolute cwd and, when Tern exports it, the window key. A plugin
- * names itself and the one Tandem project it acts on; it has no pane of the coordinator's.
+ * names the focused pane's absolute cwd and, when Tern exports it, the window key.
  */
 export const ActionOrigin = z.union([
   z.object({ pane: PaneId, ctx: z.string() }).strict(),
   z.object({ pane: PaneId, cwd: AbsolutePath, window: z.string().min(1).optional() }).strict(),
-  z.object({ plugin: z.string().min(1), repoPath: AbsolutePath }).strict(),
 ]);
 export type ActionOrigin = z.infer<typeof ActionOrigin>;
+
+/**
+ * Where a plugin's own window click came from: the plugin's manifest id and the one Tandem project
+ * it acts on. It names no pane, so it is a separate origin that no pane consumer has to handle.
+ */
+export const PluginOrigin = z
+  .object({ plugin: z.string().min(1), repoPath: AbsolutePath })
+  .strict();
+export type PluginOrigin = z.infer<typeof PluginOrigin>;
 
 /** What an `open` action shows. PRs open by number, qualified by repository when known. */
 export const ViewRef = z.discriminatedUnion("kind", [
@@ -145,6 +152,12 @@ export const ActionEnvelope = z
   .object({ v: z.literal(1), origin: ActionOrigin, action: Action })
   .strict();
 export type ActionEnvelope = z.infer<typeof ActionEnvelope>;
+
+/** The same envelope sent by a plugin's own window; `ActionEnvelope` stays pane-origin only. */
+export const PluginEnvelope = z
+  .object({ v: z.literal(1), origin: PluginOrigin, action: Action })
+  .strict();
+export type PluginEnvelope = z.infer<typeof PluginEnvelope>;
 
 /**
  * What `rt.act` shows for an outcome. Each code has one toast title and level in `rt.luau`;

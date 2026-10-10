@@ -53,6 +53,8 @@ import {
   type NoticeCode,
   type Outcome,
   PR_GUIDE_PLUGIN,
+  PluginEnvelope,
+  type PluginOrigin,
   type ViewRef,
 } from "./envelope.ts";
 import {
@@ -79,9 +81,6 @@ export type NativeActDependencies = Readonly<{
 
 type Origin = Readonly<{ paneId: string; cwd: string; windowId?: string }>;
 
-/** A click from a block or a window command: the origins that name a pane. */
-type PaneOrigin = Exclude<ActionOrigin, { plugin: string }>;
-type PluginOrigin = Extract<ActionOrigin, { plugin: string }>;
 type PluginAction = Extract<Action, { verb: "pr-fix" }>;
 type PaneAction = Exclude<Action, PluginAction>;
 
@@ -130,14 +129,18 @@ export async function readEnvelope(input: AsyncIterable<Uint8Array | string>): P
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function parseEnvelope(text: string): ActionEnvelope {
+/** A plugin's envelope names itself in `origin.plugin`; every other envelope names a pane. */
+function parseEnvelope(text: string): ActionEnvelope | PluginEnvelope {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
     throw new Error("A native action must be one JSON envelope");
   }
-  const parsed = ActionEnvelope.safeParse(raw);
+  const origin =
+    typeof raw === "object" && raw !== null && "origin" in raw ? raw.origin : undefined;
+  const named = typeof origin === "object" && origin !== null && "plugin" in origin;
+  const parsed = named ? PluginEnvelope.safeParse(raw) : ActionEnvelope.safeParse(raw);
   if (parsed.success) return parsed.data;
   throw new Error(
     parsed.error.issues
@@ -189,7 +192,7 @@ export async function nativeAct(text: string, dependencies: NativeActDependencie
  * any pane is listed or service built, so a refusal cannot have changed anything.
  */
 async function fromPlugin(
-  { origin, action }: ActionEnvelope,
+  { origin, action }: ActionEnvelope | PluginEnvelope,
   dependencies: NativeActDependencies,
   run: CommandRunner,
   serviceFor: (environment: TandemBoundaryEnvironment) => () => TandemService,
@@ -226,7 +229,7 @@ function projectEnvironment(
  * A block's echoed context names the Tandem home and the cwd it was opened for.
  */
 async function locate(
-  paneOrigin: PaneOrigin,
+  paneOrigin: ActionOrigin,
   dependencies: NativeActDependencies,
   run: CommandRunner,
 ): Promise<Omit<Act, "run" | "service">> {
@@ -320,7 +323,7 @@ async function locate(
  * manifest id and carries no pane, so nothing about the click is proved beyond the id and the
  * project. Every other origin, and every other plugin, is refused.
  */
-export function pluginOrigin(origin: ActionOrigin): PluginOrigin | string {
+export function pluginOrigin(origin: ActionOrigin | PluginOrigin): PluginOrigin | string {
   if (!("plugin" in origin))
     return "Only the PR Guide plugin can hand a pull request to Tandem. Nothing was changed.";
   return origin.plugin === PR_GUIDE_PLUGIN

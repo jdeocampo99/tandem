@@ -18,7 +18,7 @@ import {
   VERB_AUTHORITY,
 } from "../../src/native/actions.ts";
 import { blockArgs } from "../../src/native/block.ts";
-import { Action, ActionEnvelope, Outcome } from "../../src/native/envelope.ts";
+import { Action, ActionEnvelope, Outcome, PluginEnvelope } from "../../src/native/envelope.ts";
 import {
   projectStoreDirectory,
   recordVisit,
@@ -2307,9 +2307,13 @@ test("setup-save refuses an answer the CLI cannot parse before saving or prompti
 
 const SuccessFixture = z
   .object({
-    request: z.record(z.string(), z.unknown()),
-    toolRequest: z.record(z.string(), z.unknown()),
-    serviceInput: z.record(z.string(), z.unknown()),
+    request: PluginEnvelope,
+    toolRequest: z.strictObject({
+      action: z.literal("pr-watch-fix"),
+      pullRequest: z.string(),
+      repoPath: z.string(),
+    }),
+    serviceInput: z.strictObject({ pullRequest: z.string(), repoPath: z.string() }),
     outcome: Outcome,
   })
   .strict();
@@ -2425,7 +2429,7 @@ for (const terminalName of ["herdr", "tern"] as const) {
       expect(run.calls).toEqual([fixed.serviceInput]);
       expect(run.scopes).toEqual([{ repoPath: f.repo, path: f.clean }]);
       // The mapped tool request is the strict `pr-watch-fix` shape the coordinator's tool accepts.
-      const action = Action.parse(fixed.request.action);
+      const { action } = fixed.request;
       if (action.verb !== "pr-fix") throw new Error("Fixture is not a pr-fix action");
       const request = prFixToolRequest(action, f.repo);
       expect(request).toEqual(fixed.toolRequest);
