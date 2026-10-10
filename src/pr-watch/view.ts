@@ -102,7 +102,7 @@ export function renderPrWatchView(view: PrWatchView): string {
 }
 
 /** One aligned line per row; `nameRepo` names each pull request `owner/repo#N` instead of `#N`. */
-export function prWatchLines(rows: readonly PrWatchViewRow[], nameRepo: boolean): string[] {
+function prWatchLines(rows: readonly PrWatchViewRow[], nameRepo: boolean): string[] {
   const names = rows.map((row) => (nameRepo ? `${row.repo}#${row.number}` : `#${row.number}`));
   const width = (values: readonly string[]) =>
     Math.max(...values.map((value) => [...value].length));
@@ -176,7 +176,7 @@ function checksColumn(watch: PrWatch): string {
   return `${mark} ${checks.passed}/${total}`;
 }
 
-export function pad(value: string, width: number): string {
+function pad(value: string, width: number): string {
   return value + " ".repeat(Math.max(0, width - [...value].length));
 }
 

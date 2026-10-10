@@ -27,7 +27,7 @@ export type WireToolSpec = Readonly<{
  * Where a prompt came from, as Claude Code's `PromptOrigin.kind` names it: the person's Enter, a
  * finished background task's notification, or anything else (the bridge, the SDK, a peer).
  */
-export const PROMPT_ORIGINS = ["composer", "task-notification", "other"] as const;
+const PROMPT_ORIGINS = ["composer", "task-notification", "other"] as const;
 export type PromptOrigin = (typeof PROMPT_ORIGINS)[number];
 
 /** One finished model turn's tokens, from Claude Code's `turn.complete`. */
@@ -76,8 +76,6 @@ export type SidecarEvent =
   | Readonly<{ type: "shutdown" }>
   /** The person's answer to an `ask` reply; its response is the original hook's next reply. */
   | Readonly<{ type: "askAnswer"; ask: string; allowed: boolean }>;
-
-export type SidecarEventType = SidecarEvent["type"];
 
 /**
  * A hook's answer, the body of every `/event` response. `ask` may answer any event: the mod shows

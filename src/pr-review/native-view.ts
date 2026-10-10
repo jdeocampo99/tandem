@@ -47,7 +47,7 @@ export type CachedPullRequest = Readonly<{
   patch: string;
   tour: readonly ChapterInput[];
 }>;
-export type PrDiffRow = Readonly<{
+type PrDiffRow = Readonly<{
   id: string;
   row: DiffRow;
   threads: readonly PrThread[];

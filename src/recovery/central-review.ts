@@ -59,7 +59,7 @@ export const STOPPED_BEFORE_RESULT_REASON =
  * instruction, or a malformed result. The first three are `failJob`'s literal reasons in
  * workflow.ts (`reconcileJob`/`settleWorkerJob`/`reconcileMissingEndpoint`); keep them in sync.
  */
-export const DEAD_JOB_REASON_PREFIXES = [
+const DEAD_JOB_REASON_PREFIXES = [
   "worker job has no durable endpoint identity",
   "worker stopped without a durable result",
   "owned endpoint disappeared",

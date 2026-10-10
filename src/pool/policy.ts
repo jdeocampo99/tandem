@@ -138,7 +138,7 @@ export function validateInput(input: PoolMaintenanceInput): Readonly<{
   return { repo, root, managedPaths, protectedPaths, retainIdle, minimumFreeBytes };
 }
 
-export function isContained(root: string, candidate: string): boolean {
+function isContained(root: string, candidate: string): boolean {
   const relation = relative(root, candidate);
   return relation === "" || (!relation.startsWith("..") && !relation.startsWith("/"));
 }

@@ -73,7 +73,7 @@ export async function checkMerging(
 }
 
 /** The check's answer from what GitHub said; separate from the reads so it can be tested alone. */
-export function describeMerging(
+function describeMerging(
   repo: string,
   repository: RepositoryRead,
   aviator: boolean,

@@ -61,7 +61,7 @@ export function ompToolCall(
 }
 
 /** ponytail: mirrors OMP's private sanitizeMCPToolNamePart; tool names are `mcp__<server>_<tool>`. */
-export function ompMcpToolPrefix(server: string): string {
+function ompMcpToolPrefix(server: string): string {
   const sanitized = server
     .toLowerCase()
     .replace(/[^a-z_]+/gu, "_")

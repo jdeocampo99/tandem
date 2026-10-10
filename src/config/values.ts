@@ -13,7 +13,7 @@ export const INSTRUCTION_CHANNELS = [
   "review",
 ] as const satisfies readonly InstructionChannel[];
 
-export const INSTRUCTION_CHANNEL_KEYS: Readonly<Record<InstructionChannel, true>> = {
+const INSTRUCTION_CHANNEL_KEYS: Readonly<Record<InstructionChannel, true>> = {
   implementation: true,
   validation: true,
   review: true,
@@ -23,7 +23,7 @@ export const MODEL_KEYS: Readonly<Record<string, true>> = {
   model: true,
   thinking: true,
 };
-export const AGENT_ROLE_KEYS: Readonly<Record<AgentRole, true>> = Object.fromEntries(
+const AGENT_ROLE_KEYS: Readonly<Record<AgentRole, true>> = Object.fromEntries(
   MODEL_ROLE_ORDER.map((role) => [role, true] as const),
 ) as Readonly<Record<AgentRole, true>>;
 
@@ -37,7 +37,7 @@ export const LEGACY_MODEL_ROLE_KEYS: Readonly<Record<string, true>> = {
   verifier: true,
 };
 
-export const THINKING_LEVELS: Readonly<Record<ThinkingLevel, true>> = {
+const THINKING_LEVELS: Readonly<Record<ThinkingLevel, true>> = {
   off: true,
   minimal: true,
   low: true,
@@ -104,7 +104,7 @@ export function hasDisallowedControlCharacter(
   return false;
 }
 
-export function readInstruction(value: unknown, field: string): string {
+function readInstruction(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${field} must be a non-empty string`);
   }
@@ -128,7 +128,7 @@ export function readModelSelector(value: unknown, field: string): string {
   return value;
 }
 
-export function readChannel(value: unknown, field: string): InstructionChannel {
+function readChannel(value: unknown, field: string): InstructionChannel {
   if (typeof value !== "string" || !INSTRUCTION_CHANNELS.includes(value as InstructionChannel)) {
     throw new TypeError(`${field} must name a supported instruction channel`);
   }
@@ -147,7 +147,7 @@ export function readInstructionList(value: unknown, field: string): readonly str
   return entries;
 }
 
-export function normalizeRelativeReference(value: unknown, field: string): string {
+function normalizeRelativeReference(value: unknown, field: string): string {
   const reference = readNonEmptyString(value, field);
   if (
     path.posix.isAbsolute(reference) ||

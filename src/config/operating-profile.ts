@@ -12,7 +12,7 @@ import type { ModelRecord } from "../harness/contract.ts";
  * presentation favor speed) without reusing their fixed provider/model selectors, since Balanced
  * must resolve an exact selector dynamically from whichever providers the user has enabled.
  */
-export const BALANCED_ROLE_THINKING: Readonly<Record<AgentRole, ThinkingLevel>> = {
+const BALANCED_ROLE_THINKING: Readonly<Record<AgentRole, ThinkingLevel>> = {
   coordinator: "high",
   scout: "medium",
   implementer: "max",
@@ -29,13 +29,13 @@ const BALANCED_ROLE_REQUIRES_REASONING: Readonly<Record<AgentRole, boolean>> = {
   presentation: false,
 };
 
-export type BalancedRoleEvidence = Readonly<{
+type BalancedRoleEvidence = Readonly<{
   readonly reasoning: boolean;
   readonly contextWindow?: number;
   readonly cost?: Readonly<{ readonly input: number; readonly output: number }>;
 }>;
 
-export type BalancedRoleProposal = Readonly<{
+type BalancedRoleProposal = Readonly<{
   readonly role: AgentRole;
   readonly provider: string;
   readonly model: ModelSpec;

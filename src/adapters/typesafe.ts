@@ -15,21 +15,21 @@ const MAX_TEXT_LENGTH = 16 * 1024;
 const MAX_CRITERIA = 64;
 const PROBABILITY_EPSILON = 1e-6;
 
-export type JevState = string | readonly unknown[] | Readonly<Record<string, unknown>>;
+type JevState = string | readonly unknown[] | Readonly<Record<string, unknown>>;
 
-export type JevChoiceQuestion = Readonly<{
+type JevChoiceQuestion = Readonly<{
   readonly type: "choice";
   readonly instructions: string;
   readonly criteria: Readonly<Record<string, string | null>>;
 }>;
 
-export type JevNoulQuestion = Readonly<{
+type JevNoulQuestion = Readonly<{
   readonly type: "noul";
   readonly instructions: string;
   readonly criteria?: Readonly<{ readonly true?: string | null; readonly false?: string | null }>;
 }>;
 
-export type JevQuestion = JevChoiceQuestion | JevNoulQuestion;
+type JevQuestion = JevChoiceQuestion | JevNoulQuestion;
 export type JevQuestions = Readonly<Record<string, JevQuestion>>;
 
 export type JevEvaluationInput = Readonly<{
@@ -45,12 +45,12 @@ export type JevChoiceAnswer = Readonly<{
   readonly confidence: number;
 }>;
 
-export type JevNoulAnswer = Readonly<{
+type JevNoulAnswer = Readonly<{
   readonly type: "noul";
   readonly noul: number;
 }>;
 
-export type JevAnswer = JevChoiceAnswer | JevNoulAnswer;
+type JevAnswer = JevChoiceAnswer | JevNoulAnswer;
 
 export type JevUsage = Readonly<{
   readonly input_tokens: number;

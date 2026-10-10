@@ -16,7 +16,7 @@ const DEFAULT_PRESENTATION_POLL_OPTIONS: PresentationPollOptions = {
   commandTimeoutMs: 5_000,
 };
 
-export type PresentationStatus =
+type PresentationStatus =
   | "feedback"
   | "ended"
   | "waiting"

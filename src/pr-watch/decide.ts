@@ -2,7 +2,7 @@ import type { MergeWith, MergingSettingsFile } from "../config/repositories.ts";
 import type { IsoTimestamp } from "../contracts.ts";
 import { clockTime } from "./view.ts";
 
-export type CheckState = "passed" | "failed" | "pending";
+type CheckState = "passed" | "failed" | "pending";
 
 export type WatchedCheck = Readonly<{
   readonly name: string;
@@ -222,7 +222,7 @@ function decideConflicts(facts: PrWatchFacts): PrWatchDecision {
 }
 
 /** How many empty commits already reran this check on this version of the code. */
-export function retriesUsed(log: readonly PrWatchLogEntry[], tree: string, check: string): number {
+function retriesUsed(log: readonly PrWatchLogEntry[], tree: string, check: string): number {
   return log.filter(
     (entry) => entry.kind === "retry" && entry.tree === tree && entry.checks.includes(check),
   ).length;
@@ -408,7 +408,7 @@ function mergeStatus(facts: PrWatchFacts): string {
  * The checks that decide what the watcher does: the required ones, or every check when the
  * repository requires none. Optional checks still show in the view.
  */
-export function gatingChecks(pr: PrObservation): readonly WatchedCheck[] {
+function gatingChecks(pr: PrObservation): readonly WatchedCheck[] {
   const required = pr.checks.filter((check) => check.required);
   return required.length === 0 ? pr.checks : required;
 }

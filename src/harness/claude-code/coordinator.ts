@@ -44,7 +44,7 @@ const NO_TOOL_CONTEXT: HookReply = { type: "toolContext", context: [] };
  * end: Claude Code shows a mod no message list, only the prompt the run began with and its final
  * answer. Without the prompt there is nothing for a reply wait to match.
  */
-export function turnMessages(
+function turnMessages(
   end: Extract<SidecarEvent, { type: "agentEnd" }>,
 ): readonly CoordinatorMessage[] {
   if (end.prompt === undefined) return [];

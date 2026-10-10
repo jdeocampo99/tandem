@@ -34,13 +34,13 @@ type CanonicalRepositoryLocation = Readonly<{
 }>;
 
 /** Whether another session's recorded coordinator still proves it is running. */
-export type SessionCoordinatorLiveness =
+type SessionCoordinatorLiveness =
   | Readonly<{ readonly status: "live" }>
   | Readonly<{ readonly status: "stopped" }>
   | Readonly<{ readonly status: "ambiguous"; readonly detail: string }>;
 
 /** One other session's record for this repository, as it was observed. */
-export type ObservedSessionCoordinator = Readonly<{
+type ObservedSessionCoordinator = Readonly<{
   readonly found: DiscoveredCoordinatorRecord;
   readonly liveness: SessionCoordinatorLiveness;
 }>;

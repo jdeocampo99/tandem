@@ -26,15 +26,15 @@ export type PublishedReport = Readonly<{
 /** How many report pages `<home>/reports/` keeps, counting the one just written. */
 export const REPORT_FILES_KEPT = 20;
 
-export const LAVISH_MISSING_MESSAGE = "Lavish isn't installed or couldn't start.";
-export const LAVISH_FAILED_MESSAGE = "Lavish couldn't open the page.";
+const LAVISH_MISSING_MESSAGE = "Lavish isn't installed or couldn't start.";
+const LAVISH_FAILED_MESSAGE = "Lavish couldn't open the page.";
 
 /** Longer raw details are left out rather than cut mid-sentence. */
 const MAX_DETAIL_CHARS = 120;
 
 const REPORT_FILE_PATTERN = /^report-[0-9A-Za-z-]+\.html$/u;
 
-export function reportsDirectory(home: string): string {
+function reportsDirectory(home: string): string {
   return join(home, "reports");
 }
 

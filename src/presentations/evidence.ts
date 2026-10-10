@@ -11,7 +11,7 @@ import {
 
 const FEEDBACK_DIRECTORY = "feedback";
 
-export async function writePrivateJson(path: string, value: unknown): Promise<void> {
+async function writePrivateJson(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {

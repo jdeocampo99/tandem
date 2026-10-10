@@ -108,7 +108,7 @@ export function withPrWatches<Result>(
   });
 }
 
-export function watchKey(ref: PullRequestRef): string {
+function watchKey(ref: PullRequestRef): string {
   return `${ref.repo}#${ref.number}`;
 }
 
