@@ -2654,3 +2654,55 @@ test("a project two coordinators claim, or one whose coordinator is not running,
     await f.close();
   }
 });
+
+/**
+ * The fixture's one valid running coordinator, plus a second record file for the same project in
+ * another session's folder holding `sibling`: the hand-off must refuse before any pane is read.
+ */
+async function expectSiblingRecordRefused(f: Fixture, sibling: string) {
+  const fixed = await prFixFixture("pr-fix-success.json", SuccessFixture, f);
+  const path = recordPath(f.home, "other-session", f.repo);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, sibling);
+  let reads = 0;
+  const terminal = {
+    ...f.deps.terminal,
+    listPanes: async (input: Parameters<TerminalBackend["listPanes"]>[0]) => {
+      reads += 1;
+      return f.deps.terminal.listPanes(input);
+    },
+    inspect: async (target: Parameters<TerminalBackend["inspect"]>[0]) => {
+      reads += 1;
+      return f.deps.terminal.inspect(target);
+    },
+  };
+  const run = recordingService(f);
+  const outcome = await sendEnvelope(f, fixed.request, { ...run.deps, terminal });
+  expect(outcome.status).toBe("refused");
+  expect(outcome.notice?.text).toContain("cannot tell which coordinator owns this project");
+  expectUntouched(f, run);
+  expect(reads).toBe(0);
+  expect(f.proofs).toEqual([]);
+}
+
+test("a valid coordinator beside an unreadable record for the same project is refused untouched", async () => {
+  const f = await fixture();
+  try {
+    await expectSiblingRecordRefused(f, "not json");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a valid coordinator beside a misplaced record for the same project is refused untouched", async () => {
+  const f = await fixture();
+  try {
+    const current = await readCoordinatorRecord(recordPath(f.home, "isolated", f.repo));
+    if (current === undefined) throw new Error("Fixture coordinator record is missing");
+    // Stored under "other-session"'s folder but naming another session, so its placement is foreign.
+    const misplaced = { ...current, endpoint: { ...current.endpoint, sessionId: "misplaced" } };
+    await expectSiblingRecordRefused(f, `${JSON.stringify(misplaced)}\n`);
+  } finally {
+    await f.close();
+  }
+});

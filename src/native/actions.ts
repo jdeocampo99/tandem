@@ -333,8 +333,8 @@ export function pluginOrigin(origin: ActionOrigin | PluginOrigin): PluginOrigin 
 
 /**
  * The one recorded coordinator whose project is `repoPath`, across sessions. An unknown project,
- * two coordinators claiming it, or a coordinator that is not running refuses before any service
- * is built.
+ * two coordinators claiming it, an unreadable or misplaced record for it beside the valid one, or
+ * a coordinator that is not running refuses before any service is built.
  */
 async function locateProject(
   repoPath: string,
@@ -351,11 +351,20 @@ async function locateProject(
     .map((entry) => entry.record);
   const [recorded] = records;
   if (records.length > 1) throw new Error("More than one coordinator claims this project");
+  // A record that cannot be read, or sits in another session's folder, may be this project's real
+  // owner: one valid record beside it is not proof, so ownership is ambiguous and nothing is built.
+  const misplaced = discovery.records.length - records.length;
   if (recorded === undefined)
     throw new Error(
       discovery.unreadable.length > 0
         ? "Tandem has no readable coordinator for this project; unreadable records were skipped"
-        : "Tandem does not know this project",
+        : misplaced > 0
+          ? "Tandem has no coordinator for this project in its own session folder; misplaced records were skipped"
+          : "Tandem does not know this project",
+    );
+  if (discovery.unreadable.length > 0 || misplaced > 0)
+    throw new Error(
+      "Tandem cannot tell which coordinator owns this project; an unreadable or misplaced record names it too",
     );
   const terminal = dependencies.terminal ?? terminalBackend(run, { home: base.home });
   const record = await findRunningCoordinator(run, terminal, {
