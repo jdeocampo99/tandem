@@ -41,17 +41,7 @@ export async function modelAssignmentsFromFile(
   statPath: (path: string) => Promise<PathStat>,
   file: string,
 ): Promise<RepoPolicy["models"]> {
-  const inputPath = resolve(pathText(file, "input"));
-  await verifyRegularPath(statPath, inputPath, "input");
-  let source: string;
-  try {
-    source = await readFile(inputPath, "utf8");
-  } catch (error) {
-    throw new CliUsageError(
-      `input is unavailable at ${inputPath}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  const parsed = parseJsonObject(source, "input");
+  const parsed = await jsonObjectFromFile(statPath, pathText(file, "input"), "configure-models");
   try {
     return parseModelAssignments(parsed);
   } catch (error) {
