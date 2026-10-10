@@ -29,18 +29,6 @@ export function unreleasedReservation(
   return reservation !== undefined && reservation.phase !== "released";
 }
 
-export function taskHasActiveJob(task: RuntimeTaskState): boolean {
-  return task.jobs.some(activeRuntimeJob);
-}
-
-export function taskRecordForRuntime(
-  task: TaskRecord,
-  runtime: RuntimeTaskState | undefined,
-): RuntimeTaskState | undefined {
-  if (runtime === undefined || runtime.taskId !== task.id) return undefined;
-  return runtime;
-}
-
 /** The task's primary worker jobs (scout, or implementer) for its current generation, newest first. */
 export function currentPrimaryJobs(
   task: TaskRecord,

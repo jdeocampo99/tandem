@@ -40,16 +40,6 @@ export type ExecutionGateOptions = Readonly<{
   ) => ExecutionAdmission | PromiseLike<ExecutionAdmission>;
 }>;
 
-export class ExecutionAdmissionError extends Error {
-  public readonly reason: string;
-
-  public constructor(reason: string) {
-    super(reason);
-    this.name = "ExecutionAdmissionError";
-    this.reason = reason;
-  }
-}
-
 function refusal(reason: string): ExecutionAdmission {
   return { admitted: false, reason };
 }
@@ -219,13 +209,4 @@ export async function claimExecutionStart(
   return store.exclusive((transaction) =>
     claimInTransaction(transaction, input, now, runtimeFile(home)),
   );
-}
-
-export async function assertExecutionClaim(
-  input: ExecutionGateInput,
-  options: ExecutionGateOptions = {},
-): Promise<void> {
-  const admission = await claimExecutionStart(input, options);
-  if (!admission.admitted)
-    throw new ExecutionAdmissionError(admission.reason ?? "execution was refused");
 }
