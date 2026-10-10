@@ -3,14 +3,20 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
+import { z } from "zod";
 import type { NativeViews } from "../../src/board/native-views.ts";
 import { defaultPolicy } from "../../src/config/policy.ts";
-import type { CommandRequest, RequestBriefContent } from "../../src/contracts.ts";
+import type { CommandRequest, RequestBriefContent, TaskRecord } from "../../src/contracts.ts";
 import { recordPath } from "../../src/coordinator/record.ts";
 import { readCoordinatorRecord, saveCoordinatorRecord } from "../../src/coordinator/registry.ts";
 import { DEFAULT_HARNESS } from "../../src/harness/contract.ts";
 import { runTerminal, type TerminalMainDependencies } from "../../src/main.ts";
-import { blockOriginProblem, isApprovalVerb, VERB_AUTHORITY } from "../../src/native/actions.ts";
+import {
+  blockOriginProblem,
+  isApprovalVerb,
+  pluginOrigin,
+  VERB_AUTHORITY,
+} from "../../src/native/actions.ts";
 import { blockArgs } from "../../src/native/block.ts";
 import { Action, ActionEnvelope, Outcome } from "../../src/native/envelope.ts";
 import {
@@ -25,7 +31,12 @@ import type { SetupApplyResult } from "../../src/onboarding/setup-workflow.ts";
 import { withRequestReviewPane } from "../../src/requests/brief.ts";
 import { briefView } from "../../src/requests/native-view.ts";
 import { createRequestBriefStore } from "../../src/requests/store.ts";
-import { createTandemService, type TandemService } from "../../src/service/controller.ts";
+import {
+  createTandemService,
+  type PullRequestInput,
+  type TandemService,
+} from "../../src/service/controller.ts";
+import { prFixToolRequest, tandemRequestSchema } from "../../src/session/tools.ts";
 import { createTaskStore } from "../../src/tasks/store.ts";
 import { terminalBackend } from "../../src/terminal-backend/compose.ts";
 import type {
@@ -2071,10 +2082,11 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     for (const { action } of envelopes(host)) verbs.add(action.verb);
   });
   // Merged-PR links have no control in these seeds; the native-screens eval sends them directly.
+  // `pr-fix` is sent only by the PR Guide plugin's own window, never by a Tandem view.
   expect([...verbs].toSorted()).toEqual(
     Action.options
       .map((option) => option.shape.verb.value)
-      .filter((verb) => verb !== "merged-link")
+      .filter((verb) => verb !== "merged-link" && VERB_AUTHORITY[verb].kind !== "plugin")
       .toSorted(),
   );
 }, 240_000);
@@ -2288,6 +2300,313 @@ test("setup-save refuses an answer the CLI cannot parse before saving or prompti
     expect(Action.safeParse({ verb: "setup-save" }).success).toBe(false);
     expect(Action.safeParse({ verb: "setup-save", answer: [] }).success).toBe(false);
     expect(Action.safeParse({ verb: "setup-save", answer: {}, extra: 1 }).success).toBe(false);
+  } finally {
+    await f.close();
+  }
+});
+
+const SuccessFixture = z
+  .object({
+    request: z.record(z.string(), z.unknown()),
+    toolRequest: z.record(z.string(), z.unknown()),
+    serviceInput: z.record(z.string(), z.unknown()),
+    outcome: Outcome,
+  })
+  .strict();
+const RefusalFixtures = z.array(
+  z
+    .object({
+      name: z.string(),
+      origin: z.union([z.literal("block"), z.record(z.string(), z.unknown())]),
+      code: z.enum(["failed", "origin-unproven"]),
+      text: z.string(),
+    })
+    .strict(),
+);
+
+/** Fixture files name the fixture's paths as `$repo`, `$clean` and `$root`. */
+function substitute(value: unknown, paths: Readonly<Record<string, string>>): unknown {
+  if (typeof value === "string")
+    return Object.entries(paths).reduce(
+      (text, [token, replacement]) => text.replaceAll(token, replacement),
+      value,
+    );
+  if (Array.isArray(value)) return value.map((item) => substitute(item, paths));
+  if (typeof value === "object" && value !== null)
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, substitute(item, paths)]),
+    );
+  return value;
+}
+
+async function prFixFixture<T>(file: string, schema: z.ZodType<T>, f: Fixture): Promise<T> {
+  const text = await readFile(new URL(`./fixtures/${file}`, import.meta.url), "utf8");
+  return schema.parse(
+    substitute(JSON.parse(text), { $repo: f.repo, $clean: f.clean, $root: f.root }),
+  );
+}
+
+/**
+ * A service that records what the hand-off asks of `pr-watch-fix`, and how many services a click
+ * built: a refusal must build none, so nothing could have been changed.
+ */
+function recordingService(
+  f: Fixture,
+  result: (input: PullRequestInput) => Promise<TaskRecord> = async () => createPrTask(f),
+) {
+  const calls: PullRequestInput[] = [];
+  const scopes: unknown[] = [];
+  const deps: TerminalMainDependencies = {
+    createService: (options) => {
+      scopes.push(options.sourceWorkspace);
+      return {
+        ...f.service,
+        prWatchFix: async (input) => {
+          calls.push(input);
+          return result(input);
+        },
+      };
+    },
+  };
+  return { calls, scopes, deps };
+}
+
+/** One envelope through `tandem native act`, exactly as given; `f.act` always adds an origin. */
+async function sendEnvelope(
+  f: Fixture,
+  envelope: unknown,
+  deps: TerminalMainDependencies,
+): Promise<Outcome> {
+  const output: string[] = [];
+  const { service: _service, ...unscoped } = f.deps;
+  const result = await runTerminal(["native", "act"], {
+    ...unscoped,
+    ...deps,
+    input: Readable.from([JSON.stringify(envelope)]),
+    stdout: (text) => output.push(text),
+  });
+  expect(result.exitCode).toBe(0);
+  return Outcome.parse(JSON.parse(output.join("")));
+}
+
+/** Nothing a click could have changed or shown moved. */
+function expectUntouched(f: Fixture, run: ReturnType<typeof recordingService>) {
+  expect(run.calls).toEqual([]);
+  expect(run.scopes).toEqual([]);
+  expect(f.prompts).toEqual([]);
+  expect(f.opened).toEqual([]);
+  expect(f.closed).toEqual([]);
+  expect(f.focused).toEqual([]);
+}
+
+test("pr-fix is the one plugin verb; every other verb keeps its pane authority", () => {
+  const plugin = Action.options
+    .map((option) => option.shape.verb.value)
+    .filter((verb) => VERB_AUTHORITY[verb].kind === "plugin");
+  expect(plugin).toEqual(["pr-fix"]);
+  expect(isApprovalVerb("pr-fix")).toBe(false);
+  expect(pluginOrigin({ plugin: "prguide", repoPath: "/repo" })).toEqual({
+    plugin: "prguide",
+    repoPath: "/repo",
+  });
+  expect(pluginOrigin({ pane: "101", cwd: "/repo" })).toContain("Only the PR Guide plugin");
+  expect(pluginOrigin({ plugin: "other", repoPath: "/repo" })).toContain(
+    "does not come from the PR Guide plugin",
+  );
+});
+
+for (const terminalName of ["herdr", "tern"] as const) {
+  test(`${terminalName}: a plugin hand-off runs the pr-watch-fix pipeline with exactly its mapped input`, async () => {
+    const f = await fixture(terminalName);
+    try {
+      const fixed = await prFixFixture("pr-fix-success.json", SuccessFixture, f);
+      const run = recordingService(f);
+      expect(await sendEnvelope(f, fixed.request, run.deps)).toEqual(fixed.outcome);
+      expect(run.calls).toEqual([fixed.serviceInput]);
+      expect(run.scopes).toEqual([{ repoPath: f.repo, path: f.clean }]);
+      // The mapped tool request is the strict `pr-watch-fix` shape the coordinator's tool accepts.
+      const action = Action.parse(fixed.request.action);
+      if (action.verb !== "pr-fix") throw new Error("Fixture is not a pr-fix action");
+      const request = prFixToolRequest(action, f.repo);
+      expect(request).toEqual(fixed.toolRequest);
+      expect(tandemRequestSchema.parse({ request })).toEqual({ request: fixed.toolRequest });
+      // A plugin has no pane, so Tern is never asked to prove one, and nothing is shown.
+      expect(f.proofs).toEqual([]);
+      expect(f.prompts).toEqual([]);
+      expect(f.opened).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+test("a hand-off whose task could not start is kept, and a pipeline error is refused", async () => {
+  const f = await fixture();
+  try {
+    const fixed = await prFixFixture("pr-fix-success.json", SuccessFixture, f);
+    const blocked = recordingService(f, async () => ({
+      ...(await createPrTask(f)),
+      stage: "blocked",
+      blockReason: "No worktree is free",
+    }));
+    const kept = await sendEnvelope(f, fixed.request, blocked.deps);
+    expect(kept.status).toBe("kept");
+    expect(kept.notice?.text).toContain("owner/repo#42");
+    expect(kept.notice?.text).toContain("No worktree is free");
+    expect(blocked.calls).toEqual([fixed.serviceInput]);
+    const clean = recordingService(f, async () => {
+      throw new Error("owner/repo#42 has no merge conflicts right now");
+    });
+    const refused = await sendEnvelope(f, fixed.request, clean.deps);
+    expect(refused).toEqual({
+      status: "refused",
+      notice: { code: "failed", text: "owner/repo#42 has no merge conflicts right now" },
+    });
+  } finally {
+    await f.close();
+  }
+});
+
+test("a pr-fix from any origin but the PR Guide plugin, or for an unknown project, is refused untouched", async () => {
+  const f = await fixture("tern");
+  try {
+    const fixed = await prFixFixture("pr-fix-success.json", SuccessFixture, f);
+    const cases = await prFixFixture("pr-fix-refusal.json", RefusalFixtures, f);
+    for (const { name: label, origin, code, text } of cases) {
+      const run = recordingService(f);
+      const outcome = await sendEnvelope(
+        f,
+        { ...fixed.request, origin: origin === "block" ? f.blockOrigin() : origin },
+        run.deps,
+      );
+      expect({ label, status: outcome.status, code: outcome.notice?.code }).toEqual({
+        label,
+        status: "refused",
+        code,
+      });
+      expect(outcome.notice?.text).toContain(text);
+      expectUntouched(f, run);
+    }
+    expect(f.proofs).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a pr-fix with no origin or a malformed payload is refused before any pane is read", async () => {
+  const f = await fixture();
+  try {
+    const fixed = await prFixFixture("pr-fix-success.json", SuccessFixture, f);
+    const action = z.record(z.string(), z.unknown()).parse(fixed.request.action);
+    const { origin: _origin, ...withoutOrigin } = fixed.request;
+    const { reason: _reason, ...withoutReason } = action;
+    const origin = (value: unknown) => ({ ...fixed.request, origin: value });
+    const changed = (patch: Record<string, unknown>) => ({
+      ...fixed.request,
+      action: { ...action, ...patch },
+    });
+    const payloads: readonly Readonly<[string, unknown]>[] = [
+      ["no origin", withoutOrigin],
+      ["a pane beside the plugin", origin({ pane: "101", plugin: "prguide", repoPath: f.repo })],
+      ["a relative repoPath", origin({ plugin: "prguide", repoPath: "repo" })],
+      ["no repoPath", origin({ plugin: "prguide" })],
+      ["a hidden repoPath in the action", changed({ repoPath: f.repo })],
+      ["no reason", { ...fixed.request, action: withoutReason }],
+      ["a blank reason", changed({ reason: "   " })],
+      ["number zero", changed({ number: 0 })],
+      ["a fractional number", changed({ number: 1.5 })],
+      ["an unsafe number", changed({ number: 2 ** 60 })],
+      ["a string number", changed({ number: "42" })],
+      ["a repo without an owner", changed({ repo: "repo" })],
+      ["a repo with a PR fragment", changed({ repo: "owner/repo#9" })],
+      ["a repo with a path", changed({ repo: "owner/repo/extra" })],
+    ];
+    let reads = 0;
+    const terminal = {
+      ...f.deps.terminal,
+      listPanes: async (input: Parameters<TerminalBackend["listPanes"]>[0]) => {
+        reads += 1;
+        return f.deps.terminal.listPanes(input);
+      },
+    };
+    for (const [name, envelope] of payloads) {
+      const run = recordingService(f);
+      const outcome = await sendEnvelope(f, envelope, { ...run.deps, terminal });
+      expect({ name, status: outcome.status, code: outcome.notice?.code }).toEqual({
+        name,
+        status: "refused",
+        code: "failed",
+      });
+      expectUntouched(f, run);
+    }
+    expect(reads).toBe(0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a plugin origin may not send any other verb", async () => {
+  const f = await fixture("tern");
+  try {
+    const task = await createPrTask(f);
+    const origin = { plugin: "prguide", repoPath: f.repo };
+    const actions = [
+      { verb: "open", ref: { kind: "board" } },
+      { verb: "visit", event: "entry" },
+      { verb: "steer", taskId: task.id, text: "Narrow this" },
+      { verb: "restart", taskId: task.id },
+      approve(f),
+      { verb: "setup-save", answer: { mode: "settings" } },
+    ];
+    for (const action of actions) {
+      const run = recordingService(f);
+      const outcome = await sendEnvelope(f, { v: 1, origin, action }, run.deps);
+      expect({ verb: action.verb, status: outcome.status, code: outcome.notice?.code }).toEqual({
+        verb: action.verb,
+        status: "refused",
+        code: "origin-unproven",
+      });
+      expect(outcome.notice?.text).toContain("can only hand a pull request to Tandem");
+      expectUntouched(f, run);
+    }
+    expect((await f.store.read(f.record.id))?.approval).toBeUndefined();
+    expect(f.proofs).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("a project two coordinators claim, or one whose coordinator is not running, is refused", async () => {
+  const f = await fixture();
+  try {
+    const fixed = await prFixFixture("pr-fix-success.json", SuccessFixture, f);
+    f.setOwner(false);
+    const stopped = recordingService(f);
+    const notRunning = await sendEnvelope(f, fixed.request, stopped.deps);
+    expect(notRunning.status).toBe("refused");
+    expectUntouched(f, stopped);
+    f.setOwner(true);
+    const current = await readCoordinatorRecord(recordPath(f.home, "isolated", f.repo));
+    if (current === undefined) throw new Error("Fixture coordinator record is missing");
+    const otherClean = join(current.worktree.root, "other-coordinator");
+    await mkdir(otherClean);
+    await saveCoordinatorRecord(f.home, {
+      ...current,
+      endpoint: { ...current.endpoint, sessionId: "other-session" },
+      worktree: {
+        ...current.worktree,
+        path: otherClean,
+        name: "other-coordinator",
+        leaseId: "other-lease",
+        leaseHolder: "coordinator:other",
+      },
+      command: ["omp", "--cwd", otherClean, "--session-dir", join(f.home, "other-conversation")],
+    });
+    const claimed = recordingService(f);
+    const ambiguous = await sendEnvelope(f, fixed.request, claimed.deps);
+    expect(ambiguous.status).toBe("refused");
+    expect(ambiguous.notice?.text).toContain("More than one coordinator claims this project");
+    expectUntouched(f, claimed);
   } finally {
     await f.close();
   }

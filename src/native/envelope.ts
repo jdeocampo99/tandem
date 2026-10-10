@@ -20,14 +20,23 @@ const Text = z
   .refine((value) => !value.includes("\0"), "must not contain NUL characters")
   .transform((value) => value.trim());
 const Count = z.number().int().positive().safe();
+/** `owner/name`, spliced into `owner/name#N`, so no `#` or `/` beyond the one separator. */
+const GitHubRepository = z
+  .string()
+  .regex(/^[A-Za-z0-9-]+\/[A-Za-z0-9._-]+$/u, "must be owner/name");
+
+/** The manifest id of the PR Guide Tern plugin, the only plugin `pr-fix` accepts. */
+export const PR_GUIDE_PLUGIN = "prguide";
 
 /**
  * Where a click came from. A block echoes the context it was launched with; a window command
- * names the focused pane's absolute cwd and, when Tern exports it, the window key.
+ * names the focused pane's absolute cwd and, when Tern exports it, the window key. A plugin
+ * names itself and the one Tandem project it acts on; it has no pane of the coordinator's.
  */
 export const ActionOrigin = z.union([
   z.object({ pane: PaneId, ctx: z.string() }).strict(),
   z.object({ pane: PaneId, cwd: AbsolutePath, window: z.string().min(1).optional() }).strict(),
+  z.object({ plugin: z.string().min(1), repoPath: AbsolutePath }).strict(),
 ]);
 export type ActionOrigin = z.infer<typeof ActionOrigin>;
 
@@ -124,6 +133,10 @@ export const Action = z.discriminatedUnion("verb", [
   z.object({ verb: z.literal("merged-link"), url: z.string().url() }).strict(),
   /** The setup block's answer: parsed by `parseSetupAnswer`, so its shape lives in one place. */
   z.object({ verb: z.literal("setup-save"), answer: z.record(z.string(), z.unknown()) }).strict(),
+  /** The PR Guide plugin handing a watched pull request to Tandem's `pr-watch-fix` pipeline. */
+  z
+    .object({ verb: z.literal("pr-fix"), repo: GitHubRepository, number: Count, reason: Text })
+    .strict(),
 ]);
 export type Action = z.infer<typeof Action>;
 

@@ -1,0 +1,44 @@
+[
+  {
+    "name": "the coordinator's own pane",
+    "origin": { "pane": "101", "cwd": "$clean" },
+    "code": "origin-unproven",
+    "text": "Only the PR Guide plugin"
+  },
+  {
+    "name": "a window command with a window key",
+    "origin": { "pane": "101", "cwd": "$clean", "window": "control-window" },
+    "code": "origin-unproven",
+    "text": "Only the PR Guide plugin"
+  },
+  {
+    "name": "another Tandem block",
+    "origin": "block",
+    "code": "origin-unproven",
+    "text": "Only the PR Guide plugin"
+  },
+  {
+    "name": "another plugin",
+    "origin": { "plugin": "other-plugin", "repoPath": "$repo" },
+    "code": "origin-unproven",
+    "text": "does not come from the PR Guide plugin"
+  },
+  {
+    "name": "the plugin id in another spelling",
+    "origin": { "plugin": "PRGuide", "repoPath": "$repo" },
+    "code": "origin-unproven",
+    "text": "does not come from the PR Guide plugin"
+  },
+  {
+    "name": "a project Tandem does not know",
+    "origin": { "plugin": "prguide", "repoPath": "$root/unknown-project" },
+    "code": "failed",
+    "text": "does not know this project"
+  },
+  {
+    "name": "a folder inside a known project",
+    "origin": { "plugin": "prguide", "repoPath": "$repo/packages/app" },
+    "code": "failed",
+    "text": "does not know this project"
+  }
+]
