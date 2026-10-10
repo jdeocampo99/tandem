@@ -354,14 +354,17 @@ async function locateProject(
   // A record that cannot be read, or sits in another session's folder, may be this project's real
   // owner: one valid record beside it is not proof, so ownership is ambiguous and nothing is built.
   const misplaced = discovery.records.length - records.length;
-  if (recorded === undefined)
-    throw new Error(
-      discovery.unreadable.length > 0
-        ? "Tandem has no readable coordinator for this project; unreadable records were skipped"
-        : misplaced > 0
-          ? "Tandem has no coordinator for this project in its own session folder; misplaced records were skipped"
-          : "Tandem does not know this project",
-    );
+  if (recorded === undefined) {
+    if (discovery.unreadable.length > 0)
+      throw new Error(
+        "Tandem has no readable coordinator for this project; unreadable records were skipped",
+      );
+    if (misplaced > 0)
+      throw new Error(
+        "Tandem has no coordinator for this project in its own session folder; misplaced records were skipped",
+      );
+    throw new Error("Tandem does not know this project");
+  }
   if (discovery.unreadable.length > 0 || misplaced > 0)
     throw new Error(
       "Tandem cannot tell which coordinator owns this project; an unreadable or misplaced record names it too",
