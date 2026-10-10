@@ -47,7 +47,7 @@ import type {
 } from "../../src/terminal-backend/contract.ts";
 import { seedScenarioTask, seedTernProject } from "../evals/scenario.ts";
 import type { TernParityHost } from "../evals/tern-parity/harness.ts";
-import { seedReview, withParity } from "../evals/tern-parity/inventory.ts";
+import { type Parity, seedReview, withParity } from "../evals/tern-parity/inventory.ts";
 import { setupViewFixture } from "../onboarding/setup-fixture.ts";
 import { viewsOf, viewsWith } from "../terminal-backend/views.ts";
 import { prIndexEntry, projectRow, publishFixture, savedState } from "./view-files.ts";
@@ -1966,77 +1966,115 @@ function envelopes(host: TernParityHost): readonly ActionEnvelope[] {
   });
 }
 
+/** Clicks open further views, so a screen is the newest block of its kind. */
+function newest(host: TernParityHost, kind: string): number {
+  const pane = host.world
+    .ternBlocks()
+    .filter((block) => block.program === `tandem.${kind}`)
+    .at(-1)?.paneId;
+  if (pane === undefined) throw new Error(`no tandem.${kind} opened`);
+  return Number(pane);
+}
+
+/** Runs `open`, then answers the newest block of `kind`, the way `fireEvery` reopens a screen. */
+function opener(host: TernParityHost, open: () => Promise<unknown>, kind: string) {
+  return async () => {
+    await open();
+    return newest(host, kind);
+  };
+}
+
 test("T2: every click in every rendered view sends an envelope the contract accepts", async () => {
   const verbs = new Set<string>();
-  await withParity(async ({ host, panel, world, briefId }) => {
+  // Each send replays the window's whole history through a fresh Luau process, so one window for
+  // every screen costs time quadratic in the clicks. Each screen gets its own window from the
+  // same seed, and a screen that needs typed input keeps that input before its `fireEvery`.
+  const screen = (body: (parity: Parity) => Promise<void>) =>
+    withParity(async (parity) => {
+      // A new window draws its loading states until its first poll reads the view files.
+      await parity.host.refresh();
+      await body(parity);
+      for (const { action } of envelopes(parity.host)) verbs.add(action.verb);
+    });
+  await screen(async ({ host, panel }) => {
     await fireEvery(host, async () => panel.pane);
-    // Clicks open further views, so a screen is the newest block of its kind.
-    const opener = (open: () => Promise<unknown>, kind: string) => async () => {
-      await open();
-      const pane = world
-        .ternBlocks()
-        .filter((block) => block.program === `tandem.${kind}`)
-        .at(-1)?.paneId;
-      if (pane === undefined) throw new Error(`no tandem.${kind} opened`);
-      return Number(pane);
-    };
+  });
+  await screen(async ({ host, panel }) => {
     // Controls that only send once the user has typed something.
     await panel.click(/^● Port the terminal/);
-    const task = host.screen(await opener(async () => {}, "task")());
+    const task = host.screen(newest(host, "task"));
     await task.click(/^Message the worker…/);
     await task.type("use the new API");
     await task.press({ name: "enter" });
+    await fireEvery(
+      host,
+      opener(host, () => panel.click(/^● Port the terminal/), "task"),
+    );
+  });
+  await screen(async ({ host, panel }) => {
+    await fireEvery(
+      host,
+      opener(host, () => panel.click(/^● Fix login/), "task"),
+    );
+  });
+  await screen(async ({ host, briefId }) => {
     await host.link(`tandem://brief/${briefId}`);
-    const brief = host.screen(await opener(async () => {}, "brief")());
+    const brief = host.screen(newest(host, "brief"));
     await brief.click("+", { nth: 2 });
     await brief.focusField("Comment on this line…");
     await brief.type("Keep the old palette");
     await brief.click("Comment");
     await brief.click("Request changes (1)");
+    await fireEvery(
+      host,
+      opener(host, () => host.link(`tandem://brief/${briefId}`), "brief"),
+    );
+  });
+  await screen(async ({ host }) => {
     await host.link("tandem://pr/281");
-    const pr = host.screen(await opener(async () => {}, "pr")());
+    const pr = host.screen(newest(host, "pr"));
     await pr.click("Diff");
     await pr.click("+", { nth: 1 });
     await pr.type("Rename port");
     await pr.click("Comment");
     await fireEvery(
       host,
-      opener(() => panel.click(/^● Port the terminal/), "task"),
+      opener(host, () => host.link("tandem://pr/281"), "pr"),
     );
+  });
+  await screen(async ({ host, panel }) => {
     await fireEvery(
       host,
-      opener(() => panel.click(/^● Fix login/), "task"),
+      opener(host, () => panel.click("▦"), "board"),
     );
+  });
+  await screen(async ({ host, panel }) => {
     await fireEvery(
       host,
-      opener(() => host.link(`tandem://brief/${briefId}`), "brief"),
+      opener(host, () => panel.click("5h unavailable"), "usage"),
     );
+  });
+  await screen(async ({ host }) => {
     await fireEvery(
       host,
-      opener(() => host.link("tandem://pr/281"), "pr"),
+      opener(host, () => host.command("open-task"), "task-picker"),
     );
-    await fireEvery(
-      host,
-      opener(() => panel.click("▦"), "board"),
-    );
-    await fireEvery(
-      host,
-      opener(() => panel.click("5h unavailable"), "usage"),
-    );
-    await fireEvery(
-      host,
-      opener(() => host.command("open-task"), "task-picker"),
-    );
-    const settings = opener(() => host.command("settings"), "setup");
+  });
+  await screen(async ({ host }) => {
+    const settings = opener(host, () => host.command("settings"), "setup");
     await fireEvery(host, settings);
+  });
+  await screen(async ({ host }) => {
+    const settings = opener(host, () => host.command("settings"), "setup");
     const setup = host.screen(await settings());
     await host.refresh();
     await setup.click("Bug reports");
     // "Fix it" is what an unchosen setting already means, so only another option makes it unsaved.
     await setup.click("Draft an issue");
     await setup.click("Save changes");
+  });
+  await screen(async ({ host, panel }) => {
     // The project switcher's rows live in a dropdown layer only drawn while it is open.
-    await host.refresh();
     const switcher = async () => {
       const { actions } = await panel.render();
       if (!actions.some((control) => control.label === "+ Open another project…"))
@@ -2046,11 +2084,12 @@ test("T2: every click in every rendered view sends an envelope the contract acce
     await fireEvery(host, switcher);
     await switcher();
     await panel.click("+ Open another project…");
+  });
+  await screen(async ({ host, briefId }) => {
     for (const { id } of await host.commands()) await host.command(id);
     for (const kind of ["task/port", `brief/${briefId}`, "pr/281"])
       await host.link(`tandem://${kind}`);
     await host.windowStart();
-    for (const { action } of envelopes(host)) verbs.add(action.verb);
   });
   await withParity(async ({ host, world, project }) => {
     await seedReview(world);
